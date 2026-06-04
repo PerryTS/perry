@@ -43,6 +43,39 @@ pub unsafe extern "C" fn js_webcrypto_sign(
             Some(s) => s,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
+    } else if algo_upper == "KMAC128" || algo_upper == "KMAC256" {
+        let key_algo = if algo_upper == "KMAC128" {
+            KeyAlgo::Kmac128
+        } else {
+            KeyAlgo::Kmac256
+        };
+        if mat.algo != key_algo || mat.kind != KeyKind::Secret {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let output_length = match kmac_output_length(algo_bits.to_bits()) {
+            Ok(length) => length,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let customization =
+            object_field_bytes(algo_bits.to_bits(), b"customization").unwrap_or_else(Vec::new);
+        match compute_kmac(
+            key_algo,
+            &key_bytes,
+            &customization,
+            &data_bytes,
+            output_length,
+        ) {
+            Some(s) => s,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ECDSA" {
         if !is_ecdsa_key_algo(mat.algo) || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
@@ -195,6 +228,43 @@ pub unsafe extern "C" fn js_webcrypto_verify(
             return reject_with_dom_exception(name, message);
         }
         let expected_sig = match compute_hmac(mat.hash, &key_bytes, &data_bytes) {
+            Some(s) => s,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        constant_time_eq(&expected_sig, &provided_sig)
+    } else if algo_upper == "KMAC128" || algo_upper == "KMAC256" {
+        let key_algo = if algo_upper == "KMAC128" {
+            KeyAlgo::Kmac128
+        } else {
+            KeyAlgo::Kmac256
+        };
+        if mat.algo != key_algo || mat.kind != KeyKind::Secret {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let output_length = match kmac_output_length(algo_bits.to_bits()) {
+            Ok(length) => length,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        if output_length == 0 {
+            return resolve_with_bool(false);
+        }
+        let customization =
+            object_field_bytes(algo_bits.to_bits(), b"customization").unwrap_or_else(Vec::new);
+        let expected_sig = match compute_kmac(
+            key_algo,
+            &key_bytes,
+            &customization,
+            &data_bytes,
+            output_length,
+        ) {
             Some(s) => s,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
@@ -362,6 +432,16 @@ pub(super) fn number_from_bits(bits: u64) -> Option<u32> {
     } else {
         None
     }
+}
+
+unsafe fn kmac_output_length(algo_bits: u64) -> Result<u32, (&'static str, &'static str)> {
+    let Some(length) = object_field_number(algo_bits, b"outputLength") else {
+        return Err(("TypeError", "KmacParams.outputLength is required"));
+    };
+    if length % 8 != 0 {
+        return Err(("NotSupportedError", "Unsupported KmacParams outputLength"));
+    }
+    Ok(length)
 }
 
 pub(super) unsafe fn ecdh_shared_secret_bytes(

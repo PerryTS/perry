@@ -421,6 +421,70 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(buf as *const u8).bits());
     }
 
+    if algo_upper == "KMAC128" || algo_upper == "KMAC256" {
+        let key_algo = if algo_upper == "KMAC128" {
+            KeyAlgo::Kmac128
+        } else {
+            KeyAlgo::Kmac256
+        };
+        let bad_message = if key_algo == KeyAlgo::Kmac128 {
+            "Unsupported key usage for KMAC128 key"
+        } else {
+            "Unsupported key usage for KMAC256 key"
+        };
+        let usages = match validate_key_usages(
+            key_algo,
+            KeyKind::Secret,
+            usages_bits.to_bits(),
+            false,
+            "Usages cannot be empty when creating a key.",
+            bad_message,
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let default_length = if key_algo == KeyAlgo::Kmac128 {
+            128
+        } else {
+            256
+        };
+        let bit_len = if string_from_jsvalue(algo_bits.to_bits()).is_some() {
+            default_length
+        } else {
+            object_field_number(algo_bits.to_bits(), b"length").unwrap_or(default_length)
+        };
+        if bit_len == 0 {
+            return reject_with_dom_exception(
+                "OperationError",
+                "KmacKeyGenParams.length cannot be 0",
+            );
+        }
+        if bit_len % 8 != 0 {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unsupported KmacKeyGenParams.length",
+            );
+        }
+        let mut key_bytes = vec![0u8; (bit_len / 8) as usize];
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        let buf = alloc_uint8array_from_slice(&key_bytes);
+        if buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            buf as usize,
+            CryptoKeyMaterial::new(
+                key_algo,
+                HashAlgo::Sha256,
+                KeyKind::Secret,
+                extractable,
+                usages,
+            ),
+        );
+        return resolve_with_bits(JSValue::pointer(buf as *const u8).bits());
+    }
+
     if algo_upper != "AES-GCM"
         && algo_upper != "AES-KW"
         && algo_upper != "AES-CBC"

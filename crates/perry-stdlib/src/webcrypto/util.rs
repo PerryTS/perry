@@ -123,6 +123,8 @@ pub(super) enum KeyAlgo {
     RsaOaep,
     RsassaPkcs1,
     RsaPss,
+    Kmac128,
+    Kmac256,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -299,6 +301,8 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::Argon2i => 20,
         KeyAlgo::Argon2id => 21,
         KeyAlgo::ChaCha20Poly1305 => 22,
+        KeyAlgo::Kmac128 => 23,
+        KeyAlgo::Kmac256 => 24,
     }
 }
 
@@ -351,6 +355,8 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 20 => KeyAlgo::Argon2i,
                 21 => KeyAlgo::Argon2id,
                 22 => KeyAlgo::ChaCha20Poly1305,
+                23 => KeyAlgo::Kmac128,
+                24 => KeyAlgo::Kmac256,
                 _ => return None,
             };
             let hash = match hash {
@@ -558,6 +564,7 @@ pub(super) fn argon2_key_algo(name: &str) -> Option<KeyAlgo> {
 pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
     match (algo, kind) {
         (KeyAlgo::Hmac, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
+        (KeyAlgo::Kmac128 | KeyAlgo::Kmac256, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
         (
             KeyAlgo::AesGcm | KeyAlgo::AesCbc | KeyAlgo::AesCtr | KeyAlgo::ChaCha20Poly1305,
             KeyKind::Secret,
@@ -757,6 +764,59 @@ pub(super) fn compute_hmac(hash: HashAlgo, key: &[u8], data: &[u8]) -> Option<Ve
             Some(mac.finalize().into_bytes().to_vec())
         }
     }
+}
+
+pub(super) fn compute_kmac(
+    algo: KeyAlgo,
+    key: &[u8],
+    customization: &[u8],
+    data: &[u8],
+    output_bits: u32,
+) -> Option<Vec<u8>> {
+    if output_bits % 8 != 0 {
+        return None;
+    }
+    let mut out = vec![0u8; (output_bits / 8) as usize];
+    match algo {
+        KeyAlgo::Kmac128 => {
+            use sha3_010::digest::{core_api::CoreProxy, ExtendableOutput, Update, XofReader};
+            let core = <sha3_010::CShake128 as CoreProxy>::Core::new_with_function_name(
+                b"KMAC",
+                customization,
+            );
+            let mut cshake = sha3_010::CShake128::from_core(core);
+            for item in sha3_utils::bytepad::<168, _>([sha3_utils::encode_string(key)]) {
+                Update::update(&mut cshake, item.as_bytes());
+            }
+            Update::update(&mut cshake, data);
+            Update::update(
+                &mut cshake,
+                sha3_utils::right_encode(output_bits as usize).as_bytes(),
+            );
+            let mut reader = cshake.finalize_xof();
+            XofReader::read(&mut reader, &mut out);
+        }
+        KeyAlgo::Kmac256 => {
+            use sha3_010::digest::{core_api::CoreProxy, ExtendableOutput, Update, XofReader};
+            let core = <sha3_010::CShake256 as CoreProxy>::Core::new_with_function_name(
+                b"KMAC",
+                customization,
+            );
+            let mut cshake = sha3_010::CShake256::from_core(core);
+            for item in sha3_utils::bytepad::<136, _>([sha3_utils::encode_string(key)]) {
+                Update::update(&mut cshake, item.as_bytes());
+            }
+            Update::update(&mut cshake, data);
+            Update::update(
+                &mut cshake,
+                sha3_utils::right_encode(output_bits as usize).as_bytes(),
+            );
+            let mut reader = cshake.finalize_xof();
+            XofReader::read(&mut reader, &mut out);
+        }
+        _ => return None,
+    }
+    Some(out)
 }
 
 pub(super) fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {

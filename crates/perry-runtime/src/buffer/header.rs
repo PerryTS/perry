@@ -103,7 +103,7 @@ thread_local! {
     ///       12 RSASSA-PKCS1-v1_5, 13 RSA-OAEP, 14 RSA-PSS,
     ///       15 ECDSA P-384, 16 ECDH P-384, 17 ECDSA P-521,
     ///       18 ECDH P-521, 19 Argon2d, 20 Argon2i, 21 Argon2id,
-    ///       22 ChaCha20-Poly1305
+    ///       22 ChaCha20-Poly1305, 23 KMAC128, 24 KMAC256
     /// hash: 1 SHA-1, 2 SHA-256, 3 SHA-384, 4 SHA-512
     /// kind: 1 secret, 2 private, 3 public
     /// extractable: WebCrypto CryptoKey.extractable
@@ -370,6 +370,7 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
 
     match (algo, kind) {
         (1, 1) => SIGN | VERIFY,
+        (23 | 24, 1) => SIGN | VERIFY,
         (2 | 4 | 5 | 22, 1) => ENCRYPT | DECRYPT | WRAP_KEY | UNWRAP_KEY,
         (3, 1) => WRAP_KEY | UNWRAP_KEY,
         (6 | 7 | 19 | 20 | 21, 1) => DERIVE_KEY | DERIVE_BITS,

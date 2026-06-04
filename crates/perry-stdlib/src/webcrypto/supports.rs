@@ -26,7 +26,7 @@ unsafe fn algorithm_curve(bits: u64) -> Option<String> {
 unsafe fn supports_generate_key(algorithm_bits: u64, algorithm: &str) -> bool {
     let object_form = algorithm_is_object(algorithm_bits);
     match algorithm {
-        "ED25519" | "X25519" => true,
+        "ED25519" | "X25519" | "KMAC128" | "KMAC256" => true,
         "CHACHA20-POLY1305" => true,
         "HMAC" | "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" => object_form,
         "ECDSA" | "ECDH" => {
@@ -43,7 +43,7 @@ unsafe fn supports_generate_key(algorithm_bits: u64, algorithm: &str) -> bool {
 unsafe fn supports_import_key(algorithm_bits: u64, algorithm: &str) -> bool {
     match algorithm {
         "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" | "CHACHA20-POLY1305" | "PBKDF2" | "HKDF"
-        | "ARGON2D" | "ARGON2I" | "ARGON2ID" | "ED25519" | "X25519" => true,
+        | "ARGON2D" | "ARGON2I" | "ARGON2ID" | "ED25519" | "X25519" | "KMAC128" | "KMAC256" => true,
         "HMAC" => algorithm_is_object(algorithm_bits),
         "ECDSA" | "ECDH" => algorithm_curve(algorithm_bits)
             .as_deref()
@@ -67,6 +67,8 @@ fn supports_export_key(algorithm: &str) -> bool {
             | "ECDH"
             | "ED25519"
             | "X25519"
+            | "KMAC128"
+            | "KMAC256"
             | "RSA-OAEP"
             | "RSA-PSS"
             | "RSASSA-PKCS1-V1_5"

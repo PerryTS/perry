@@ -88,6 +88,8 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         20 => "Argon2i",
         21 => "Argon2id",
         22 => "ChaCha20-Poly1305",
+        23 => "KMAC128",
+        24 => "KMAC256",
         _ => "",
     }
 }
@@ -106,7 +108,7 @@ fn crypto_key_algorithm_has_hash(algo: u8) -> bool {
 }
 
 fn crypto_key_algorithm_has_length(algo: u8) -> bool {
-    matches!(algo, 1 | 2 | 3 | 4 | 5)
+    matches!(algo, 1 | 2 | 3 | 4 | 5 | 21 | 22)
 }
 
 fn crypto_key_named_curve(algo: u8) -> Option<&'static str> {

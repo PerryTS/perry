@@ -46,6 +46,14 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         }
     };
     let algo_upper = algo_name.to_ascii_uppercase();
+    if (algo_upper == "KMAC128" || algo_upper == "KMAC256") && format_lower == "raw" {
+        let message = if algo_upper == "KMAC128" {
+            "Unable to import KMAC128 using raw format"
+        } else {
+            "Unable to import KMAC256 using raw format"
+        };
+        return reject_with_dom_exception("NotSupportedError", message);
+    }
     let (key_algo, hash, kind) = if algo_upper == "HMAC"
         && (format_lower == "raw" || format_lower == "jwk")
     {
@@ -77,6 +85,10 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             return reject_with_dom_exception("SyntaxError", message);
         }
         (argon_algo, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "KMAC128" && format_lower == "jwk" {
+        (KeyAlgo::Kmac128, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "KMAC256" && format_lower == "jwk" {
+        (KeyAlgo::Kmac256, HashAlgo::Sha256, KeyKind::Secret)
     } else if algo_upper == "AES-GCM" && (format_lower == "raw" || format_lower == "jwk") {
         // AES-GCM: 128, 192, or 256-bit keys. We accept any length
         // here and let encrypt/decrypt fail loudly on mismatch.
@@ -176,6 +188,8 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         KeyAlgo::Argon2d => "Unsupported key usage for a Argon2d key",
         KeyAlgo::Argon2i => "Unsupported key usage for a Argon2i key",
         KeyAlgo::Argon2id => "Unsupported key usage for a Argon2id key",
+        KeyAlgo::Kmac128 => "Unsupported key usage for KMAC128 key",
+        KeyAlgo::Kmac256 => "Unsupported key usage for KMAC256 key",
         _ => "Unsupported key usage for the requested algorithm",
     };
     let usages = match validate_key_usages(
@@ -197,6 +211,9 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     };
     if key_algo == KeyAlgo::ChaCha20Poly1305 && key_bytes.len() != 32 {
         return reject_with_dom_exception("DataError", "Invalid key length");
+    }
+    if key_bytes.is_empty() && matches!(key_algo, KeyAlgo::Kmac128 | KeyAlgo::Kmac256) {
+        return reject_with_dom_exception("DataError", "Zero-length key is not supported");
     }
     if key_bytes.is_empty()
         && !matches!(
@@ -312,6 +329,15 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
     if format_lower == "raw" && mat.kind == KeyKind::Private {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
+    if format_lower == "raw" && matches!(mat.algo, KeyAlgo::Kmac128 | KeyAlgo::Kmac256) {
+        let name = if mat.algo == KeyAlgo::Kmac128 {
+            "KMAC128"
+        } else {
+            "KMAC256"
+        };
+        let message = format!("Unable to export {name} secret key using raw format");
+        return reject_with_dom_exception("NotSupportedError", &message);
+    }
     if format_lower == "jwk"
         && mat.kind != KeyKind::Secret
         && !matches!(
@@ -348,14 +374,15 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
     if format_lower == "jwk" {
         if mat.kind == KeyKind::Secret {
             let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
-            let obj = js_object_alloc(
-                0,
-                if mat.algo == KeyAlgo::ChaCha20Poly1305 {
-                    3
-                } else {
-                    2
-                },
-            );
+            let field_count = if matches!(
+                mat.algo,
+                KeyAlgo::ChaCha20Poly1305 | KeyAlgo::Kmac128 | KeyAlgo::Kmac256
+            ) {
+                3
+            } else {
+                2
+            };
+            let obj = js_object_alloc(0, field_count);
             if obj.is_null() {
                 return reject_with_dom_exception("OperationError", "The operation failed");
             }
@@ -364,6 +391,11 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
                 set_object_string_field(obj, b"alg", "C20P");
             }
             set_object_string_field(obj, b"k", &encoded);
+            if mat.algo == KeyAlgo::Kmac128 {
+                set_object_string_field(obj, b"alg", "K128");
+            } else if mat.algo == KeyAlgo::Kmac256 {
+                set_object_string_field(obj, b"alg", "K256");
+            }
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
         if matches!(
@@ -512,6 +544,8 @@ pub(super) unsafe fn jwk_import_key_bytes(
     if matches!(
         key_algo,
         KeyAlgo::Hmac
+            | KeyAlgo::Kmac128
+            | KeyAlgo::Kmac256
             | KeyAlgo::AesGcm
             | KeyAlgo::AesKw
             | KeyAlgo::AesCbc
@@ -520,6 +554,18 @@ pub(super) unsafe fn jwk_import_key_bytes(
     ) {
         if kty != "oct" {
             return None;
+        }
+        if let Some(alg) = object_field_string(obj_bits, b"alg") {
+            let expected_alg = match key_algo {
+                KeyAlgo::Kmac128 => Some("K128"),
+                KeyAlgo::Kmac256 => Some("K256"),
+                _ => None,
+            };
+            if let Some(expected) = expected_alg {
+                if alg != expected {
+                    return None;
+                }
+            }
         }
         let k = object_field_string(obj_bits, b"k")?;
         return base64::engine::general_purpose::URL_SAFE_NO_PAD

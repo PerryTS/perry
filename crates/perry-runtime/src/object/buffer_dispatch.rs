@@ -287,6 +287,8 @@ unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
         "HKDF" => 6,
         "PBKDF2" => 7,
         "CHACHA20-POLY1305" => 15,
+        "KMAC128" => 23,
+        "KMAC256" => 24,
         _ => return f64::from_bits(JSValue::undefined().bits()),
     };
     let hash_name = object_field_string_value(algorithm_bits, b"hash")
