@@ -68,6 +68,13 @@ fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool
     )
 }
 
+fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(
+        receiver_class_name(ctx, object).as_deref(),
+        Some("Uint8Array")
+    )
+}
+
 fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -476,6 +483,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                 );
                 return Ok(result);
+            }
+            if is_uint8array_receiver(ctx, object) && !is_numeric_expr(ctx, index) {
+                let arr_box = lower_expr(ctx, object)?;
+                let key_box = lower_expr(ctx, index)?;
+                let blk = ctx.block();
+                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_get_dynamic",
+                    &[(I64, &arr_i64), (DOUBLE, &key_box)],
+                ));
             }
             // Scalar-replaced array literal: `arr[k]` where arr was bound to
             // `[...]` and never escaped, and k is a compile-time index in

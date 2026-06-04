@@ -13,32 +13,15 @@ unsafe fn throw_type_error(message: &str) -> ! {
 }
 
 unsafe fn throw_dom_exception(name: &str, message: &str) -> ! {
-    let obj = js_object_alloc(0, 3);
-    if obj.is_null() {
-        throw_type_error(message);
-    }
-    let name_key = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
-    let message_key = perry_runtime::js_string_from_bytes(b"message".as_ptr(), 7);
-    let stack_key = perry_runtime::js_string_from_bytes(b"stack".as_ptr(), 5);
     let name_str = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let empty_str = perry_runtime::js_string_from_bytes(b"".as_ptr(), 0);
-    js_object_set_field_by_name(
-        obj,
-        name_key,
-        f64::from_bits(JSValue::string_ptr(name_str).bits()),
-    );
-    js_object_set_field_by_name(
-        obj,
-        message_key,
-        f64::from_bits(JSValue::string_ptr(message_str).bits()),
-    );
-    js_object_set_field_by_name(
-        obj,
-        stack_key,
-        f64::from_bits(JSValue::string_ptr(empty_str).bits()),
-    );
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(obj as i64))
+    let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
+    let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
+    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    if err.is_null() {
+        throw_type_error(message);
+    }
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 
 unsafe fn require_hash(algo_bits: u64) -> HashAlgo {

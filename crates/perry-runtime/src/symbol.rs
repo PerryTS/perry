@@ -1364,6 +1364,66 @@ unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -
     None
 }
 
+unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    if !obj_f64.is_finite() || obj_f64 <= 0.0 || obj_f64.fract() != 0.0 {
+        return None;
+    }
+    let kind_probe = crate::object::stream_handle_kind_probe()?;
+    let kind = kind_probe(obj_f64 as usize);
+    if kind == 0 {
+        return None;
+    }
+
+    let sym_key = sym_key_from_f64(sym_f64);
+    if sym_key == 0 {
+        return Some(f64::from_bits(TAG_UNDEFINED));
+    }
+
+    let iterator = well_known_symbol("iterator");
+    if !iterator.is_null() {
+        let iterator_f64 =
+            f64::from_bits(crate::value::JSValue::pointer(iterator as *const u8).bits());
+        if sym_key == sym_key_from_f64(iterator_f64) {
+            return Some(f64::from_bits(TAG_UNDEFINED));
+        }
+    }
+
+    let async_iterator = well_known_symbol("asyncIterator");
+    if !async_iterator.is_null() {
+        let async_iterator_f64 =
+            f64::from_bits(crate::value::JSValue::pointer(async_iterator as *const u8).bits());
+        if sym_key == sym_key_from_f64(async_iterator_f64) {
+            if kind == 1 {
+                let mname = b"values";
+                return Some(crate::object::js_class_method_bind(
+                    obj_f64,
+                    mname.as_ptr(),
+                    mname.len(),
+                ));
+            }
+            return Some(f64::from_bits(TAG_UNDEFINED));
+        }
+    }
+
+    let to_string_tag = well_known_symbol("toStringTag");
+    if !to_string_tag.is_null() {
+        let to_string_tag_f64 =
+            f64::from_bits(crate::value::JSValue::pointer(to_string_tag as *const u8).bits());
+        if sym_key == sym_key_from_f64(to_string_tag_f64) {
+            let tag = match kind {
+                1 => "ReadableStream",
+                2 => "WritableStream",
+                5 => "TransformStream",
+                _ => return Some(f64::from_bits(TAG_UNDEFINED)),
+            };
+            let str_ptr = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+            return Some(f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK)));
+        }
+    }
+
+    Some(f64::from_bits(TAG_UNDEFINED))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
@@ -1403,6 +1463,14 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
         return f64::from_bits(TAG_UNDEFINED);
+    }
+    // #1545: Web Stream handles are normal finite numbers, not heap objects.
+    // Resolve their well-known symbol surface before pointer-oriented fallback
+    // paths reinterpret the raw f64 bits as an address. ReadableStream is
+    // async-iterable only; none of the Web Stream handles expose
+    // `Symbol.iterator`.
+    if let Some(v) = web_stream_symbol_property(obj_f64, sym_f64) {
+        return v;
     }
     // #1213: Timeout/Immediate handles expose `Symbol.dispose` so
     // `using t = setTimeout(...)` and `t[Symbol.dispose]()` clear the timer.
@@ -1595,30 +1663,6 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             if (func_proto.to_bits() >> 48) == 0x7FFD {
                 if let Some(v) = own_symbol_property(func_proto, sym_f64) {
                     return v;
-                }
-            }
-        }
-    }
-    // #1545: Web ReadableStream handles are normal finite numbers, not
-    // heap objects. Expose `rs[Symbol.asyncIterator]` as the same bound method
-    // as `rs.values`, matching Node's Web Streams surface while leaving
-    // `Symbol.iterator` absent.
-    if obj_f64.is_finite() && obj_f64 > 0.0 && obj_f64.fract() == 0.0 {
-        if let Some(kind_probe) = crate::object::stream_handle_kind_probe() {
-            if kind_probe(obj_f64 as usize) == 1 {
-                let async_iterator = well_known_symbol("asyncIterator");
-                if !async_iterator.is_null() {
-                    let async_iterator_f64 = f64::from_bits(
-                        crate::value::JSValue::pointer(async_iterator as *const u8).bits(),
-                    );
-                    if sym_key_from_f64(sym_f64) == sym_key_from_f64(async_iterator_f64) {
-                        let mname = b"values";
-                        return crate::object::js_class_method_bind(
-                            obj_f64,
-                            mname.as_ptr(),
-                            mname.len(),
-                        );
-                    }
                 }
             }
         }

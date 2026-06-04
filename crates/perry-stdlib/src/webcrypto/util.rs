@@ -2,7 +2,7 @@ pub(super) use std::collections::HashMap;
 pub(super) use std::sync::Mutex;
 
 pub(super) use aes::cipher::{
-    generic_array::GenericArray, BlockEncrypt, KeyInit as AesBlockKeyInit,
+    generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit as AesBlockKeyInit,
 };
 pub(super) use aes::{Aes128, Aes192, Aes256};
 pub(super) use base64::Engine as _;
@@ -49,6 +49,12 @@ pub(super) use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 pub(super) use rsa::{BigUint as RsaBigUint, Oaep, RsaPrivateKey, RsaPublicKey};
 pub(super) use sha1::Sha1;
 pub(super) use sha2::{Digest as Sha2Digest, Sha256, Sha384, Sha512};
+
+pub(super) use ml_kem::kem::KeyExport as MlKemKeyExport;
+pub(super) use ml_kem::pkcs8::{
+    DecodePrivateKey as MlKemDecodePrivateKey, DecodePublicKey as MlKemDecodePublicKey,
+    EncodePrivateKey as MlKemEncodePrivateKey, EncodePublicKey as MlKemEncodePublicKey,
+};
 
 pub(super) use perry_runtime::{
     buffer::{buffer_alloc, buffer_data_mut, is_registered_buffer, BufferHeader},
@@ -112,6 +118,7 @@ pub(super) enum KeyAlgo {
     AesCbc,
     AesCtr,
     ChaCha20Poly1305,
+    AesOcb,
     EcdsaP256,
     EcdhP256,
     EcdsaP384,
@@ -119,10 +126,17 @@ pub(super) enum KeyAlgo {
     EcdsaP521,
     EcdhP521,
     Ed25519,
+    Ed448,
     X25519,
+    X448,
     RsaOaep,
     RsassaPkcs1,
     RsaPss,
+    Kmac128,
+    Kmac256,
+    MlKem512,
+    MlKem768,
+    MlKem1024,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -227,6 +241,10 @@ pub(super) const USAGE_DERIVE_KEY: u32 = 1 << 4;
 pub(super) const USAGE_DERIVE_BITS: u32 = 1 << 5;
 pub(super) const USAGE_WRAP_KEY: u32 = 1 << 6;
 pub(super) const USAGE_UNWRAP_KEY: u32 = 1 << 7;
+pub(super) const USAGE_ENCAPSULATE_BITS: u32 = 1 << 8;
+pub(super) const USAGE_DECAPSULATE_BITS: u32 = 1 << 9;
+pub(super) const USAGE_ENCAPSULATE_KEY: u32 = 1 << 10;
+pub(super) const USAGE_DECAPSULATE_KEY: u32 = 1 << 11;
 
 #[derive(Copy, Clone, Debug)]
 pub(super) struct CryptoKeyMaterial {
@@ -299,6 +317,14 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::Argon2i => 20,
         KeyAlgo::Argon2id => 21,
         KeyAlgo::ChaCha20Poly1305 => 22,
+        KeyAlgo::Kmac128 => 23,
+        KeyAlgo::Kmac256 => 24,
+        KeyAlgo::AesOcb => 25,
+        KeyAlgo::X448 => 26,
+        KeyAlgo::Ed448 => 27,
+        KeyAlgo::MlKem512 => 30,
+        KeyAlgo::MlKem768 => 31,
+        KeyAlgo::MlKem1024 => 32,
     }
 }
 
@@ -351,6 +377,14 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 20 => KeyAlgo::Argon2i,
                 21 => KeyAlgo::Argon2id,
                 22 => KeyAlgo::ChaCha20Poly1305,
+                23 => KeyAlgo::Kmac128,
+                24 => KeyAlgo::Kmac256,
+                25 => KeyAlgo::AesOcb,
+                26 => KeyAlgo::X448,
+                27 => KeyAlgo::Ed448,
+                30 => KeyAlgo::MlKem512,
+                31 => KeyAlgo::MlKem768,
+                32 => KeyAlgo::MlKem1024,
                 _ => return None,
             };
             let hash = match hash {
@@ -542,6 +576,10 @@ pub(super) fn usage_bit(name: &str) -> Option<u32> {
         "deriveBits" => Some(USAGE_DERIVE_BITS),
         "wrapKey" => Some(USAGE_WRAP_KEY),
         "unwrapKey" => Some(USAGE_UNWRAP_KEY),
+        "encapsulateBits" => Some(USAGE_ENCAPSULATE_BITS),
+        "decapsulateBits" => Some(USAGE_DECAPSULATE_BITS),
+        "encapsulateKey" => Some(USAGE_ENCAPSULATE_KEY),
+        "decapsulateKey" => Some(USAGE_DECAPSULATE_KEY),
         _ => None,
     }
 }
@@ -558,8 +596,13 @@ pub(super) fn argon2_key_algo(name: &str) -> Option<KeyAlgo> {
 pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
     match (algo, kind) {
         (KeyAlgo::Hmac, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
+        (KeyAlgo::Kmac128 | KeyAlgo::Kmac256, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
         (
-            KeyAlgo::AesGcm | KeyAlgo::AesCbc | KeyAlgo::AesCtr | KeyAlgo::ChaCha20Poly1305,
+            KeyAlgo::AesGcm
+            | KeyAlgo::AesCbc
+            | KeyAlgo::AesCtr
+            | KeyAlgo::AesOcb
+            | KeyAlgo::ChaCha20Poly1305,
             KeyKind::Secret,
         ) => USAGE_ENCRYPT | USAGE_DECRYPT | USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
         (KeyAlgo::AesKw, KeyKind::Secret) => USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
@@ -576,6 +619,7 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             | KeyAlgo::EcdsaP384
             | KeyAlgo::EcdsaP521
             | KeyAlgo::Ed25519
+            | KeyAlgo::Ed448
             | KeyAlgo::RsassaPkcs1
             | KeyAlgo::RsaPss,
             KeyKind::Private,
@@ -585,21 +629,183 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             | KeyAlgo::EcdsaP384
             | KeyAlgo::EcdsaP521
             | KeyAlgo::Ed25519
+            | KeyAlgo::Ed448
             | KeyAlgo::RsassaPkcs1
             | KeyAlgo::RsaPss,
             KeyKind::Public,
         ) => USAGE_VERIFY,
         (
-            KeyAlgo::EcdhP256 | KeyAlgo::EcdhP384 | KeyAlgo::EcdhP521 | KeyAlgo::X25519,
+            KeyAlgo::EcdhP256
+            | KeyAlgo::EcdhP384
+            | KeyAlgo::EcdhP521
+            | KeyAlgo::X25519
+            | KeyAlgo::X448,
             KeyKind::Private,
         ) => USAGE_DERIVE_KEY | USAGE_DERIVE_BITS,
         (
-            KeyAlgo::EcdhP256 | KeyAlgo::EcdhP384 | KeyAlgo::EcdhP521 | KeyAlgo::X25519,
+            KeyAlgo::EcdhP256
+            | KeyAlgo::EcdhP384
+            | KeyAlgo::EcdhP521
+            | KeyAlgo::X25519
+            | KeyAlgo::X448,
             KeyKind::Public,
         ) => 0,
         (KeyAlgo::RsaOaep, KeyKind::Public) => USAGE_ENCRYPT | USAGE_WRAP_KEY,
         (KeyAlgo::RsaOaep, KeyKind::Private) => USAGE_DECRYPT | USAGE_UNWRAP_KEY,
+        (KeyAlgo::MlKem512 | KeyAlgo::MlKem768 | KeyAlgo::MlKem1024, KeyKind::Public) => {
+            USAGE_ENCAPSULATE_BITS | USAGE_ENCAPSULATE_KEY
+        }
+        (KeyAlgo::MlKem512 | KeyAlgo::MlKem768 | KeyAlgo::MlKem1024, KeyKind::Private) => {
+            USAGE_DECAPSULATE_BITS | USAGE_DECAPSULATE_KEY
+        }
         _ => 0,
+    }
+}
+
+pub(super) fn ml_kem_key_algo_from_name(name: &str) -> Option<KeyAlgo> {
+    match name {
+        "ML-KEM-512" => Some(KeyAlgo::MlKem512),
+        "ML-KEM-768" => Some(KeyAlgo::MlKem768),
+        "ML-KEM-1024" => Some(KeyAlgo::MlKem1024),
+        _ => None,
+    }
+}
+
+pub(super) fn is_ml_kem_key_algo(algo: KeyAlgo) -> bool {
+    matches!(
+        algo,
+        KeyAlgo::MlKem512 | KeyAlgo::MlKem768 | KeyAlgo::MlKem1024
+    )
+}
+
+pub(super) fn ml_kem_algorithm_name(algo: KeyAlgo) -> Option<&'static str> {
+    match algo {
+        KeyAlgo::MlKem512 => Some("ML-KEM-512"),
+        KeyAlgo::MlKem768 => Some("ML-KEM-768"),
+        KeyAlgo::MlKem1024 => Some("ML-KEM-1024"),
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_der_pair_from_seed(
+    algo: KeyAlgo,
+    seed_bytes: &[u8],
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let seed = ml_kem::Seed::try_from(seed_bytes).ok()?;
+    match algo {
+        KeyAlgo::MlKem512 => {
+            let private = ml_kem::DecapsulationKey512::from_seed(seed);
+            let private_der = private.to_pkcs8_der().ok()?.as_bytes().to_vec();
+            let public_der = private
+                .encapsulation_key()
+                .to_public_key_der()
+                .ok()?
+                .as_bytes()
+                .to_vec();
+            Some((private_der, public_der))
+        }
+        KeyAlgo::MlKem768 => {
+            let private = ml_kem::DecapsulationKey768::from_seed(seed);
+            let private_der = private.to_pkcs8_der().ok()?.as_bytes().to_vec();
+            let public_der = private
+                .encapsulation_key()
+                .to_public_key_der()
+                .ok()?
+                .as_bytes()
+                .to_vec();
+            Some((private_der, public_der))
+        }
+        KeyAlgo::MlKem1024 => {
+            let private = ml_kem::DecapsulationKey1024::from_seed(seed);
+            let private_der = private.to_pkcs8_der().ok()?.as_bytes().to_vec();
+            let public_der = private
+                .encapsulation_key()
+                .to_public_key_der()
+                .ok()?
+                .as_bytes()
+                .to_vec();
+            Some((private_der, public_der))
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_public_bytes_from_der(algo: KeyAlgo, der: &[u8]) -> Option<Vec<u8>> {
+    match algo {
+        KeyAlgo::MlKem512 => Some(
+            ml_kem::EncapsulationKey512::from_public_key_der(der)
+                .ok()?
+                .to_bytes()
+                .as_slice()
+                .to_vec(),
+        ),
+        KeyAlgo::MlKem768 => Some(
+            ml_kem::EncapsulationKey768::from_public_key_der(der)
+                .ok()?
+                .to_bytes()
+                .as_slice()
+                .to_vec(),
+        ),
+        KeyAlgo::MlKem1024 => Some(
+            ml_kem::EncapsulationKey1024::from_public_key_der(der)
+                .ok()?
+                .to_bytes()
+                .as_slice()
+                .to_vec(),
+        ),
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_private_seed_and_public_from_der(
+    algo: KeyAlgo,
+    der: &[u8],
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    match algo {
+        KeyAlgo::MlKem512 => {
+            let private = ml_kem::DecapsulationKey512::from_pkcs8_der(der).ok()?;
+            Some((
+                private.to_seed()?.as_slice().to_vec(),
+                private.encapsulation_key().to_bytes().as_slice().to_vec(),
+            ))
+        }
+        KeyAlgo::MlKem768 => {
+            let private = ml_kem::DecapsulationKey768::from_pkcs8_der(der).ok()?;
+            Some((
+                private.to_seed()?.as_slice().to_vec(),
+                private.encapsulation_key().to_bytes().as_slice().to_vec(),
+            ))
+        }
+        KeyAlgo::MlKem1024 => {
+            let private = ml_kem::DecapsulationKey1024::from_pkcs8_der(der).ok()?;
+            Some((
+                private.to_seed()?.as_slice().to_vec(),
+                private.encapsulation_key().to_bytes().as_slice().to_vec(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn ml_kem_public_der_from_bytes(algo: KeyAlgo, public_bytes: &[u8]) -> Option<Vec<u8>> {
+    match algo {
+        KeyAlgo::MlKem512 => {
+            let public = ml_kem::Key::<ml_kem::EncapsulationKey512>::try_from(public_bytes).ok()?;
+            let key = ml_kem::EncapsulationKey512::new(&public).ok()?;
+            Some(key.to_public_key_der().ok()?.as_bytes().to_vec())
+        }
+        KeyAlgo::MlKem768 => {
+            let public = ml_kem::Key::<ml_kem::EncapsulationKey768>::try_from(public_bytes).ok()?;
+            let key = ml_kem::EncapsulationKey768::new(&public).ok()?;
+            Some(key.to_public_key_der().ok()?.as_bytes().to_vec())
+        }
+        KeyAlgo::MlKem1024 => {
+            let public =
+                ml_kem::Key::<ml_kem::EncapsulationKey1024>::try_from(public_bytes).ok()?;
+            let key = ml_kem::EncapsulationKey1024::new(&public).ok()?;
+            Some(key.to_public_key_der().ok()?.as_bytes().to_vec())
+        }
+        _ => None,
     }
 }
 
@@ -682,32 +888,18 @@ pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
     js_promise_resolved(f64::from_bits(bits))
 }
 
-/// Construct a DOMException-shaped object (`{ name, message, stack: "" }`)
-/// and return a rejected Promise carrying it. WebCrypto spec demands
-/// `DOMException` instances on subtle.* error paths (`OperationError`,
-/// `NotSupportedError`, `InvalidAccessError`, `DataError`, `SyntaxError`),
-/// and consumers (`.catch(e => e.name === "...")`) match on `.name` —
-/// we model that shape rather than the full DOM `code` lookup table.
-/// Issue #1431.
+/// Construct a DOMException and return a rejected Promise carrying it.
 pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
-    let obj = js_object_alloc(0, 3);
-    if obj.is_null() {
-        return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
-    }
-    let name_key = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
-    let message_key = perry_runtime::js_string_from_bytes(b"message".as_ptr(), 7);
-    let stack_key = perry_runtime::js_string_from_bytes(b"stack".as_ptr(), 5);
     let name_str = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let empty_str = perry_runtime::js_string_from_bytes(b"".as_ptr(), 0);
     let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
     let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
-    let stack_val = f64::from_bits(JSValue::string_ptr(empty_str).bits());
-    js_object_set_field_by_name(obj, name_key, name_val);
-    js_object_set_field_by_name(obj, message_key, message_val);
-    js_object_set_field_by_name(obj, stack_key, stack_val);
-    let obj_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    perry_runtime::js_promise_rejected(obj_val)
+    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    if err.is_null() {
+        return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
+    }
+    let err_val = f64::from_bits(JSValue::pointer(err as *const u8).bits());
+    perry_runtime::js_promise_rejected(err_val)
 }
 
 /// Resolve a Promise with a Uint8Array view of `bytes`.
@@ -757,6 +949,59 @@ pub(super) fn compute_hmac(hash: HashAlgo, key: &[u8], data: &[u8]) -> Option<Ve
             Some(mac.finalize().into_bytes().to_vec())
         }
     }
+}
+
+pub(super) fn compute_kmac(
+    algo: KeyAlgo,
+    key: &[u8],
+    customization: &[u8],
+    data: &[u8],
+    output_bits: u32,
+) -> Option<Vec<u8>> {
+    if output_bits % 8 != 0 {
+        return None;
+    }
+    let mut out = vec![0u8; (output_bits / 8) as usize];
+    match algo {
+        KeyAlgo::Kmac128 => {
+            use sha3_010::digest::{core_api::CoreProxy, ExtendableOutput, Update, XofReader};
+            let core = <sha3_010::CShake128 as CoreProxy>::Core::new_with_function_name(
+                b"KMAC",
+                customization,
+            );
+            let mut cshake = sha3_010::CShake128::from_core(core);
+            for item in sha3_utils::bytepad::<168, _>([sha3_utils::encode_string(key)]) {
+                Update::update(&mut cshake, item.as_bytes());
+            }
+            Update::update(&mut cshake, data);
+            Update::update(
+                &mut cshake,
+                sha3_utils::right_encode(output_bits as usize).as_bytes(),
+            );
+            let mut reader = cshake.finalize_xof();
+            XofReader::read(&mut reader, &mut out);
+        }
+        KeyAlgo::Kmac256 => {
+            use sha3_010::digest::{core_api::CoreProxy, ExtendableOutput, Update, XofReader};
+            let core = <sha3_010::CShake256 as CoreProxy>::Core::new_with_function_name(
+                b"KMAC",
+                customization,
+            );
+            let mut cshake = sha3_010::CShake256::from_core(core);
+            for item in sha3_utils::bytepad::<136, _>([sha3_utils::encode_string(key)]) {
+                Update::update(&mut cshake, item.as_bytes());
+            }
+            Update::update(&mut cshake, data);
+            Update::update(
+                &mut cshake,
+                sha3_utils::right_encode(output_bits as usize).as_bytes(),
+            );
+            let mut reader = cshake.finalize_xof();
+            XofReader::read(&mut reader, &mut out);
+        }
+        _ => return None,
+    }
+    Some(out)
 }
 
 pub(super) fn generate_p256_signing_key() -> Option<P256EcdsaSigningKey> {

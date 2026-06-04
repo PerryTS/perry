@@ -74,8 +74,11 @@ PERRY_TEST_SUMMARY_OUT=/tmp/x.json _harness.sh       # emit JSON summary
 The harness defines its own pass/fail/skip totals; downstream consumers
 (release_sweep tier 3) only care about the JSON summary.
 
-The `ink-link-smoke` fixture also has a named CI job in
-`.github/workflows/test.yml`. It runs on release tags, on manual dispatch with
-`run_extended_tests=true`, and on PRs with the `run-extended-tests` label. That
+The `effect-basic` and `ink-link-smoke` fixtures also have named CI jobs in
+`.github/workflows/test.yml`. They run on release tags, on manual dispatch with
+`run_extended_tests=true`, and on PRs with the `run-extended-tests` label. The
+Effect job opts into a currently advisory compile/run signal with
+`PERRY_EFFECT_BASIC_ADVISORY=1`; the default tier-3 sweep records it as SKIP so
+known Effect end-to-end gaps do not block unrelated package releases. The Ink
 job intentionally stops at compile/link plus symbol inspection; end-to-end Ink
 rendering remains tracked separately from the release fixture contract.

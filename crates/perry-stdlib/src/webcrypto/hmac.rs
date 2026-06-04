@@ -43,6 +43,39 @@ pub unsafe extern "C" fn js_webcrypto_sign(
             Some(s) => s,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
+    } else if algo_upper == "KMAC128" || algo_upper == "KMAC256" {
+        let key_algo = if algo_upper == "KMAC128" {
+            KeyAlgo::Kmac128
+        } else {
+            KeyAlgo::Kmac256
+        };
+        if mat.algo != key_algo || mat.kind != KeyKind::Secret {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let output_length = match kmac_output_length(algo_bits.to_bits()) {
+            Ok(length) => length,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let customization =
+            object_field_bytes(algo_bits.to_bits(), b"customization").unwrap_or_else(Vec::new);
+        match compute_kmac(
+            key_algo,
+            &key_bytes,
+            &customization,
+            &data_bytes,
+            output_length,
+        ) {
+            Some(s) => s,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ECDSA" {
         if !is_ecdsa_key_algo(mat.algo) || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
@@ -108,6 +141,23 @@ pub unsafe extern "C" fn js_webcrypto_sign(
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         use ed25519_dalek::Signer as _;
         signing_key.sign(&data_bytes).to_bytes().to_vec()
+    } else if algo_upper == "ED448" {
+        if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Private {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let signing_key = match ed448_goldilocks::SigningKey::try_from(key_bytes.as_slice()) {
+            Ok(k) => k,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        signing_key.sign_raw(&data_bytes).to_bytes().to_vec()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
@@ -199,6 +249,43 @@ pub unsafe extern "C" fn js_webcrypto_verify(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         constant_time_eq(&expected_sig, &provided_sig)
+    } else if algo_upper == "KMAC128" || algo_upper == "KMAC256" {
+        let key_algo = if algo_upper == "KMAC128" {
+            KeyAlgo::Kmac128
+        } else {
+            KeyAlgo::Kmac256
+        };
+        if mat.algo != key_algo || mat.kind != KeyKind::Secret {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let output_length = match kmac_output_length(algo_bits.to_bits()) {
+            Ok(length) => length,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        if output_length == 0 {
+            return resolve_with_bool(false);
+        }
+        let customization =
+            object_field_bytes(algo_bits.to_bits(), b"customization").unwrap_or_else(Vec::new);
+        let expected_sig = match compute_kmac(
+            key_algo,
+            &key_bytes,
+            &customization,
+            &data_bytes,
+            output_length,
+        ) {
+            Some(s) => s,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        constant_time_eq(&expected_sig, &provided_sig)
     } else if algo_upper == "ECDSA" {
         if !is_ecdsa_key_algo(mat.algo) || mat.kind != KeyKind::Public {
             return reject_with_dom_exception(
@@ -279,6 +366,31 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         use ed25519_dalek::Verifier as _;
         verifying_key.verify(&data_bytes, &signature).is_ok()
+    } else if algo_upper == "ED448" {
+        if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Public {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let public: [u8; 57] = match key_bytes.as_slice().try_into() {
+            Ok(p) => p,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let verifying_key = match ed448_goldilocks::VerifyingKey::from_bytes(&public) {
+            Ok(k) => k,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let signature = match ed448_goldilocks::Signature::from_slice(&provided_sig) {
+            Ok(sig) => sig,
+            Err(_) => return resolve_with_bool(false),
+        };
+        verifying_key.verify_raw(&signature, &data_bytes).is_ok()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {
         if mat.algo != KeyAlgo::RsassaPkcs1 || mat.kind != KeyKind::Public {
             return reject_with_dom_exception(
@@ -364,6 +476,16 @@ pub(super) fn number_from_bits(bits: u64) -> Option<u32> {
     }
 }
 
+unsafe fn kmac_output_length(algo_bits: u64) -> Result<u32, (&'static str, &'static str)> {
+    let Some(length) = object_field_number(algo_bits, b"outputLength") else {
+        return Err(("TypeError", "KmacParams.outputLength is required"));
+    };
+    if length % 8 != 0 {
+        return Err(("NotSupportedError", "Unsupported KmacParams outputLength"));
+    }
+    Ok(length)
+}
+
 pub(super) unsafe fn ecdh_shared_secret_bytes(
     algo_bits: u64,
     base_key_bits: u64,
@@ -373,7 +495,7 @@ pub(super) unsafe fn ecdh_shared_secret_bytes(
         None => return None,
     };
     let algo_upper = algo_name.to_ascii_uppercase();
-    if algo_upper != "ECDH" && algo_upper != "X25519" {
+    if algo_upper != "ECDH" && algo_upper != "X25519" && algo_upper != "X448" {
         return None;
     }
     let public_bits = object_field_bits(algo_bits, b"public")?;
@@ -394,6 +516,15 @@ pub(super) unsafe fn ecdh_shared_secret_bytes(
         let public: [u8; 32] = public_bytes.as_slice().try_into().ok()?;
         let private = x25519_dalek::StaticSecret::from(private);
         let public = x25519_dalek::PublicKey::from(public);
+        return Some(private.diffie_hellman(&public).as_bytes().to_vec());
+    }
+    if algo_upper == "X448" {
+        if public_mat.algo != KeyAlgo::X448 || base_mat.algo != KeyAlgo::X448 {
+            return None;
+        }
+        let private: [u8; 56] = private_bytes.as_slice().try_into().ok()?;
+        let public = x448::PublicKey::from_bytes_unchecked(&public_bytes)?;
+        let private = x448::StaticSecret::from(private);
         return Some(private.diffie_hellman(&public).as_bytes().to_vec());
     }
     match (public_mat.algo, base_mat.algo) {

@@ -446,6 +446,30 @@ fn module_strictness_uses_raw_directive_tokens() {
 }
 
 #[test]
+fn function_constructor_lookalike_directives_parse_as_sloppy_script_bodies() {
+    let module = lower_js_src(
+        r#"
+        const doubledSpace = Function("\"use  strict\"; var public = 1; return public;");
+        const escapedSpace = new Function("\"use\\x20strict\"; var yield = 2; return yield;");
+        const interrupted = new Function("var interface = 3; \"use strict\"; return interface;");
+        "#,
+    );
+
+    assert!(matches!(
+        top_level_init(&module, "doubledSpace"),
+        Expr::Closure { .. }
+    ));
+    assert!(matches!(
+        top_level_init(&module, "escapedSpace"),
+        Expr::Closure { .. }
+    ));
+    assert!(matches!(
+        top_level_init(&module, "interrupted"),
+        Expr::Closure { .. }
+    ));
+}
+
+#[test]
 fn sloppy_js_yield_identifier_arrow_parameters_lower() {
     let module = lower_js_src(
         r#"

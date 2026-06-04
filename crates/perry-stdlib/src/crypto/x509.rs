@@ -3,6 +3,7 @@ use super::*;
 pub struct X509Handle {
     der: Vec<u8>,
     cert: x509_cert::Certificate,
+    issuer_certificate: Option<Handle>,
 }
 
 /// Short attribute name for an X.500 DN OID, matching Node's subject /
@@ -182,6 +183,25 @@ enum X509HostSubject {
     Never,
 }
 
+fn x509_subject_email_addresses(cert: &x509_cert::Certificate) -> Vec<String> {
+    let mut addresses = Vec::new();
+    for rdn in cert.tbs_certificate.subject.0.iter() {
+        for atv in rdn.0.iter() {
+            if atv.oid.to_string() == "1.2.840.113549.1.9.1" {
+                addresses.push(x509_attr_value(atv));
+            }
+        }
+    }
+    addresses
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum X509CheckSubject {
+    Default,
+    Always,
+    Never,
+}
+
 struct X509CheckHostOptions {
     subject: X509HostSubject,
     wildcards: bool,
@@ -305,6 +325,20 @@ fn x509_dns_name_matches(candidate: &str, host: &str, options: &X509CheckHostOpt
     !host_label.is_empty() && host_label.starts_with(prefix) && host_label.ends_with(suffix)
 }
 
+unsafe fn x509_check_subject_option(args: &[f64]) -> X509CheckSubject {
+    let Some(options) = args.get(1) else {
+        return X509CheckSubject::Default;
+    };
+    let Some(subject) = object_field_string(options.to_bits(), b"subject") else {
+        return X509CheckSubject::Default;
+    };
+    match subject.as_str() {
+        "always" => X509CheckSubject::Always,
+        "never" => X509CheckSubject::Never,
+        _ => X509CheckSubject::Default,
+    }
+}
+
 fn x509_check_host_value(
     cert: &x509_cert::Certificate,
     name: &str,
@@ -337,21 +371,35 @@ fn x509_check_host_value(
         .find(|candidate| x509_dns_name_matches(candidate, name, options))
 }
 
-fn x509_check_email_value(cert: &x509_cert::Certificate, email: &str) -> Option<String> {
+fn x509_check_email_value(
+    cert: &x509_cert::Certificate,
+    email: &str,
+    subject: X509CheckSubject,
+) -> Option<String> {
     use x509_cert::ext::pkix::name::GeneralName;
 
-    let san = x509_decoded_subject_alt_name(cert)?;
-    san.0.iter().find_map(|general_name| {
-        let GeneralName::Rfc822Name(value) = general_name else {
-            return None;
-        };
-        let candidate = value.as_str();
-        if candidate == email {
-            Some(candidate.to_string())
-        } else {
-            None
+    let mut saw_email_san = false;
+    if let Some(san) = x509_decoded_subject_alt_name(cert) {
+        for general_name in san.0.iter() {
+            let GeneralName::Rfc822Name(value) = general_name else {
+                continue;
+            };
+            saw_email_san = true;
+            let candidate = value.as_str();
+            if candidate == email {
+                return Some(candidate.to_string());
+            }
         }
-    })
+    }
+
+    if subject == X509CheckSubject::Never || (saw_email_san && subject != X509CheckSubject::Always)
+    {
+        return None;
+    }
+
+    x509_subject_email_addresses(cert)
+        .into_iter()
+        .find(|candidate| candidate == email)
 }
 
 fn x509_check_ip_value(cert: &x509_cert::Certificate, ip: &str) -> Option<String> {
@@ -421,6 +469,63 @@ fn x509_info_access(cert: &x509_cert::Certificate) -> Option<String> {
     } else {
         Some(lines.join("\n"))
     }
+}
+
+fn x509_handle_arg(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != 0x7FFD_0000_0000_0000 {
+        return None;
+    }
+    let handle = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+    crate::common::handle::with_handle::<X509Handle, bool, _>(handle, |_| true)
+        .unwrap_or(false)
+        .then_some(handle)
+}
+
+fn x509_throw_certificate_arg(value: f64) -> ! {
+    let message = format!(
+        "The \"otherCert\" argument must be an instance of X509Certificate. Received {}",
+        perry_runtime::fs::validate::describe_received(value)
+    );
+    perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn x509_name_der(name: &x509_cert::name::Name) -> Option<Vec<u8>> {
+    use x509_cert::der::Encode;
+
+    name.to_der().ok()
+}
+
+fn x509_check_issued_value(cert: &x509_cert::Certificate, issuer: &x509_cert::Certificate) -> bool {
+    use x509_cert::der::Encode;
+
+    let Some(issuer_name) = x509_name_der(&cert.tbs_certificate.issuer) else {
+        return false;
+    };
+    let Some(subject_name) = x509_name_der(&issuer.tbs_certificate.subject) else {
+        return false;
+    };
+    if issuer_name != subject_name {
+        return false;
+    }
+
+    let Some(alg) = x509_rsa_signature_digest(cert) else {
+        return false;
+    };
+    let Some((_, public_key)) = x509_rsa_public_key(issuer) else {
+        return false;
+    };
+    let Some(signature_bytes) = cert.signature.as_bytes() else {
+        return false;
+    };
+    let Ok(signature) = RsaPkcs1v15Signature::try_from(signature_bytes) else {
+        return false;
+    };
+    let Ok(tbs_der) = cert.tbs_certificate.to_der() else {
+        return false;
+    };
+
+    verify_rsa_data(alg, public_key, &tbs_der, &signature)
 }
 
 fn x509_string_f64(s: &str) -> f64 {
@@ -794,6 +899,10 @@ unsafe fn x509_check_private_key_value(handle: &X509Handle, args: &[f64]) -> f64
     )
 }
 
+fn x509_handle_value(handle: Handle) -> f64 {
+    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+}
+
 fn throw_x509_parse_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(msg);
@@ -878,8 +987,12 @@ pub unsafe extern "C" fn js_crypto_x509_new(input_ptr: i64) -> f64 {
         Ok(d) => d,
         Err(_) => throw_x509_parse_error("error:0680007B:asn1 encoding routines::header too long"),
     };
-    let handle: Handle = register_handle(X509Handle { der, cert });
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+    let handle: Handle = register_handle(X509Handle {
+        der,
+        cert,
+        issuer_certificate: None,
+    });
+    x509_handle_value(handle)
 }
 
 /// Read-only property dispatch for an X509Certificate handle.
@@ -896,6 +1009,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
             | "checkIP"
             | "verify"
             | "checkPrivateKey"
+            | "checkIssued"
     ) {
         return dispatch_x509_method_property(handle, property);
     }
@@ -954,6 +1068,10 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         "publicKey" => x509_public_key_value(h),
+        "issuerCertificate" => h
+            .issuer_certificate
+            .map(x509_handle_value)
+            .unwrap_or_else(nanbox_undefined),
         _ => nanbox_undefined(),
     }
 }
@@ -975,7 +1093,9 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
             }
         }
         "checkEmail" => {
-            match x509_check_email_value(&h.cert, &x509_required_string_arg(args, "email")) {
+            let subject = x509_check_subject_option(args);
+            match x509_check_email_value(&h.cert, &x509_required_string_arg(args, "email"), subject)
+            {
                 Some(value) => x509_string_f64(&value),
                 None => nanbox_undefined(),
             }
@@ -986,6 +1106,22 @@ pub unsafe fn dispatch_x509_method(handle: i64, method: &str, args: &[f64]) -> f
         },
         "verify" => x509_verify_value(h, args),
         "checkPrivateKey" => x509_check_private_key_value(h, args),
+        "checkIssued" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+            let Some(other_handle) = x509_handle_arg(value) else {
+                x509_throw_certificate_arg(value);
+            };
+            let cert = h.cert.clone();
+            let Some(other_cert) =
+                get_handle_mut::<X509Handle>(other_handle).map(|other| other.cert.clone())
+            else {
+                x509_throw_certificate_arg(value);
+            };
+            js_bool(x509_check_issued_value(&cert, &other_cert))
+        }
         _ => nanbox_undefined(),
     }
 }
@@ -1016,6 +1152,7 @@ pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 
         "checkIP" => b"checkIP",
         "verify" => b"verify",
         "checkPrivateKey" => b"checkPrivateKey",
+        "checkIssued" => b"checkIssued",
         _ => return nanbox_undefined(),
     };
     let this_f64 =

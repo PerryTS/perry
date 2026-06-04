@@ -105,6 +105,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_index_get_dynamic", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_typed_array_at", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_typed_array_set", VOID, &[I64, I32, DOUBLE]);
+    module.declare_function(
+        "js_typed_array_index_set_dynamic",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_uint8array_get", I32, &[I64, I32]);
     module.declare_function("js_uint8array_set", VOID, &[I64, I32, I32]);
     module.declare_function("js_native_arena_alloc", I64, &[I64]);

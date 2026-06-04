@@ -28,6 +28,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
     };
     let algo_upper = algo_name.to_ascii_uppercase();
+    let algo_is_string = string_from_jsvalue(algo_bits.to_bits()).is_some();
     if algo_upper == "RSA-OAEP" || algo_upper == "RSASSA-PKCS1-V1_5" || algo_upper == "RSA-PSS" {
         let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha1);
         let key_algo = match algo_upper.as_str() {
@@ -157,6 +158,68 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         );
         return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
     }
+    if algo_upper == "ED448" {
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            KeyAlgo::Ed448,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for an Ed448 key",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let mut seed = [0u8; 57];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        let signing_key = match ed448_goldilocks::SigningKey::try_from(seed.as_slice()) {
+            Ok(k) => k,
+            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let public_bytes = signing_key.verifying_key().to_bytes().to_vec();
+
+        let private_buf = alloc_uint8array_from_slice(&seed);
+        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        if private_buf.is_null() || public_buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial::new(
+                KeyAlgo::Ed448,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial::new(
+                KeyAlgo::Ed448,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
     if algo_upper == "X25519" {
         let (private_usages, public_usages) = match validate_key_pair_usages(
             KeyAlgo::X25519,
@@ -193,6 +256,141 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             public_buf as usize,
             CryptoKeyMaterial::new(
                 KeyAlgo::X25519,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if let Some(key_algo) = ml_kem_key_algo_from_name(&algo_upper) {
+        let bad_message = match key_algo {
+            KeyAlgo::MlKem512 => "Unsupported key usage for a ML-KEM-512 key",
+            KeyAlgo::MlKem768 => "Unsupported key usage for a ML-KEM-768 key",
+            KeyAlgo::MlKem1024 => "Unsupported key usage for a ML-KEM-1024 key",
+            _ => unreachable!(),
+        };
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            key_algo,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            bad_message,
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        if private_usages == 0 {
+            return reject_with_dom_exception(
+                "SyntaxError",
+                "Usages cannot be empty when creating a key.",
+            );
+        }
+
+        let mut seed = [0u8; 64];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        let (private_der, public_der) = match ml_kem_der_pair_from_seed(key_algo, &seed) {
+            Some(pair) => pair,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+
+        let private_buf = alloc_uint8array_from_slice(&private_der);
+        let public_buf = alloc_uint8array_from_slice(&public_der);
+        if private_buf.is_null() || public_buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial::new(
+                key_algo,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial::new(
+                key_algo,
+                HashAlgo::Sha256,
+                KeyKind::Public,
+                true,
+                public_usages,
+            ),
+        );
+
+        let obj = js_object_alloc(0, 2);
+        if obj.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
+        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
+        js_object_set_field_by_name(
+            obj,
+            public_key_name,
+            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
+        );
+        js_object_set_field_by_name(
+            obj,
+            private_key_name,
+            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
+        );
+        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+    }
+    if algo_upper == "X448" {
+        let (private_usages, public_usages) = match validate_key_pair_usages(
+            KeyAlgo::X448,
+            usages_bits.to_bits(),
+            "Usages cannot be empty when creating a key.",
+            "Unsupported key usage for the requested algorithm",
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let mut seed = [0u8; 56];
+        rand::rngs::OsRng.fill_bytes(&mut seed);
+        let private_key = x448::StaticSecret::from(seed);
+        let public_key = x448::PublicKey::from(&private_key);
+        let private_bytes = private_key.as_bytes().to_vec();
+        let public_bytes = public_key.as_bytes().to_vec();
+
+        let private_buf = alloc_uint8array_from_slice(&private_bytes);
+        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        if private_buf.is_null() || public_buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            private_buf as usize,
+            CryptoKeyMaterial::new(
+                KeyAlgo::X448,
+                HashAlgo::Sha256,
+                KeyKind::Private,
+                extractable,
+                private_usages,
+            ),
+        );
+        register_crypto_key(
+            public_buf as usize,
+            CryptoKeyMaterial::new(
+                KeyAlgo::X448,
                 HashAlgo::Sha256,
                 KeyKind::Public,
                 true,
@@ -421,10 +619,75 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         return resolve_with_bits(JSValue::pointer(buf as *const u8).bits());
     }
 
+    if algo_upper == "KMAC128" || algo_upper == "KMAC256" {
+        let key_algo = if algo_upper == "KMAC128" {
+            KeyAlgo::Kmac128
+        } else {
+            KeyAlgo::Kmac256
+        };
+        let bad_message = if key_algo == KeyAlgo::Kmac128 {
+            "Unsupported key usage for KMAC128 key"
+        } else {
+            "Unsupported key usage for KMAC256 key"
+        };
+        let usages = match validate_key_usages(
+            key_algo,
+            KeyKind::Secret,
+            usages_bits.to_bits(),
+            false,
+            "Usages cannot be empty when creating a key.",
+            bad_message,
+        ) {
+            Ok(u) => u,
+            Err((name, message)) => return reject_with_dom_exception(name, message),
+        };
+        let default_length = if key_algo == KeyAlgo::Kmac128 {
+            128
+        } else {
+            256
+        };
+        let bit_len = if string_from_jsvalue(algo_bits.to_bits()).is_some() {
+            default_length
+        } else {
+            object_field_number(algo_bits.to_bits(), b"length").unwrap_or(default_length)
+        };
+        if bit_len == 0 {
+            return reject_with_dom_exception(
+                "OperationError",
+                "KmacKeyGenParams.length cannot be 0",
+            );
+        }
+        if bit_len % 8 != 0 {
+            return reject_with_dom_exception(
+                "NotSupportedError",
+                "Unsupported KmacKeyGenParams.length",
+            );
+        }
+        let mut key_bytes = vec![0u8; (bit_len / 8) as usize];
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        let buf = alloc_uint8array_from_slice(&key_bytes);
+        if buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
+        register_crypto_key(
+            buf as usize,
+            CryptoKeyMaterial::new(
+                key_algo,
+                HashAlgo::Sha256,
+                KeyKind::Secret,
+                extractable,
+                usages,
+            ),
+        );
+        return resolve_with_bits(JSValue::pointer(buf as *const u8).bits());
+    }
+
     if algo_upper != "AES-GCM"
         && algo_upper != "AES-KW"
         && algo_upper != "AES-CBC"
         && algo_upper != "AES-CTR"
+        && algo_upper != "AES-OCB"
     {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
@@ -436,9 +699,17 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         KeyAlgo::AesCtr
     } else if algo_upper == "AES-KW" {
         KeyAlgo::AesKw
+    } else if algo_upper == "AES-OCB" {
+        KeyAlgo::AesOcb
     } else {
         KeyAlgo::AesGcm
     };
+    if algo_upper == "AES-OCB" && algo_is_string {
+        return reject_with_dom_exception(
+            "TypeError",
+            "Failed to normalize algorithm: length is required",
+        );
+    }
     let usages = match validate_key_usages(
         key_algo,
         KeyKind::Secret,
@@ -450,10 +721,19 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         Ok(u) => u,
         Err((name, message)) => return reject_with_dom_exception(name, message),
     };
-    let length = object_field_number(algo_bits.to_bits(), b"length").unwrap_or(256);
+    let length = match object_field_number(algo_bits.to_bits(), b"length") {
+        Some(length) => length,
+        None if algo_upper == "AES-OCB" => {
+            return reject_with_dom_exception(
+                "TypeError",
+                "Failed to normalize algorithm: length is required",
+            )
+        }
+        None => 256,
+    };
     let byte_len = match (algo_upper.as_str(), length) {
         (_, 128) => 16,
-        ("AES-GCM" | "AES-KW" | "AES-CBC" | "AES-CTR", 192) => 24,
+        ("AES-GCM" | "AES-KW" | "AES-CBC" | "AES-CTR" | "AES-OCB", 192) => 24,
         (_, 256) => 32,
         _ => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
@@ -462,8 +742,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(&mut key_bytes);
 
-    // Allocate the CryptoKey-shaped buffer + register it as AES-GCM so
-    // the importKey/encrypt/decrypt path works on the result.
+    // Allocate the CryptoKey-shaped buffer and register the requested
+    // WebCrypto algorithm so later operations can validate it.
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");

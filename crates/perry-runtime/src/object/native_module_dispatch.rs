@@ -691,6 +691,10 @@ pub(crate) unsafe fn dispatch_native_module_method(
             "Class constructor KeyObject cannot be invoked without 'new'",
             "ERR_CONSTRUCT_CALL_REQUIRED",
         ),
+        ("crypto", "X509Certificate") => crate::fs::validate::throw_type_error_with_code(
+            "Class constructor X509Certificate cannot be invoked without 'new'",
+            "ERR_CONSTRUCT_CALL_REQUIRED",
+        ),
         ("crypto.KeyObject", "from") => {
             super::native_module_crypto_key_object::key_object_from(arg(0))
         }

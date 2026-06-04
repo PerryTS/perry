@@ -36,8 +36,8 @@ use std::sync::{
 };
 
 use sync_run::{
-    cp_read_async_run_options, cp_read_run_options, cp_run_to_completion, CpRun, CpRunError,
-    CpRunOptions,
+    cp_read_async_run_options, cp_read_run_options, cp_read_spawn_sync_run_options,
+    cp_read_sync_stdio_run_options, cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
 };
 
 use crate::closure::{
@@ -393,13 +393,13 @@ pub extern "C" fn js_child_process_exec_sync(
     };
     cp_apply_options(&mut command, opts_val);
 
-    let run_options = cp_read_run_options(opts_val);
+    let run_options = cp_read_sync_stdio_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let stdout_box = cp_box_run_output(&run.stdout, run.stdout_piped, &mode);
     if run.success() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_run_output(&run.stderr, run.stderr_piped, &mode);
     cp_sync_throw_error(&run, &cmd_str, stdout_box, stderr_box);
 }
 
@@ -435,17 +435,21 @@ pub extern "C" fn js_child_process_spawn_sync(
     // unless `shell` is set).
     let arg_strs = unsafe { cp_read_arg_strings(args_ptr as i64) };
     let command = cp_build_command(&cmd_str, &arg_strs, opts_val);
-    let run_options = cp_read_run_options(opts_val);
+    let run_options = cp_read_spawn_sync_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
 
     let spawn_failed_before_pid = run.spawn_error.is_some() && run.pid.is_none();
     let stdout_box = if spawn_failed_before_pid {
         cp_undefined()
+    } else if !run.stdout_piped {
+        TAG_NULL_F64
     } else {
         cp_box_output(&run.stdout, &mode)
     };
     let stderr_box = if spawn_failed_before_pid {
         cp_undefined()
+    } else if !run.stderr_piped {
+        TAG_NULL_F64
     } else {
         cp_box_output(&run.stderr, &mode)
     };
@@ -1626,9 +1630,27 @@ pub(super) enum CpStdio {
     Pipe,
     Ignore,
     Inherit,
+    Fd(i32),
 }
 
 fn cp_stdio_kind(value: f64) -> CpStdio {
+    let js_value = JSValue::from_bits(value.to_bits());
+    let fd = if js_value.is_int32() {
+        Some(js_value.as_int32())
+    } else if js_value.is_number() {
+        let n = js_value.as_number();
+        if n.is_finite() && n >= 0.0 && n.fract() == 0.0 && n <= i32::MAX as f64 {
+            Some(n as i32)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(fd) = fd {
+        return CpStdio::Fd(fd);
+    }
+
     match cp_value_to_string(value).as_deref() {
         Some("ignore") => CpStdio::Ignore,
         Some("inherit") => CpStdio::Inherit,
@@ -1636,8 +1658,8 @@ fn cp_stdio_kind(value: f64) -> CpStdio {
     }
 }
 
-/// Read the deterministic live-stdio subset: `pipe` (default), `ignore`, and
-/// `inherit`. Other Node forms (numeric fds, custom streams) intentionally
+/// Read the deterministic live-stdio subset: `pipe` (default), `ignore`,
+/// `inherit`, and numeric fd entries. Custom stream handles intentionally
 /// remain in #2555.
 pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     let mut out = vec![CpStdio::Pipe; fds];
@@ -1646,6 +1668,14 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     }
 
     let stdio = cp_get_field(opts_val, b"stdio");
+    if let Some(arr) = cp_array_ptr(stdio) {
+        let n = crate::array::js_array_length(arr).min(fds as u32);
+        for i in 0..n {
+            out[i as usize] = cp_stdio_kind(crate::array::js_array_get_f64(arr, i));
+        }
+        return out;
+    }
+
     if let Some(s) = cp_value_to_string(stdio) {
         match s.as_str() {
             "ignore" => out.fill(CpStdio::Ignore),
@@ -1654,21 +1684,13 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
         }
         return out;
     }
-
-    let Some(arr) = cp_array_ptr(stdio) else {
-        return out;
-    };
-    let n = crate::array::js_array_length(arr).min(fds as u32);
-    for i in 0..n {
-        out[i as usize] = cp_stdio_kind(crate::array::js_array_get_f64(arr, i));
-    }
     out
 }
 
 pub(super) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     match kind {
         CpStdio::Pipe => pipe_obj,
-        CpStdio::Ignore | CpStdio::Inherit => TAG_NULL_F64,
+        CpStdio::Ignore | CpStdio::Inherit | CpStdio::Fd(_) => TAG_NULL_F64,
     }
 }
 
@@ -1677,10 +1699,31 @@ pub(super) fn cp_apply_live_stdio(command: &mut Command, stdio: &[CpStdio]) {
         CpStdio::Pipe => Stdio::piped(),
         CpStdio::Ignore => Stdio::null(),
         CpStdio::Inherit => Stdio::inherit(),
+        CpStdio::Fd(fd) => cp_stdio_from_fd(fd),
     };
     command.stdin(to_stdio(stdio.first().copied().unwrap_or(CpStdio::Pipe)));
     command.stdout(to_stdio(stdio.get(1).copied().unwrap_or(CpStdio::Pipe)));
     command.stderr(to_stdio(stdio.get(2).copied().unwrap_or(CpStdio::Pipe)));
+}
+
+#[cfg(unix)]
+fn cp_stdio_from_fd(fd: i32) -> Stdio {
+    use std::os::fd::FromRawFd;
+
+    if let Some(file) = crate::fs::try_clone_registered_fd(fd) {
+        return Stdio::from(file);
+    }
+
+    let dup_fd = unsafe { libc::dup(fd) };
+    if dup_fd < 0 {
+        return Stdio::null();
+    }
+    unsafe { Stdio::from_raw_fd(dup_fd) }
+}
+
+#[cfg(not(unix))]
+fn cp_stdio_from_fd(_fd: i32) -> Stdio {
+    Stdio::null()
 }
 
 /// Default shell for `{ shell: true }` (`shell: "<path>"` overrides it).
@@ -1800,6 +1843,14 @@ fn cp_box_output(bytes: &[u8], mode: &CpOutput) -> f64 {
     match mode {
         CpOutput::Buffer => cp_make_buffer(bytes),
         CpOutput::Text(enc) => crate::value::js_nanbox_string(cp_encode_text(bytes, enc) as i64),
+    }
+}
+
+fn cp_box_run_output(bytes: &[u8], piped: bool, mode: &CpOutput) -> f64 {
+    if piped {
+        cp_box_output(bytes, mode)
+    } else {
+        TAG_NULL_F64
     }
 }
 
@@ -2196,14 +2247,14 @@ pub extern "C" fn js_child_process_exec_file_sync(
     command.args(&arg_strs);
     cp_apply_argv0(&mut command, opts_val);
     cp_apply_options(&mut command, opts_val);
-    let run_options = cp_read_run_options(opts_val);
+    let run_options = cp_read_sync_stdio_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
 
-    let stdout_box = cp_box_output(&run.stdout, &mode);
+    let stdout_box = cp_box_run_output(&run.stdout, run.stdout_piped, &mode);
     if run.success() {
         return stdout_box;
     }
-    let stderr_box = cp_box_output(&run.stderr, &mode);
+    let stderr_box = cp_box_run_output(&run.stderr, run.stderr_piped, &mode);
     cp_sync_throw_error(
         &run,
         &cp_file_cmd_display(&file_str, &arg_strs),

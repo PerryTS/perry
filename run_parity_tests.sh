@@ -357,14 +357,35 @@ if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
         ""|http|http/*|https|https/*|http2|http2/*)
             # No-auto optimized links still consume prebuilt well-known ext archives
             # and need the matching stdlib pump hooks compiled into libperry_stdlib.a.
-            BUILD_PACKAGES+=(-p perry-ext-http)
+            # HTTP fixtures can also emit net + ws well-known owners via the codegen
+            # FFI registry, so build those wrappers too (#4373).
+            BUILD_PACKAGES+=(-p perry-ext-http -p perry-ext-net -p perry-ext-ws)
             BUILD_FEATURES+=(--features perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump)
+            ;;
+    esac
+fi
+needs_ext_net=0
+if [[ "$TEST_SUITE" == "node-suite" ]]; then
+    case "$MODULE_FILTER" in
+        ""|net|net/*)
+            # node-suite/net commonly runs with PERRY_NO_AUTO_OPTIMIZE=1.
+            # That path links prebuilt well-known archives, so build ext-net
+            # once up front instead of failing on unresolved js_net_* symbols.
+            needs_ext_net=1
             ;;
     esac
 fi
 if ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURES[@]}" 2>/dev/null; then
     echo -e "${RED}Failed to build compiler/runtime archives${NC}"
     exit 1
+fi
+if [[ "$needs_ext_net" -eq 1 ]]; then
+    echo "Building net extension (release)..."
+    ext_net_jobs="${CARGO_BUILD_JOBS:-1}"
+    if ! cargo build --release --quiet -p perry-ext-net -j "$ext_net_jobs" 2>/dev/null; then
+        echo -e "${RED}Failed to build net extension library${NC}"
+        exit 1
+    fi
 fi
 if [[ ! -x "$PERRY_BIN" ]]; then
     echo -e "${RED}Expected $PERRY_BIN after release build${NC}"
