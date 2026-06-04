@@ -12,40 +12,69 @@ use std::sync::Once;
 
 // `events` is feature-gated behind `bundled-events`; when the well-known
 // bindings table routes `import 'events'` to perry-ext-events the in-tree
-// module is configured out (and the default auto-optimize build compiles
-// without it). The domain<->EventEmitter integration degrades to inert
-// no-ops in that build — these shims keep `mod domain` (which is NOT
-// feature-gated) compiling either way.
+// module may still be compiled into stdlib. Keep the local fast path for
+// bundled EventEmitter handles, but fall through to runtime hooks so external
+// EventEmitter implementations can participate in node:domain routing.
+#[inline]
+fn ee_is_event_emitter_handle_hook(handle: Handle) -> bool {
+    perry_runtime::object::event_emitter_handle_probe()
+        .is_some_and(|probe| unsafe { probe(handle) })
+}
+
+#[inline]
+fn ee_get_domain_hook(handle: Handle) -> Handle {
+    perry_runtime::object::event_emitter_get_domain()
+        .map(|get_domain| unsafe { get_domain(handle) })
+        .unwrap_or(0)
+}
+
+#[inline]
+fn ee_set_domain_hook(handle: Handle, domain: Handle) {
+    if let Some(set_domain) = perry_runtime::object::event_emitter_set_domain() {
+        let _ = unsafe { set_domain(handle, domain) };
+    }
+}
+
 #[cfg(feature = "bundled-events")]
 #[inline]
 fn ee_is_event_emitter_handle(handle: Handle) -> bool {
-    crate::events::is_event_emitter_handle(handle)
+    crate::events::is_event_emitter_handle(handle) || ee_is_event_emitter_handle_hook(handle)
 }
 #[cfg(not(feature = "bundled-events"))]
 #[inline]
-fn ee_is_event_emitter_handle(_handle: Handle) -> bool {
-    false
+fn ee_is_event_emitter_handle(handle: Handle) -> bool {
+    ee_is_event_emitter_handle_hook(handle)
 }
 
 #[cfg(feature = "bundled-events")]
 #[inline]
 fn ee_get_domain(handle: Handle) -> Handle {
-    crate::events::js_event_emitter_get_domain(handle)
+    if crate::events::is_event_emitter_handle(handle) {
+        crate::events::js_event_emitter_get_domain(handle)
+    } else {
+        ee_get_domain_hook(handle)
+    }
 }
 #[cfg(not(feature = "bundled-events"))]
 #[inline]
-fn ee_get_domain(_handle: Handle) -> Handle {
-    0
+fn ee_get_domain(handle: Handle) -> Handle {
+    ee_get_domain_hook(handle)
 }
 
 #[cfg(feature = "bundled-events")]
 #[inline]
 fn ee_set_domain(handle: Handle, domain: Handle) {
-    let _ = crate::events::js_event_emitter_set_domain(handle, domain);
+    if crate::events::is_event_emitter_handle(handle) {
+        let _ = crate::events::js_event_emitter_set_domain(handle, domain);
+    } else {
+        ee_set_domain_hook(handle, domain);
+    }
 }
 #[cfg(not(feature = "bundled-events"))]
 #[inline]
-fn ee_set_domain(_handle: Handle, _domain: Handle) {}
+fn ee_set_domain(handle: Handle, domain: Handle) {
+    ee_set_domain_hook(handle, domain);
+}
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
@@ -124,6 +153,8 @@ fn handle_from_value(value: f64) -> Handle {
     let bits = value.to_bits();
     if (bits >> 48) == 0x7FFD {
         (bits & 0x0000_FFFF_FFFF_FFFF) as Handle
+    } else if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
+        value as Handle
     } else {
         bits as Handle
     }
@@ -250,7 +281,8 @@ unsafe fn emit_domain_event(handle: Handle, event: &str, args: &[f64]) -> bool {
     true
 }
 
-pub unsafe fn js_domain_emit_error(
+#[no_mangle]
+pub unsafe extern "C" fn js_domain_emit_error(
     handle: Handle,
     error: f64,
     emitter: f64,

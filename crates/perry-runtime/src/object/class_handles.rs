@@ -70,6 +70,8 @@ pub type FetchHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 /// as heap objects.
 pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 pub type EventEmitterAsyncResourceHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+pub type EventEmitterGetDomainFn = unsafe extern "C" fn(handle: i64) -> i64;
+pub type EventEmitterSetDomainFn = unsafe extern "C" fn(handle: i64, domain: i64) -> i32;
 
 /// Probe for stdlib `net.Socket` handles. Socket instances are represented as
 /// pointer-tagged small integer handles, not heap objects with class ids.
@@ -96,6 +98,8 @@ static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
     AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_GET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_SET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
@@ -237,6 +241,36 @@ pub unsafe extern "C" fn js_register_event_emitter_async_resource_handle_probe(
     f: EventEmitterAsyncResourceHandleProbeFn,
 ) {
     EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn event_emitter_get_domain() -> Option<EventEmitterGetDomainFn> {
+    let p = EVENT_EMITTER_GET_DOMAIN_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterGetDomainFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_get_domain(f: EventEmitterGetDomainFn) {
+    EVENT_EMITTER_GET_DOMAIN_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn event_emitter_set_domain() -> Option<EventEmitterSetDomainFn> {
+    let p = EVENT_EMITTER_SET_DOMAIN_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterSetDomainFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_set_domain(f: EventEmitterSetDomainFn) {
+    EVENT_EMITTER_SET_DOMAIN_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]
