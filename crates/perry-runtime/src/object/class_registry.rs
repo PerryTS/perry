@@ -418,6 +418,31 @@ pub(crate) unsafe fn resolve_proto_chain_field_with_receiver(
     resolve_proto_chain_field_inner(class_id, key, Some(receiver))
 }
 
+unsafe fn inherited_proto_accessor_value(
+    proto_obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    if key.is_null() || !ACCESSORS_IN_USE.with(|c| c.get()) {
+        return None;
+    }
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let name = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()?;
+    let acc = get_accessor_descriptor(proto_obj as usize, name)?;
+    if acc.get == 0 {
+        return Some(JSValue::undefined());
+    }
+    let closure = (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+    if closure.is_null() {
+        return Some(JSValue::undefined());
+    }
+    let previous_this = js_implicit_this_set(receiver);
+    let value = crate::closure::js_closure_call0(closure);
+    js_implicit_this_set(previous_this);
+    Some(JSValue::from_bits(value.to_bits()))
+}
+
 unsafe fn resolve_proto_chain_field_inner(
     class_id: u32,
     key: *const crate::StringHeader,
@@ -428,6 +453,11 @@ unsafe fn resolve_proto_chain_field_inner(
     while depth < 32 {
         let proto_obj = class_prototype_object(cid);
         if !proto_obj.is_null() {
+            if let Some(receiver) = receiver {
+                if let Some(value) = inherited_proto_accessor_value(proto_obj, key, receiver) {
+                    return Some(value);
+                }
+            }
             let field_val = if let Some(receiver) = receiver {
                 let previous_this = js_implicit_this_set(receiver);
                 let value = js_object_get_field_by_name(proto_obj as *const _, key);
