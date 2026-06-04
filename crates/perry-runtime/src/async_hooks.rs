@@ -1168,7 +1168,6 @@ extern "C" fn async_local_storage_snapshot_trampoline(
     callback_value: f64,
     rest: f64,
 ) -> f64 {
-    validate_bind_callback(callback_value);
     let snapshot_id = js_closure_get_capture_ptr(closure, 0) as usize;
     let this_arg = crate::object::js_implicit_this_get();
     run_with_context_snapshot(snapshot_id, || {
