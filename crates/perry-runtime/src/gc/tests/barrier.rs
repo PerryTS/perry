@@ -299,6 +299,13 @@ fn test_write_barrier_non_pointer_child_skipped() {
         0,
         "number child must not enter remembered set"
     );
+    // Small native handles use pointer-like NaN-box tags but are not heap objects.
+    js_write_barrier(POINTER_TAG | (old as u64), POINTER_TAG | 0xE0000);
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "small native-handle child must not enter remembered set"
+    );
 }
 
 #[test]
@@ -311,6 +318,12 @@ fn test_write_barrier_non_pointer_parent_skipped() {
         remembered_set_size(),
         0,
         "non-pointer parent must not dirty remembered pages"
+    );
+    js_write_barrier_slot(POINTER_TAG | 0xE0000, 0, POINTER_TAG | young as u64);
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "small native-handle parent must not dirty remembered pages"
     );
 }
 

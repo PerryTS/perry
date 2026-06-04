@@ -784,3 +784,4 @@ pub(super) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 pub(super) const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 pub(super) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub(super) const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+pub(super) const MIN_HEAP_POINTER: u64 = 0x100000;

@@ -33,6 +33,19 @@ pub extern "C" fn js_event_emitter_get_domain(handle: Handle) -> Handle {
 #[no_mangle]
 pub extern "C" fn js_event_emitter_domain_value(handle: Handle) -> f64 {
     let domain = js_event_emitter_get_domain(handle);
+    let domain = if domain == 0 {
+        let is_external = perry_runtime::object::external_event_emitter_domain_probe()
+            .is_some_and(|probe| unsafe { probe(handle) });
+        if is_external {
+            perry_runtime::object::external_event_emitter_domain_get()
+                .map(|get| unsafe { get(handle) })
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    } else {
+        domain
+    };
     if domain == 0 {
         f64::from_bits(TAG_NULL_F64_BITS)
     } else {

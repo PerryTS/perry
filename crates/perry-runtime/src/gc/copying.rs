@@ -127,7 +127,7 @@ impl CopyingPointerSet {
 
     #[inline]
     pub(super) fn raw_pointer_candidate(bits: u64) -> bool {
-        (0x1000..=POINTER_MASK).contains(&bits) && bits & 0x7 == 0
+        (MIN_HEAP_POINTER..=POINTER_MASK).contains(&bits) && bits & 0x7 == 0
     }
 
     #[inline]
@@ -135,7 +135,7 @@ impl CopyingPointerSet {
         let tag = bits & TAG_MASK;
         if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
             let addr = (bits & POINTER_MASK) as usize;
-            return (addr != 0).then_some((addr, true, tag));
+            return (addr >= MIN_HEAP_POINTER as usize).then_some((addr, true, tag));
         }
         if tag >= 0x7FF8_0000_0000_0000 {
             return None;
@@ -155,7 +155,7 @@ impl CopyingPointerSet {
         let tag = bits & TAG_MASK;
         if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
             let addr = (bits & POINTER_MASK) as usize;
-            if addr == 0 {
+            if addr < MIN_HEAP_POINTER as usize {
                 return Ok(None);
             }
             return self

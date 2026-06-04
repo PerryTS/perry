@@ -12,40 +12,83 @@ use std::sync::Once;
 
 // `events` is feature-gated behind `bundled-events`; when the well-known
 // bindings table routes `import 'events'` to perry-ext-events the in-tree
-// module is configured out (and the default auto-optimize build compiles
-// without it). The domain<->EventEmitter integration degrades to inert
-// no-ops in that build — these shims keep `mod domain` (which is NOT
-// feature-gated) compiling either way.
+// module may not own EventEmitter handles. The runtime hooks below let the
+// external EventEmitter implementation participate in domain membership
+// without making this stdlib module link directly against that crate.
 #[cfg(feature = "bundled-events")]
 #[inline]
-fn ee_is_event_emitter_handle(handle: Handle) -> bool {
+fn stdlib_ee_is_event_emitter_handle(handle: Handle) -> bool {
     crate::events::is_event_emitter_handle(handle)
 }
 #[cfg(not(feature = "bundled-events"))]
 #[inline]
-fn ee_is_event_emitter_handle(_handle: Handle) -> bool {
+fn stdlib_ee_is_event_emitter_handle(_handle: Handle) -> bool {
     false
 }
 
 #[cfg(feature = "bundled-events")]
 #[inline]
-fn ee_get_domain(handle: Handle) -> Handle {
+fn stdlib_ee_get_domain(handle: Handle) -> Handle {
     crate::events::js_event_emitter_get_domain(handle)
 }
 #[cfg(not(feature = "bundled-events"))]
 #[inline]
-fn ee_get_domain(_handle: Handle) -> Handle {
+fn stdlib_ee_get_domain(_handle: Handle) -> Handle {
     0
 }
 
 #[cfg(feature = "bundled-events")]
 #[inline]
-fn ee_set_domain(handle: Handle, domain: Handle) {
+fn stdlib_ee_set_domain(handle: Handle, domain: Handle) {
     let _ = crate::events::js_event_emitter_set_domain(handle, domain);
 }
 #[cfg(not(feature = "bundled-events"))]
 #[inline]
-fn ee_set_domain(_handle: Handle, _domain: Handle) {}
+fn stdlib_ee_set_domain(_handle: Handle, _domain: Handle) {}
+
+#[inline]
+fn external_ee_is_event_emitter_handle(handle: Handle) -> bool {
+    perry_runtime::object::external_event_emitter_domain_probe()
+        .is_some_and(|probe| unsafe { probe(handle) })
+}
+
+#[inline]
+fn external_ee_get_domain(handle: Handle) -> Handle {
+    perry_runtime::object::external_event_emitter_domain_get()
+        .map(|get| unsafe { get(handle) })
+        .unwrap_or(0)
+}
+
+#[inline]
+fn external_ee_set_domain(handle: Handle, domain: Handle) {
+    if let Some(set) = perry_runtime::object::external_event_emitter_domain_set() {
+        let _ = unsafe { set(handle, domain) };
+    }
+}
+
+#[inline]
+fn ee_is_event_emitter_handle(handle: Handle) -> bool {
+    stdlib_ee_is_event_emitter_handle(handle) || external_ee_is_event_emitter_handle(handle)
+}
+
+#[inline]
+fn ee_get_domain(handle: Handle) -> Handle {
+    let stdlib_domain = stdlib_ee_get_domain(handle);
+    if stdlib_domain != 0 {
+        stdlib_domain
+    } else {
+        external_ee_get_domain(handle)
+    }
+}
+
+#[inline]
+fn ee_set_domain(handle: Handle, domain: Handle) {
+    if stdlib_ee_is_event_emitter_handle(handle) {
+        stdlib_ee_set_domain(handle, domain);
+    } else if external_ee_is_event_emitter_handle(handle) {
+        external_ee_set_domain(handle, domain);
+    }
+}
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
@@ -258,6 +301,16 @@ pub unsafe fn js_domain_emit_error(
 ) -> bool {
     annotate_error(handle, error, emitter, undefined(), domain_thrown);
     emit_domain_event(handle, "error", &[error])
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_domain_emit_error_from_event_emitter(
+    handle: Handle,
+    error: f64,
+    emitter: f64,
+    domain_thrown: i32,
+) -> i32 {
+    js_domain_emit_error(handle, error, emitter, domain_thrown != 0) as i32
 }
 
 unsafe fn call_with_domain(handle: Handle, callback: f64, args: &[f64]) -> f64 {

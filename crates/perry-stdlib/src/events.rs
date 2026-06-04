@@ -922,6 +922,13 @@ unsafe fn collect_emit_args(args_ptr: *const ArrayHeader) -> Vec<f64> {
     args
 }
 
+fn root_nanbox_f64_slice<'scope>(
+    scope: &'scope perry_runtime::gc::RuntimeHandleScope,
+    args: &[f64],
+) -> Vec<perry_runtime::gc::RuntimeHandle<'scope>> {
+    args.iter().map(|arg| scope.root_nanbox_f64(*arg)).collect()
+}
+
 unsafe fn call_emitter_listener(
     handle: Handle,
     async_resource_handle: i64,
@@ -932,7 +939,7 @@ unsafe fn call_emitter_listener(
     let callback_value = js_nanbox_pointer(callback);
     if async_resource_handle != 0 {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let arg_handles = scope.root_nanbox_f64_slice(args);
+        let arg_handles = root_nanbox_f64_slice(&scope, args);
         let arr = js_array_alloc(0);
         let arr_handle = scope.root_raw_mut_ptr(arr);
         for arg in &arg_handles {

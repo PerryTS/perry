@@ -4,7 +4,11 @@ pub(super) fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Opti
     let tag = bits & TAG_MASK;
     let (ptr_addr, is_nanbox) = match tag {
         t if t == POINTER_TAG || t == STRING_TAG || t == BIGINT_TAG => {
-            ((bits & POINTER_MASK) as usize, true)
+            let addr = (bits & POINTER_MASK) as usize;
+            if addr < MIN_HEAP_POINTER as usize {
+                return None;
+            }
+            (addr, true)
         }
         _ => {
             // Reject NaN-tagged non-pointer values (numbers,
@@ -13,7 +17,7 @@ pub(super) fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Opti
                 return None;
             }
             // Raw pointer fallback: lower 48 bits valid range.
-            if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
+            if !(MIN_HEAP_POINTER..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
                 return None;
             }
             (bits as usize, false)
@@ -33,12 +37,15 @@ pub(super) fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet
         return None;
     }
     let ptr_addr = (bits & POINTER_MASK) as usize;
+    if ptr_addr < MIN_HEAP_POINTER as usize {
+        return None;
+    }
     let new_user = try_rewrite_raw_addr(ptr_addr, valid_ptrs)?;
     Some(tag | (new_user as u64 & POINTER_MASK))
 }
 
 pub(super) fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet) -> Option<usize> {
-    if ptr_addr == 0 {
+    if ptr_addr < MIN_HEAP_POINTER as usize {
         return None;
     }
     let mut current = ptr_addr;

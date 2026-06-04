@@ -198,6 +198,19 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     handle
 }
 
+/// Register `value` under a caller-selected handle id.
+///
+/// This is for in-tree wrappers that must reserve a disjoint handle band for
+/// generic runtime dispatch. External wrappers should prefer
+/// [`register_handle`].
+pub fn register_handle_with_id<T: 'static + Send + Sync>(value: T, handle: Handle) -> Handle {
+    if handle <= INVALID_HANDLE {
+        panic!("perry-ffi handle id must be positive");
+    }
+    HANDLES.insert(handle, Box::new(value));
+    handle
+}
+
 fn next_handle_id() -> Handle {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     if handle >= FFI_HANDLE_ID_END {

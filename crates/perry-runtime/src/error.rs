@@ -2,7 +2,7 @@
 //!
 //! Provides the built-in Error class and its subclasses.
 
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::{js_string_from_bytes, js_string_from_bytes_with_capacity, StringHeader};
 
 /// Object type tag for runtime type discrimination
 pub const OBJECT_TYPE_REGULAR: u32 = 1;
@@ -84,12 +84,38 @@ pub struct ErrorHeader {
 unsafe fn make_stack(name: &str, message: &str) -> *mut StringHeader {
     // Build a simple "<name>: <message>\n    at <anonymous>" string.
     // Real stack traces are not implemented; the test only checks `.includes(message)`.
-    let s = if message.is_empty() {
-        format!("{}\n    at <anonymous>", name)
-    } else {
-        format!("{}: {}\n    at <anonymous>", name, message)
-    };
-    js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    const SEP: &[u8] = b": ";
+    const SUFFIX: &[u8] = b"\n    at <anonymous>";
+
+    let name_bytes = name.as_bytes();
+    let message_bytes = message.as_bytes();
+    let sep_len = if message.is_empty() { 0 } else { SEP.len() };
+    let total_len = name_bytes.len() + sep_len + message_bytes.len() + SUFFIX.len();
+    if total_len > u32::MAX as usize {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
+
+    let ptr = js_string_from_bytes_with_capacity(std::ptr::null(), 0, total_len as u32);
+    let mut out = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+    std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), out, name_bytes.len());
+    out = out.add(name_bytes.len());
+    if !message.is_empty() {
+        std::ptr::copy_nonoverlapping(SEP.as_ptr(), out, SEP.len());
+        out = out.add(SEP.len());
+        std::ptr::copy_nonoverlapping(message_bytes.as_ptr(), out, message_bytes.len());
+        out = out.add(message_bytes.len());
+    }
+    std::ptr::copy_nonoverlapping(SUFFIX.as_ptr(), out, SUFFIX.len());
+
+    (*ptr).byte_len = total_len as u32;
+    (*ptr).utf16_len = (name.encode_utf16().count()
+        + if message.is_empty() {
+            0
+        } else {
+            SEP.len() + message.encode_utf16().count()
+        }
+        + SUFFIX.len()) as u32;
+    ptr
 }
 
 unsafe fn alloc_error(

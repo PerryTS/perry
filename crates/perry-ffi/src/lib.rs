@@ -65,8 +65,8 @@ pub use handle::gc_register_root_scanner;
 pub use handle::{
     drop_handle, gc_register_mutable_root_scanner, gc_register_mutable_root_scanner_named,
     get_handle, get_handle_mut, handle_exists, iter_handle_ids_of, iter_handles_of,
-    iter_handles_of_mut, register_handle, take_handle, with_handle, with_handle_mut,
-    GcMutableRootScanner, GcRootVisitor, Handle, INVALID_HANDLE,
+    iter_handles_of_mut, register_handle, register_handle_with_id, take_handle, with_handle,
+    with_handle_mut, GcMutableRootScanner, GcRootVisitor, Handle, INVALID_HANDLE,
 };
 
 mod jsvalue;

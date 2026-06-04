@@ -761,12 +761,12 @@ pub(super) fn heap_word_candidate_addr(bits: u64) -> Option<usize> {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
         let ptr = (bits & POINTER_MASK) as usize;
-        return (ptr != 0).then_some(ptr);
+        return (ptr >= MIN_HEAP_POINTER as usize).then_some(ptr);
     }
     if tag >= 0x7FF8_0000_0000_0000 {
         return None;
     }
-    if (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
+    if (MIN_HEAP_POINTER..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
         Some(bits as usize)
     } else {
         None
@@ -801,7 +801,7 @@ pub(super) fn current_heap_header_for_user_ptr(
     user_ptr: usize,
     valid_ptrs: Option<&ValidPointerSet>,
 ) -> Option<*mut GcHeader> {
-    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+    if user_ptr < MIN_HEAP_POINTER as usize {
         return None;
     }
     if valid_ptrs.is_some_and(|ptrs| ptrs.contains(&user_ptr)) {
@@ -1039,7 +1039,7 @@ pub(super) fn barrier_parent_needs_remembering(parent_addr: usize, external_slot
 
 #[inline]
 pub(super) fn malloc_gc_parent_addr(parent_addr: usize) -> bool {
-    if parent_addr < GC_HEADER_SIZE + 0x1000 {
+    if parent_addr < MIN_HEAP_POINTER as usize {
         return false;
     }
     unsafe {
@@ -1063,12 +1063,20 @@ pub(super) fn malloc_gc_parent_addr(parent_addr: usize) -> bool {
 pub(super) fn decode_heap_addr(bits: u64) -> usize {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        (bits & POINTER_MASK) as usize
+        let addr = (bits & POINTER_MASK) as usize;
+        if addr >= MIN_HEAP_POINTER as usize {
+            addr
+        } else {
+            0
+        }
     } else if tag < 0x7FF8_0000_0000_0000 {
         // Possible raw pointer. Accept only if the arena side metadata
         // recognizes it as a heap address; ordinary f64 payload bits
         // miss the metadata table and remain non-pointers.
         let addr = bits as usize;
+        if addr < MIN_HEAP_POINTER as usize {
+            return 0;
+        }
         if matches!(
             crate::arena::classify_heap_generation(addr),
             crate::arena::HeapGeneration::Unknown

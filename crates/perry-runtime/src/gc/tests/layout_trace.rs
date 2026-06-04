@@ -1502,3 +1502,24 @@ fn test_trace_closure_uses_pointer_layout_mask() {
     clear_marks();
     clear_mark_seeds();
 }
+
+#[test]
+fn test_layout_mask_ignores_small_pointer_tagged_native_handles() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let closure = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 2);
+    let native_handle_bits = POINTER_TAG | 0xE0000;
+    crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(native_handle_bits));
+    crate::closure::js_closure_set_capture_ptr(closure, 1, 0xE0000);
+
+    assert_eq!(test_layout_pointer_slot_count(closure as usize, 2), Some(0));
+    let slots = unsafe { test_heap_child_slots_for_user(closure as *mut u8) };
+    assert!(matches!(
+        slots.as_slice(),
+        [HeapChildSlot::PointerFreeRange(range)] if range.slot_count() == 2
+    ));
+
+    clear_marks();
+    clear_mark_seeds();
+}

@@ -937,6 +937,34 @@ fn test_transient_runtime_handle_scope_drop_removes_roots() {
 }
 
 #[test]
+fn test_transient_runtime_handle_scope_ignores_small_native_handle_root() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let live = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let valid_ptrs = build_valid_pointer_set();
+    let native_handle_bits = POINTER_TAG | 0xE0000;
+    {
+        let scope = RuntimeHandleScope::new();
+        let native = scope.root_nanbox_f64(f64::from_bits(native_handle_bits));
+        let heap = scope.root_nanbox_u64(ptr_bits(live as usize));
+        assert_eq!(native.get_nanbox_u64(), native_handle_bits);
+        assert_eq!(heap.get_nanbox_u64(), ptr_bits(live as usize));
+
+        let mut marker = RuntimeRootVisitor::for_mark(&valid_ptrs);
+        scan_runtime_handle_roots_mut(&mut marker);
+    }
+
+    unsafe {
+        assert_ne!((*header_from_user_ptr(live)).gc_flags & GC_FLAG_MARKED, 0);
+    }
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), 0);
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_set_gc_field_rewrite_reindexes_elements() {
     clear_marks();
     clear_mark_seeds();

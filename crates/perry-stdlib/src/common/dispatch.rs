@@ -18,9 +18,16 @@ fn nanbox_handle_value(handle: i64) -> f64 {
     f64::from_bits(POINTER_TAG_BITS | (handle as u64 & POINTER_MASK_BITS))
 }
 
+fn root_nanbox_f64_slice<'scope>(
+    scope: &'scope perry_runtime::gc::RuntimeHandleScope,
+    args: &[f64],
+) -> Vec<perry_runtime::gc::RuntimeHandle<'scope>> {
+    args.iter().map(|arg| scope.root_nanbox_f64(*arg)).collect()
+}
+
 unsafe fn pack_args_array(args: &[f64]) -> *mut perry_runtime::ArrayHeader {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let arg_handles = scope.root_nanbox_f64_slice(args);
+    let arg_handles = root_nanbox_f64_slice(&scope, args);
     let arr = perry_runtime::js_array_alloc(0);
     let arr_handle = scope.root_raw_mut_ptr(arr);
     for arg in &arg_handles {
@@ -195,15 +202,16 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     };
     let method_name = method_name_owned.as_str();
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
+    let mut args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
         std::slice::from_raw_parts(args_ptr, args_len).to_vec()
     } else {
         Vec::new()
     };
-    let arg_handles = scope.root_nanbox_f64_slice(&original_args);
-    let args = perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    let arg_handles = root_nanbox_f64_slice(&scope, &args);
+    for (arg, handle) in args.iter_mut().zip(arg_handles.iter()) {
+        *arg = handle.get_nanbox_f64();
+    }
     let _ = method_name;
-    let _ = args;
     let _ = handle;
 
     if let Some(v) = crate::domain::dispatch_domain_method(handle, method_name, &args) {
@@ -2302,7 +2310,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 unsafe fn dispatch_sqlite_stmt(handle: i64, method: &str, args: &[f64]) -> f64 {
     use perry_runtime::js_nanbox_pointer;
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let arg_handles = scope.root_nanbox_f64_slice(args);
+    let arg_handles = root_nanbox_f64_slice(&scope, args);
     // Pack args into a fresh JS array. Each `f64` is already a
     // NaN-boxed value as the codegen produces. js_array_push takes a
     // perry_ffi::JsValue (NaN-boxed), but the runtime helpers in
@@ -2706,7 +2714,6 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
     js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
     js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
-    crate::string_decoder::string_decoder_prototype_value();
     #[cfg(feature = "http-client")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
     #[cfg(feature = "http-client")]

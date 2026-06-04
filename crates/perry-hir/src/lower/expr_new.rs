@@ -159,6 +159,7 @@ fn is_url_encoding_constructor_name(name: &str) -> bool {
 
 fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Option<&'static str> {
     match (module_name, method_name) {
+        ("events", Some("EventEmitter")) => Some("EventEmitter"),
         ("events", Some("EventEmitterAsyncResource")) => Some("EventEmitterAsyncResource"),
         ("url", Some("URL")) => Some("URL"),
         ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
@@ -623,7 +624,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let class_name = prop_ident.sym.as_ref();
                 if matches!(
                     (module_name, class_name),
-                    ("events", "EventEmitterAsyncResource")
+                    ("events", "EventEmitter" | "EventEmitterAsyncResource")
                         | ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
                         | ("sqlite", "DatabaseSync" | "Session" | "StatementSync")
                 ) {

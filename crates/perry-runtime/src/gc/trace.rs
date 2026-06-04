@@ -388,7 +388,7 @@ pub(super) fn try_mark_value(value_bits: u64, valid_ptrs: &ValidPointerSet) -> b
         return false;
     }
     let ptr_val = (value_bits & POINTER_MASK) as usize;
-    if ptr_val == 0 {
+    if ptr_val < MIN_HEAP_POINTER as usize {
         return false;
     }
 
@@ -458,7 +458,7 @@ pub(super) unsafe fn mark_field_into_worklist(
     let tag = val_bits & TAG_MASK;
     let ptr_val: usize = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
         let p = (val_bits & POINTER_MASK) as usize;
-        if p == 0 {
+        if p < MIN_HEAP_POINTER as usize {
             return false;
         }
         p
@@ -468,7 +468,7 @@ pub(super) unsafe fn mark_field_into_worklist(
         // user-address range. f64 numbers have the exponent bits set,
         // which puts them well above 0x0000_FFFF_FFFF_FFFF — they're
         // rejected here.
-        if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&val_bits) {
+        if !(MIN_HEAP_POINTER..=0x0000_FFFF_FFFF_FFFF).contains(&val_bits) {
             return false;
         }
         val_bits as usize

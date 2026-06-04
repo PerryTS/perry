@@ -518,7 +518,7 @@ pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> 
     // and plain integers. Valid heap pointers are in the lower 48-bit address space and
     // won't have NaN-boxing tags in upper bits (already rejected above).
     let raw_ptr_u64 = word;
-    if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&raw_ptr_u64) {
+    if !(MIN_HEAP_POINTER..=0x0000_FFFF_FFFF_FFFF).contains(&raw_ptr_u64) {
         return false; // Too small (null/invalid) or has upper bits set (NaN tag or non-address)
     }
     let raw_ptr = raw_ptr_u64 as usize;
@@ -904,9 +904,11 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::Copy { mark } => {
                 let tag = bits & TAG_MASK;
                 if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-                    (*mark)(f64::from_bits(bits));
+                    if bits & POINTER_MASK >= MIN_HEAP_POINTER {
+                        (*mark)(f64::from_bits(bits));
+                    }
                 } else if tag < 0x7FF8_0000_0000_0000
-                    && (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits)
+                    && (MIN_HEAP_POINTER..=0x0000_FFFF_FFFF_FFFF).contains(&bits)
                 {
                     (*mark)(f64::from_bits(POINTER_TAG | (bits & POINTER_MASK)));
                 }
@@ -917,7 +919,7 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     #[inline]
     pub(super) fn visit_tagged_raw_addr(&mut self, addr: usize, copy_tag: u64) -> Option<usize> {
-        if addr == 0 {
+        if addr < MIN_HEAP_POINTER as usize {
             return None;
         }
         match &mut self.mode {
@@ -1458,7 +1460,7 @@ pub(super) fn mark_mutable_root_slots_step(
 pub(super) fn shadow_slot_pointer_root(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
     let addr = bits & POINTER_MASK;
-    addr != 0 && (tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG)
+    addr >= MIN_HEAP_POINTER && (tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG)
 }
 
 #[inline]
@@ -1477,7 +1479,7 @@ pub(super) fn mutable_slot_points_to_valid_root(bits: u64, valid_ptrs: &ValidPoi
         return valid_ptrs.contains(&addr);
     }
     let raw_ptr = bits as usize;
-    raw_ptr != 0 && valid_ptrs.contains(&raw_ptr)
+    raw_ptr >= MIN_HEAP_POINTER as usize && valid_ptrs.contains(&raw_ptr)
 }
 
 #[inline]
@@ -1567,7 +1569,10 @@ pub(super) fn nanboxed_root_header(
         return None;
     }
     let ptr_val = (value_bits & POINTER_MASK) as usize;
-    if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
+    if ptr_val < MIN_HEAP_POINTER as usize
+        || !valid_ptrs.maybe_contains(ptr_val)
+        || !valid_ptrs.contains(&ptr_val)
+    {
         return None;
     }
     Some(unsafe { header_from_user_ptr(ptr_val as *const u8) })

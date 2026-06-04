@@ -70,6 +70,9 @@ pub type FetchHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 /// as heap objects.
 pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 pub type EventEmitterAsyncResourceHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+pub type ExternalEventEmitterDomainProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+pub type ExternalEventEmitterDomainGetFn = unsafe extern "C" fn(handle: i64) -> i64;
+pub type ExternalEventEmitterDomainSetFn = unsafe extern "C" fn(handle: i64, domain: i64) -> i32;
 
 /// Probe for stdlib `net.Socket` handles. Socket instances are represented as
 /// pointer-tagged small integer handles, not heap objects with class ids.
@@ -96,6 +99,9 @@ static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
     AtomicPtr::new(ptr::null_mut());
+static EXTERNAL_EVENT_EMITTER_DOMAIN_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EXTERNAL_EVENT_EMITTER_DOMAIN_GET_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EXTERNAL_EVENT_EMITTER_DOMAIN_SET_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
@@ -237,6 +243,57 @@ pub unsafe extern "C" fn js_register_event_emitter_async_resource_handle_probe(
     f: EventEmitterAsyncResourceHandleProbeFn,
 ) {
     EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn external_event_emitter_domain_probe() -> Option<ExternalEventEmitterDomainProbeFn> {
+    let p = EXTERNAL_EVENT_EMITTER_DOMAIN_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), ExternalEventEmitterDomainProbeFn>(p) })
+    }
+}
+
+#[inline]
+pub fn external_event_emitter_domain_get() -> Option<ExternalEventEmitterDomainGetFn> {
+    let p = EXTERNAL_EVENT_EMITTER_DOMAIN_GET_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), ExternalEventEmitterDomainGetFn>(p) })
+    }
+}
+
+#[inline]
+pub fn external_event_emitter_domain_set() -> Option<ExternalEventEmitterDomainSetFn> {
+    let p = EXTERNAL_EVENT_EMITTER_DOMAIN_SET_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), ExternalEventEmitterDomainSetFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_external_event_emitter_domain_probe(
+    f: ExternalEventEmitterDomainProbeFn,
+) {
+    EXTERNAL_EVENT_EMITTER_DOMAIN_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_external_event_emitter_domain_get(
+    f: ExternalEventEmitterDomainGetFn,
+) {
+    EXTERNAL_EVENT_EMITTER_DOMAIN_GET_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_external_event_emitter_domain_set(
+    f: ExternalEventEmitterDomainSetFn,
+) {
+    EXTERNAL_EVENT_EMITTER_DOMAIN_SET_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]

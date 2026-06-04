@@ -271,12 +271,12 @@ pub(super) fn strip_nanbox_user_ptr(bits: u64) -> usize {
 pub(super) fn layout_pointer_bearing_bits(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        return bits & POINTER_MASK != 0;
+        return bits & POINTER_MASK >= MIN_HEAP_POINTER;
     }
     if tag >= 0x7FF8_0000_0000_0000 {
         return false;
     }
-    (0x1000..=POINTER_MASK).contains(&bits) && (bits & 0x7) == 0
+    (MIN_HEAP_POINTER..=POINTER_MASK).contains(&bits) && (bits & 0x7) == 0
 }
 
 #[inline]

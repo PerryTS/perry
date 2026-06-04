@@ -12,10 +12,13 @@
 
 pub use super::class_handles::{
     event_emitter_async_resource_handle_probe, event_emitter_handle_probe, event_emitter_on,
-    fetch_handle_kind_probe, handle_method_dispatch, handle_own_property_names_dispatch,
-    handle_property_dispatch, handle_property_set_dispatch, handle_prototype_dispatch,
-    js_register_event_emitter_async_resource_handle_probe, js_register_event_emitter_handle_probe,
-    js_register_event_emitter_on, js_register_fetch_handle_kind_probe,
+    external_event_emitter_domain_get, external_event_emitter_domain_probe,
+    external_event_emitter_domain_set, fetch_handle_kind_probe, handle_method_dispatch,
+    handle_own_property_names_dispatch, handle_property_dispatch, handle_property_set_dispatch,
+    handle_prototype_dispatch, js_register_event_emitter_async_resource_handle_probe,
+    js_register_event_emitter_handle_probe, js_register_event_emitter_on,
+    js_register_external_event_emitter_domain_get, js_register_external_event_emitter_domain_probe,
+    js_register_external_event_emitter_domain_set, js_register_fetch_handle_kind_probe,
     js_register_handle_method_dispatch, js_register_handle_own_property_names_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
     js_register_handle_prototype_dispatch, js_register_net_socket_handle_probe,
