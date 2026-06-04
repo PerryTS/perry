@@ -110,10 +110,31 @@ const LARGE_CODEGEN_THREAD_CAP: usize = 1;
 const LARGE_CODEGEN_STACK_SIZE: usize = 128 * 1024 * 1024;
 const MAX_OBJECT_FILE_STEM_BYTES: usize = 200;
 
-type ClassCanonicalKey = (perry_hir::ClassId, String);
+type ClassCanonicalPathMap =
+    std::collections::HashMap<perry_hir::ClassId, std::collections::HashMap<String, String>>;
 
-fn class_canonical_key(class_id: perry_hir::ClassId, class_name: &str) -> ClassCanonicalKey {
-    (class_id, class_name.to_string())
+fn insert_class_canonical_path(
+    canonical_paths: &mut ClassCanonicalPathMap,
+    class_id: perry_hir::ClassId,
+    class_name: &str,
+    source_path: &str,
+) {
+    canonical_paths
+        .entry(class_id)
+        .or_default()
+        .entry(class_name.to_string())
+        .or_insert_with(|| source_path.to_string());
+}
+
+fn get_class_canonical_path<'a>(
+    canonical_paths: &'a ClassCanonicalPathMap,
+    class_id: perry_hir::ClassId,
+    class_name: &str,
+) -> Option<&'a str> {
+    canonical_paths
+        .get(&class_id)
+        .and_then(|by_name| by_name.get(class_name))
+        .map(String::as_str)
 }
 
 fn codegen_thread_count(total_modules: usize, host_threads: usize) -> usize {
@@ -790,16 +811,18 @@ pub fn run_with_parse_cache(
     // to the wrong module prefix, leaving final link references like
     // `SchemaAST_ts__FiberImpl_A_E__addObserver` while the producer lives in
     // `internal_effect_ts__FiberImpl_A_E__addObserver`.
-    let mut class_canonical_path: std::collections::HashMap<ClassCanonicalKey, String> =
-        std::collections::HashMap::new();
+    let mut class_canonical_path: ClassCanonicalPathMap = std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         for class in &hir_module.classes {
             if class.is_exported {
                 exported_classes.insert((path_str.clone(), class.name.clone()), class);
-                class_canonical_path
-                    .entry(class_canonical_key(class.id, &class.name))
-                    .or_insert_with(|| path_str.clone());
+                insert_class_canonical_path(
+                    &mut class_canonical_path,
+                    class.id,
+                    &class.name,
+                    &path_str,
+                );
             }
         }
         // Issue #485: handle `export { Local as Exported }` for classes.
@@ -3945,9 +3968,12 @@ pub fn run_with_parse_cache(
                 let child_src_path: Option<String> = imported_classes[idx]
                     .source_class_id
                     .and_then(|cid| {
-                        class_canonical_path
-                            .get(&class_canonical_key(cid, &imported_classes[idx].name))
-                            .cloned()
+                        get_class_canonical_path(
+                            &class_canonical_path,
+                            cid,
+                            &imported_classes[idx].name,
+                        )
+                        .map(str::to_string)
                     });
                 // Issue #485: include the class's parent in the transitive
                 // closure too. Without this, `import { Sub } from 'pkg'` where
@@ -3999,8 +4025,11 @@ pub fn run_with_parse_cache(
                         .or_else(|| {
                             exported_classes.iter().find(|((path, cname), class)| {
                                 cname == &ref_name
-                                    && class_canonical_path
-                                        .get(&class_canonical_key(class.id, &class.name))
+                                    && get_class_canonical_path(
+                                        &class_canonical_path,
+                                        class.id,
+                                        &class.name,
+                                    )
                                         .map(|cp| cp == path)
                                         .unwrap_or(true)
                             })
@@ -4113,8 +4142,11 @@ pub fn run_with_parse_cache(
                 let Some(class_id) = imported_class.source_class_id else {
                     continue;
                 };
-                let Some(canonical_path) =
-                    class_canonical_path.get(&class_canonical_key(class_id, &imported_class.name))
+                let Some(canonical_path) = get_class_canonical_path(
+                    &class_canonical_path,
+                    class_id,
+                    &imported_class.name,
+                )
                 else {
                     continue;
                 };
@@ -5832,11 +5864,11 @@ pub fn run_with_parse_cache(
 #[cfg(test)]
 mod codegen_thread_tests {
     use super::{
-        class_canonical_key, codegen_thread_count_with_override,
-        codegen_thread_stack_size_with_override, nm_output_defines_symbol,
+        codegen_thread_count_with_override, codegen_thread_stack_size_with_override,
+        get_class_canonical_path, insert_class_canonical_path, nm_output_defines_symbol,
         object_file_stem_for_module, should_apply_export_origin_name_override,
-        should_register_exported_name_compat_alias, LARGE_CODEGEN_MODULE_COUNT,
-        LARGE_CODEGEN_STACK_SIZE, MAX_OBJECT_FILE_STEM_BYTES,
+        should_register_exported_name_compat_alias, ClassCanonicalPathMap,
+        LARGE_CODEGEN_MODULE_COUNT, LARGE_CODEGEN_STACK_SIZE, MAX_OBJECT_FILE_STEM_BYTES,
     };
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -5929,20 +5961,24 @@ libperry_runtime.a(global_this_webassembly.o):
     }
 
     #[test]
-    fn class_canonical_key_keeps_monomorph_collisions_separate() {
-        let mut canonical_paths = HashMap::new();
-        canonical_paths.insert(
-            class_canonical_key(1001, "SchemaAstClass"),
-            "/pkg/SchemaAST.ts".to_string(),
+    fn class_canonical_paths_keep_monomorph_collisions_separate() {
+        let mut canonical_paths: ClassCanonicalPathMap = HashMap::new();
+        insert_class_canonical_path(
+            &mut canonical_paths,
+            1001,
+            "SchemaAstClass",
+            "/pkg/SchemaAST.ts",
         );
-        canonical_paths.insert(
-            class_canonical_key(1001, "FiberImpl_A_E"),
-            "/pkg/internal/effect.ts".to_string(),
+        insert_class_canonical_path(
+            &mut canonical_paths,
+            1001,
+            "FiberImpl_A_E",
+            "/pkg/internal/effect.ts",
         );
 
         assert_eq!(
-            canonical_paths.get(&class_canonical_key(1001, "FiberImpl_A_E")),
-            Some(&"/pkg/internal/effect.ts".to_string())
+            get_class_canonical_path(&canonical_paths, 1001, "FiberImpl_A_E"),
+            Some("/pkg/internal/effect.ts")
         );
     }
 
