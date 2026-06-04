@@ -22,15 +22,6 @@ function thrownShape(label: string, fn: () => void): void {
   }
 }
 
-async function rejectedShape(label: string, fn: () => Promise<unknown>): Promise<void> {
-  try {
-    await fn();
-    console.log(label + ":", "resolved");
-  } catch (e: any) {
-    console.log(label + ":", e.name, e.code);
-  }
-}
-
 const callback4 = await callbackCall((cb) => dns.resolve4("localhost", cb));
 const callback6 = await callbackCall((cb) => dns.resolve6("localhost", cb));
 const callbackA = await callbackCall((cb) => dns.resolve("localhost", "A", cb));
@@ -50,4 +41,4 @@ const resolver4 = await promiseResolver.resolve4("localhost");
 console.log("promise resolver resolve4:", resolver4.includes("127.0.0.1"));
 
 thrownShape("callback bad rrtype", () => dns.resolve("localhost", "BAD", () => {}));
-await rejectedShape("promise bad rrtype", () => dnsPromises.resolve("localhost", "BAD" as any));
+thrownShape("promise bad rrtype", () => dnsPromises.resolve("localhost", "BAD" as any));
