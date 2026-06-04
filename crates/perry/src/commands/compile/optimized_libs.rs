@@ -91,7 +91,19 @@ impl OptimizedLibs {
 }
 
 fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<String> {
-    ctx.native_module_imports.iter().cloned().collect()
+    let mut iteration_set: BTreeSet<String> = ctx.native_module_imports.iter().cloned().collect();
+    if let Ok(forced) = std::env::var("PERRY_FORCE_WELL_KNOWN") {
+        for module in forced.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace()) {
+            let module = module.trim();
+            if module.is_empty() {
+                continue;
+            }
+            if super::well_known::lookup_well_known(module).is_some() {
+                iteration_set.insert(module.strip_prefix("node:").unwrap_or(module).to_string());
+            }
+        }
+    }
+    iteration_set
 }
 
 /// Resolve well-known wrapper archives without rebuilding runtime/stdlib.
@@ -1342,6 +1354,27 @@ mod tests {
         let modules = well_known_iteration_set(&ctx);
 
         assert!(modules.contains("node-fetch"));
+    }
+
+    #[test]
+    fn forced_well_known_env_extends_iteration_set() {
+        let _guard = env_lock();
+        let old_force_well_known = std::env::var("PERRY_FORCE_WELL_KNOWN").ok();
+
+        set_env_var(
+            "PERRY_FORCE_WELL_KNOWN",
+            Some("http, node:net ws definitely-not-real"),
+        );
+        let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
+        let modules = well_known_iteration_set(&ctx);
+
+        set_env_var("PERRY_FORCE_WELL_KNOWN", old_force_well_known.as_deref());
+
+        assert!(modules.contains("http"));
+        assert!(modules.contains("net"));
+        assert!(modules.contains("ws"));
+        assert!(!modules.contains("node:net"));
+        assert!(!modules.contains("definitely-not-real"));
     }
 
     #[test]

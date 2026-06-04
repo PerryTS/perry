@@ -40,6 +40,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_UNBOXED_OBJECT_FIELDS",
     "PERRY_NO_AUTO_OPTIMIZE",
     "PERRY_DISABLE_WELL_KNOWN",
+    "PERRY_FORCE_WELL_KNOWN",
 ];
 
 #[derive(Debug, Clone)]
