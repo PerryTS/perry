@@ -38,6 +38,9 @@ pub struct CompileResult {
 pub struct LinkCacheStats {
     pub linked: bool,
     pub skipped: bool,
+    pub object_fingerprints_used: usize,
+    pub object_files_hashed: usize,
+    pub external_inputs_hashed: usize,
 }
 
 // Helpers moved to sub-modules:

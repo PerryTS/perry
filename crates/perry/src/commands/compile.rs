@@ -3898,7 +3898,7 @@ pub fn run_with_parse_cache(
 
     // Sequential print + obj_paths collection (output grouped, source
     // order preserved).
-    let mut obj_fingerprints: Vec<String> = Vec::new();
+    let mut obj_fingerprints: Vec<Option<String>> = Vec::new();
     for (obj_path, _, object_fingerprint) in to_write {
         match format {
             OutputFormat::Text => {
@@ -3911,7 +3911,7 @@ pub fn run_with_parse_cache(
             }
             OutputFormat::Json => {}
         }
-        obj_fingerprints.push(object_fingerprint);
+        obj_fingerprints.push(Some(object_fingerprint));
         obj_paths.push(obj_path);
     }
 
@@ -4309,6 +4309,7 @@ pub fn run_with_parse_cache(
             let stub_path = PathBuf::from("_perry_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
             obj_paths.push(stub_path);
+            obj_fingerprints.push(None);
         }
     }
 
@@ -4366,9 +4367,15 @@ pub fn run_with_parse_cache(
                             let _ = fs::remove_file(ll);
                         }
                     }
-                    // Replace obj_paths with the merged .o + any stubs
-                    obj_paths = vec![linked_obj];
-                    obj_paths.extend(stub_objs);
+                    // Replace obj_paths with the merged .o + any stubs.
+                    // The merged object is derived after codegen-cache
+                    // materialization, so the original per-module cache
+                    // fingerprints are no longer a trusted proxy for these
+                    // bytes.
+                    let mut linked_obj_paths = vec![linked_obj];
+                    linked_obj_paths.extend(stub_objs);
+                    obj_fingerprints = vec![None; linked_obj_paths.len()];
+                    obj_paths = linked_obj_paths;
                     true
                 }
                 Err(e) => {
@@ -4385,7 +4392,8 @@ pub fn run_with_parse_cache(
         // Fall back: compile any .ll files to .o via clang -c.
         eprintln!("  bitcode-link: runtime .bc not available, falling back to normal link");
         let mut new_obj_paths: Vec<PathBuf> = Vec::new();
-        for p in &obj_paths {
+        let mut new_obj_fingerprints: Vec<Option<String>> = Vec::new();
+        for (idx, p) in obj_paths.iter().enumerate() {
             if p.extension().and_then(|e| e.to_str()) == Some("ll") {
                 let ll_text = fs::read_to_string(p)?;
                 let obj_bytes =
@@ -4396,11 +4404,14 @@ pub fn run_with_parse_cache(
                     let _ = fs::remove_file(p);
                 }
                 new_obj_paths.push(obj_path);
+                new_obj_fingerprints.push(None);
             } else {
                 new_obj_paths.push(p.clone());
+                new_obj_fingerprints.push(obj_fingerprints.get(idx).cloned().unwrap_or(None));
             }
         }
         obj_paths = new_obj_paths;
+        obj_fingerprints = new_obj_fingerprints;
         false
     } else {
         false
@@ -4427,6 +4438,7 @@ pub fn run_with_parse_cache(
                     println!("Embedded JS bundle: {}", obj.display());
                 }
                 obj_paths.push(obj);
+                obj_fingerprints.push(None);
             }
             Err(e) => {
                 // Don't hard-fail — the on-disk `__perry_js_bundle.js`
@@ -4651,6 +4663,7 @@ pub fn run_with_parse_cache(
             let stub_path = PathBuf::from("_perry_failed_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
             obj_paths.push(stub_path);
+            obj_fingerprints.push(None);
         }
     }
 
@@ -5278,6 +5291,9 @@ pub fn run_with_parse_cache(
                     "link_cache": {
                         "linked": link_cache_stats.linked,
                         "skipped": link_cache_stats.skipped,
+                        "object_fingerprints_used": link_cache_stats.object_fingerprints_used,
+                        "object_files_hashed": link_cache_stats.object_files_hashed,
+                        "external_inputs_hashed": link_cache_stats.external_inputs_hashed,
                     },
                 });
                 println!("{}", serde_json::to_string(&result)?);
