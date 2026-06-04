@@ -154,24 +154,6 @@ fn atomics_view_arg(value: f64) -> AtomicView {
     throw_type_error(b"Atomics operation requires an integer typed array");
 }
 
-fn atomics_int32_view_arg(value: f64) -> AtomicView {
-    let js = JSValue::from_bits(value.to_bits());
-    if !js.is_pointer() {
-        throw_type_error(b"Atomics wait/notify requires an Int32Array");
-    }
-    let raw = clean_ta_ptr(js.as_pointer::<TypedArrayHeader>()) as usize;
-    if raw == 0 {
-        throw_type_error(b"Atomics wait/notify requires an Int32Array");
-    }
-    if lookup_typed_array_kind(raw) == Some(KIND_INT32) {
-        return AtomicView::TypedArray {
-            ptr: raw as *mut TypedArrayHeader,
-            kind: KIND_INT32,
-        };
-    }
-    throw_type_error(b"Atomics wait/notify requires an Int32Array");
-}
-
 fn atomics_wait_notify_view_arg(value: f64) -> AtomicView {
     let js = JSValue::from_bits(value.to_bits());
     if !js.is_pointer() {
@@ -394,12 +376,6 @@ fn typed_array_set_bigint_bits(ta: *mut TypedArrayHeader, index: i32, value: u64
 
 fn slot(view: f64, index: f64) -> (AtomicView, i32) {
     let view = atomics_view_arg(view);
-    let idx = atomics_to_index(index, view.length());
-    (view, idx)
-}
-
-fn int32_slot(view: f64, index: f64) -> (AtomicView, i32) {
-    let view = atomics_int32_view_arg(view);
     let idx = atomics_to_index(index, view.length());
     (view, idx)
 }
@@ -660,10 +636,28 @@ pub extern "C" fn js_atomics_wait_async(
     expected: f64,
     timeout: f64,
 ) -> f64 {
-    let (view, idx) = int32_slot(view, index);
-    let expected = coerce_for_kind(KIND_INT32, expected);
+    let (view, idx) = wait_notify_slot(view, index);
+    if !view.has_shared_backing() {
+        throw_type_error(b"Atomics.waitAsync requires a shared typed array");
+    }
+    let kind = view.kind();
+    let expected_bigint_bits = if kind == KIND_BIGINT64 {
+        bigint_bits(expected)
+    } else {
+        0
+    };
+    let expected_i32 = if kind == KIND_BIGINT64 {
+        0.0
+    } else {
+        coerce_for_kind(KIND_INT32, expected)
+    };
     let timeout = number_arg(timeout);
-    if view.get_numeric(idx) != expected {
+    let mismatched = if kind == KIND_BIGINT64 {
+        view.get_bigint_bits(idx) != expected_bigint_bits
+    } else {
+        view.get_numeric(idx) != expected_i32
+    };
+    if mismatched {
         return wait_async_result(false, string_value(b"not-equal"));
     }
     if timeout <= 0.0 {
