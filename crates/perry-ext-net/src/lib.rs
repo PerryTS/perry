@@ -78,7 +78,10 @@ pub use option_setters::{
     js_net_socket_set_timeout, js_net_socket_set_type_of_service,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
+
 mod server_state;
+#[cfg(test)]
+mod test_async_shims;
 pub use server_state::*;
 
 use crate::tls::do_tls_handshake;
