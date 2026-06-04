@@ -101,6 +101,23 @@ fn validate_fd_number(fd: f64) -> i32 {
     fd as i32
 }
 
+fn tty_isatty_fd_arg(value: f64) -> Option<i32> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_int32() {
+        let fd = js_value.as_int32();
+        return (fd >= 0).then_some(fd);
+    }
+    if !js_value.is_number() {
+        return None;
+    }
+
+    let fd = js_value.as_number();
+    if !fd.is_finite() || fd < 0.0 || fd.fract() != 0.0 || fd > i32::MAX as f64 {
+        return None;
+    }
+    Some(fd as i32)
+}
+
 #[cfg(unix)]
 fn write_stream_fd_type_supported(fd: i32) -> bool {
     unsafe {
@@ -305,7 +322,9 @@ fn set_fd_raw_mode(_fd: i32, _enabled: bool) -> bool {
 /// `tty.isatty(fd)` — return 1 if the fd refers to a terminal.
 #[no_mangle]
 pub extern "C" fn js_tty_isatty(fd: f64) -> f64 {
-    let fd_i = fd as i32;
+    let Some(fd_i) = tty_isatty_fd_arg(fd) else {
+        return TAG_FALSE_F64;
+    };
     if isatty_impl(fd_i) {
         TAG_TRUE_F64
     } else {
@@ -1253,6 +1272,42 @@ mod tests {
             bits == 0x7FFC_0000_0000_0003 || bits == 0x7FFC_0000_0000_0004,
             "expected TAG_FALSE or TAG_TRUE, got {:#x}",
             bits
+        );
+    }
+
+    #[test]
+    fn isatty_fd_arg_matches_node_validation() {
+        assert_eq!(tty_isatty_fd_arg(0.0), Some(0));
+        assert_eq!(tty_isatty_fd_arg(-0.0), Some(0));
+        assert_eq!(tty_isatty_fd_arg(i32::MAX as f64), Some(i32::MAX));
+        assert_eq!(tty_isatty_fd_arg((i32::MAX as f64) + 1.0), None);
+        assert_eq!(tty_isatty_fd_arg(-1.0), None);
+        assert_eq!(tty_isatty_fd_arg(1.5), None);
+        assert_eq!(tty_isatty_fd_arg(f64::NAN), None);
+        assert_eq!(tty_isatty_fd_arg(f64::INFINITY), None);
+        assert_eq!(tty_isatty_fd_arg(f64::NEG_INFINITY), None);
+
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(7).bits())),
+            Some(7)
+        );
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(-1).bits())),
+            None
+        );
+
+        assert_eq!(tty_isatty_fd_arg(TAG_TRUE_F64), None);
+        assert_eq!(tty_isatty_fd_arg(TAG_FALSE_F64), None);
+        assert_eq!(tty_isatty_fd_arg(TAG_UNDEFINED_F64), None);
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(crate::value::TAG_NULL)),
+            None
+        );
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(
+                JSValue::try_short_string(b"0").unwrap().bits()
+            )),
+            None
         );
     }
 
