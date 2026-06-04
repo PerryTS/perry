@@ -126,6 +126,10 @@ pub unsafe extern "C" fn js_webcrypto_supports(
         "GENERATEKEY" => supports_generate_key(algorithm_bits.to_bits(), &algorithm),
         "IMPORTKEY" => supports_import_key(algorithm_bits.to_bits(), &algorithm),
         "EXPORTKEY" => supports_export_key(&algorithm),
+        "ENCAPSULATEBITS" | "DECAPSULATEBITS" => matches!(
+            algorithm.as_str(),
+            "ML-KEM-512" | "ML-KEM-768" | "ML-KEM-1024"
+        ),
         _ => false,
     };
     js_bool(supported)
