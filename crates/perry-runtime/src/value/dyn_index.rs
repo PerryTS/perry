@@ -42,6 +42,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     if raw_ptr < 0x10000 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // TypedArrays carry element-typed storage, not boxed ArrayHeader slots.
+    // Probe the registry before any GC-header or raw ArrayHeader fallback so
+    // values whose static type was erased by callback methods still read via
+    // the per-kind accessor (`Uint16Array#map(...)[0]`, `(ta as any)[0]`).
+    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+        return crate::typedarray::js_typed_array_index_get_dynamic(
+            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+            index,
+        );
+    }
     // Issue #63 / #321 (Effect.runSync→fork SIGBUS): the raw-I64 fallback
     // above accepts arbitrary in-range bits — including denormal f64
     // payloads from non-pointer dataflow (e.g. effect's fiberRefs.ts loop
@@ -206,6 +216,19 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         return value;
     };
     if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return value;
+    }
+    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+        if index.is_finite() {
+            let idx_i32 = index as i32;
+            if idx_i32 >= 0 && index == idx_i32 as f64 {
+                crate::typedarray::js_typed_array_set(
+                    raw_ptr as *mut crate::typedarray::TypedArrayHeader,
+                    idx_i32,
+                    value,
+                );
+            }
+        }
         return value;
     }
     // Mirror the #63/#321 guard on the get side: heuristic-derived
