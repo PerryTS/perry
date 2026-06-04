@@ -74,20 +74,25 @@ fn throw_dataview_oob() -> ! {
 }
 
 #[inline]
+/// `ToIndex(byteOffset)` for `GetViewValue`/`SetViewValue`: ToNumber →
+/// ToIntegerOrInfinity → range-check `[0, 2^53-1]`. A Symbol or object byteOffset
+/// is coerced through the full ToNumber (`js_number_coerce` throws a TypeError on
+/// a Symbol and runs an object's `valueOf`/`toString`); a BigInt throws a
+/// TypeError (ToIndex uses ToNumber, which — unlike `Number()` — rejects BigInt);
+/// a negative or `> 2^53-1` integer (including ±Infinity) throws a RangeError.
+/// Previously this used the bare `JSValue::to_number()`, which silently produced
+/// `NaN`/`0` for those cases — so a Symbol didn't throw, `valueOf` never ran, and
+/// negative/Infinity offsets only surfaced (if at all) as a later bounds error.
 fn to_byte_offset(value: f64) -> i64 {
-    let n = crate::value::JSValue::from_bits(value.to_bits()).to_number();
-    if n.is_nan() {
-        0
-    } else if !n.is_finite() {
-        // ±Infinity → out of any finite buffer range; surfaced as OOB later.
-        if n > 0.0 {
-            i64::MAX
-        } else {
-            i64::MIN
-        }
-    } else {
-        n.trunc() as i64
+    if crate::value::JSValue::from_bits(value.to_bits()).is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
     }
+    let n = crate::builtins::js_number_coerce(value);
+    let i = if n.is_nan() { 0.0 } else { n.trunc() };
+    if i < 0.0 || i > 9_007_199_254_740_991.0 {
+        throw_dataview_oob();
+    }
+    i as i64
 }
 
 #[inline]

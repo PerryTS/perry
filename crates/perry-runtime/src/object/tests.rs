@@ -2,6 +2,7 @@
 #![cfg(test)]
 
 use super::*;
+use std::os::raw::c_int;
 
 fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     let closure_ptr = crate::closure::js_closure_alloc(
@@ -39,6 +40,207 @@ fn js_string_to_rust(value: JSValue) -> String {
         let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let bytes = std::slice::from_raw_parts(data, (*ptr).byte_len as usize);
         std::str::from_utf8(bytes).unwrap().to_string()
+    }
+}
+
+fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
+    let env = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
+    if jumped == 0 {
+        let result = f();
+        crate::exception::js_try_end();
+        Ok(result)
+    } else {
+        crate::exception::js_try_end();
+        let err = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(err)
+    }
+}
+
+unsafe fn installed_builtin_method(ctor_name: &str, method_name: &str) -> f64 {
+    let global_ptr = js_object_alloc(0, 0);
+    super::global_this::populate_global_this_builtins(global_ptr);
+    let ctor_key = crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
+    let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
+    assert!(
+        ctor.is_pointer(),
+        "{ctor_name} constructor should be installed"
+    );
+
+    let prototype_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let prototype = js_object_get_field_by_name(
+        ctor.as_pointer::<crate::closure::ClosureHeader>() as *const ObjectHeader,
+        prototype_key,
+    );
+    assert!(
+        prototype.is_pointer(),
+        "{ctor_name}.prototype should be installed"
+    );
+
+    let method_key =
+        crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let method = js_object_get_field_by_name(prototype.as_pointer::<ObjectHeader>(), method_key);
+    assert!(
+        method.is_pointer(),
+        "{ctor_name}.prototype.{method_name} should be a function value"
+    );
+    f64::from_bits(method.bits())
+}
+
+extern "C" fn symbol_to_primitive_nan(
+    _closure: *const crate::closure::ClosureHeader,
+    hint: f64,
+) -> f64 {
+    let hint_value = JSValue::from_bits(hint.to_bits());
+    assert_eq!(js_string_to_rust(hint_value), "number");
+    f64::NAN
+}
+
+extern "C" fn value_of_finite(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    1.0
+}
+
+extern "C" fn symbol_to_primitive_this_object(
+    _closure: *const crate::closure::ClosureHeader,
+    hint: f64,
+) -> f64 {
+    let hint_value = JSValue::from_bits(hint.to_bits());
+    assert_eq!(js_string_to_rust(hint_value), "number");
+    crate::object::js_implicit_this_get()
+}
+
+extern "C" fn to_iso_string_sentinel(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let string = crate::string::js_string_from_bytes(b"iso".as_ptr(), 3);
+    crate::value::js_nanbox_string(string as i64)
+}
+
+#[test]
+fn date_to_json_number_hint_honors_symbol_to_primitive() {
+    unsafe {
+        let receiver = js_object_alloc(0, 0);
+        let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
+
+        let to_primitive =
+            crate::closure::js_closure_alloc(symbol_to_primitive_nan as *const u8, 0);
+        crate::closure::js_register_closure_arity(symbol_to_primitive_nan as *const u8, 1);
+        let sym = crate::symbol::well_known_symbol("toPrimitive");
+        let sym_value =
+            f64::from_bits(crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK));
+        crate::symbol::js_object_set_symbol_property(
+            receiver_value,
+            sym_value,
+            crate::value::js_nanbox_pointer(to_primitive as i64),
+        );
+
+        let value_of = crate::closure::js_closure_alloc(value_of_finite as *const u8, 0);
+        crate::closure::js_register_closure_arity(value_of_finite as *const u8, 0);
+        let value_of_key = crate::string::js_string_from_bytes(b"valueOf".as_ptr(), 7);
+        js_object_set_field_by_name(
+            receiver,
+            value_of_key,
+            crate::value::js_nanbox_pointer(value_of as i64),
+        );
+
+        let prev_this = js_implicit_this_set(receiver_value);
+        let result = catch_js(crate::object::date_proto_thunks::test_date_to_json_current_this);
+        js_implicit_this_set(prev_this);
+
+        let result = result.expect("Date.prototype.toJSON should not throw");
+        assert!(
+            JSValue::from_bits(result.to_bits()).is_null(),
+            "@@toPrimitive returning NaN must make Date.prototype.toJSON return null"
+        );
+    }
+}
+
+#[test]
+fn date_to_json_symbol_to_primitive_object_result_throws() {
+    unsafe {
+        let receiver = js_object_alloc(0, 0);
+        let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
+
+        let to_primitive =
+            crate::closure::js_closure_alloc(symbol_to_primitive_this_object as *const u8, 0);
+        crate::closure::js_register_closure_arity(symbol_to_primitive_this_object as *const u8, 1);
+        let sym = crate::symbol::well_known_symbol("toPrimitive");
+        let sym_value =
+            f64::from_bits(crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK));
+        crate::symbol::js_object_set_symbol_property(
+            receiver_value,
+            sym_value,
+            crate::value::js_nanbox_pointer(to_primitive as i64),
+        );
+
+        let to_iso = crate::closure::js_closure_alloc(to_iso_string_sentinel as *const u8, 0);
+        crate::closure::js_register_closure_arity(to_iso_string_sentinel as *const u8, 0);
+        let to_iso_key = crate::string::js_string_from_bytes(b"toISOString".as_ptr(), 11);
+        js_object_set_field_by_name(
+            receiver,
+            to_iso_key,
+            crate::value::js_nanbox_pointer(to_iso as i64),
+        );
+
+        let prev_this = js_implicit_this_set(receiver_value);
+        let result = catch_js(crate::object::date_proto_thunks::test_date_to_json_current_this);
+        js_implicit_this_set(prev_this);
+
+        assert!(
+            result.is_err(),
+            "@@toPrimitive returning an object must throw before toISOString"
+        );
+    }
+}
+
+#[test]
+fn builtin_prototype_methods_reject_dynamic_new() {
+    unsafe {
+        for (ctor, method) in [
+            ("Date", "toJSON"),
+            ("Array", "map"),
+            ("Object", "hasOwnProperty"),
+        ] {
+            let method_value = installed_builtin_method(ctor, method);
+            let result = catch_js(|| js_new_function_construct(method_value, std::ptr::null(), 0));
+            assert!(
+                result.is_err(),
+                "{ctor}.prototype.{method} should not be constructable"
+            );
+
+            let args = crate::array::js_array_alloc(0);
+            let args_value = crate::value::js_nanbox_pointer(args as i64);
+            let result = catch_js(|| {
+                crate::proxy::js_reflect_construct(
+                    method_value,
+                    args_value,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                )
+            });
+            assert!(
+                result.is_err(),
+                "{ctor}.prototype.{method} should not be a Reflect.construct target"
+            );
+        }
+
+        let ordinary = crate::closure::js_closure_alloc(value_of_finite as *const u8, 0);
+        crate::closure::js_register_closure_arity(value_of_finite as *const u8, 0);
+        let ordinary_value = crate::value::js_nanbox_pointer(ordinary as i64);
+        let result = catch_js(|| js_new_function_construct(ordinary_value, std::ptr::null(), 0));
+        assert!(result.is_ok(), "ordinary closures remain constructable");
+
+        let args = crate::array::js_array_alloc(0);
+        let args_value = crate::value::js_nanbox_pointer(args as i64);
+        let result = catch_js(|| {
+            crate::proxy::js_reflect_construct(
+                ordinary_value,
+                args_value,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            )
+        });
+        assert!(
+            result.is_ok(),
+            "ordinary closures remain Reflect.construct targets"
+        );
     }
 }
 

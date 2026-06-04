@@ -340,7 +340,12 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
             let is_net_module =
                 obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");
-            if is_net_module && matches!(prop_ident.sym.as_ref(), "Socket" | "Stream" | "Server") {
+            if is_net_module
+                && matches!(
+                    prop_ident.sym.as_ref(),
+                    "Socket" | "Stream" | "Server" | "BlockList" | "SocketAddress"
+                )
+            {
                 let args = new_expr
                     .args
                     .as_ref()

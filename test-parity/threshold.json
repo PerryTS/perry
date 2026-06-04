@@ -23,11 +23,6 @@
       "issue": "793",
       "reason": "Known node:https module-inventory gap tracked in known_failures.json."
     },
-    "parity/net": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:net module-inventory gap tracked in known_failures.json."
-    },
     "parity/sqlite": {
       "min_parity_pct": 0.0,
       "issue": "793",

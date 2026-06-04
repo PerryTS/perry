@@ -79,6 +79,7 @@ unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {
         test_direct_method as *const () as usize as i64,
         1,
         0,
+        0,
     );
 }
 

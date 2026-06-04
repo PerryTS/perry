@@ -509,15 +509,20 @@ pub(super) fn build_and_run_link(
                     }
                 }
                 cmd.arg(stdlib);
-                // #466 Phase 4 step 2: well-known bindings join the
-                // link line right after perry-stdlib so they cover
-                // the exact `_js_*` symbol gap that was just opened
-                // by stripping the corresponding feature from the
-                // perry-stdlib rebuild.
-                if !prefer_well_known_before_stdlib {
-                    for wk in &well_known_libs {
-                        cmd.arg(wk);
-                    }
+                // #466 Phase 4 step 2: well-known bindings normally join the
+                // link line right after perry-stdlib so they cover the exact
+                // `_js_*` symbol gap that was just opened by stripping the
+                // corresponding feature from the perry-stdlib rebuild.
+                //
+                // In no-auto/fallback mode the full prebuilt stdlib may still
+                // contain method-value bridge objects that reference wrapper
+                // symbols (for example external net Socket helpers). Archives
+                // are scanned left-to-right, so repeat the well-known libs
+                // after stdlib as well: the first occurrence lets wrapper
+                // definitions win over duplicate bundled stdlib functions,
+                // and the second resolves stdlib bridge references.
+                for wk in &well_known_libs {
+                    cmd.arg(wk);
                 }
                 // Also link runtime to supply symbols that may be DCE'd from stdlib's
                 // bundled perry-runtime (e.g. js_closure_unbind_this, js_string_addref)
@@ -553,10 +558,8 @@ pub(super) fn build_and_run_link(
             cmd.arg(stdlib);
             // #466 Phase 4 step 2: see the parallel comment in the
             // non-Android branch above.
-            if !prefer_well_known_before_stdlib {
-                for wk in &well_known_libs {
-                    cmd.arg(wk);
-                }
+            for wk in &well_known_libs {
+                cmd.arg(wk);
             }
         } else {
             eprintln!("Warning: stdlib required but libperry_stdlib.a not found");

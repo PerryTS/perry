@@ -15,10 +15,22 @@ use perry_hir::Expr;
 use perry_types::Type as HirType;
 
 use crate::expr::{
-    emit_typed_feedback_register_site, lower_expr, unbox_to_i64, FnCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
+use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64};
+
+fn is_async_dispose_symbol_index(index: &Expr) -> bool {
+    let Expr::SymbolFor(symbol_name) = index else {
+        return false;
+    };
+    match symbol_name.as_ref() {
+        Expr::String(name) => name == "@@__perry_wk_asyncDispose",
+        Expr::WtfString(name) => name.as_slice() == b"@@__perry_wk_asyncDispose",
+        _ => false,
+    }
+}
 
 pub fn try_lower_native_chain_method_call(
     ctx: &mut FnCtx<'_>,
@@ -85,6 +97,20 @@ pub fn try_lower_index_get_call(
             || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
         if crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref {
             return Ok(None);
+        }
+        if crate::type_analysis::receiver_class_name(ctx, object).as_deref() == Some("Server")
+            && is_async_dispose_symbol_index(index)
+        {
+            let recv_box = lower_expr(ctx, object)?;
+            for arg in args {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let blk = ctx.block();
+            let handle = unbox_to_i64(blk, &recv_box);
+            blk.call_void("js_net_server_close", &[(I64, &handle), (I64, "0")]);
+            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
+            return Ok(Some(nanbox_pointer_inline(blk, &promise_handle)));
         }
         let is_static_string = matches!(index.as_ref(), Expr::String(_))
             || crate::type_analysis::is_string_expr(ctx, index)
