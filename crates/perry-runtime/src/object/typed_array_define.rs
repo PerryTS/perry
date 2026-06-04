@@ -127,6 +127,59 @@ unsafe fn field_present(desc: *mut ObjectHeader, name: &[u8]) -> bool {
     own_key_present(desc, key)
 }
 
+/// If `key_value` is a String key that is a CanonicalNumericIndexString, return
+/// its numeric value. Returns `None` for symbols, non-string keys, and strings
+/// that aren't canonical numeric indices (those go through ordinary semantics).
+unsafe fn canonical_index_for_key(key_value: f64) -> Option<f64> {
+    if crate::symbol::js_is_symbol(key_value) != 0 {
+        return None;
+    }
+    let key_str_ptr = crate::builtins::js_string_coerce(key_value);
+    if key_str_ptr.is_null() {
+        return None;
+    }
+    let name_ptr = (key_str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key_str_ptr).byte_len as usize;
+    let key = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
+    canonical_numeric_index(key)
+}
+
+/// Result of a TypedArray Integer-Indexed `[[GetOwnProperty]]`.
+pub(crate) enum TypedArrayOwnIndex {
+    /// Not a TypedArray, or the key isn't a canonical numeric index — fall back
+    /// to ordinary `[[GetOwnProperty]]`.
+    NotTypedArray,
+    /// Canonical numeric index but out of bounds / invalid — no own property.
+    OutOfBounds,
+    /// Valid in-bounds index — the element value (a NaN-boxed Number).
+    Element(f64),
+}
+
+/// TypedArray Integer-Indexed `[[GetOwnProperty]]`: resolves a canonical numeric
+/// index key to the element value (so `getOwnPropertyDescriptor(ta, "0")` yields
+/// a `{ value, writable, enumerable, configurable: true }` data descriptor).
+pub(crate) unsafe fn typed_array_own_index(obj_value: f64, key_value: f64) -> TypedArrayOwnIndex {
+    let Some((addr, is_buf, length)) = typed_array_view_info(obj_value) else {
+        return TypedArrayOwnIndex::NotTypedArray;
+    };
+    let Some(numeric_index) = canonical_index_for_key(key_value) else {
+        return TypedArrayOwnIndex::NotTypedArray;
+    };
+    if !is_valid_integer_index(numeric_index, length) {
+        return TypedArrayOwnIndex::OutOfBounds;
+    }
+    let idx = numeric_index as i32;
+    let value = if is_buf {
+        crate::buffer::js_buffer_get(addr as *const crate::buffer::BufferHeader, idx) as f64
+    } else {
+        crate::typedarray::js_typed_array_get(
+            addr as *const crate::typedarray::TypedArrayHeader,
+            idx,
+        )
+    };
+    TypedArrayOwnIndex::Element(value)
+}
+
 /// TypedArray Integer-Indexed `[[DefineOwnProperty]]`. See module docs.
 ///
 /// `key_value` and `descriptor_value` are the raw NaN-boxed arguments. The
@@ -140,26 +193,8 @@ pub(crate) unsafe fn typed_array_define_own_property(
         return TypedArrayDefineOutcome::NotTypedArray;
     };
 
-    // Only String keys can be canonical numeric index strings. Symbols (and any
-    // non-string key) fall through to ordinary define.
-    if crate::symbol::js_is_symbol(key_value) != 0 {
-        return TypedArrayDefineOutcome::NotTypedArray;
-    }
-    let key_str_ptr = crate::builtins::js_string_coerce(key_value);
-    if key_str_ptr.is_null() {
-        return TypedArrayDefineOutcome::NotTypedArray;
-    }
-    let key = {
-        let name_ptr = (key_str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let name_len = (*key_str_ptr).byte_len as usize;
-        match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-            Ok(s) => s.to_string(),
-            Err(_) => return TypedArrayDefineOutcome::NotTypedArray,
-        }
-    };
-
-    let Some(numeric_index) = canonical_numeric_index(&key) else {
-        // Not a canonical numeric index → ordinary define handles it.
+    let Some(numeric_index) = canonical_index_for_key(key_value) else {
+        // Symbol / non-string / non-canonical key → ordinary define handles it.
         return TypedArrayDefineOutcome::NotTypedArray;
     };
 

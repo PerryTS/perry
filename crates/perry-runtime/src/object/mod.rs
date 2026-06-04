@@ -102,7 +102,10 @@ pub(crate) use primitive_proto_thunks::primitive_proto_method_value;
 pub use property_key::*;
 pub(crate) use prototype_helpers::*;
 pub(crate) use reflect_support::*;
-pub(crate) use typed_array_define::{typed_array_define_own_property, TypedArrayDefineOutcome};
+pub(crate) use typed_array_define::{
+    typed_array_define_own_property, typed_array_own_index, TypedArrayDefineOutcome,
+    TypedArrayOwnIndex,
+};
 pub use util_types::*;
 pub use with_env::*;
 

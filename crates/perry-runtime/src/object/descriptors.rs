@@ -155,6 +155,20 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
 
+        // TypedArrays are Integer-Indexed exotic objects: a canonical numeric
+        // index key resolves to the element as a writable/enumerable/
+        // configurable data property (valid index) or to no own property
+        // (out-of-bounds / invalid index), never the ordinary keys table.
+        match super::typed_array_own_index(obj_value, key_value) {
+            super::TypedArrayOwnIndex::Element(value) => {
+                return build_data_descriptor(value, true, true, true);
+            }
+            super::TypedArrayOwnIndex::OutOfBounds => {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            super::TypedArrayOwnIndex::NotTypedArray => {}
+        }
+
         if let Some(class_id) = class_ref_id(obj_value) {
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
