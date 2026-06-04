@@ -1886,6 +1886,7 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
+    let object_output_dir = std::env::current_dir()?;
     let compile_results: Vec<Result<(PathBuf, Vec<u8>, String), String>> = ctx
         .native_modules
         .par_iter()
@@ -3847,7 +3848,7 @@ pub fn run_with_parse_cache(
                 .to_string();
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
-            let obj_path = PathBuf::from(format!("{}.{}", obj_name, ext));
+            let obj_path = object_output_dir.join(format!("{}.{}", obj_name, ext));
             let object_fingerprint = cache_key
                 .map(|k| format!("cache:{:016x}", k))
                 .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));

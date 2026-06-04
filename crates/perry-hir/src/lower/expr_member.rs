@@ -1512,7 +1512,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         property_name
                     };
                     let class_filter =
-                        if matches!(module_name.as_str(), "http" | "https" | "events") {
+                        if matches!(module_name.as_str(), "http" | "https" | "events" | "net") {
                             Some(class_name.clone())
                         } else {
                             None
