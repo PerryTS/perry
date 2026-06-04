@@ -4067,6 +4067,12 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // Overwrite the no-op getter entries with brand-checking thunks so
+            // `Date.prototype.getX.call(this)` performs `thisTimeValue(this)`
+            // (TypeError on a non-Date receiver) and dispatches correctly.
+            // MUST run after the OBJECT_PROTO_METHODS block, which would
+            // otherwise re-clobber `valueOf` with the generic Object no-op.
+            date_proto_thunks::install_date_proto_getters(proto_obj);
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
