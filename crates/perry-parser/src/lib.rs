@@ -677,6 +677,32 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_js_lookalike_directives_keep_function_body_sloppy() {
+        let source = r#"
+            function doubledSpace() {
+                "use  strict";
+                var public = 1;
+                return public;
+            }
+            function escapedSpace() {
+                "use\x20strict";
+                var yield = 2;
+                return yield;
+            }
+            function interrupted() {
+                var interface = 3;
+                "use strict";
+                return interface;
+            }
+        "#;
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(source, "test.js", &mut cache).unwrap();
+
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
     fn test_parse_js_sloppy_escaped_contextual_identifiers() {
         let source = r#"
             var imp\u006Cements = 1;

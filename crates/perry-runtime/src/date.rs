@@ -292,8 +292,10 @@ pub extern "C" fn js_date_new_from_value(value: f64) -> f64 {
         // otherwise read the pointer bits as a bogus timestamp).
         date_cell_timestamp(value)
     } else {
-        // Numeric timestamp
-        value
+        // Any other value → ToNumber timestamp. Booleans/null coerce
+        // numerically, objects run a single valueOf, and Symbol/BigInt throw
+        // (rather than silently producing an Invalid Date from raw pointer bits).
+        jsvalue_to_number(value)
     };
     alloc_date_cell(result)
 }
@@ -940,7 +942,20 @@ static KEEP_JS_DATE_UTC: extern "C" fn(*const f64, i32) -> f64 = js_date_utc;
 /// to the inputs Date setters/constructors actually receive). `undefined`
 /// becomes NaN; numbers pass through; numeric strings parse; everything else
 /// is NaN.
+/// ECMAScript `ToNumber` for Date arguments (constructor numeric arg, `Date.UTC`,
+/// `Date.prototype.set*` components). Throws `TypeError` on Symbol/BigInt (per
+/// spec), reads a Date's time value, and runs a *single* `valueOf`/`toString`
+/// (`OrdinaryToPrimitive` number hint) for ordinary objects and arrays before
+/// the primitive numeric coercion. Primitives use the ordinary string/boolean/
+/// nullish coercion.
 fn jsvalue_to_number(v: f64) -> f64 {
+    // Symbol and BigInt are not numerically convertible.
+    if unsafe { crate::symbol::js_is_symbol(v) } != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+    }
+    if crate::value::JSValue::from_bits(v.to_bits()).is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
     let bits = v.to_bits();
     let tag = (bits >> 48) & 0xFFFF;
     match tag {
@@ -980,6 +995,22 @@ fn jsvalue_to_number(v: f64) -> f64 {
         0x7FFE => {
             // INT32
             ((bits & 0xFFFF_FFFF) as u32 as i32) as f64
+        }
+        0x7FFD => {
+            // Pointer: a Date contributes its time value; any other object (and
+            // arrays) coerce via OrdinaryToPrimitive(number) → ToNumber.
+            if is_date_value(v) {
+                return date_cell_timestamp(v);
+            }
+            match unsafe { crate::value::ordinary_to_primitive_number_for_add(v) } {
+                crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => jsvalue_to_number(p),
+                crate::value::OrdinaryToPrimitiveOutcome::DefaultString => f64::NAN,
+                crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+                    crate::collection_iter::throw_type_error(
+                        "Cannot convert object to primitive value",
+                    )
+                }
+            }
         }
         _ => v, // plain f64 double
     }
@@ -1097,33 +1128,15 @@ pub extern "C" fn js_date_new_local_components(
     fn coerce(v: f64, default: f64) -> f64 {
         let bits = v.to_bits();
         let tag = (bits >> 48) & 0xFFFF;
-        if tag == 0x7FFF {
-            // NaN-boxed string — parse via the same path Number(str) uses.
-            let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
-            if ptr.is_null() || (ptr as usize) < 0x1000 {
-                return f64::NAN;
-            }
-            unsafe {
-                let len = (*ptr).byte_len as usize;
-                let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                match std::str::from_utf8(bytes) {
-                    Ok(s) => {
-                        let s = s.trim();
-                        if s.is_empty() {
-                            default
-                        } else {
-                            s.parse::<f64>().unwrap_or(f64::NAN)
-                        }
-                    }
-                    Err(_) => f64::NAN,
-                }
-            }
-        } else if tag == 0x7FFC && (bits & 0xFF) == 0x01 {
-            // undefined — for required args this is NaN, for optional ones default
+        if tag == 0x7FFC && (bits & 0xFF) == 0x01 {
+            // undefined — optional trailing args take their default; a required
+            // leading `undefined` passes NaN (callers supply `default = NaN`).
             default
         } else {
-            v
+            // Everything else goes through ECMAScript ToNumber: strings parse,
+            // booleans/null coerce numerically, objects run a single valueOf,
+            // and Symbol/BigInt throw.
+            jsvalue_to_number(v)
         }
     }
     let y = coerce(year, f64::NAN);

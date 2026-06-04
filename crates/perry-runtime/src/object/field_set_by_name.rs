@@ -180,6 +180,19 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    if let Some(addr) =
+        crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
+    {
+        unsafe {
+            crate::typedarray_props::typed_array_set_own_property(
+                addr as *mut crate::typedarray::TypedArrayHeader,
+                key,
+                value,
+            );
+        }
+        return;
+    }
+
     // Issue #618-followup: detect INT32-tagged class ref (top16 == 0x7FFE).
     // Drizzle's `((SQL2) => { SQL2.Aliased = Aliased; })(SQL)` pattern sets
     // a static property on an imported class — Perry stores classes as
@@ -306,6 +319,16 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
         return;
+    }
+    unsafe {
+        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+            crate::typedarray_props::typed_array_set_own_property(
+                obj as *mut crate::typedarray::TypedArrayHeader,
+                key,
+                value,
+            );
+            return;
+        }
     }
     unsafe {
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && string_key_eq(key, b"length") {

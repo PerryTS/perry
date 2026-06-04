@@ -284,7 +284,13 @@ jobs:
       # suffix so the bottle can ship both side-by-side. tvOS/visionOS/
       # watchOS are Tier-3 (need nightly + -Zbuild-std) and out of scope.
       - name: Build iOS cross-compile libraries (macOS)
-        if: runner.os == 'macOS'
+        # Only on the arm64 mac job. These iOS/Apple cross-libs are aarch64 and
+        # identical regardless of host, so building them on the x86_64 mac runner
+        # is redundant — and the macos-15 x86_64 runner fails `libsqlite3-sys`
+        # bindgen on the iOS target (libclang/SDK env). The macOS staging step
+        # copies these libs only `if [ -f ]`, so the x86_64 bottle degrades
+        # gracefully; the arm64 bottle + the build-cross tarballs still ship them.
+        if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
         run: |
           for triple in aarch64-apple-ios aarch64-apple-ios-sim; do
             cargo build --release --target "$triple" -p perry-runtime
@@ -303,7 +309,8 @@ jobs:
       # `apple_class_lib_name` already maps each `--target` to the correct
       # variant (covered by the `handles_other_class_suffixes` unit test).
       - name: Build tvOS/visionOS/watchOS cross-compile libraries (macOS)
-        if: runner.os == 'macOS'
+        # arm64 mac job only — same rationale as the iOS step above.
+        if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
         run: |
           set -e
           # Format: "<platform>:<device-triple>:<sim-triple>"

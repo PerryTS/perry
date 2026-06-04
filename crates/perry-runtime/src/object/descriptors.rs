@@ -169,6 +169,17 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             super::TypedArrayOwnIndex::NotTypedArray => {}
         }
 
+        if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+            let key_str = crate::builtins::js_string_coerce(key_value);
+            if key_str.is_null() {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            return crate::typedarray_props::typed_array_get_own_property_descriptor(
+                addr as *const crate::typedarray::TypedArrayHeader,
+                key_str,
+            );
+        }
+
         if let Some(class_id) = class_ref_id(obj_value) {
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
@@ -571,7 +582,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
 
 /// Build a `{ value, writable, enumerable, configurable }` data descriptor
 /// object. Shared by the string-primitive descriptor path (#2818).
-unsafe fn build_data_descriptor(
+pub(crate) unsafe fn build_data_descriptor(
     value: f64,
     writable: bool,
     enumerable: bool,
@@ -593,7 +604,7 @@ unsafe fn build_data_descriptor(
     f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
 }
 
-unsafe fn build_accessor_descriptor(
+pub(crate) unsafe fn build_accessor_descriptor(
     get: f64,
     set: f64,
     enumerable: bool,
@@ -686,6 +697,13 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         }
         if let Some(str_value) = boxed_string_payload(obj_value) {
             return boxed_string_own_property_names(obj_value, str_value);
+        }
+        if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+            let result = crate::typedarray_props::typed_array_own_property_names(
+                addr as *const crate::typedarray::TypedArrayHeader,
+                false,
+            );
+            return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
         }
         if let Some(class_id) = class_ref_id(obj_value) {
             let is_prototype_ref = super::class_prototype_ref_id(obj_value).is_some();
