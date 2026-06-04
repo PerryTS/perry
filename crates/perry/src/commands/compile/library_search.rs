@@ -1304,7 +1304,8 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
     // model doesn't crash at load. (RUSTFLAGS scopes to the cross target,
     // so host build-scripts/proc-macros are unaffected.)
     if matches!(target, Some("android") | Some("android-x86_64")) {
-        cargo_cmd.env("RUSTFLAGS", "-C tls-model=global-dynamic");
+        let tls_flag = super::optimized_libs::android_global_dynamic_tls_rustflag(&mut cargo_cmd);
+        cargo_cmd.env("RUSTFLAGS", tls_flag);
     }
 
     let status = cargo_cmd
