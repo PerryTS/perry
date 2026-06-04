@@ -54,8 +54,23 @@ pub struct FinallyRoute {
     pub post_finally_state: u32,
     /// `true` if the finally body itself contains yields/awaits (await-using
     /// path). Such finallys are linearized into states and can't be inlined
-    /// into the `.return()`/`.throw()` closures, so they're skipped there.
+    /// into the `.return()`/`.throw()` closures synchronously.
     pub has_yields: bool,
+    /// #4438 B2-finally: for a YIELDING finally, the first state of its
+    /// linearized body. Abrupt completion (`.throw()`/`.return()`/runtime
+    /// throw) while suspended in the protected try interval routes here so the
+    /// finally's own `yield`s suspend; on completion the pending throw/return
+    /// is re-raised. `None` for non-yielding finallys (inlined as before).
+    pub finally_entry_state: Option<u32>,
+    /// #4438 B2-finally: upper bound of the protected suspended-state interval
+    /// for routing into a yielding finally. Covers the try body but EXCLUDES
+    /// the finally's own states, so an abrupt completion while suspended INSIDE
+    /// the finally supersedes the pending one instead of re-entering it.
+    pub protected_end_state: u32,
+    /// #4438 B2-finally: the state whose body, after the finally completes,
+    /// re-raises a pending throw/return completion (the completion check is
+    /// appended in `transform_generator_function`).
+    pub completion_check_state: Option<u32>,
 }
 
 /// Linearize the generator body into a sequence of states.
@@ -617,6 +632,21 @@ pub fn linearize_body(
                 || finally.as_ref().is_some_and(|f| body_contains_yield(f))
                 || catch.as_ref().is_some_and(|c| body_contains_yield(&c.body)) =>
             {
+                // #4438: flush any pending pre-try code (e.g. a `throw` or
+                // assignment sitting between a preceding `yield` and this `try`)
+                // as its own state, so the try's protected interval starts
+                // cleanly at the try body. Without this the pre-try code lands in
+                // the try's first state and a throw there is wrongly routed to
+                // THIS try's handler instead of an enclosing one.
+                if !current.is_empty() {
+                    let pre_state = *state_num;
+                    *state_num += 1;
+                    states.push(State {
+                        num: pre_state,
+                        body: std::mem::take(current),
+                        exit: StateExit::Goto(*state_num),
+                    });
+                }
                 let protected_start_state = *state_num;
 
                 // Issue #256: widen the guard to also fire when yields live ONLY
@@ -733,22 +763,35 @@ pub fn linearize_body(
                     post_catch_state = *state_num;
                 }
 
-                // Finally block: linearize if it has yields (await-using path),
-                // otherwise push as-is.
+                // Finally block.
                 if let Some(fin) = finally {
                     let fin_has_yields = body_contains_yield(fin);
-                    // #4374: register the finally so the .return()/.throw()
-                    // closures can run it on abrupt completion. The protected
-                    // suspended-state interval is the same one the catch route
-                    // covers — `protected_start_state` (try entry) through
-                    // `post_catch_state` (the state where the finally begins).
-                    finallys.push(FinallyRoute {
-                        body: fin.clone(),
-                        protected_start_state,
-                        post_finally_state: post_catch_state,
-                        has_yields: fin_has_yields,
-                    });
                     if fin_has_yields {
+                        // #4438 B2-finally: a YIELDING finally is linearized into
+                        // states with a clean entry so abrupt completion can route
+                        // INTO it (its `yield`s suspend) and re-raise the pending
+                        // throw/return once it finishes.
+                        //
+                        // Flush the happy-path tail currently in `current` (the
+                        // post-last-yield try code, when there's no catch) as its
+                        // own state so the finally starts fresh — the abrupt path
+                        // must not re-run the try tail.
+                        let tail_state = *state_num;
+                        *state_num += 1;
+                        let tail_idx = states.len();
+                        states.push(State {
+                            num: tail_state,
+                            body: std::mem::take(current),
+                            exit: StateExit::Goto(0), // patched to finally_entry below
+                        });
+                        let finally_entry_state = *state_num;
+                        states[tail_idx].exit = StateExit::Goto(finally_entry_state);
+                        // Throws/returns while suspended in the try body (states
+                        // protected_start..=tail_state) route into the finally.
+                        // The finally's own states (> tail_state) are excluded.
+                        let finally_protected_end = tail_state;
+
+                        // Linearize the finally body into states.
                         linearize_body(
                             fin,
                             states,
@@ -760,7 +803,44 @@ pub fn linearize_body(
                             catches,
                             finallys,
                         );
+
+                        // Flush the finally tail as the completion-check state.
+                        // `transform_generator_function` appends the re-raise of a
+                        // pending throw/return to this state's body; on the normal
+                        // path (no pending) it just falls through to post-finally.
+                        let completion_state = *state_num;
+                        *state_num += 1;
+                        let comp_idx = states.len();
+                        states.push(State {
+                            num: completion_state,
+                            body: std::mem::take(current),
+                            exit: StateExit::Goto(0), // patched to post_finally below
+                        });
+                        let post_finally_state = *state_num;
+                        states[comp_idx].exit = StateExit::Goto(post_finally_state);
+
+                        finallys.push(FinallyRoute {
+                            body: fin.clone(),
+                            protected_start_state,
+                            post_finally_state,
+                            has_yields: true,
+                            finally_entry_state: Some(finally_entry_state),
+                            protected_end_state: finally_protected_end,
+                            completion_check_state: Some(completion_state),
+                        });
                     } else {
+                        // #4374: a non-yielding finally is inlined into the
+                        // .return()/.throw()/dispatch closures on abrupt
+                        // completion (and pushed as-is for the happy path).
+                        finallys.push(FinallyRoute {
+                            body: fin.clone(),
+                            protected_start_state,
+                            post_finally_state: post_catch_state,
+                            has_yields: false,
+                            finally_entry_state: None,
+                            protected_end_state: post_catch_state,
+                            completion_check_state: None,
+                        });
                         for s in fin {
                             current.push(s.clone());
                         }

@@ -84,6 +84,14 @@ pub fn transform_generator_function_with_extra_captures(
     let done_id = alloc_local(next_local_id);
     let sent_id = alloc_local(next_local_id); // value passed by caller via next(val)
     let executing_id = alloc_local(next_local_id);
+    // #4438 B2-finally: pending abrupt-completion record for routing through a
+    // YIELDING finally. `pending_type`: 0 = none, 1 = throw, 2 = return.
+    // `pending_value`: the thrown error / returned value. Set when abrupt
+    // completion routes into a finally; re-raised at the finally's completion
+    // check. (Sync generators only — async never sets these, so the appended
+    // completion checks are inert on the async path.)
+    let pending_type_id = alloc_local(next_local_id);
+    let pending_value_id = alloc_local(next_local_id);
 
     // Collect all states from the generator body
     let mut states: Vec<State> = Vec::new();
@@ -121,6 +129,27 @@ pub fn transform_generator_function_with_extra_captures(
         body: current,
         exit: StateExit::Done,
     });
+
+    // #4438 B2-finally: whether any yielding finally needs the pending-completion
+    // record + routing machinery (kept off for generators without one).
+    let has_yielding_finally = finallys.iter().any(|f| f.finally_entry_state.is_some());
+
+    // #4438 B2-finally: append the completion-resume check to each yielding
+    // finally's completion-check state. After the finally body runs (on either
+    // the happy path or an abrupt completion routed into it), re-raise a pending
+    // throw/return; on the normal path (pending_type == 0) it's inert and the
+    // state falls through to post-finally. Sync only in practice — async never
+    // sets `pending_type`, so the checks are dead on the async path.
+    if !is_async_generator {
+        let resume = build_completion_resume_stmts(pending_type_id, pending_value_id, done_id);
+        for route in &finallys {
+            if let Some(cc) = route.completion_check_state {
+                if let Some(state) = states.iter_mut().find(|s| s.num == cc) {
+                    state.body.extend(resume.iter().cloned());
+                }
+            }
+        }
+    }
 
     // Collect hoisted var IDs first so we know which Lets to rewrite
     let hoisted_for_rewrite = collect_hoisted_vars(&func.body);
@@ -265,36 +294,67 @@ pub fn transform_generator_function_with_extra_captures(
     // instead of returning {value: undefined, done: false} and deferring to
     // the next .next(). Only the sync-generator .throw() path uses this.
     let while_body_for_throw = while_body.clone();
+    // #4438 B2-finally: the `.return()` closure needs the same continuation loop
+    // when it routes into a yielding finally (so the finally's `yield`s suspend).
+    let while_body_for_return = while_body.clone();
 
-    // #4438: for sync generators, wrap the dispatch loop body in a real
-    // try/catch so a `throw` *executing inside a try block during a normal
-    // .next()* is caught and routed to the matching catch's linearized states
-    // (or, when no catch matches, runs any pending `finally` and completes the
-    // generator before propagating). Pre-#4438 the catch handler existed only
-    // in the .throw() closure, so such a throw escaped uncaught.
+    // #4438: for sync generators, wrap each state-dispatch loop body in a real
+    // try/catch so a `throw` *executing inside a try block during dispatch* is
+    // caught and routed to the matching catch/finally (or runs pending finally +
+    // completes the generator when unhandled). This applies to the `.next()`
+    // loop AND the `.throw()`/`.return()` continuation loops — e.g. a `catch`
+    // that rethrows must still run a non-yielding `finally` on the way out.
     let has_state_based_catch = catches.iter().any(|r| r.catch_entry_state.is_some());
     let has_inlineable_finally = finallys.iter().any(|r| !r.has_yields);
-    let wrap_dispatch = !is_async_generator && (has_state_based_catch || has_inlineable_finally);
+    let wrap_dispatch = !is_async_generator
+        && (has_state_based_catch || has_inlineable_finally || has_yielding_finally);
     let dispatch_body = if wrap_dispatch {
         let disp_err_id = alloc_local(next_local_id);
-        let handler = build_dispatch_catch_handler(
+        wrap_dispatch_loop(
+            while_body,
             &catches,
             &finallys,
             state_id,
             done_id,
+            pending_type_id,
+            pending_value_id,
             disp_err_id,
             &hoisted_ids,
-        );
-        vec![Stmt::Try {
-            body: while_body,
-            catch: Some(CatchClause {
-                param: Some((disp_err_id, "__gen_disp_err".to_string())),
-                body: handler,
-            }),
-            finally: None,
-        }]
+        )
     } else {
         while_body
+    };
+    let while_body_for_throw = if wrap_dispatch {
+        let disp_err_id = alloc_local(next_local_id);
+        wrap_dispatch_loop(
+            while_body_for_throw,
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            pending_type_id,
+            pending_value_id,
+            disp_err_id,
+            &hoisted_ids,
+        )
+    } else {
+        while_body_for_throw
+    };
+    let while_body_for_return = if wrap_dispatch {
+        let disp_err_id = alloc_local(next_local_id);
+        wrap_dispatch_loop(
+            while_body_for_return,
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            pending_type_id,
+            pending_value_id,
+            disp_err_id,
+            &hoisted_ids,
+        )
+    } else {
+        while_body_for_return
     };
 
     // Build next() method body
@@ -365,7 +425,14 @@ pub fn transform_generator_function_with_extra_captures(
     // box. Net effect per call: one js_box_alloc + one js_box_set per id,
     // versus the pre-fix path which did one js_box_alloc inside the Let
     // (same cost, but the cache then hit on stale captures).
+    // #4438 B2-finally: only allocate/box the pending-completion record when a
+    // yielding finally exists (otherwise it's unused — keep other generators'
+    // box set unchanged).
     let mut prealloc_ids: Vec<LocalId> = vec![state_id, done_id, sent_id, executing_id];
+    if has_yielding_finally {
+        prealloc_ids.push(pending_type_id);
+        prealloc_ids.push(pending_value_id);
+    }
     for (var_id, _, _) in &hoisted {
         prealloc_ids.push(*var_id);
     }
@@ -402,6 +469,24 @@ pub fn transform_generator_function_with_extra_captures(
         init: Some(Expr::Bool(false)),
     });
 
+    // #4438 B2-finally: let __pending_type = 0; let __pending_value = undefined
+    if has_yielding_finally {
+        new_body.push(Stmt::Let {
+            id: pending_type_id,
+            name: "__gen_pending_type".to_string(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Number(0.0)),
+        });
+        new_body.push(Stmt::Let {
+            id: pending_value_id,
+            name: "__gen_pending_value".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        });
+    }
+
     // Re-emit hoisted Let stubs (prealloc already covered the boxes;
     // these Lets now route through the prealloc-boxes path and just
     // set the box value via js_box_set).
@@ -437,6 +522,15 @@ pub fn transform_generator_function_with_extra_captures(
     // Build captures: state, done, sent, params, hoisted vars, extra locals
     let mut captures = vec![state_id, done_id, sent_id, executing_id];
     let mut mutable_captures = vec![state_id, done_id, sent_id, executing_id];
+    // #4438 B2-finally: the pending-completion record is read/written across the
+    // next/throw/return closures, so capture it by reference like the other
+    // state-machine internals (only when a yielding finally uses it).
+    if has_yielding_finally {
+        captures.push(pending_type_id);
+        captures.push(pending_value_id);
+        mutable_captures.push(pending_type_id);
+        mutable_captures.push(pending_value_id);
+    }
     for param in &func.params {
         captures.push(param.id);
     }
@@ -552,23 +646,54 @@ pub fn transform_generator_function_with_extra_captures(
             )))],
             else_branch: None,
         });
-        // Mark done (abrupt completion), then run pending finallys. A finally
-        // that itself `return`s supersedes `v` (rewritten to an iter-result
-        // return inside build_finally_run_stmts); a finally that throws
-        // propagates out of this closure.
+        // #4445: mark the generator "executing" while the resume runs (the
+        // executing guard rejects a re-entrant resume).
         return_resume_body.push(Stmt::Expr(Expr::LocalSet(
             executing_id,
             Box::new(Expr::Bool(true)),
         )));
-        return_resume_body.push(Stmt::Expr(Expr::LocalSet(
+        // Unhandled path: mark done, run pending non-yielding finallys, return
+        // {v, true}. A finally that itself `return`s supersedes `v` (rewritten to
+        // an iter-result return inside build_finally_run_stmts); a finally that
+        // throws propagates out of this closure.
+        let mut return_fallback = vec![Stmt::Expr(Expr::LocalSet(
             done_id,
             Box::new(Expr::Bool(true)),
-        )));
-        return_resume_body.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
-        return_resume_body.push(Stmt::Return(Some(make_iter_result(
+        ))];
+        return_fallback.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_fallback.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
             true,
         ))));
+        if !is_async_generator && has_yielding_finally {
+            // #4438 B2-finally: route `.return(v)` into the innermost enclosing
+            // yielding finally (record the pending return + jump in), then fall
+            // through to the continuation loop so the finally's `yield`s suspend;
+            // its completion check re-raises the return. Catches don't catch a
+            // return completion, so only finally routes apply.
+            return_resume_body.extend(build_abrupt_routing(
+                &catches,
+                &finallys,
+                state_id,
+                pending_type_id,
+                pending_value_id,
+                &Expr::LocalGet(return_param_id),
+                false,
+                2.0,
+                false,
+                false,
+                return_fallback,
+            ));
+            return_resume_body.push(Stmt::While {
+                condition: Expr::Bool(true),
+                body: while_body_for_return,
+            });
+        } else {
+            return_resume_body.extend(return_fallback);
+        }
+        // #4445: wrap with the executing guard + a catch that clears `executing`
+        // and marks `done` on any escaping throw (also wraps returns in a Promise
+        // for async generators).
         let return_catch_id = alloc_local(next_local_id);
         let return_body = wrap_generator_resume_body(
             return_resume_body,
@@ -632,6 +757,8 @@ pub fn transform_generator_function_with_extra_captures(
             done_id,
             throw_param_id,
             inner_catch_id,
+            pending_type_id,
+            pending_value_id,
             &hoisted_ids,
             throw_continuation,
         ));
@@ -968,6 +1095,7 @@ fn generator_expr_uses_call_this(expr: &Expr) -> bool {
 /// ```
 ///
 /// The two-step `let __step; __step = ...;` pattern is required because
+#[allow(clippy::too_many_arguments)]
 fn build_async_throw_body(
     catches: &[CatchRoute],
     finallys: &[FinallyRoute],
@@ -975,6 +1103,8 @@ fn build_async_throw_body(
     done_id: LocalId,
     throw_param_id: LocalId,
     inner_catch_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
     // #4374: for sync generators, the cloned state-dispatch loop. When present,
     // a matched catch route sets the resume state and *falls through* to this
@@ -984,13 +1114,11 @@ fn build_async_throw_body(
     continuation: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
     let fall_through = continuation.is_some();
-    // #4374: when no catch handles the throw, run any pending `finally`
-    // (innermost first) before propagating the error — `try { yield }
-    // finally { ... }` must run its finally on `.throw(e)`. A `finally` that
-    // `return`s supersedes the thrown value (rewritten to an iter-result
-    // return inside build_finally_run_stmts). For a try WITH a catch, the
-    // catch route below returns first, so this only fires for
-    // try/finally-without-catch and for truly unhandled throws.
+    // #4374: when no catch handles the throw, run any pending non-yielding
+    // `finally` before propagating the error. A `finally` that `return`s
+    // supersedes the thrown value (rewritten to an iter-result return inside
+    // build_finally_run_stmts). For a try WITH a catch, a route below matches
+    // first, so this only fires for unhandled throws.
     let mut fallback = Vec::new();
     // An unhandled throw completes the generator (subsequent .next() must
     // return {done: true}). Sync generators only — async generators keep the
@@ -1004,32 +1132,29 @@ fn build_async_throw_body(
     fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
     fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
 
-    // Build nested `if` dispatch in source order. We iterate from the back so
-    // the first collected route is tested first; nested try/catch routes are
-    // collected before their containing route and should win on overlap.
-    for route in catches.iter().rev() {
-        // #4438: sync generators route the thrown error into the catch's
-        // linearized states (set the catch param + jump to `catch_entry_state`,
-        // then fall through to the appended continuation loop, which dispatches
-        // the catch body — so a `yield` inside the catch actually suspends).
-        // Async generators (and any route without a linearized catch) keep the
-        // legacy inline-the-catch-body behavior.
-        let state_based = fall_through && route.catch_entry_state.is_some();
-        let then_branch = if state_based {
-            let mut b = Vec::new();
-            if let Some(cp_id) = route.param_id {
-                b.push(Stmt::Expr(Expr::LocalSet(
-                    cp_id,
-                    Box::new(Expr::LocalGet(throw_param_id)),
-                )));
-            }
-            b.push(Stmt::Expr(Expr::LocalSet(
-                state_id,
-                Box::new(Expr::Number(route.catch_entry_state.unwrap() as f64)),
-            )));
-            b
-        } else {
-            build_async_catch_route_body(
+    let mut body = if fall_through {
+        // #4438: sync generators route the thrown error to the innermost
+        // enclosing catch (jump to its linearized states) or yielding finally
+        // (record the pending throw + jump in), then fall through to the
+        // appended continuation loop which dispatches it — so a `yield` inside
+        // the catch/finally suspends.
+        build_abrupt_routing(
+            catches,
+            finallys,
+            state_id,
+            pending_type_id,
+            pending_value_id,
+            &Expr::LocalGet(throw_param_id),
+            true,
+            1.0,
+            false,
+            false,
+            fallback,
+        )
+    } else {
+        // Async generators: legacy inline-the-catch-body behavior.
+        for route in catches.iter().rev() {
+            let then_branch = build_async_catch_route_body(
                 route,
                 finallys,
                 state_id,
@@ -1038,27 +1163,27 @@ fn build_async_throw_body(
                 inner_catch_id,
                 hoisted_ids,
                 fall_through,
-            )
-        };
-        fallback = vec![Stmt::If {
-            condition: catch_route_condition(route, state_id, state_based, false),
-            then_branch,
-            else_branch: Some(fallback),
-        }];
-    }
+            );
+            fallback = vec![Stmt::If {
+                condition: catch_route_condition(route, state_id, false, false),
+                then_branch,
+                else_branch: Some(fallback),
+            }];
+        }
+        fallback
+    };
 
-    // #4374: append the continuation loop. Only a fallen-through catch route
-    // reaches it (the no-catch branch throws and the catch routes either
-    // `return` on a user `return`/finally-return or fall through after setting
-    // the resume state).
+    // #4374: append the continuation loop. Only a fallen-through catch/finally
+    // route reaches it (the unhandled branch throws; matched routes set the
+    // resume state and fall through).
     if let Some(cont) = continuation {
-        fallback.push(Stmt::While {
+        body.push(Stmt::While {
             condition: Expr::Bool(true),
             body: cont,
         });
     }
 
-    fallback
+    body
 }
 
 fn catch_route_condition(
@@ -1109,17 +1234,219 @@ fn catch_route_condition(
     }
 }
 
-/// #4438: build the catch handler for the sync-generator dispatch loop. When a
-/// `throw` executes inside a try during a normal `.next()` dispatch, route the
-/// error to the matching catch's linearized states (set the catch param, jump
-/// to `catch_entry_state`, and `continue` the dispatch loop so the catch body
-/// runs — including any `yield` inside it). When no catch owns the current
-/// state, run any pending `finally`, complete the generator, and rethrow.
+/// #4438 B2-finally: interval condition for routing an abrupt completion into a
+/// yielding finally — `state` in (or `>=` for runtime throws) the protected try
+/// interval, up to `protected_end_state` (which excludes the finally's own
+/// states so a completion while suspended INSIDE the finally supersedes it).
+fn finally_abrupt_condition(
+    route: &FinallyRoute,
+    state_id: LocalId,
+    inclusive_lower: bool,
+) -> Expr {
+    let lower_op = if inclusive_lower {
+        CompareOp::Ge
+    } else {
+        CompareOp::Gt
+    };
+    Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(Expr::Compare {
+            op: lower_op,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.protected_start_state as f64)),
+        }),
+        right: Box::new(Expr::Compare {
+            op: CompareOp::Le,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.protected_end_state as f64)),
+        }),
+    }
+}
+
+/// #4438 B2-finally: the re-raise appended to a yielding finally's
+/// completion-check state. After the finally runs, a pending throw is re-thrown
+/// (and re-routed by the dispatch wrapper to an enclosing handler, or propagated
+/// when unhandled) and a pending return completes the generator with its value.
+/// On the normal path (`pending_type == 0`) both checks are skipped.
+fn build_completion_resume_stmts(
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    done_id: LocalId,
+) -> Vec<Stmt> {
+    vec![
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(pending_type_id)),
+                right: Box::new(Expr::Number(1.0)),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(pending_type_id, Box::new(Expr::Number(0.0)))),
+                Stmt::Throw(Expr::LocalGet(pending_value_id)),
+            ],
+            else_branch: None,
+        },
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(pending_type_id)),
+                right: Box::new(Expr::Number(2.0)),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(pending_type_id, Box::new(Expr::Number(0.0)))),
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Return(Some(make_iter_result(
+                    Expr::LocalGet(pending_value_id),
+                    true,
+                ))),
+            ],
+            else_branch: None,
+        },
+    ]
+}
+
+/// #4438: build the merged abrupt-completion routing if-chain for sync
+/// generators. A thrown error / returned value routes to the innermost
+/// enclosing handler: a `catch` (jump to its linearized states) or a yielding
+/// `finally` (record the pending completion + jump into the finally). Routes are
+/// ordered innermost-first (protected-start descending; a `catch` beats a
+/// `finally` at the same try). `value_src` is the error/return value;
+/// `pending_kind` is 1 (throw) or 2 (return) for finally routes. `with_continue`
+/// appends `continue` (dispatch wrapper) vs falling through (the throw/return
+/// closures, which append their own continuation loop). When nothing matches the
+/// current state, `fallback` runs.
+#[allow(clippy::too_many_arguments)]
+fn build_abrupt_routing(
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    value_src: &Expr,
+    include_catch: bool,
+    pending_kind: f64,
+    with_continue: bool,
+    inclusive_lower: bool,
+    fallback: Vec<Stmt>,
+) -> Vec<Stmt> {
+    // (protected_start, kind, index): kind 0 = catch, 1 = finally.
+    let mut routes: Vec<(u32, u8, usize)> = Vec::new();
+    if include_catch {
+        for (i, r) in catches.iter().enumerate() {
+            if r.catch_entry_state.is_some() {
+                routes.push((r.protected_start_state, 0, i));
+            }
+        }
+    }
+    for (i, r) in finallys.iter().enumerate() {
+        if r.finally_entry_state.is_some() {
+            routes.push((r.protected_start_state, 1, i));
+        }
+    }
+    // Innermost first: start descending, catch before finally on a tie.
+    routes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+
+    let mut chain = fallback;
+    for (_, kind, idx) in routes.iter().rev() {
+        let (condition, mut then_branch) = if *kind == 0 {
+            let route = &catches[*idx];
+            let mut a = Vec::new();
+            if let Some(cp_id) = route.param_id {
+                a.push(Stmt::Expr(Expr::LocalSet(
+                    cp_id,
+                    Box::new(value_src.clone()),
+                )));
+            }
+            a.push(Stmt::Expr(Expr::LocalSet(
+                state_id,
+                Box::new(Expr::Number(route.catch_entry_state.unwrap() as f64)),
+            )));
+            (
+                catch_route_condition(route, state_id, true, inclusive_lower),
+                a,
+            )
+        } else {
+            let route = &finallys[*idx];
+            let a = vec![
+                Stmt::Expr(Expr::LocalSet(
+                    pending_type_id,
+                    Box::new(Expr::Number(pending_kind)),
+                )),
+                Stmt::Expr(Expr::LocalSet(
+                    pending_value_id,
+                    Box::new(value_src.clone()),
+                )),
+                Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(route.finally_entry_state.unwrap() as f64)),
+                )),
+            ];
+            (
+                finally_abrupt_condition(route, state_id, inclusive_lower),
+                a,
+            )
+        };
+        if with_continue {
+            then_branch.push(Stmt::Continue);
+        }
+        chain = vec![Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(chain),
+        }];
+    }
+    chain
+}
+
+/// #4438: wrap a state-dispatch loop body in a real `try/catch` whose handler
+/// routes a throw executing during dispatch to the matching catch/finally
+/// (`continue`) or runs pending non-yielding finallys + completes + rethrows
+/// when unhandled. Used for the `.next()` loop and the `.throw()`/`.return()`
+/// continuation loops alike.
+#[allow(clippy::too_many_arguments)]
+fn wrap_dispatch_loop(
+    loop_body: Vec<Stmt>,
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    done_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    err_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let handler = build_dispatch_catch_handler(
+        catches,
+        finallys,
+        state_id,
+        done_id,
+        pending_type_id,
+        pending_value_id,
+        err_id,
+        hoisted_ids,
+    );
+    vec![Stmt::Try {
+        body: loop_body,
+        catch: Some(CatchClause {
+            param: Some((err_id, "__gen_disp_err".to_string())),
+            body: handler,
+        }),
+        finally: None,
+    }]
+}
+
+/// #4438: the catch handler for the sync-generator dispatch loop. Routes a throw
+/// executing inside a try (during a normal `.next()`) to the matching catch's
+/// or yielding finally's states (and `continue`s the loop), or runs pending
+/// non-yielding finallys + completes + rethrows when unhandled.
+#[allow(clippy::too_many_arguments)]
 fn build_dispatch_catch_handler(
     catches: &[CatchRoute],
     finallys: &[FinallyRoute],
     state_id: LocalId,
     done_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
     err_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
 ) -> Vec<Stmt> {
@@ -1129,29 +1456,19 @@ fn build_dispatch_catch_handler(
     ))];
     fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
     fallback.push(Stmt::Throw(Expr::LocalGet(err_id)));
-    for route in catches.iter().rev() {
-        let Some(entry) = route.catch_entry_state else {
-            continue;
-        };
-        let mut then_branch = Vec::new();
-        if let Some(cp_id) = route.param_id {
-            then_branch.push(Stmt::Expr(Expr::LocalSet(
-                cp_id,
-                Box::new(Expr::LocalGet(err_id)),
-            )));
-        }
-        then_branch.push(Stmt::Expr(Expr::LocalSet(
-            state_id,
-            Box::new(Expr::Number(entry as f64)),
-        )));
-        then_branch.push(Stmt::Continue);
-        fallback = vec![Stmt::If {
-            condition: catch_route_condition(route, state_id, true, true),
-            then_branch,
-            else_branch: Some(fallback),
-        }];
-    }
-    fallback
+    build_abrupt_routing(
+        catches,
+        finallys,
+        state_id,
+        pending_type_id,
+        pending_value_id,
+        &Expr::LocalGet(err_id),
+        true,
+        1.0,
+        true,
+        true,
+        fallback,
+    )
 }
 
 fn build_async_catch_route_body(
