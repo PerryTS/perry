@@ -53,11 +53,6 @@
       "issue": "793",
       "reason": "Known node:stream/web module-inventory gap tracked in known_failures.json."
     },
-    "parity/tls": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:tls module-inventory gap tracked in known_failures.json."
-    },
     "parity/zlib": {
       "min_parity_pct": 0.0,
       "issue": "793",

@@ -59,12 +59,6 @@
       "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
       "max_diff_lines": null
     },
-    "tls": {
-      "test_id": "test_parity_tls",
-      "issue": "812",
-      "allowed_statuses": ["pass", "parity_fail", "compile_fail"],
-      "max_diff_lines": null
-    },
     "zlib": {
       "test_id": "test_parity_zlib",
       "issue": "812",

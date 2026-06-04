@@ -44,7 +44,14 @@ console.log("tls.DEFAULT_MAX_VERSION:", tls.DEFAULT_MAX_VERSION);
 console.log("tls.DEFAULT_MIN_VERSION:", tls.DEFAULT_MIN_VERSION);
 console.log("tls.DEFAULT_CIPHERS typeof:", typeof tls.DEFAULT_CIPHERS);
 try {
-  console.log("tls.rootCertificates length:", tls.rootCertificates.length);
+  const roots = tls.rootCertificates;
+  console.log("tls.rootCertificates shape:",
+    Array.isArray(roots),
+    Object.isFrozen(roots),
+    roots.length > 1,
+    typeof roots[0],
+    roots[0]?.startsWith("-----BEGIN CERTIFICATE-----"),
+  );
 } catch (e) {
   console.log("tls.rootCertificates error:", (e as Error).message);
 }
