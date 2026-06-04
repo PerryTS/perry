@@ -765,7 +765,7 @@ fn render_apply_value(value: f64) -> String {
 fn describe_apply_type(value: f64) -> &'static str {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
-        "a undefined"
+        "undefined"
     } else if jv.is_null() {
         "null"
     } else if jv.is_bool() {
