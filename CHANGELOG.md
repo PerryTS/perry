@@ -2,6 +2,24 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1118 — fix(runtime): round-trip BigInt64Array/BigUint64Array elements as BigInt (#4356)
+
+`BigInt64Array`/`BigUint64Array` element reads and writes coerced through `f64`, so values round-tripped as **Numbers** instead of **BigInts** and large/non-representable bigints were silently truncated: `const b = new BigInt64Array(2); b[0] = 5n; b[0]` yielded `0` (typeof Number) instead of `5n`.
+
+All fixes in `crates/perry-runtime/src/typedarray/`:
+
+- **`load_at`** — bigint kinds now return a NaN-boxed BigInt (`js_bigint_from_i64`/`js_bigint_from_u64`) instead of `raw as f64`, so element reads are real `bigint`s.
+- **`store_at`** — bigint kinds read the BigInt's raw low limb (`bigint::bigint_slot_bits`) rather than `value as i64` on an already-NaN-boxed pointer (which mapped to `0`).
+- **`js_typed_array_set`** — bigint views run `ToBigInt`: a Number throws `TypeError: Cannot convert <n> to a BigInt`, Boolean/String coerce, BigInt passes through; the raw value is stored (not `jsvalue_to_f64`'d).
+- **Construction-from-array** and **`TypedArray.prototype.set()`** — coerce per destination kind (`bigint::coerce_for_kind` → `ToBigInt` for bigint views), so `new BigInt64Array([1n, 2n])` and `ta.set([...])` keep real BigInt elements.
+- **`format_typed_value`** — render bigint elements from the raw limb, with the trailing `n` for the `console.log` inspect form and without it for `join`.
+
+The internal `load_at`→`store_at` data-movement helpers (`slice`, `reverse`, `copyWithin`, set-from-TA) round-trip the raw bits unchanged. The inline codegen element fast paths have no BigInt `BufferElem` variant, so bigint views always reach the runtime — a runtime-only fix covers the codegen path too. Unblocks the element-set side-effect assertions in the test262 `TypedArrayConstructors/internals/DefineOwnProperty/BigInt/` subdirectory. Verified byte-for-byte against `node --experimental-strip-types` for element get/set, negative + u64-max values, construction, `join`/inspect, in-place `reverse`, `slice`, `set()` from a typed array and a plain array, Boolean coercion, `Object`/`Reflect.defineProperty`, out-of-bounds rejection, and the Number→`TypeError`. New fixture: `test-parity/node-suite/bigint/typed-array/element-roundtrip.ts`.
+
+`DataView.prototype.getBigInt64`/`setBigInt64`/`getBigUint64`/`setBigUint64` (a distinct, previously-unimplemented feature) is tracked in #4365. Chained-method-result element indexing (`const x = ta.reverse(); x[0]`) and `String(ta)` read raw bytes — a pre-existing codegen/`toString` limitation that affects numeric typed arrays too, not bigint-specific.
+
+To keep `typedarray.rs` (already at the 2000-line file-size cap) under the limit, it was converted to a directory module: the BigInt element-coercion helpers moved to `typedarray/bigint.rs` and the Node-style display formatting to `typedarray/format.rs`.
+
 ## v0.5.1117 — fix(release-gate): unblock package publishing (IteratorFrom panic, Math no_mangle, decouple extended suites)
 
 The release pipeline had shipped **no binary/npm/brew assets since v0.5.1025** (~90 versions): every tag created a GitHub release object but `release-packages.yml`'s `await-tests` gate failed because the tag-gated **Tests** workflow stayed red on its aspirational extended jobs. Core jobs (`cargo-test`, `lint`, `api-docs-drift`, `compiler-output-regression`) passed throughout.
