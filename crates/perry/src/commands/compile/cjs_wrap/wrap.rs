@@ -2,12 +2,25 @@
 //! assemble the IIFE-shaped module.
 
 use super::*;
+use perry_hir::ModuleKind;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Wrap CJS source as ESM. `source_path` is the absolute path of the file
 /// being wrapped — used to resolve `require('./relative')` targets when
 /// peeking at re-export wrappers' transitive named exports.
+#[cfg(test)]
 pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Path) -> String {
+    wrap_commonjs_with_context(source, source_path, None, None, None)
+}
+
+pub(in crate::commands::compile) fn wrap_commonjs_with_context(
+    source: &str,
+    source_path: &Path,
+    project_root: Option<&Path>,
+    compile_packages: Option<&HashSet<String>>,
+    compile_package_dirs: Option<&HashMap<String, std::path::PathBuf>>,
+) -> String {
     // Issue #665 (fifth pass): rewrite `module.exports = class X { ... };`
     // expressions into declaration form + bare-identifier assignment so the
     // existing hoist + direct-default-export machinery surfaces the class.
@@ -123,10 +136,27 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         .map(|(_, _, range)| *range)
         .collect();
 
+    let import_styles = require_specs
+        .iter()
+        .map(|spec| {
+            require_import_style(
+                spec,
+                source_path,
+                project_root,
+                compile_packages,
+                compile_package_dirs,
+            )
+        })
+        .collect::<Vec<_>>();
+
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .map(|(spec, local)| format!("import {} from '{}';", local, spec))
+        .zip(import_styles.iter())
+        .map(|((spec, local), style)| match style {
+            RequireImportStyle::Default => format!("import {} from '{}';", local, spec),
+            RequireImportStyle::Namespace => format!("import * as {} from '{}';", local, spec),
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -455,4 +485,46 @@ const _cjs = (function() {{
         );
     }
     wrapped
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequireImportStyle {
+    Default,
+    Namespace,
+}
+
+fn require_import_style(
+    spec: &str,
+    source_path: &Path,
+    project_root: Option<&Path>,
+    compile_packages: Option<&HashSet<String>>,
+    compile_package_dirs: Option<&HashMap<String, std::path::PathBuf>>,
+) -> RequireImportStyle {
+    let resolved = match (project_root, compile_packages, compile_package_dirs) {
+        (Some(project_root), Some(compile_packages), Some(compile_package_dirs)) => {
+            super::super::resolve::resolve_import(
+                spec,
+                source_path,
+                project_root,
+                compile_packages,
+                compile_package_dirs,
+            )
+            .map(|(path, kind)| (path, kind))
+        }
+        _ => super::super::resolve::resolve_relative_import_path(spec, source_path)
+            .map(|path| (path, ModuleKind::NativeCompiled)),
+    };
+
+    let Some((target, ModuleKind::NativeCompiled)) = resolved else {
+        return RequireImportStyle::Default;
+    };
+    let Ok(target_source) = std::fs::read_to_string(&target) else {
+        return RequireImportStyle::Default;
+    };
+
+    if is_commonjs(&target_source) {
+        RequireImportStyle::Default
+    } else {
+        RequireImportStyle::Namespace
+    }
 }

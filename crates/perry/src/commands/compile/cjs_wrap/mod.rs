@@ -55,7 +55,7 @@ pub(self) use hoist_classes::{
 
 // Public API consumed by `compile.rs` / `collect_modules.rs`.
 pub(super) use detect::is_commonjs;
-pub(super) use wrap::wrap_commonjs;
+pub(super) use wrap::wrap_commonjs_with_context;
 
 #[cfg(test)]
 mod tests {

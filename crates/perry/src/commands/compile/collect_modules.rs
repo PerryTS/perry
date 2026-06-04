@@ -506,7 +506,13 @@ fn collect_module_one(
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
     let source = if was_cjs_wrapped {
-        super::cjs_wrap::wrap_commonjs(&raw_source, &canonical)
+        super::cjs_wrap::wrap_commonjs_with_context(
+            &raw_source,
+            &canonical,
+            Some(&ctx.project_root),
+            Some(&ctx.compile_packages),
+            Some(&ctx.compile_package_dirs),
+        )
     } else {
         raw_source
     };
