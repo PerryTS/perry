@@ -442,16 +442,16 @@ fn brotli_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 /// `zlib.brotliCompressSync(data)` -> Buffer
 ///
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut BufferHeader {
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
     let out = brotli_compress_bytes(&data);
     buffer_from_slice(&out)
 }
 
 /// `zlib.brotliDecompressSync(data)` -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut BufferHeader {
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
     match brotli_decompress_bytes(&data) {
         Ok(out) => buffer_from_slice(&out),
         Err(e) => throw_zlib_error(&format!("brotli: {}", e)),
@@ -1321,8 +1321,12 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
         "deflateRawSync" => ptr_to_f64(js_zlib_deflate_raw_sync(arg(0)) as *const u8),
         "inflateRawSync" => ptr_to_f64(js_zlib_inflate_raw_sync(arg(0)) as *const u8),
         "unzipSync" => ptr_to_f64(js_zlib_unzip_sync(arg(0)) as *const u8),
-        "brotliCompressSync" => ptr_to_f64(js_zlib_brotli_compress_sync(arg(0)) as *const u8),
-        "brotliDecompressSync" => ptr_to_f64(js_zlib_brotli_decompress_sync(arg(0)) as *const u8),
+        "brotliCompressSync" => {
+            ptr_to_f64(js_zlib_brotli_compress_sync(arg(0).to_bits() as i64) as *const u8)
+        }
+        "brotliDecompressSync" => {
+            ptr_to_f64(js_zlib_brotli_decompress_sync(arg(0).to_bits() as i64) as *const u8)
+        }
         "zstdCompressSync" => ptr_to_f64(js_zlib_zstd_compress_sync(arg(0), arg(1)) as *const u8),
         "zstdDecompressSync" => {
             ptr_to_f64(js_zlib_zstd_decompress_sync(arg(0), arg(1)) as *const u8)
