@@ -16,12 +16,12 @@
 //! fallback) is:
 //!
 //!   1. Hoist every `require('X')` call as `import _req_N from 'X';`.
-//!   2. Wrap the CJS body in an IIFE that defines `module = { exports: {} }`,
-//!      a synchronous `require(specifier)` that dispatches to the hoisted
-//!      `_req_N` bindings, runs the original code, and returns
-//!      `module.exports`. The IIFE result is bound to `_cjs`.
-//!   3. Emit `export default _cjs;` plus `export const X = _cjs.X;` for each
-//!      detected named export.
+//!   2. Create the CJS module record before body evaluation so circular
+//!      imports can observe its partial `exports` object, then wrap the CJS
+//!      body in an IIFE that defines reassignable `module`/`exports` locals and
+//!      a synchronous `require(specifier)` dispatcher.
+//!   3. Emit a live `_cjs` default export plus `export const X = _cjs.X;` for
+//!      each detected named export.
 //!
 //! Two named-export sources are unioned:
 //!
@@ -223,9 +223,10 @@ module.exports = inner;
     fn wraps_simple_cjs_as_esm() {
         let src = "exports.foo = 42;";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
-        assert!(wrapped.contains("export default _cjs;"));
+        assert!(wrapped.contains("export { _cjs as default };"));
         assert!(wrapped.contains("export const foo = _cjs.foo;"));
-        assert!(wrapped.contains("const _cjs = (function()"));
+        assert!(wrapped.contains("let _cjs = __cjs_module.exports;"));
+        assert!(wrapped.contains("(function()"));
     }
 
     #[test]
@@ -238,8 +239,13 @@ module.exports = inner;
         let src = "exports.foo = 42;";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
         assert!(
-            wrapped.contains("const __cjs_module = { exports: {} };"),
-            "expected stable __cjs_module, got:\n{}",
+            wrapped.contains("const __perry_cjs_cache_key = '/tmp/test.js';"),
+            "expected stable per-module CJS cache key, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("const __cjs_module = __perry_cjs_cache_root[__perry_cjs_cache_key]"),
+            "expected stable __cjs_module from CJS cache, got:\n{}",
             wrapped
         );
         assert!(
@@ -253,13 +259,62 @@ module.exports = inner;
             wrapped
         );
         assert!(
-            wrapped.contains("return __cjs_module.exports;"),
-            "export must be read from the stable ref, got:\n{}",
+            wrapped.contains("_cjs = __cjs_module.exports;"),
+            "default binding must be refreshed from the stable ref, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("export { _cjs as default };"),
+            "default export must be a live _cjs binding, got:\n{}",
             wrapped
         );
         // The body must NOT re-collide with a `const module`/`const exports`.
         assert!(!wrapped.contains("const module = "));
         assert!(!wrapped.contains("const exports = "));
+    }
+
+    #[test]
+    fn wrap_exposes_partial_exports_before_cjs_body_for_cycles() {
+        // CommonJS circular `require()` must return the in-progress exports
+        // object. The wrapper therefore creates the module cache object and
+        // default binding before the synthetic wrapper body starts.
+        let src = "exports.foo = 42;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        let module_pos = wrapped
+            .find("const __cjs_module = __perry_cjs_cache_root[__perry_cjs_cache_key]")
+            .expect("expected stable module record");
+        let default_pos = wrapped
+            .find("let _cjs = __cjs_module.exports;")
+            .expect("expected live default binding");
+        let body_pos = wrapped.find("(function()").expect("expected wrapper body");
+        assert!(
+            module_pos < body_pos && default_pos < body_pos,
+            "module record and _cjs binding must exist before body evaluation, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_requires_cjs_targets_through_shared_cache() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let dep = tmp.path().join("dep.js");
+        fs::write(&dep, "exports.dep = 1;").expect("write dep");
+        let entry = tmp.path().join("entry.js");
+        let src = "const dep = require('./dep.js');\nexports.value = dep.dep;";
+        let wrapped = wrap_commonjs(src, &entry);
+        let dep_key = dep
+            .canonicalize()
+            .expect("canonical dep")
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            wrapped.contains(&format!(
+                "if (specifier === './dep.js') return __perry_cjs_require_cached('{}');",
+                dep_key
+            )),
+            "CJS require target must return shared cache exports, got:\n{}",
+            wrapped
+        );
     }
 
     #[test]
@@ -415,7 +470,7 @@ module.exports = inner;
     fn wrap_keeps_cjs_default_when_module_exports_is_object_literal() {
         let src = "module.exports = { foo: 1, bar: 2 };";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
-        assert!(wrapped.contains("export default _cjs;"));
+        assert!(wrapped.contains("export { _cjs as default };"));
     }
 
     #[test]
@@ -444,7 +499,7 @@ module.exports = inner;
     fn wrap_keeps_cjs_default_when_module_exports_is_function_call() {
         let src = "module.exports = makeThing();";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
-        assert!(wrapped.contains("export default _cjs;"));
+        assert!(wrapped.contains("export { _cjs as default };"));
     }
 
     #[test]
@@ -717,7 +772,7 @@ module.exports = inner;
         let src = "module.exports = 1 + 2;";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/scalar.js"));
         assert!(
-            wrapped.contains("export default _cjs;"),
+            wrapped.contains("export { _cjs as default };"),
             "should keep _cjs default for non-class RHS, got:\n{}",
             wrapped
         );
@@ -732,7 +787,7 @@ module.exports = inner;
                    module.exports = somethingElse;";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/conflict.js"));
         assert!(
-            wrapped.contains("export default _cjs;"),
+            wrapped.contains("export { _cjs as default };"),
             "expected _cjs default when conflicting module.exports lines exist, got:\n{}",
             wrapped
         );
@@ -752,7 +807,7 @@ module.exports = inner;
                    module.exports = class Foo { conflict() {} };";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/collide.js"));
         assert!(
-            wrapped.contains("export default _cjs;"),
+            wrapped.contains("export { _cjs as default };"),
             "expected _cjs default on name collision, got:\n{}",
             wrapped
         );
@@ -853,7 +908,7 @@ module.exports = inner;
         // named-export loop and pre-fix emitted `export const default =
         // _cjs.default;` (invalid syntax — `default` is a reserved word).
         // The named-export path must skip reserved words; the separate
-        // `export default _cjs;` machinery covers the default export.
+        // `export { _cjs as default };` machinery covers the default export.
         let src = "module.exports = function pino(){};\n\
                    module.exports.default = function pino(){};\n\
                    module.exports.transport = require('./transport');\n\
@@ -910,9 +965,9 @@ module.exports = inner;
                    module.exports = Sender;\n";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/sender.js"));
         // The IIFE body must still contain the class — i.e. the wrap must
-        // not lift it above the `const _cjs = (function() { ... })()` line.
+        // not lift it above the synthetic wrapper body.
         let iife_open = wrapped
-            .find("const _cjs = (function()")
+            .find("(function()")
             .expect("wrap must produce the IIFE wrapper");
         let class_pos = wrapped
             .find("class Sender")
@@ -935,7 +990,7 @@ module.exports = inner;
                    module.exports = Pure;\n";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pure.js"));
         let iife_open = wrapped
-            .find("const _cjs = (function()")
+            .find("(function()")
             .expect("wrap must produce the IIFE wrapper");
         let class_pos = wrapped
             .find("class Pure")

@@ -83,7 +83,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
         if alias.starts_with("_req_") {
             return false;
         }
-        if matches!(alias, "_cjs" | "module" | "exports" | "require") {
+        if matches!(
+            alias,
+            "_cjs" | "__cjs_module" | "module" | "exports" | "require"
+        ) {
             return false;
         }
         if hoisted_class_names.iter().any(|c| c == alias) {
@@ -115,6 +118,19 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
         chosen_alias_per_spec.insert(spec.clone());
     }
 
+    let cjs_cache_keys = require_specs
+        .iter()
+        .map(|spec| {
+            require_cjs_cache_key(
+                spec,
+                source_path,
+                project_root,
+                compile_packages,
+                compile_package_dirs,
+            )
+        })
+        .collect::<Vec<_>>();
+
     // #1721: ranges of `const <alias> = require(<spec>)` lines whose alias we
     // ADOPTED as the import local name above (`import_local_names[idx] == alias`).
     // The synthetic `require` returns that name, and the hoisted `import <alias>`
@@ -128,10 +144,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
     let adopted_alias_strip_ranges: Vec<(usize, usize)> = raw_aliases
         .iter()
         .filter(|(alias, spec, _)| {
-            require_specs
-                .iter()
-                .position(|s| s == spec)
-                .is_some_and(|idx| import_local_names[idx] == *alias)
+            let Some(idx) = require_specs.iter().position(|s| s == spec) else {
+                return false;
+            };
+            import_local_names[idx] == *alias && cjs_cache_keys[idx].is_none()
         })
         .map(|(_, _, range)| *range)
         .collect();
@@ -148,6 +164,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
             )
         })
         .collect::<Vec<_>>();
+    let source_cache_key = js_single_quote(&cjs_cache_key_for_path(source_path));
 
     let imports = require_specs
         .iter()
@@ -163,7 +180,19 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
     let require_cases = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .map(|(spec, local)| format!("        if (specifier === '{}') return {};", spec, local))
+        .zip(cjs_cache_keys.iter())
+        .map(|((spec, local), cache_key)| match cache_key {
+            Some(cache_key) => format!(
+                "        if (specifier === {}) return __perry_cjs_require_cached({});",
+                js_single_quote(spec),
+                js_single_quote(cache_key)
+            ),
+            None => format!(
+                "        if (specifier === {}) return {};",
+                js_single_quote(spec),
+                local
+            ),
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let require_resolve_cases = require_specs
@@ -201,12 +230,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
     // hoisted class binding directly instead of through `_cjs`. The IIFE
     // still runs (side-effects and `exports.X = ...` keep their semantics),
     // but `import X from "pkg"` resolves to the hoisted class declaration
-    // with all its methods on the prototype. Going through `_cjs` (whose
-    // declaration is `const _cjs = (function(){...})()` and whose value
-    // happens to be the class) loses class identity in HIR — instance
-    // methods come back `undefined`. This is the `module.exports = Class`
-    // + `extends` shape used by rate-limiter-flexible and most older
-    // npm-published CJS classes.
+    // with all its methods on the prototype. Going through `_cjs` loses class
+    // identity in HIR — instance methods come back `undefined`. This is the
+    // `module.exports = Class` + `extends` shape used by
+    // rate-limiter-flexible and most older npm-published CJS classes.
     let default_export_identifier = extract_single_module_exports_assignment(source)
         .filter(|name| hoisted_class_names.contains(name));
 
@@ -367,14 +394,23 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
 
     let default_export_decl = match &default_export_identifier {
         Some(name) => format!("export default {};", name),
-        None => "export default _cjs;".to_string(),
+        None => "export { _cjs as default };".to_string(),
     };
 
     let wrapped = format!(
         r#"{imports}
 {import_aliases}
 {hoisted_class_block}
-const _cjs = (function() {{
+// #4261 follow-up: CommonJS cycles must see the in-progress module's partial
+// exports object. Create the stable module record before evaluating the body,
+// then expose `_cjs` as a live default binding. Files that later replace
+// `module.exports` update `_cjs` after evaluation, while circular `require()`
+// calls made during evaluation still receive the initial exports object.
+const __perry_cjs_cache_key = {source_cache_key};
+const __perry_cjs_cache_root = globalThis.__perry_cjs_cache || (globalThis.__perry_cjs_cache = {{}});
+const __cjs_module = __perry_cjs_cache_root[__perry_cjs_cache_key] || (__perry_cjs_cache_root[__perry_cjs_cache_key] = {{ exports: {{}} }});
+let _cjs = __cjs_module.exports;
+(function() {{
     // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
     // `var module = X` / `module = X` / `exports = X` — e.g. iconv-lite's
@@ -384,13 +420,17 @@ const _cjs = (function() {{
     // a body reassigning its local `module` can't clobber it (Node holds the
     // real module ref the same way), so named/default-export resolution stays
     // correct regardless of what the body does to its `module` local.
-    const __cjs_module = {{ exports: {{}} }};
     var module = __cjs_module;
     var exports = __cjs_module.exports;
     function __perry_cjs_require_error(kind, code, message) {{
         const err = kind === 'type' ? new TypeError(message) : new Error(message);
         err.code = code;
         return err;
+    }}
+    function __perry_cjs_require_cached(key) {{
+        const cache = globalThis.__perry_cjs_cache || (globalThis.__perry_cjs_cache = {{}});
+        const cached = cache[key] || (cache[key] = {{ exports: {{}} }});
+        return cached.exports;
     }}
     function __perry_cjs_require_is_builtin(specifier) {{
         switch (specifier) {{
@@ -473,7 +513,7 @@ const _cjs = (function() {{
 
     {body_for_iife}
 
-    return __cjs_module.exports;
+    _cjs = __cjs_module.exports;
 }})();
 
 {default_export_decl}
@@ -532,4 +572,62 @@ fn require_import_style(
     } else {
         RequireImportStyle::Namespace
     }
+}
+
+fn require_cjs_cache_key(
+    spec: &str,
+    source_path: &Path,
+    project_root: Option<&Path>,
+    compile_packages: Option<&HashSet<String>>,
+    compile_package_dirs: Option<&HashMap<String, std::path::PathBuf>>,
+) -> Option<String> {
+    let resolved = match (project_root, compile_packages, compile_package_dirs) {
+        (Some(project_root), Some(compile_packages), Some(compile_package_dirs)) => {
+            super::super::resolve::resolve_import(
+                spec,
+                source_path,
+                project_root,
+                compile_packages,
+                compile_package_dirs,
+            )
+        }
+        _ => super::super::resolve::resolve_relative_import_path(spec, source_path)
+            .map(|path| (path, ModuleKind::NativeCompiled)),
+    };
+
+    let Some((target, ModuleKind::NativeCompiled)) = resolved else {
+        return None;
+    };
+    let Ok(target_source) = std::fs::read_to_string(&target) else {
+        return None;
+    };
+    if is_commonjs(&target_source) {
+        Some(cjs_cache_key_for_path(&target))
+    } else {
+        None
+    }
+}
+
+fn cjs_cache_key_for_path(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn js_single_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
 }
