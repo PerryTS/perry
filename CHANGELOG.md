@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1119 — feat(runtime): implement DataView getBigInt64/setBigInt64/getBigUint64/setBigUint64 (#4365)
+
+`DataView.prototype.getBigInt64`/`setBigInt64`/`getBigUint64`/`setBigUint64` were unimplemented — `DataViewKind::from_method_suffix` didn't recognize the `"BigInt64"`/`"BigUint64"` suffixes, so the method names never routed to the DataView dispatch: reads returned `undefined` and setters silently no-op'd.
+
+- **`buffer/dataview.rs`** — add `BigInt64`/`BigUint64` to `DataViewKind` (width 8) and `from_method_suffix`. The `get` arms read the raw 8 bytes (endian-aware) and return a NaN-boxed BigInt (`js_bigint_from_i64`/`js_bigint_from_u64`). The `set` path runs `ToBigInt` (a Number throws `TypeError: Cannot convert <n> to a BigInt`, Boolean/String coerce, BigInt passes through) via the new `to_bigint_raw_or_throw`, then writes the BigInt's low 64 bits — bypassing the numeric `to_number`/ToIntN wrap the integer kinds use.
+- **`object/dataview_proto_thunks.rs`** — register `get`/`setBigInt64` + `get`/`setBigUint64` thunks and prototype-table rows so they are reflectable (`typeof DataView.prototype.getBigInt64 === "function"`) and `.call`-able.
+- **`object/buffer_dispatch.rs`** — add the four names to the buffer-method gate so instance calls reach `dispatch_buffer_method`.
+
+Verified byte-for-byte against `node --experimental-strip-types`: signed/unsigned round-trip, negative + u64-max values, big/little endian, Boolean coercion, Number→`TypeError`, out-of-bounds `RangeError`, prototype reflection, `.call` dispatch, and the non-DataView-receiver brand check. Numeric DataView accessors are unchanged. Follow-up to #4356 (#4364); reuses the same BigInt limb box/unbox helpers. New fixture: `test-parity/node-suite/buffer/dataview/bigint-accessors.ts`.
+
 ## v0.5.1118 — fix(runtime): round-trip BigInt64Array/BigUint64Array elements as BigInt (#4356)
 
 `BigInt64Array`/`BigUint64Array` element reads and writes coerced through `f64`, so values round-tripped as **Numbers** instead of **BigInts** and large/non-representable bigints were silently truncated: `const b = new BigInt64Array(2); b[0] = 5n; b[0]` yielded `0` (typeof Number) instead of `5n`.
