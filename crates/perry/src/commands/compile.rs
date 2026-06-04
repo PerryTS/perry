@@ -20,6 +20,7 @@ mod app_metadata;
 mod apple_info_plist;
 mod audit_manifest;
 mod bootstrap;
+mod build_cache;
 mod bundle_apple;
 mod bundle_ios;
 mod cjs_wrap;
@@ -55,6 +56,7 @@ use bootstrap::{
     maybe_init_type_checker, rerun_collect_with_class_field_types, run_native_instance_fixups,
     run_post_collect_preflight,
 };
+use build_cache::BuildCacheProbe;
 use bundle_apple::{bundle_for_tvos, bundle_for_visionos, bundle_for_watchos};
 use bundle_ios::build_ios_app_bundle;
 use collect_modules::collect_modules;
@@ -285,11 +287,6 @@ pub fn run_with_parse_cache(
         }
     }
 
-    match format {
-        OutputFormat::Text => println!("Collecting modules..."),
-        OutputFormat::Json => {}
-    }
-
     // Canonicalize the input path first so its `.parent()` is an absolute directory.
     // Without this, a bare filename like `perry demo.ts` produced `Path::new("").parent()`
     // → fallback `"."`, and the walk-up loops below (package.json + perry.toml discovery)
@@ -306,6 +303,22 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
+
+    let build_cache_probe = BuildCacheProbe::new(&args, &project_root, &ctx.cache_root);
+    let mut build_cache_stats = build_cache_probe.probe();
+    if build_cache_stats.hit {
+        if let OutputFormat::Json = format {
+            build_cache_probe.print_json_hit(&build_cache_stats)?;
+        } else if verbose > 0 {
+            println!("Build cache hit: {}", build_cache_stats.reason);
+        }
+        return Ok(build_cache_probe.compile_result_for_hit());
+    }
+
+    match format {
+        OutputFormat::Text => println!("Collecting modules..."),
+        OutputFormat::Json => {}
+    }
 
     // Tier 2.x: package.json + perry.toml + i18n + google_auth config
     // loading lifted into compile/host_config.rs::apply_pkg_and_toml_config.
@@ -4672,6 +4685,7 @@ pub fn run_with_parse_cache(
             is_dylib,
             codegen_cache_stats,
             link_cache_stats: None,
+            build_cache_stats: None,
         });
     }
 
@@ -4838,6 +4852,7 @@ pub fn run_with_parse_cache(
             is_dylib: true,
             codegen_cache_stats,
             link_cache_stats: None,
+            build_cache_stats: None,
         });
     }
 
@@ -4899,6 +4914,7 @@ pub fn run_with_parse_cache(
             is_dylib: true,
             codegen_cache_stats,
             link_cache_stats: None,
+            build_cache_stats: None,
         });
     }
 
@@ -5274,6 +5290,10 @@ pub fn run_with_parse_cache(
                     "output": exe_path.to_string_lossy(),
                     "native_modules": ctx.native_modules.len(),
                     "js_modules": ctx.js_modules.len(),
+                    "build_cache": {
+                        "hit": false,
+                        "miss_reason": build_cache_stats.reason,
+                    },
                     "codegen_cache": codegen_cache,
                     "link_cache": {
                         "linked": link_cache_stats.linked,
@@ -5342,6 +5362,25 @@ pub fn run_with_parse_cache(
         write_link_cache_manifest(&link_cache_status, &exe_path);
     }
 
+    let mut build_cache_runtime_inputs = Vec::new();
+    build_cache_runtime_inputs.push(runtime_lib.clone());
+    if let Some(path) = &stdlib_lib_resolved {
+        build_cache_runtime_inputs.push(path.clone());
+    }
+    build_cache_runtime_inputs.extend(optimized_libs.well_known_libs.iter().cloned());
+    if let Some(path) = &wasm_host_lib {
+        build_cache_runtime_inputs.push(path.clone());
+    }
+    build_cache_probe.write_manifest_after_success(
+        &mut build_cache_stats,
+        &ctx,
+        &exe_path,
+        target.as_deref(),
+        &compiled_features,
+        &obj_fingerprints,
+        &build_cache_runtime_inputs,
+    );
+
     emit_attestation_sidecar(&ctx, &exe_path, format);
 
     print_binary_size(format, &exe_path);
@@ -5358,6 +5397,7 @@ pub fn run_with_parse_cache(
         is_dylib,
         codegen_cache_stats,
         link_cache_stats: Some(link_cache_status.stats()),
+        build_cache_stats: Some(build_cache_stats),
     })
 }
 

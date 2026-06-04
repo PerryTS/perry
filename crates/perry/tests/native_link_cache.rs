@@ -8,16 +8,27 @@ fn perry_bin() -> PathBuf {
 }
 
 fn compile_json(project: &Path, entry: &Path, output: &Path) -> Value {
-    let out = Command::new(perry_bin())
-        .current_dir(project)
+    compile_json_with_env(project, entry, output, &[])
+}
+
+fn compile_json_with_env(
+    project: &Path,
+    entry: &Path,
+    output: &Path,
+    envs: &[(&str, &str)],
+) -> Value {
+    let mut cmd = Command::new(perry_bin());
+    cmd.current_dir(project)
         .arg("--format")
         .arg("json")
         .arg("compile")
         .arg(entry)
         .arg("-o")
-        .arg(output)
-        .output()
-        .expect("run perry compile");
+        .arg(output);
+    for (name, value) in envs {
+        cmd.env(name, value);
+    }
+    let out = cmd.output().expect("run perry compile");
 
     assert!(
         out.status.success(),
@@ -55,6 +66,15 @@ fn assert_skipped(result: &Value) {
     assert_eq!(result["link_cache"]["skipped"], true, "{result}");
 }
 
+fn assert_build_cache_hit(result: &Value) {
+    assert_eq!(result["build_cache"]["hit"], true, "{result}");
+}
+
+fn assert_build_cache_miss(result: &Value, reason: &str) {
+    assert_eq!(result["build_cache"]["hit"], false, "{result}");
+    assert_eq!(result["build_cache"]["miss_reason"], reason, "{result}");
+}
+
 #[test]
 fn native_compile_skips_link_on_identical_second_build() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -84,13 +104,37 @@ fn native_compile_skips_link_on_identical_second_build() {
 
     let first = compile_json(project, &entry, &output);
     assert_linked(&first);
+    assert_build_cache_miss(&first, "manifest-missing");
     let first_bytes = fs::read(&output).expect("first output");
     assert_eq!(run_binary(&output).trim(), "42");
 
     let second = compile_json(project, &entry, &output);
     assert_skipped(&second);
+    assert_build_cache_hit(&second);
     assert_eq!(fs::read(&output).expect("second output"), first_bytes);
     assert_eq!(run_binary(&output).trim(), "42");
+
+    fs::write(
+        project.join("package.json"),
+        "{\"name\":\"link-cache-test\",\"version\":\"1.0.1\"}\n",
+    )
+    .unwrap();
+    let config_changed = compile_json(project, &entry, &output);
+    assert_build_cache_miss(&config_changed, "config");
+    assert_eq!(run_binary(&output).trim(), "42");
+
+    let env_changed = compile_json_with_env(project, &entry, &output, &[("PERRY_DEBUG_INIT", "1")]);
+    assert_linked(&env_changed);
+    assert_build_cache_miss(&env_changed, "env");
+
+    let env_restored = compile_json(project, &entry, &output);
+    assert_linked(&env_restored);
+    assert_build_cache_miss(&env_restored, "env");
+    assert_eq!(run_binary(&output).trim(), "42");
+
+    let warm_again = compile_json(project, &entry, &output);
+    assert_skipped(&warm_again);
+    assert_build_cache_hit(&warm_again);
 
     fs::write(
         src.join("util.ts"),
@@ -99,10 +143,12 @@ fn native_compile_skips_link_on_identical_second_build() {
     .unwrap();
     let changed = compile_json(project, &entry, &output);
     assert_linked(&changed);
+    assert_build_cache_miss(&changed, "source");
     assert_eq!(run_binary(&output).trim(), "41");
 
     fs::remove_file(&output).unwrap();
     let missing_output = compile_json(project, &entry, &output);
     assert_linked(&missing_output);
+    assert_build_cache_miss(&missing_output, "output");
     assert!(output.exists());
 }

@@ -383,6 +383,7 @@ pub(super) fn compile_for_ios_widget(
         is_dylib: false,
         codegen_cache_stats: None,
         link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -635,6 +636,7 @@ pub(super) fn compile_for_watchos_widget(
         is_dylib: false,
         codegen_cache_stats: None,
         link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -969,6 +971,7 @@ pub(super) fn compile_for_android_widget(
         is_dylib: false,
         codegen_cache_stats: None,
         link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -1221,6 +1224,7 @@ pub(super) fn compile_for_wearos_tile(
         is_dylib: false,
         codegen_cache_stats: None,
         link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -1380,6 +1384,7 @@ pub(super) fn compile_for_web(
         is_dylib: false,
         codegen_cache_stats: None,
         link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -1529,5 +1534,6 @@ pub(super) fn compile_for_wasm(
         is_dylib: false,
         codegen_cache_stats: None,
         link_cache_stats: None,
+        build_cache_stats: None,
     })
 }

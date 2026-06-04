@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use perry_hir::{Module as HirModule, ModuleKind};
+use serde::{Deserialize, Serialize};
 
 use crate::OutputFormat;
 
@@ -32,12 +33,22 @@ pub struct CompileResult {
     /// executable linker path.
     #[allow(dead_code)]
     pub link_cache_stats: Option<LinkCacheStats>,
+    /// Native executable build-level no-op status. `Some` for native executable
+    /// compile attempts; `None` for targets that bypass the native linker path.
+    #[allow(dead_code)]
+    pub build_cache_stats: Option<BuildCacheStats>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkCacheStats {
     pub linked: bool,
     pub skipped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildCacheStats {
+    pub hit: bool,
+    pub reason: String,
 }
 
 // Helpers moved to sub-modules:
