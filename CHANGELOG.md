@@ -2,6 +2,14 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1122 — fix(release): decouple aspirational platform/framework smokes from the publish gate
+
+v0.5.1121's publish was blocked at `await-tests` because the tag-gated **Tests** workflow concluded failure — but the only *core*-job failures were `cargo-test` (the `secret_key_buffer_metadata_survives_ic_miss_for_aes_sizes` regression from #4363 typed-array own-properties, since fixed on `main` by #4399) and `lint` (a transient rustup/curl network flake during toolchain setup). The v0.5.1121 tag predated #4399, so its `cargo-test` could never pass; this release re-tags from a `main` that includes the fix.
+
+To stop new aspirational smoke jobs from silently re-blocking publish (the recurring failure mode this whole pipeline-repair has hit), marked `harmonyos-smoke` and `ink-link-smoke` `continue-on-error: true` — joining `effect-basic-smoke` (already so) and the `parity`/`compile-smoke`/`doc-tests`/`drizzle-mysql-smoke` set. Package publish now effectively gates only on the four core jobs: `cargo-test`, `lint`, `api-docs-drift`, `compiler-output-regression` (+ Simulator Tests).
+
+Note: a more durable fix is to have `release-packages.yml`'s `await-tests` gate key on those core jobs' conclusions directly rather than the whole-workflow conclusion, so future aspirational jobs need no `continue-on-error` annotation. Tracked as a follow-up.
+
 ## v0.5.1121 — fix(release): build Apple cross-libs on the arm64 mac job only (unblocks npm/brew/apt/winget publish)
 
 v0.5.1120 fixed the gtk4 + android build-matrix breakage (both verified green on the real toolchains) and published 34 assets, but `release-packages` still concluded failure and skipped the package-manager publish legs (`npm-publish`/`homebrew`/`apt`/`winget`, which `needs: build` = every primary build). The lone remaining failure was `build (macos-15, x86_64-apple-darwin)`: its "Build iOS cross-compile libraries (macOS)" step panicked in `libsqlite3-sys` build.rs — `could not run bindgen on header sqlite3/sqlite3.h` — a libclang/SDK issue on the macos-15 x86_64 runner. The macos-14 arm64 runner built the identical iOS aarch64 libs fine; the failure was masked in earlier releases by the build matrix's (now-removed) fail-fast.

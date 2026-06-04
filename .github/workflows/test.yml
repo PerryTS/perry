@@ -870,6 +870,12 @@ jobs:
   # entries for the workflow).
   # ---------------------------------------------------------------------------
   harmonyos-smoke:
+    # Aspirational smoke (informational) — must not block package publish.
+    # release-packages await-tests keys on this workflow's run conclusion;
+    # continue-on-error keeps a red result here from failing it (same as
+    # parity/compile-smoke/doc-tests/drizzle/effect-basic-smoke). Core jobs
+    # (cargo-test/lint/api-docs-drift/compiler-output-regression) still gate.
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -987,6 +993,8 @@ jobs:
   # `run-extended-tests` label or workflow dispatch.
   # ---------------------------------------------------------------------------
   ink-link-smoke:
+    # Aspirational smoke (informational) — see harmonyos-smoke. Does not block publish.
+    continue-on-error: true
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
