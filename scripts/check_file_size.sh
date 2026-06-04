@@ -137,12 +137,6 @@ crates/perry-stdlib/src/common/dispatch.rs
 # SQLite stdlib shim remains a generated-feel native adapter table; current
 # main crossed the threshold before this PR. Split tracked under #1435.
 crates/perry-stdlib/src/sqlite.rs
-# WHATWG Streams (ReadableStream/WritableStream/TransformStream + reader/
-# writer/controller dispatch). Crossed the limit at 2088 LOC after the
-# web-stream correctness batch (#2450 pipeTo preventClose, #2455 BYOB-on-
-# non-byte reject, #2460 reserved-type reject) landed on main without a
-# split. Splitting per stream-kind family is tracked under #2472.
-crates/perry-stdlib/src/streams.rs
 # Member-expression lowering tower (one big match over member/property/call
 # shapes, plus per-namespace literal builders). Crossed the limit at 2121 LOC
 # after #3161 inlined the full allowedNodeEnvironmentFlags string list into
