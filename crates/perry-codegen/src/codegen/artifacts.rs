@@ -21,7 +21,7 @@ use super::closure::compile_closure;
 use super::entry::compile_module_entry;
 use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
 use super::method::{compile_method, compile_static_method};
-use super::opts::CrossModuleCtx;
+use super::opts::{CrossModuleCtx, NamespaceEntryKind};
 use super::spec_function_length;
 
 /// Read-only view of the `CompileOptions` fields that the artifact
@@ -866,6 +866,95 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     }
                 }
             }
+        }
+    }
+
+    // Namespace re-exports are value exports too. A consumer of
+    // `export * as NodeWS from "ws"` imports/reads `NodeWS` through
+    // `perry_fn_<this-module>__NodeWS()`. Dynamic namespace materialization
+    // already knew how to build these values, but the ordinary static export
+    // getter was missing, so final link failed with an undefined
+    // `NodeSocket_ts__NodeWS` symbol.
+    {
+        let mut entries: Vec<(&String, &NamespaceEntryKind)> =
+            cross_module.namespace_reexport_values.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (exported, kind) in entries {
+            let getter = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+            if llmod.has_function(&getter) {
+                continue;
+            }
+            let foreign_target = match kind {
+                NamespaceEntryKind::ForeignVar {
+                    source_prefix,
+                    source_local,
+                }
+                | NamespaceEntryKind::ForeignFunction {
+                    source_prefix,
+                    source_local,
+                    ..
+                } => {
+                    let target = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
+                    llmod.declare_function(&target, DOUBLE, &[]);
+                    Some(target)
+                }
+                _ => None,
+            };
+            let native_label =
+                if let NamespaceEntryKind::NativeModuleNamespace { module_name } = kind {
+                    Some(llmod.add_string_constant(module_name))
+                } else {
+                    None
+                };
+            if let NamespaceEntryKind::NestedNamespace { source_prefix } = kind {
+                if source_prefix != module_prefix {
+                    llmod.add_external_global(&format!("__perry_ns_{}", source_prefix), DOUBLE);
+                }
+            }
+            let wf = llmod.define_function(&getter, DOUBLE, vec![]);
+            let _ = wf.create_block("entry");
+            let blk = wf.block_mut(0).unwrap();
+            let value = match kind {
+                NamespaceEntryKind::LocalVar { global_name } => {
+                    blk.load(DOUBLE, &format!("@{}", global_name))
+                }
+                NamespaceEntryKind::LocalFunction { wrap_symbol } => {
+                    let handle = blk.call(
+                        I64,
+                        "js_closure_alloc_singleton",
+                        &[(crate::types::PTR, &format!("@{}", wrap_symbol))],
+                    );
+                    crate::expr::nanbox_pointer_inline(blk, &handle)
+                }
+                NamespaceEntryKind::LocalClass { class_id } => {
+                    let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
+                    crate::nanbox::double_literal(f64::from_bits(bits))
+                }
+                NamespaceEntryKind::ForeignVar { .. } => {
+                    let target = foreign_target.as_ref().expect("foreign target prepared");
+                    blk.call(DOUBLE, &target, &[])
+                }
+                NamespaceEntryKind::ForeignFunction { .. } => {
+                    let target = foreign_target.as_ref().expect("foreign target prepared");
+                    blk.call(DOUBLE, &target, &[])
+                }
+                NamespaceEntryKind::NestedNamespace { source_prefix } => {
+                    let ns_name = format!("__perry_ns_{}", source_prefix);
+                    blk.load(DOUBLE, &format!("@{}", ns_name))
+                }
+                NamespaceEntryKind::NativeModuleNamespace { .. } => {
+                    let (label, len) = native_label.as_ref().expect("native label prepared");
+                    blk.call(
+                        DOUBLE,
+                        "js_create_native_module_namespace",
+                        &[
+                            (crate::types::PTR, &format!("@{}", label)),
+                            (I64, &len.to_string()),
+                        ],
+                    )
+                }
+            };
+            blk.ret(DOUBLE, &value);
         }
     }
 

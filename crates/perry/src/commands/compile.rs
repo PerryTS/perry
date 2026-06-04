@@ -873,32 +873,38 @@ pub fn run_with_parse_cache(
         }
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
-            if let perry_hir::Export::Named { local, exported } = export {
-                exports.insert(exported.clone(), path_str.clone());
-                // #1758: a LOCAL renamed export of a CLASS
-                // (`export { Number$ as Number }`, no `from`) must record the
-                // origin (local) name so importers resolve `ns.Number` to the
-                // defining class `Number$`. The re-export propagation loop below
-                // only records origin names for cross-module
-                // `export { X as Y } from "src"`. Without this, the
-                // namespace-member class value-read (property_get.rs) looks up
-                // `class_ids["Number"]` (the export alias) — a miss — and
-                // `S.Number` falls back to the global `Number`, losing all
-                // inherited statics (effect's `S.Number.ast` → undefined →
-                // Schema decode crash). Scoped to classes: renamed var/func
-                // exports route through wrapper-symbol emission that keys on the
-                // export name, and feeding the origin name there breaks linking.
-                if local != exported
-                    && hir_module
-                        .classes
-                        .iter()
-                        .any(|c| c.name == *local && c.is_exported)
-                {
-                    all_module_export_origin_names
-                        .entry(path_str.clone())
-                        .or_insert_with(BTreeMap::new)
-                        .insert(exported.clone(), local.clone());
+            match export {
+                perry_hir::Export::Named { local, exported } => {
+                    exports.insert(exported.clone(), path_str.clone());
+                    // #1758: a LOCAL renamed export of a CLASS
+                    // (`export { Number$ as Number }`, no `from`) must record the
+                    // origin (local) name so importers resolve `ns.Number` to the
+                    // defining class `Number$`. The re-export propagation loop below
+                    // only records origin names for cross-module
+                    // `export { X as Y } from "src"`. Without this, the
+                    // namespace-member class value-read (property_get.rs) looks up
+                    // `class_ids["Number"]` (the export alias) — a miss — and
+                    // `S.Number` falls back to the global `Number`, losing all
+                    // inherited statics (effect's `S.Number.ast` → undefined →
+                    // Schema decode crash). Scoped to classes: renamed var/func
+                    // exports route through wrapper-symbol emission that keys on the
+                    // export name, and feeding the origin name there breaks linking.
+                    if local != exported
+                        && hir_module
+                            .classes
+                            .iter()
+                            .any(|c| c.name == *local && c.is_exported)
+                    {
+                        all_module_export_origin_names
+                            .entry(path_str.clone())
+                            .or_insert_with(BTreeMap::new)
+                            .insert(exported.clone(), local.clone());
+                    }
                 }
+                perry_hir::Export::NamespaceReExport { name, .. } => {
+                    exports.insert(name.clone(), path_str.clone());
+                }
+                _ => {}
             }
             // ReExport is handled in the propagation loop below (avoids borrow issues)
         }
@@ -1080,6 +1086,75 @@ pub fn run_with_parse_cache(
                     .or_insert_with(BTreeMap::new)
                     .insert(name, origin_name);
             }
+        }
+    }
+
+    let native_module_name_for_namespace_reexport = |source: &str| -> Option<String> {
+        if source.starts_with('.') || source.starts_with('/') {
+            return None;
+        }
+        Some(source.strip_prefix("node:").unwrap_or(source).to_string())
+    };
+    let mut direct_namespace_reexport_values: BTreeMap<
+        (String, String),
+        perry_codegen::NamespaceEntryKind,
+    > = BTreeMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let path_str = path.to_string_lossy().to_string();
+        for export in &hir_module.exports {
+            let perry_hir::Export::NamespaceReExport { source, name } = export else {
+                continue;
+            };
+            let kind = if let Some((resolved_source, _)) = resolve_import(
+                source,
+                path,
+                &ctx.project_root,
+                &ctx.compile_packages,
+                &ctx.compile_package_dirs,
+            ) {
+                perry_codegen::NamespaceEntryKind::NestedNamespace {
+                    source_prefix: compute_module_prefix(
+                        &resolved_source.to_string_lossy(),
+                        &ctx.project_root,
+                    ),
+                }
+            } else if let Some(module_name) = native_module_name_for_namespace_reexport(source) {
+                perry_codegen::NamespaceEntryKind::NativeModuleNamespace { module_name }
+            } else {
+                continue;
+            };
+            direct_namespace_reexport_values.insert((path_str.clone(), name.clone()), kind);
+        }
+    }
+    let mut namespace_reexport_values_by_module: BTreeMap<
+        String,
+        std::collections::HashMap<String, perry_codegen::NamespaceEntryKind>,
+    > = BTreeMap::new();
+    for (module_path, exports) in &all_module_exports {
+        for (export_name, origin_path) in exports {
+            let origin_name = all_module_export_origin_names
+                .get(module_path)
+                .and_then(|m| m.get(export_name))
+                .cloned()
+                .unwrap_or_else(|| export_name.clone());
+            let Some(origin_kind) =
+                direct_namespace_reexport_values.get(&(origin_path.clone(), origin_name.clone()))
+            else {
+                continue;
+            };
+            let kind = if origin_path == module_path && origin_name == *export_name {
+                origin_kind.clone()
+            } else {
+                perry_codegen::NamespaceEntryKind::ForeignVar {
+                    source_prefix: compute_module_prefix(origin_path, &ctx.project_root),
+                    source_local: origin_name,
+                }
+            };
+            namespace_reexport_values_by_module
+                .entry(module_path.clone())
+                .or_default()
+                .insert(export_name.clone(), kind);
+            exported_var_names.insert((module_path.clone(), export_name.clone()));
         }
     }
 
@@ -3695,6 +3770,10 @@ pub fn run_with_parse_cache(
                 imported_func_synthetic_arguments: imported_synthetic_arguments,
                 imported_func_return_types: imported_return_types,
                 imported_vars,
+                namespace_reexport_values: namespace_reexport_values_by_module
+                    .get(&path.to_string_lossy().to_string())
+                    .cloned()
+                    .unwrap_or_default(),
 
                 // Feature plumbing
                 output_type: args.output_type.clone(),

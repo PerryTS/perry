@@ -1088,6 +1088,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         }),
         imported_vars: opts.imported_vars,
+        namespace_reexport_values: opts.namespace_reexport_values,
         needs_stdlib: opts.needs_stdlib,
         needs_geisterhand: opts.needs_geisterhand,
         geisterhand_port: opts.geisterhand_port,

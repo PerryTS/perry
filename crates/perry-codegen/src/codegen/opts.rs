@@ -238,6 +238,11 @@ pub struct CompileOptions {
     /// { HONE_VERSION } from './version'` followed by `let v = HONE_VERSION`
     /// would create a closure wrapper around the getter, not the actual string.
     pub imported_vars: std::collections::HashSet<String>,
+    /// Producer-side value getters for namespace re-exports. Covers
+    /// `export * as Name from "native-or-external"` and re-export barrels
+    /// forwarding that `Name`; consumers import/read `Name` through the same
+    /// zero-arg `perry_fn_<module>__<Name>()` getter used by exported vars.
+    pub namespace_reexport_values: std::collections::HashMap<String, NamespaceEntryKind>,
 
     // ── Feature plumbing ──
     //
@@ -416,6 +421,10 @@ pub enum NamespaceEntryKind {
     /// nested value IS the target module's `@__perry_ns_<source_prefix>`
     /// global, populated by the target's own `__init`.
     NestedNamespace { source_prefix: String },
+    /// `export * as Name from "ws"` / `node:*` / native-routed packages.
+    /// There is no compiled module namespace global; build the native module
+    /// namespace object through the runtime.
+    NativeModuleNamespace { module_name: String },
 }
 
 /// A class imported from another native module.
@@ -605,6 +614,8 @@ pub(crate) struct CrossModuleCtx {
     pub i18n: Option<crate::expr::I18nLowerCtx>,
     /// Names of imports that are exported variables (not functions).
     pub imported_vars: std::collections::HashSet<String>,
+    /// See `CompileOptions::namespace_reexport_values`.
+    pub namespace_reexport_values: std::collections::HashMap<String, NamespaceEntryKind>,
     /// Whether perry-stdlib will be linked into the final binary. When
     /// false, compile_module_entry skips the `js_stdlib_init_dispatch()`
     /// call in main's prologue because only the runtime is linked and

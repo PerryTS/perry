@@ -537,6 +537,30 @@ pub extern "C" fn js_webassembly_call_export_4(
     call_export_n(inst_jsval, name_jsval, &[a, b, c, d])
 }
 
+// Codegen emits calls to these `js_webassembly_*` shims from generated `.o`
+// files, while the runtime crate itself has no Rust caller for most of them.
+// Keep typed reference edges so `cargo build -p perry-runtime --features
+// wasm-host` exports the shims from `libperry_runtime.a`; otherwise no-auto
+// builds can find `libperry_wasm_host.a` but still fail final link with an
+// undefined `js_webassembly_module_new`.
+#[rustfmt::skip]
+mod keep_webassembly_exports {
+    use super::*;
+
+    #[used] static K00: extern "C" fn(f64) -> f64 = js_webassembly_validate;
+    #[used] static K01: extern "C" fn(f64) -> f64 = js_webassembly_module_new;
+    #[used] static K02: extern "C" fn(f64) -> f64 = js_webassembly_compile;
+    #[used] static K03: extern "C" fn(f64) -> f64 = js_webassembly_module_exports;
+    #[used] static K04: extern "C" fn(f64) -> f64 = js_webassembly_module_imports;
+    #[used] static K05: extern "C" fn(f64, f64) -> f64 = js_webassembly_module_custom_sections;
+    #[used] static K06: extern "C" fn(f64) -> f64 = js_webassembly_instantiate;
+    #[used] static K07: extern "C" fn(f64, f64) -> f64 = js_webassembly_call_export_0;
+    #[used] static K08: extern "C" fn(f64, f64, f64) -> f64 = js_webassembly_call_export_1;
+    #[used] static K09: extern "C" fn(f64, f64, f64, f64) -> f64 = js_webassembly_call_export_2;
+    #[used] static K10: extern "C" fn(f64, f64, f64, f64, f64) -> f64 = js_webassembly_call_export_3;
+    #[used] static K11: extern "C" fn(f64, f64, f64, f64, f64, f64) -> f64 = js_webassembly_call_export_4;
+}
+
 fn call_export_n(inst_jsval: f64, name_jsval: f64, args: &[f64]) -> f64 {
     let inst = unbox_pointer(inst_jsval);
     if inst.is_null() {

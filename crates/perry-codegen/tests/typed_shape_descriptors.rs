@@ -58,6 +58,7 @@ fn empty_opts() -> CompileOptions {
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
         imported_func_return_types: std::collections::HashMap::new(),
         imported_vars: std::collections::HashSet::new(),
+        namespace_reexport_values: std::collections::HashMap::new(),
         output_type: "executable".to_string(),
         needs_stdlib: false,
         needs_ui: false,

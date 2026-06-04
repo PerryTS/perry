@@ -699,6 +699,10 @@ fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out:
             out.push_str("nested_ns:");
             out.push_str(source_prefix);
         }
+        perry_codegen::NamespaceEntryKind::NativeModuleNamespace { module_name } => {
+            out.push_str("native_module_ns:");
+            out.push_str(module_name);
+        }
     }
 }
 /// On-disk per-module object cache at `.perry-cache/objects/<target>/<hash:016x>.o`.
@@ -865,6 +869,7 @@ mod object_cache_tests {
             imported_func_synthetic_arguments: std::collections::HashSet::new(),
             imported_func_return_types: std::collections::HashMap::new(),
             imported_vars: std::collections::HashSet::new(),
+            namespace_reexport_values: std::collections::HashMap::new(),
             output_type: "executable".to_string(),
             needs_stdlib: false,
             needs_ui: false,

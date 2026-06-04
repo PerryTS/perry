@@ -1,4 +1,4 @@
-use perry_codegen::{compile_module, AppMetadata, CompileOptions};
+use perry_codegen::{compile_module, AppMetadata, CompileOptions, NamespaceEntryKind};
 use perry_hir::{Class, Export, Expr, Function, Module, ModuleInitKind, Stmt};
 use perry_types::Type;
 
@@ -28,6 +28,7 @@ fn empty_opts() -> CompileOptions {
         imported_func_return_types: std::collections::HashMap::new(),
         namespace_reexport_named_imports: std::collections::HashSet::new(),
         imported_vars: std::collections::HashSet::new(),
+        namespace_reexport_values: std::collections::HashMap::new(),
         output_type: "executable".to_string(),
         needs_stdlib: false,
         needs_ui: false,
@@ -179,6 +180,17 @@ fn module_with_exported_value_alias_colliding_with_local_value_getter() -> Modul
     module
 }
 
+fn module_with_native_namespace_reexport() -> Module {
+    let mut module = module_with_duplicate_local_function_names();
+    module.name = "NodeSocket.ts".to_string();
+    module.functions = Vec::new();
+    module.exports = vec![Export::NamespaceReExport {
+        source: "ws".to_string(),
+        name: "NodeWS".to_string(),
+    }];
+    module
+}
+
 #[test]
 fn duplicate_local_function_names_get_unique_llvm_symbols() {
     let ir = String::from_utf8(
@@ -282,4 +294,50 @@ fn exported_value_alias_does_not_clobber_local_value_getter_symbol() {
             .count(),
         1
     );
+}
+
+#[test]
+fn native_namespace_reexport_emits_static_value_getter() {
+    let mut opts = empty_opts();
+    opts.namespace_reexport_values.insert(
+        "NodeWS".to_string(),
+        NamespaceEntryKind::NativeModuleNamespace {
+            module_name: "ws".to_string(),
+        },
+    );
+    let ir =
+        String::from_utf8(compile_module(&module_with_native_namespace_reexport(), opts).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        ir.matches("define double @perry_fn_NodeSocket_ts__NodeWS()")
+            .count(),
+        1
+    );
+    assert!(ir.contains("js_create_native_module_namespace"));
+    assert!(!ir.contains("declare double @perry_fn_NodeSocket_ts__NodeWS()"));
+}
+
+#[test]
+fn export_all_barrel_forwards_namespace_reexport_getter() {
+    let mut opts = empty_opts();
+    opts.namespace_reexport_values.insert(
+        "NodeWS".to_string(),
+        NamespaceEntryKind::ForeignVar {
+            source_prefix: "platform_node_shared_src_NodeSocket_ts".to_string(),
+            source_local: "NodeWS".to_string(),
+        },
+    );
+    let mut module = module_with_native_namespace_reexport();
+    module.name = "platform-node/src/NodeSocket.ts".to_string();
+    module.exports = Vec::new();
+
+    let ir = String::from_utf8(compile_module(&module, opts).unwrap()).unwrap();
+
+    assert_eq!(
+        ir.matches("define double @perry_fn_platform_node_src_NodeSocket_ts__NodeWS()")
+            .count(),
+        1
+    );
+    assert!(ir.contains("call double @perry_fn_platform_node_shared_src_NodeSocket_ts__NodeWS()"));
 }

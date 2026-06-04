@@ -803,6 +803,15 @@ pub(super) fn emit_namespace_populator(
             NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
                 .block()
                 .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
+            NamespaceEntryKind::NativeModuleNamespace { module_name } => {
+                let mod_label = crate::expr::emit_string_literal_global(ctx, module_name);
+                let mod_len = module_name.len().to_string();
+                ctx.block().call(
+                    DOUBLE,
+                    "js_create_native_module_namespace",
+                    &[(PTR, &mod_label), (I64, &mod_len)],
+                )
+            }
         };
 
         let blk = ctx.block();
