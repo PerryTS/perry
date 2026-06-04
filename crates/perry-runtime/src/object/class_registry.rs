@@ -35,6 +35,14 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+fn is_non_constructable_builtin_function_value(value: f64) -> bool {
+    super::native_module::builtin_closure_is_non_constructable_value(value)
+}
+
+fn throw_non_constructable_builtin_function() -> ! {
+    super::object_ops::throw_object_type_error(b"Function is not a constructor")
+}
+
 pub(crate) fn class_mark_key_deleted(class_id: u32, key: &str) {
     if class_id == 0 {
         return;
@@ -1210,6 +1218,9 @@ pub unsafe extern "C" fn js_new_function_construct(
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
         return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
     }
+    if is_non_constructable_builtin_function_value(func_value) {
+        throw_non_constructable_builtin_function();
+    }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
         if module == "sqlite"
             && matches!(
@@ -1849,6 +1860,11 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     }
     if !is_callable_function_value(func_value) {
         return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    if is_non_constructable_builtin_function_value(func_value)
+        || is_non_constructable_builtin_function_value(nt)
+    {
+        throw_non_constructable_builtin_function();
     }
     if is_arrow_function_value(func_value) {
         crate::fs::validate::throw_type_error_with_code(

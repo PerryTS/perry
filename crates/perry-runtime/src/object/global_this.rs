@@ -3282,6 +3282,7 @@ fn install_constructor_static_with_call_arity(
     }
     super::native_module::set_bound_native_closure_name(closure, name);
     super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
@@ -3551,6 +3552,7 @@ pub(super) fn install_proto_method(
     // can't distinguish `map` (1) from `slice` (2). Read back by the `.length`
     // value-accessor and `getOwnPropertyDescriptor`.
     super::native_module::set_builtin_closure_length(closure as usize, arity);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
@@ -3612,6 +3614,7 @@ pub(super) fn install_proto_method_rest_with_length(
     crate::closure::js_register_closure_rest(func_ptr, call_fixed_arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
     super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     js_object_set_field_by_name(proto_obj, key, value);
