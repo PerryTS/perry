@@ -1615,10 +1615,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 }
             }
         }
-        // RegExpExecArray.index / .groups — receiver is a local that holds the result
-        // of regex.exec(...). The runtime stores the most recent exec metadata in
-        // thread-locals which RegExpExecIndex/Groups read.
-        if prop_name == "index" || prop_name == "groups" {
+        // RegExpExecArray.index — receiver is a local that holds the result of
+        // regex.exec(...). The runtime stores the most recent exec index in a
+        // thread-local which RegExpExecIndex reads.
+        //
+        // `.groups` is deliberately NOT folded here: the runtime now attaches
+        // the named-capture object as a real own property on the result array
+        // (see regex.rs::set_exec_array_groups), so a generic PropertyGet reads
+        // the per-result value. That keeps `m.groups` correct after an
+        // intervening match on another regex, where a thread-local would be
+        // clobbered.
+        if prop_name == "index" {
             // Strip non-null assertion (m1! → m1)
             let inner = match member.obj.as_ref() {
                 ast::Expr::TsNonNull(nn) => nn.expr.as_ref(),
@@ -1626,11 +1633,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             };
             if let ast::Expr::Ident(ident) = inner {
                 if ctx.regex_exec_locals.contains(&ident.sym.to_string()) {
-                    return Ok(if prop_name == "index" {
-                        Expr::RegExpExecIndex
-                    } else {
-                        Expr::RegExpExecGroups
-                    });
+                    return Ok(Expr::RegExpExecIndex);
                 }
             }
         }

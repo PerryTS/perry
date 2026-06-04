@@ -223,6 +223,28 @@ fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index: f64) {
     crate::array::js_array_set_string_key(arr, input_key, input_value);
 }
 
+/// Attach the `groups` own property to a regex match-result array.
+///
+/// Mirrors `set_exec_array_metadata` for `index`/`input`: the result of
+/// `regex.exec(s)` / `s.match(regex)` carries `groups` as a real own property
+/// so reads stay correct under aliasing and interleaved matches — a stored
+/// `m.groups` survives a later `re2.exec(...)`, instead of resolving through a
+/// single most-recent-match thread-local (`LAST_EXEC_GROUPS`). Per ECMA-262
+/// RegExpBuiltinExec, `groups` is the named-capture object when the pattern
+/// has named groups, else `undefined`.
+fn set_exec_array_groups(arr: *mut ArrayHeader, groups_obj: *mut ObjectHeader) {
+    if arr.is_null() {
+        return;
+    }
+    let groups_key = js_string_from_str("groups");
+    let value = if groups_obj.is_null() {
+        f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
+    } else {
+        crate::value::js_nanbox_pointer(groups_obj as i64)
+    };
+    crate::array::js_array_set_string_key(arr, groups_key, value);
+}
+
 fn char_index_to_byte(s: &str, char_index: usize) -> usize {
     if char_index == 0 {
         return 0;
@@ -520,6 +542,12 @@ pub extern "C" fn js_string_match(
                             }
                         }
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                        // fancy-regex path doesn't extract named groups; mirror
+                        // the thread-local (`undefined`) on the result object.
+                        set_exec_array_groups(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            ptr::null_mut(),
+                        );
                         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
                     }
                     _ => {
@@ -626,8 +654,16 @@ pub extern "C" fn js_string_match(
                             *g.borrow_mut() =
                                 groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
                         });
+                        set_exec_array_groups(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+                        );
                     } else {
                         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                        set_exec_array_groups(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            ptr::null_mut(),
+                        );
                     }
 
                     arr_handle.get_raw_mut_ptr::<ArrayHeader>()
@@ -1073,6 +1109,12 @@ pub extern "C" fn js_regexp_exec(
                     );
                     LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                    // fancy-regex path doesn't extract named groups; mirror the
+                    // thread-local (`undefined`) on the result object.
+                    set_exec_array_groups(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                        ptr::null_mut(),
+                    );
                     return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
                 }
                 return Some(ptr::null_mut()); // fancy-regex tried but no match
@@ -1139,36 +1181,42 @@ pub extern "C" fn js_regexp_exec(
                     .collect();
 
                 if !group_names.is_empty() {
-                    let mut packed_keys: Vec<u8> = Vec::new();
-                    for (name, _) in &group_names {
-                        packed_keys.extend_from_slice(name.as_bytes());
-                        packed_keys.push(0);
-                    }
-                    let groups_obj = crate::object::js_object_alloc_with_shape(
-                        0x7FFF_FE00,
-                        group_names.len() as u32,
-                        packed_keys.as_ptr(),
-                        packed_keys.len() as u32,
-                    );
+                    // Allocate a fresh per-result object (and shape) via
+                    // `js_object_alloc(0, 0)` + by-name setters, NOT a shared
+                    // `js_object_alloc_with_shape(const_id)`. A fixed interned
+                    // shape id makes a later match with different named captures
+                    // inherit the prior call's key names (e.g. `(?<x>…)` then
+                    // `(?<z>…)` exposing `.x` on the second result). This mirrors
+                    // the fix already applied to the `js_string_match` path.
+                    let groups_obj = crate::object::js_object_alloc(0, 0);
                     let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-                    for (idx, (_, m)) in group_names.iter().enumerate() {
+                    for (name, m) in &group_names {
                         let val = if let Some(m) = m {
                             let str_ptr = js_string_from_str(m.as_str());
-                            let nanboxed = js_nanbox_string(str_ptr as i64);
-                            crate::value::JSValue::from_bits(nanboxed.to_bits())
+                            js_nanbox_string(str_ptr as i64)
                         } else {
-                            crate::value::JSValue::undefined()
+                            f64::from_bits(TAG_UNDEFINED)
                         };
+                        let key_ptr =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                         let groups_obj =
                             groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                        crate::object::js_object_set_field(groups_obj, idx as u32, val);
+                        crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
                     }
                     LAST_EXEC_GROUPS.with(|g| {
                         *g.borrow_mut() =
                             groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
                     });
+                    set_exec_array_groups(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                        groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+                    );
                 } else {
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                    set_exec_array_groups(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                        ptr::null_mut(),
+                    );
                 }
 
                 arr_handle.get_raw_mut_ptr::<ArrayHeader>()

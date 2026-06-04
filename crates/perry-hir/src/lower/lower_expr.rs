@@ -1434,20 +1434,25 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         ast::MemberProp::Ident(ident) => {
                             let prop_name = ident.sym.to_string();
                             // Mirror the eager-fold from
-                            // `expr_member::lower_member` for `m.index` /
-                            // `m.groups` when `m` is a tracked
+                            // `expr_member::lower_member` for `m.index`
+                            // when `m` is a tracked
                             // regex.exec()/string.match() result. The
                             // standard `lower_member` fires when the
-                            // AST is `m.groups`; for the optional-chain
-                            // form `m?.groups` SWC routes here, the
+                            // AST is `m.index`; for the optional-chain
+                            // form `m?.index` SWC routes here, the
                             // `member.obj` has already been lowered to
                             // `LocalGet(...)`, so `lower_member`'s
                             // `ast::Expr::Ident` check fails. Intercept
                             // here so the optional-chain shape also
-                            // resolves to the thread-local groups
-                            // object instead of a generic property
-                            // read that returns undefined.
-                            if (prop_name == "groups" || prop_name == "index")
+                            // resolves to the thread-local index value.
+                            //
+                            // `.groups` is intentionally left as a generic
+                            // PropertyGet: the runtime attaches the
+                            // named-capture object as a real own property on
+                            // the result array (regex.rs::set_exec_array_groups),
+                            // so it survives an intervening match on another
+                            // regex (a thread-local would be clobbered).
+                            if prop_name == "index"
                                 && match member.obj.as_ref() {
                                     ast::Expr::Ident(ident) => {
                                         ctx.regex_exec_locals.contains(&ident.sym.to_string())
@@ -1461,11 +1466,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                     _ => false,
                                 }
                             {
-                                if prop_name == "groups" {
-                                    Expr::RegExpExecGroups
-                                } else {
-                                    Expr::RegExpExecIndex
-                                }
+                                Expr::RegExpExecIndex
                             } else {
                                 Expr::PropertyGet {
                                     object: Box::new(obj_expr.clone()),
