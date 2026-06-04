@@ -86,6 +86,80 @@ pub fn extract_named_exports_from_require(source: &str) -> Vec<(String, String)>
     found
 }
 
+/// Detect `const X = require('Y'); module.exports.X = X` (and `exports.X = X`)
+/// CJS barrels. This is the Undici index shape:
+///
+/// ```js
+/// const Dispatcher = require('./lib/dispatcher/dispatcher')
+/// module.exports.Dispatcher = Dispatcher
+/// ```
+///
+/// Route the named export through a direct ESM re-export of `Y`'s default
+/// export. Going through `_cjs.Dispatcher` makes HIR believe the class is
+/// produced by the barrel file, so later typed method calls look for
+/// `index_js__Dispatcher__destroy` even though the real method producer lives
+/// in `lib/dispatcher/dispatcher.js`.
+pub fn extract_named_exports_from_require_alias(source: &str) -> Vec<(String, String)> {
+    let mut alias_to_spec: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for (alias, spec, _) in extract_require_aliases_with_ranges(source) {
+        alias_to_spec.entry(alias).or_insert(spec);
+    }
+    if alias_to_spec.is_empty() {
+        return Vec::new();
+    }
+
+    let export_re = regex::Regex::new(
+        r#"(?m)^\s*(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*;?\s*$"#,
+    )
+    .unwrap();
+    let other_re = regex::Regex::new(
+        r#"(?m)^\s*(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+?)\s*;?\s*$"#,
+    )
+    .unwrap();
+
+    let mut found: Vec<(String, String, String)> = Vec::new();
+    let mut seen_names: Vec<String> = Vec::new();
+    for cap in export_re.captures_iter(source) {
+        let (Some(name), Some(alias)) = (cap.get(1), cap.get(2)) else {
+            continue;
+        };
+        let name = name.as_str().to_string();
+        if name == "__esModule" || seen_names.contains(&name) {
+            continue;
+        }
+        let alias = alias.as_str().to_string();
+        let Some(spec) = alias_to_spec.get(&alias) else {
+            continue;
+        };
+        seen_names.push(name.clone());
+        found.push((name, alias, spec.clone()));
+    }
+    if found.is_empty() {
+        return Vec::new();
+    }
+
+    let mut disqualified: Vec<String> = Vec::new();
+    for cap in other_re.captures_iter(source) {
+        let (Some(name), Some(rhs)) = (cap.get(1), cap.get(2)) else {
+            continue;
+        };
+        let name = name.as_str();
+        let Some((_, alias, _)) = found.iter().find(|(n, _, _)| n == name) else {
+            continue;
+        };
+        if rhs.as_str().trim() != alias {
+            disqualified.push(name.to_string());
+        }
+    }
+
+    found
+        .into_iter()
+        .filter(|(name, _, _)| !disqualified.contains(name))
+        .map(|(name, _, spec)| (name, spec))
+        .collect()
+}
+
 /// Issue #665 follow-up (object-literal aggregator): detect the published
 /// `rate-limiter-flexible/index.js` shape —
 ///

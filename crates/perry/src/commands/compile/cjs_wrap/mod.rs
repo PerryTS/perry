@@ -46,7 +46,8 @@ mod wrap;
 pub(self) use detect::is_js_reserved_word;
 pub(self) use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,
-    extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
+    extract_named_exports_from_require_alias, extract_object_literal_exports_from_require,
+    extract_single_module_exports_assignment,
 };
 pub(self) use extract_requires::{extract_require_aliases_with_ranges, extract_require_specifiers};
 pub(self) use hoist_classes::{
@@ -62,7 +63,8 @@ mod tests {
     use super::detect::is_commonjs;
     use super::extract_exports::{
         extract_exports_from_source, extract_named_exports_from_require,
-        extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
+        extract_named_exports_from_require_alias, extract_object_literal_exports_from_require,
+        extract_single_module_exports_assignment,
     };
     use super::extract_requires::{
         extract_require_aliases_with_ranges, extract_require_specifiers,
@@ -491,6 +493,56 @@ module.exports = inner;
         // And does NOT emit the property-read form for the same name.
         assert!(
             !wrapped.contains("export const RateLimiterMemory = _cjs.RateLimiterMemory;"),
+            "should NOT emit _cjs property read for direct-reexport name, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn extracts_named_exports_from_require_alias_assignment() {
+        // Undici index.js shape: bind the required leaf class to a local
+        // alias, then publish it through module.exports.X = X.
+        let src = "const Dispatcher = require('./lib/dispatcher/dispatcher')\n\
+                   const Dispatcher1Wrapper = require('./lib/dispatcher/dispatcher1-wrapper')\n\
+                   module.exports.Dispatcher = Dispatcher\n\
+                   module.exports.Dispatcher1Wrapper = Dispatcher1Wrapper";
+        let got = extract_named_exports_from_require_alias(src);
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "Dispatcher".to_string(),
+                    "./lib/dispatcher/dispatcher".to_string()
+                ),
+                (
+                    "Dispatcher1Wrapper".to_string(),
+                    "./lib/dispatcher/dispatcher1-wrapper".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_named_exports_from_require_alias_when_later_reassigned() {
+        let src = "const Dispatcher = require('./dispatcher')\n\
+                   module.exports.Dispatcher = Dispatcher\n\
+                   module.exports.Dispatcher = decorate(Dispatcher)";
+        let got = extract_named_exports_from_require_alias(src);
+        assert!(got.is_empty(), "expected empty, got {:?}", got);
+    }
+
+    #[test]
+    fn wrap_emits_direct_reexport_for_require_alias_assignment() {
+        let src = "const Dispatcher = require('./lib/dispatcher/dispatcher')\n\
+                   module.exports.Dispatcher = Dispatcher";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        assert!(
+            wrapped.contains("export { Dispatcher as Dispatcher };"),
+            "expected direct alias re-export, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("export const Dispatcher = _cjs.Dispatcher;"),
             "should NOT emit _cjs property read for direct-reexport name, got:\n{}",
             wrapped
         );

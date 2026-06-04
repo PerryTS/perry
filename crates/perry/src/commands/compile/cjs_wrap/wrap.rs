@@ -249,6 +249,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_context(
     //       up the RHS as a require alias and emit the export under the
     //       property name.
     let mut named_reexport_requires = extract_named_exports_from_require(source);
+    for (name, spec) in extract_named_exports_from_require_alias(source) {
+        if !named_reexport_requires.iter().any(|(n, _)| *n == name) {
+            named_reexport_requires.push((name, spec));
+        }
+    }
     for (name, spec) in extract_object_literal_exports_from_require(source) {
         if !named_reexport_requires.iter().any(|(n, _)| *n == name) {
             named_reexport_requires.push((name, spec));

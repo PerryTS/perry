@@ -1208,27 +1208,62 @@ pub fn run_with_parse_cache(
                                         if let Some(source_exports) =
                                             all_module_exports.get(&source_path_str)
                                         {
-                                            if let Some(origin) = source_exports.get(&imported_name)
+                                            let mut resolved_export = source_exports
+                                                .get(&imported_name)
+                                                .cloned()
+                                                .map(|origin| (origin, imported_name.clone()));
+                                            // CJS class barrels often lower to
+                                            // `import X from "./leaf"; export { X }`
+                                            // where `leaf` also has a named class export
+                                            // `X`, but Perry's metadata records that class
+                                            // under `X` rather than `"default"`. If the
+                                            // default import name matches a real exported
+                                            // class in the source module, treat the named
+                                            // re-export as forwarding that class's origin.
+                                            if resolved_export.is_none()
+                                                && imported_name == "default"
+                                            {
+                                                for fallback_name in [local, exported] {
+                                                    if let Some(origin) =
+                                                        source_exports.get(fallback_name)
+                                                    {
+                                                        let class_key =
+                                                            (origin.clone(), fallback_name.clone());
+                                                        if exported_classes.contains_key(&class_key)
+                                                        {
+                                                            resolved_export = Some((
+                                                                origin.clone(),
+                                                                fallback_name.clone(),
+                                                            ));
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if let Some((origin, resolved_imported_name)) =
+                                                resolved_export
                                             {
                                                 let current_exports =
                                                     all_module_exports.get(&path_str);
                                                 let already_correct = current_exports
                                                     .and_then(|e| e.get(exported.as_str()))
-                                                    .map(|v| v == origin)
+                                                    .map(|v| v == &origin)
                                                     .unwrap_or(false);
                                                 if !already_correct {
                                                     let deep_origin_name =
                                                         all_module_export_origin_names
                                                             .get(&source_path_str)
-                                                            .and_then(|m| m.get(&imported_name))
+                                                            .and_then(|m| {
+                                                                m.get(&resolved_imported_name)
+                                                            })
                                                             .cloned()
                                                             .unwrap_or_else(|| {
-                                                                imported_name.clone()
+                                                                resolved_imported_name.clone()
                                                             });
                                                     new_export_entries.push((
                                                         path_str.clone(),
                                                         exported.clone(),
-                                                        origin.clone(),
+                                                        origin,
                                                         deep_origin_name,
                                                     ));
                                                 }
@@ -1708,11 +1743,27 @@ pub fn run_with_parse_cache(
                                     ) {
                                         let source_path_str =
                                             resolved_source.to_string_lossy().to_string();
-                                        let key_src = (source_path_str, imported_name);
-                                        if let Some(class) = exported_classes.get(&key_src) {
+                                        let key_src =
+                                            (source_path_str.clone(), imported_name.clone());
+                                        let mut class = exported_classes.get(&key_src).copied();
+                                        if class.is_none() && imported_name == "default" {
+                                            for fallback_name in [local, exported] {
+                                                let fallback_key = (
+                                                    source_path_str.clone(),
+                                                    fallback_name.clone(),
+                                                );
+                                                if let Some(found) =
+                                                    exported_classes.get(&fallback_key)
+                                                {
+                                                    class = Some(*found);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if let Some(class) = class {
                                             let key = (path_str.clone(), exported.clone());
                                             if !exported_classes.contains_key(&key) {
-                                                new_entries.push((key, *class));
+                                                new_entries.push((key, class));
                                             }
                                         }
                                     }
@@ -4031,6 +4082,23 @@ pub fn run_with_parse_cache(
                         closure_worklist.push(imported_classes.len() - 1);
                     }
                 }
+            }
+
+            // Re-export barrels can register an ImportedClass entry under the
+            // barrel module before the same class is also discovered at its
+            // defining module. Codegen's method registry is first-writer-wins
+            // by effective class name, so keep aliases intact but always point
+            // known class ids back at their canonical producer prefix.
+            for imported_class in &mut imported_classes {
+                let Some(class_id) = imported_class.source_class_id else {
+                    continue;
+                };
+                let Some(canonical_path) = class_canonical_path.get(&class_id) else {
+                    continue;
+                };
+                let canonical_prefix =
+                    compute_module_prefix(canonical_path, &ctx.project_root);
+                imported_class.source_prefix = canonical_prefix;
             }
 
             // Type aliases from all modules
