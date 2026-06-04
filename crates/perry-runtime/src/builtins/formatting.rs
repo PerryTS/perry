@@ -1084,11 +1084,12 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
 fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
     let target = crate::proxy::js_proxy_target(value);
     if !inspect_show_proxy() {
-        return if json {
+        let target_str = if json {
             format_jsvalue_for_json(target, depth)
         } else {
             format_jsvalue(target, depth)
         };
+        return format!("Proxy({target_str})");
     }
 
     let handler = crate::proxy::js_proxy_handler(value);
