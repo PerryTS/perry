@@ -96,6 +96,11 @@ pub fn transform_generator_function_with_extra_captures(
     // The .throw() closure uses that interval to route a rejected await to
     // the matching catch handler instead of always using the first catch.
     let mut catches: Vec<CatchRoute> = Vec::new();
+    // #4374: finally blocks collected during linearization, so the
+    // .return()/.throw() closures can run pending finallys on abrupt
+    // completion. Innermost finallys are pushed first (the recursion into a
+    // try body collects nested finallys before the enclosing one).
+    let mut finallys: Vec<FinallyRoute> = Vec::new();
     linearize_body(
         &func.body,
         &mut states,
@@ -105,6 +110,7 @@ pub fn transform_generator_function_with_extra_captures(
         next_local_id,
         sent_id,
         &mut catches,
+        &mut finallys,
     );
     let extra_local_ids: Vec<LocalId> = (local_id_before..*next_local_id).collect();
 
@@ -489,13 +495,29 @@ pub fn transform_generator_function_with_extra_captures(
             *next_func_id += 1;
             id
         };
-        let mut return_body: Vec<Stmt> = vec![
-            Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-            Stmt::Return(Some(make_iter_result(
+        // #4374: `.return(v)` on a generator suspended inside a `try` must run
+        // the pending `finally` blocks (innermost first) before completing.
+        let mut return_body: Vec<Stmt> = Vec::new();
+        // Already-done generators just complete with {value: v, done: true} —
+        // no finally re-run (the finally already ran on normal completion).
+        return_body.push(Stmt::If {
+            condition: Expr::LocalGet(done_id),
+            then_branch: vec![Stmt::Return(Some(make_iter_result(
                 Expr::LocalGet(return_param_id),
                 true,
-            ))),
-        ];
+            )))],
+            else_branch: None,
+        });
+        // Mark done (abrupt completion), then run pending finallys. A finally
+        // that itself `return`s supersedes `v` (rewritten to an iter-result
+        // return inside build_finally_run_stmts); a finally that throws
+        // propagates out of this closure.
+        return_body.push(Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))));
+        return_body.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_body.push(Stmt::Return(Some(make_iter_result(
+            Expr::LocalGet(return_param_id),
+            true,
+        ))));
         if is_async_generator {
             wrap_returns_in_promise(&mut return_body);
         }
@@ -532,7 +554,7 @@ pub fn transform_generator_function_with_extra_captures(
             id
         };
         let mut throw_body =
-            build_async_throw_body(&catches, state_id, throw_param_id, &hoisted_ids);
+            build_async_throw_body(&catches, &finallys, state_id, throw_param_id, &hoisted_ids);
         if is_async_generator {
             wrap_returns_in_promise(&mut throw_body);
         }
@@ -733,11 +755,20 @@ fn generator_expr_uses_call_this(expr: &Expr) -> bool {
 /// The two-step `let __step; __step = ...;` pattern is required because
 fn build_async_throw_body(
     catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
     state_id: LocalId,
     throw_param_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
 ) -> Vec<Stmt> {
-    let mut fallback = vec![Stmt::Throw(Expr::LocalGet(throw_param_id))];
+    // #4374: when no catch handles the throw, run any pending `finally`
+    // (innermost first) before propagating the error — `try { yield }
+    // finally { ... }` must run its finally on `.throw(e)`. A `finally` that
+    // `return`s supersedes the thrown value (rewritten to an iter-result
+    // return inside build_finally_run_stmts). For a try WITH a catch, the
+    // catch route below returns first, so this only fires for
+    // try/finally-without-catch and for truly unhandled throws.
+    let mut fallback = build_finally_run_stmts(finallys, state_id, hoisted_ids);
+    fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
 
     // Build nested `if` dispatch in source order. We iterate from the back so
     // the first collected route is tested first; nested try/catch routes are
@@ -800,6 +831,49 @@ fn build_async_catch_route_body(
     )));
     body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, false))));
     body
+}
+
+/// #4374: build the statements that run pending `finally` blocks on abrupt
+/// completion (`.return()`/`.throw()`), innermost first. Each finally runs
+/// only when the generator is suspended inside its protected state interval
+/// (`state > protected_start && state <= post_finally`). A `return X` inside
+/// a finally is rewritten to `return {value: X, done: true}` so it supersedes
+/// the abrupt completion value; a `throw` inside a finally is left intact and
+/// propagates out of the closure. Finallys that themselves yield/await
+/// (`has_yields`) can't be inlined synchronously and are skipped.
+fn build_finally_run_stmts(
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for route in finallys.iter().filter(|r| !r.has_yields) {
+        let mut body = route.body.clone();
+        rewrite_hoisted_lets_in_stmts(&mut body, hoisted_ids);
+        rewrite_catch_returns_to_iter_result(&mut body);
+        out.push(Stmt::If {
+            condition: finally_route_condition(route, state_id),
+            then_branch: body,
+            else_branch: None,
+        });
+    }
+    out
+}
+
+fn finally_route_condition(route: &FinallyRoute, state_id: LocalId) -> Expr {
+    Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(Expr::Compare {
+            op: CompareOp::Gt,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.protected_start_state as f64)),
+        }),
+        right: Box::new(Expr::Compare {
+            op: CompareOp::Le,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.post_finally_state as f64)),
+        }),
+    }
 }
 
 fn build_async_throw_body_direct(
