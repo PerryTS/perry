@@ -38,8 +38,8 @@ use super::{
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    lower_index_set_fast, lower_js_args_array, lower_math_operand, lower_object_literal,
+    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
@@ -49,11 +49,11 @@ use super::{
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::MathFround(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "js_math_fround", &[(DOUBLE, &v)]))
         }
         Expr::MathF16round(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_math_f16round", &[(DOUBLE, &v)]))
@@ -563,7 +563,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.cbrt --------
         Expr::MathCbrt(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "js_math_cbrt", &[(DOUBLE, &v)]))
         }
 
@@ -824,13 +824,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(double_literal(0.0));
             }
             if values.len() == 1 {
-                let v = lower_expr(ctx, &values[0])?;
+                let v = lower_math_operand(ctx, &values[0])?;
                 // Math.hypot(x) = |x|
                 return Ok(ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &v)]));
             }
-            let mut acc = lower_expr(ctx, &values[0])?;
+            let mut acc = lower_math_operand(ctx, &values[0])?;
             for v in &values[1..] {
-                let rhs = lower_expr(ctx, v)?;
+                let rhs = lower_math_operand(ctx, v)?;
                 let blk = ctx.block();
                 acc = blk.call(DOUBLE, "js_math_hypot", &[(DOUBLE, &acc), (DOUBLE, &rhs)]);
             }

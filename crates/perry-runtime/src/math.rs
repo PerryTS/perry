@@ -2,6 +2,24 @@
 
 use rand::Rng;
 
+/// Math built-ins apply ECMAScript ToNumber, where Symbol and BigInt throw.
+/// `Number(1n)` is allowed in JavaScript, so this stays separate from the
+/// shared `js_number_coerce` helper used by the Number constructor.
+#[no_mangle]
+pub extern "C" fn js_math_to_number(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    if jsval.is_pointer() {
+        let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if crate::symbol::is_registered_symbol(ptr) {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+        }
+    }
+    crate::builtins::js_number_coerce(value)
+}
+
 /// Math.pow(base, exponent) -> number
 #[no_mangle]
 pub extern "C" fn js_math_pow(base: f64, exp: f64) -> f64 {
@@ -228,7 +246,7 @@ pub extern "C" fn js_math_min_array(arr_ptr: i64) -> f64 {
     }
     let mut result = f64::INFINITY;
     for i in 0..len {
-        let num = crate::array::js_array_get_f64(arr, i as u32);
+        let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
             return f64::NAN;
         }
@@ -252,7 +270,7 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
     }
     let mut result = f64::NEG_INFINITY;
     for i in 0..len {
-        let num = crate::array::js_array_get_f64(arr, i as u32);
+        let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
             return f64::NAN;
         }
