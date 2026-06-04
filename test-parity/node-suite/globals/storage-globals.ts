@@ -42,6 +42,19 @@ globalDesc("Storage desc", "Storage");
 globalDesc("localStorage desc", "localStorage");
 globalDesc("sessionStorage desc", "sessionStorage");
 
+const localStorageDesc: any = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const sessionStorageDesc: any = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+const lengthDesc: any = Object.getOwnPropertyDescriptor(Storage.prototype, "length");
+show(
+  "storage getter identity",
+  [
+    localStorageDesc.get.call(g) === localStorage,
+    sessionStorageDesc.get.call(g) === sessionStorage,
+  ].join("/"),
+);
+show("length getter session", lengthDesc.get.call(sessionStorage));
+showError("length getter proto", () => lengthDesc.get.call(Storage.prototype));
+
 for (const name of ["clear", "getItem", "key", "removeItem", "setItem"]) {
   const fn = (Storage.prototype as any)[name];
   const desc: any = Object.getOwnPropertyDescriptor(Storage.prototype, name);
