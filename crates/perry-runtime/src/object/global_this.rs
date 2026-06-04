@@ -1514,11 +1514,12 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
     }
-    install_proto_method(
+    install_proto_method_with_receiver_brand(
         proto_obj,
         "values",
         global_this_builtin_noop_thunk as *const u8,
         0,
+        "TypedArray",
     );
     unsafe {
         let values_key = crate::string::js_string_from_bytes(b"values".as_ptr(), 6);
@@ -3479,6 +3480,45 @@ fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u3
     }
 }
 
+fn record_proto_method_receiver_brand(value: f64, brand: &'static str) {
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsv.is_pointer() {
+        return;
+    }
+    let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if raw != 0 {
+        super::native_module::set_builtin_closure_receiver_brand(raw, brand);
+    }
+}
+
+fn install_proto_method_with_receiver_brand(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+    brand: &'static str,
+) -> f64 {
+    let value = install_proto_method(proto_obj, method_name, func_ptr, arity);
+    record_proto_method_receiver_brand(value, brand);
+    value
+}
+
+fn install_noop_proto_methods_with_receiver_brand(
+    proto_obj: *mut ObjectHeader,
+    methods: &[(&str, u32)],
+    brand: &'static str,
+) {
+    for (name, arity) in methods.iter().copied() {
+        install_proto_method_with_receiver_brand(
+            proto_obj,
+            name,
+            global_this_builtin_noop_thunk as *const u8,
+            arity,
+            brand,
+        );
+    }
+}
+
 extern "C" fn url_pattern_test_thunk(
     _closure: *const crate::closure::ClosureHeader,
     input: f64,
@@ -4116,7 +4156,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
         | "BigInt64Array" | "BigUint64Array" => {
-            install_noop_proto_methods(
+            install_noop_proto_methods_with_receiver_brand(
                 proto_obj,
                 &[
                     ("at", 1),
@@ -4151,6 +4191,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("values", 0),
                     ("with", 2),
                 ],
+                "TypedArray",
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }

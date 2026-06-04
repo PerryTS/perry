@@ -4597,6 +4597,12 @@ thread_local! {
     /// the spec count. #3143.
     static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<std::collections::HashMap<usize, u32>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Internal receiver brand for noop-backed builtin prototype methods.
+    /// This lets reflective calls distinguish same-named methods such as
+    /// `Array.prototype.map` and `Uint8Array.prototype.map`.
+    static BUILTIN_CLOSURE_RECEIVER_BRAND: std::cell::RefCell<std::collections::HashMap<usize, &'static str>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// Record the spec `.length` for a built-in prototype-method closure. See
@@ -4611,6 +4617,16 @@ pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
 /// closure, or `None` if this closure isn't one. See [`BUILTIN_CLOSURE_LENGTH`].
 pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
     BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
+}
+
+pub(crate) fn set_builtin_closure_receiver_brand(closure: usize, brand: &'static str) {
+    BUILTIN_CLOSURE_RECEIVER_BRAND.with(|m| {
+        m.borrow_mut().insert(closure, brand);
+    });
+}
+
+pub(crate) fn builtin_closure_receiver_brand(closure: usize) -> Option<&'static str> {
+    BUILTIN_CLOSURE_RECEIVER_BRAND.with(|m| m.borrow().get(&closure).copied())
 }
 
 /// Whitelist of (module, property) pairs for which property-read should

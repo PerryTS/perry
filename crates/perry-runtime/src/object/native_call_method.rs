@@ -380,6 +380,31 @@ pub(crate) fn throw_object_to_locale_string_nullish_receiver() -> ! {
     throw_type_error_message(b"Object.prototype.toLocaleString called on null or undefined")
 }
 
+#[inline]
+fn raw_receiver_addr(value: f64) -> Option<usize> {
+    let bits = value.to_bits();
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_pointer() {
+        return Some((bits & crate::value::POINTER_MASK) as usize);
+    }
+    if bits >> 48 == 0 && bits > 0x10000 {
+        return Some(bits as usize);
+    }
+    None
+}
+
+fn is_typed_array_or_uint8array_receiver(value: f64) -> bool {
+    let Some(raw) = raw_receiver_addr(value) else {
+        return false;
+    };
+    crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::buffer::is_registered_buffer(raw)
+}
+
+fn throw_typed_array_incompatible_receiver() -> ! {
+    throw_type_error_message(b"Method %TypedArray%.prototype called on incompatible receiver")
+}
+
 fn throw_object_to_string_not_function() -> ! {
     crate::error::js_throw_type_error_not_a_function(
         std::ptr::null(),
@@ -829,6 +854,13 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     let name_hdr = crate::builtins::js_string_coerce(name_val);
     let name = super::has_own_helpers::str_from_string_header(name_hdr)?;
     let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    if matches!(
+        super::native_module::builtin_closure_receiver_brand(closure as usize),
+        Some("TypedArray")
+    ) && !is_typed_array_or_uint8array_receiver(receiver)
+    {
+        throw_typed_array_incompatible_receiver();
+    }
     Some(js_native_call_method(
         receiver,
         name.as_ptr() as *const i8,
