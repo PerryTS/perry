@@ -183,6 +183,40 @@ fn module_with_exported_value_alias_colliding_with_local_value_getter() -> Modul
     module
 }
 
+fn module_with_reserved_word_export_aliases() -> Module {
+    let mut module = module_with_duplicate_local_function_names();
+    module.name = "regexes.ts".to_string();
+    module.functions = Vec::new();
+    module.init = vec![
+        Stmt::Let {
+            id: 10,
+            name: "_null".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Number(1.0)),
+        },
+        Stmt::Let {
+            id: 11,
+            name: "_undefined".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Number(2.0)),
+        },
+    ];
+    module.exported_objects = vec!["_null".to_string(), "_undefined".to_string()];
+    module.exports = vec![
+        Export::Named {
+            local: "_null".to_string(),
+            exported: "null".to_string(),
+        },
+        Export::Named {
+            local: "_undefined".to_string(),
+            exported: "undefined".to_string(),
+        },
+    ];
+    module
+}
+
 fn module_with_native_namespace_reexport() -> Module {
     let mut module = module_with_duplicate_local_function_names();
     module.name = "NodeSocket.ts".to_string();
@@ -319,6 +353,37 @@ fn exported_value_alias_does_not_clobber_local_value_getter_symbol() {
             .count(),
         1
     );
+}
+
+#[test]
+fn renamed_value_export_emits_local_namespace_getter_alias() {
+    let ir = String::from_utf8(
+        compile_module(&module_with_reserved_word_export_aliases(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ir.matches("define double @perry_fn_regexes_ts__null()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ir.matches("define double @perry_fn_regexes_ts___null()")
+            .count(),
+        1
+    );
+    assert!(!ir.contains("declare double @perry_fn_regexes_ts___null()"));
+    assert_eq!(
+        ir.matches("define double @perry_fn_regexes_ts__undefined()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ir.matches("define double @perry_fn_regexes_ts___undefined()")
+            .count(),
+        1
+    );
+    assert!(!ir.contains("declare double @perry_fn_regexes_ts___undefined()"));
 }
 
 #[test]

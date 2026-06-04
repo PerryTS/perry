@@ -867,6 +867,40 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 }
             }
         }
+
+        // Issue #1018: namespace materialization can legitimately ask
+        // for the local side of a renamed value export. Zod's
+        // `regexes.ts` has:
+        //
+        //   const _null = /^null$/i;
+        //   export { _null as null };
+        //
+        // The public getter is emitted as `perry_fn_<src>__null`, but
+        // namespace-origin metadata preserves `_null` as the defining
+        // local and the namespace populator calls
+        // `perry_fn_<src>___null`. Emit a reverse zero-arg alias when
+        // the public getter exists and the local getter does not.
+        for export in &hir.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            if local == exported {
+                continue;
+            }
+            let local_getter = format!("perry_fn_{}__{}", module_prefix, sanitize(local));
+            let public_getter = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+            if llmod.has_function(&local_getter)
+                || !llmod.has_function(&public_getter)
+                || !emitted_aliases.insert(local_getter.clone())
+            {
+                continue;
+            }
+            let g = llmod.define_function(&local_getter, DOUBLE, vec![]);
+            let _ = g.create_block("entry");
+            let b = g.block_mut(0).unwrap();
+            let v = b.call(DOUBLE, &public_getter, &[]);
+            b.ret(DOUBLE, &v);
+        }
     }
 
     // Namespace re-exports and barrel-forwarded functions are value exports
