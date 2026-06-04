@@ -2,6 +2,20 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1117 — fix(release-gate): unblock package publishing (IteratorFrom panic, Math no_mangle, decouple extended suites)
+
+The release pipeline had shipped **no binary/npm/brew assets since v0.5.1025** (~90 versions): every tag created a GitHub release object but `release-packages.yml`'s `await-tests` gate failed because the tag-gated **Tests** workflow stayed red on its aspirational extended jobs. Core jobs (`cargo-test`, `lint`, `api-docs-drift`, `compiler-output-regression`) passed throughout.
+
+Two real, deterministic bugs that kept `compile-smoke` red:
+
+- **codegen panic** — `Iterator.from(x)` (#2874) lowers to `Expr::IteratorFrom`, which `expr/mod.rs` routes to `instance_misc1::lower`, but that submodule never implemented the arm — so it hit the catch-all `unreachable!("expr/mod.rs dispatched a variant not handled by this submodule")` and crashed the compiler on `test_gap_iterator_helpers_2874`. Added the arm: lower to the existing `js_iterator_from` runtime helper (`f64 -> f64`, NaN-boxed in/out). (The lazy helper methods `.map`/`.filter`/`.toArray`/… returning `undefined` at runtime remains a separate #2874 functional gap; `compile-smoke` is compile-only.)
+- **link error** — `js_throw_math_constructor_type_error` (`crates/perry-runtime/src/error.rs`) was missing `#[no_mangle]` (every sibling `js_throw_*_constructor_type_error` has it), so the symbol was Rust-mangled and the codegen-emitted C call failed to link with `Undefined symbols: _js_throw_math_constructor_type_error` on the default auto-optimize path (`test_gap_language_types_object_part_a`).
+
+CI / release gating:
+
+- Added the four `perry/ui`-importing smoke tests (`test_ui_on_keydown_smoke`, `test_issue_1495_image_systemname`, `test_issue_1867_audio_playback`, `test_issue_2022_canvas_draw_image`) to the `compile-smoke` `SKIP_TESTS` list — they need `--target macos` to link platform widgets and fail with ld undefined-symbol errors on the bare Linux compile path (`ci-env`, consistent with the existing `test_ui_*` skips).
+- **Decoupled package publish from the aspirational extended suites.** Marked `parity`, `compile-smoke`, `doc-tests`, and `drizzle-mysql-smoke` as `continue-on-error: true` at the job level so a red result no longer fails the Tests workflow run conclusion — which is what `await-tests` keys on. Publishing now gates on the CORE jobs that actually pass (+ Simulator Tests); the extended suites still run on every tag and surface their pass/fail as an informational signal. This is a deliberate maintainer decision over chasing full extended-suite green, which is partly CI-environment-bound (parity runs node 22 on Linux; doc-tests fails only on the macos-14 runner's older objc2/Xcode toolchain — it builds clean locally).
+
 ## v0.5.1116 — fix(events): node:events module-level static helpers dispatch (events.once/on/listenerCount/...)
 
 `events.once(emitter, name)` and the other `node:events` module-level static
