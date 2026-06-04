@@ -236,13 +236,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // minute?, second?, ms?)` in local time. dayjs's parseDate
                 // takes this branch with regex-captured string args — see
                 // js_date_new_local_components for the coercion path.
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let mut vals: Vec<String> = Vec::with_capacity(7);
                 for a in args.iter().take(7) {
                     vals.push(lower_expr(ctx, a)?);
                 }
+                // Pad *absent* trailing components with their ECMA-262 default
+                // literal (slot 2 `day` → 1, time slots 3-6 → 0) rather than
+                // `undefined`, so the runtime can run a plain ToNumber on every
+                // forwarded slot: a *present* `undefined` then coerces to NaN
+                // (Invalid Date), while a truly-omitted arg uses its default.
+                // Slots: 0 year, 1 month, 2 day, 3 hour, 4 min, 5 sec, 6 ms.
                 while vals.len() < 7 {
-                    vals.push(undef.clone());
+                    let default = if vals.len() == 2 { 1.0 } else { 0.0 };
+                    vals.push(double_literal(default));
                 }
                 let blk = ctx.block();
                 let call_args: Vec<(crate::types::LlvmType, &str)> =

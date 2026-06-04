@@ -69,6 +69,81 @@ date_getter_thunk!(
     crate::date::js_date_get_timezone_offset
 );
 
+/// `Date.prototype.toISOString` reflective thunk. The instance fast path
+/// (`d.toISOString()`) is lowered by codegen straight to
+/// `js_date_to_iso_string_or_throw`, but the value form
+/// (`Date.prototype.toISOString.call(x)`) reaches here: brand-check `this`
+/// (TypeError on a non-Date receiver), then format-or-throw (RangeError when
+/// the time value is `NaN`).
+extern "C" fn date_to_iso_string(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    if !crate::date::is_date_value(this) {
+        super::object_ops::throw_object_type_error(b"this is not a Date object.");
+    }
+    let s = crate::date::js_date_to_iso_string_or_throw(this);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+/// `Date.prototype.toJSON` reflective thunk. Unlike the getters this is a
+/// *generic* method — it is not brand-checked to Date. Per ECMA-262
+/// (`thisTimeValue` is NOT used): `ToObject(this)`, then `ToPrimitive(this,
+/// number)`; if that primitive is a Number and not finite, return `null`;
+/// otherwise return `Invoke(this, "toISOString")`. So it works for a real Date
+/// (Invalid → `null`), a plain object carrying its own `toISOString`, and a
+/// `Number(-Infinity)` wrapper (→ `null`).
+extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let jsv = crate::value::JSValue::from_bits(this.to_bits());
+    // ToObject(this): null / undefined throw a TypeError.
+    if jsv.is_undefined() || jsv.is_null() {
+        super::object_ops::throw_object_type_error(b"Cannot convert undefined or null to object");
+    }
+    // ToPrimitive(this, hint Number).
+    let tv = if crate::date::is_date_value(this) {
+        crate::date::date_cell_timestamp(this)
+    } else {
+        match unsafe { crate::value::ordinary_to_primitive_number_for_add(this) } {
+            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
+            // A plain object's default `"[object Object]"` is a String, never a
+            // Number, so step 3 (non-finite Number → null) never fires; fall
+            // through to the `toISOString` invocation.
+            crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            }
+            crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+                super::object_ops::throw_object_type_error(
+                    b"Cannot convert object to primitive value",
+                )
+            }
+        }
+    };
+    // Step 3: if the primitive is a Number and is not finite, return null.
+    let tv_jsv = crate::value::JSValue::from_bits(tv.to_bits());
+    let as_num = if tv_jsv.is_int32() {
+        Some(((tv.to_bits() & 0xFFFF_FFFF) as u32 as i32) as f64)
+    } else if tv_jsv.is_number() {
+        Some(tv)
+    } else {
+        None
+    };
+    if let Some(n) = as_num {
+        if !n.is_finite() {
+            return f64::from_bits(crate::value::TAG_NULL);
+        }
+    }
+    // Step 4: Invoke(this, "toISOString").
+    let name = b"toISOString";
+    unsafe {
+        crate::object::js_native_call_method(
+            this,
+            name.as_ptr() as *const i8,
+            name.len(),
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
 /// Legacy `Date.prototype.getYear` — `getFullYear() - 1900` (NaN-preserving).
 extern "C" fn date_get_year(_closure: *const crate::closure::ClosureHeader) -> f64 {
     let fy = crate::date::js_date_get_full_year(require_date_timestamp());
@@ -111,6 +186,16 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
     for (name, ptr) in methods.iter().copied() {
         super::global_this::install_proto_method(proto_obj, name, ptr, 0);
     }
+    // String-returning / generic methods that also need real reflective thunks
+    // (overwriting their no-op entries). `toJSON` is generic (`.length === 1`),
+    // `toISOString` brand-checks `this` (`.length === 0`).
+    super::global_this::install_proto_method(
+        proto_obj,
+        "toISOString",
+        date_to_iso_string as *const u8,
+        0,
+    );
+    super::global_this::install_proto_method(proto_obj, "toJSON", date_to_json as *const u8, 1);
 }
 
 // --- Setters ---------------------------------------------------------------
