@@ -162,6 +162,8 @@ dataview_get_thunk!(dv_get_int32, "Int32");
 dataview_get_thunk!(dv_get_uint32, "Uint32");
 dataview_get_thunk!(dv_get_float32, "Float32");
 dataview_get_thunk!(dv_get_float64, "Float64");
+dataview_get_thunk!(dv_get_bigint64, "BigInt64");
+dataview_get_thunk!(dv_get_biguint64, "BigUint64");
 
 dataview_set_thunk!(dv_set_int8, "Int8");
 dataview_set_thunk!(dv_set_uint8, "Uint8");
@@ -171,6 +173,8 @@ dataview_set_thunk!(dv_set_int32, "Int32");
 dataview_set_thunk!(dv_set_uint32, "Uint32");
 dataview_set_thunk!(dv_set_float32, "Float32");
 dataview_set_thunk!(dv_set_float64, "Float64");
+dataview_set_thunk!(dv_set_bigint64, "BigInt64");
+dataview_set_thunk!(dv_set_biguint64, "BigUint64");
 
 /// Install the `DataView.prototype` accessors + numeric methods. Called from
 /// `global_this::populate_builtin_prototype_methods`'s `"DataView"` arm.
@@ -217,6 +221,8 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
         ("getUint32", dv_get_uint32 as *const u8),
         ("getFloat32", dv_get_float32 as *const u8),
         ("getFloat64", dv_get_float64 as *const u8),
+        ("getBigInt64", dv_get_bigint64 as *const u8),
+        ("getBigUint64", dv_get_biguint64 as *const u8),
     ];
     for (name, ptr) in gets.iter().copied() {
         install_proto_method_rest_with_length(proto_obj, name, ptr, 1, 1);
@@ -233,6 +239,8 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
         ("setUint32", dv_set_uint32 as *const u8),
         ("setFloat32", dv_set_float32 as *const u8),
         ("setFloat64", dv_set_float64 as *const u8),
+        ("setBigInt64", dv_set_bigint64 as *const u8),
+        ("setBigUint64", dv_set_biguint64 as *const u8),
     ];
     for (name, ptr) in sets.iter().copied() {
         // `install_proto_method_rest` registers spec_length == call_fixed_arity.

@@ -28,6 +28,8 @@ pub enum DataViewKind {
     Uint32,
     Float32,
     Float64,
+    BigInt64,
+    BigUint64,
 }
 
 impl DataViewKind {
@@ -37,8 +39,15 @@ impl DataViewKind {
             DataViewKind::Int8 | DataViewKind::Uint8 => 1,
             DataViewKind::Int16 | DataViewKind::Uint16 => 2,
             DataViewKind::Int32 | DataViewKind::Uint32 | DataViewKind::Float32 => 4,
-            DataViewKind::Float64 => 8,
+            DataViewKind::Float64 | DataViewKind::BigInt64 | DataViewKind::BigUint64 => 8,
         }
+    }
+
+    /// Is this a BigInt-valued accessor (`getBigInt64`/`setBigUint64`/…)? Those
+    /// read/write a NaN-boxed BigInt rather than a Number.
+    #[inline]
+    fn is_bigint(self) -> bool {
+        matches!(self, DataViewKind::BigInt64 | DataViewKind::BigUint64)
     }
 
     /// Map a `get*`/`set*` method name (without the `get`/`set` prefix) to a
@@ -53,6 +62,8 @@ impl DataViewKind {
             "Uint32" => DataViewKind::Uint32,
             "Float32" => DataViewKind::Float32,
             "Float64" => DataViewKind::Float64,
+            "BigInt64" => DataViewKind::BigInt64,
+            "BigUint64" => DataViewKind::BigUint64,
             _ => return None,
         })
     }
@@ -177,6 +188,24 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
                     f64::from_be_bytes(b)
                 }
             }
+            DataViewKind::BigInt64 => {
+                let b = read_bytes::<8>(buf, offset);
+                let v = if little {
+                    i64::from_le_bytes(b)
+                } else {
+                    i64::from_be_bytes(b)
+                };
+                crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(v) as i64)
+            }
+            DataViewKind::BigUint64 => {
+                let b = read_bytes::<8>(buf, offset);
+                let v = if little {
+                    u64::from_le_bytes(b)
+                } else {
+                    u64::from_be_bytes(b)
+                };
+                crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(v) as i64)
+            }
         }
     }
 }
@@ -193,9 +222,23 @@ pub fn js_data_view_set(
 ) -> f64 {
     let buf = unbox_buffer_ptr(buf_f64.to_bits()) as *mut BufferHeader;
     let offset = to_byte_offset(offset_value);
+    if kind.is_bigint() {
+        // SetViewValue for a BigInt accessor: `ToBigInt(value)` (a Number throws
+        // `TypeError`) runs before the bounds check, then the raw 8 bytes are
+        // stored with the requested endianness (both kinds share the bit layout).
+        let raw = to_bigint_raw_or_throw(value);
+        let b = if little {
+            raw.to_le_bytes()
+        } else {
+            raw.to_be_bytes()
+        };
+        unsafe { write_bytes(buf, offset, &b) };
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     let n = to_number(value);
     unsafe {
         match kind {
+            DataViewKind::BigInt64 | DataViewKind::BigUint64 => unreachable!(),
             DataViewKind::Int8 | DataViewKind::Uint8 => {
                 // ToUint8 / ToInt8 wrap to the same byte; store identically.
                 let byte = wrap_to_u64(n, 8) as u8;
@@ -254,4 +297,55 @@ fn wrap_to_u64(n: f64, bits: u32) -> u64 {
     let modulus = 1i128 << bits;
     let reduced = (truncated as i128).rem_euclid(modulus);
     reduced as u64
+}
+
+/// `ToBigInt(value)` for a `setBigInt64`/`setBigUint64` write, returning the
+/// BigInt's low 64 bits (the only ones an 8-byte slot holds; both signed and
+/// unsigned share the bit layout). Per the ECMAScript `ToBigInt` operation, a
+/// Number (incl. a NaN-boxed int32), `undefined`, `null`, and Symbols are NOT
+/// convertible and throw a `TypeError`; BigInt passes through, Boolean and
+/// String coerce.
+fn to_bigint_raw_or_throw(value: f64) -> u64 {
+    use crate::value::JSValue;
+    let jsval = JSValue::from_bits(value.to_bits());
+    let bi: *const crate::bigint::BigIntHeader = if jsval.is_bigint() {
+        jsval.as_bigint_ptr() as *const crate::bigint::BigIntHeader
+    } else if jsval.is_bool() {
+        crate::bigint::js_bigint_from_i64(if jsval.as_bool() { 1 } else { 0 })
+    } else if jsval.is_any_string() {
+        // StringToBigInt (a malformed numeric string throws SyntaxError).
+        crate::bigint::js_bigint_from_f64(value)
+    } else {
+        throw_bigint_conversion_type_error(value);
+    };
+    let bi = crate::bigint::clean_bigint_ptr(bi);
+    if bi.is_null() {
+        return 0;
+    }
+    unsafe { (*bi).limbs[0] }
+}
+
+/// Throw `TypeError: Cannot convert <x> to a BigInt`, matching Node's
+/// `ToBigInt` rejection text for a DataView BigInt setter.
+#[cold]
+fn throw_bigint_conversion_type_error(value: f64) -> ! {
+    use crate::value::JSValue;
+    let jsval = JSValue::from_bits(value.to_bits());
+    let label = if jsval.is_undefined() {
+        "undefined".to_string()
+    } else if jsval.is_null() {
+        "null".to_string()
+    } else if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        "a Symbol value".to_string()
+    } else if jsval.is_int32() {
+        jsval.as_int32().to_string()
+    } else {
+        format!("{value}")
+    };
+    let msg = format!("Cannot convert {label} to a BigInt");
+    let err = crate::error::js_typeerror_new(crate::string::js_string_from_bytes(
+        msg.as_ptr(),
+        msg.len() as u32,
+    ));
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }

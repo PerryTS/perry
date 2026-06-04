@@ -182,6 +182,13 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "setUint32"
             | "setFloat32"
             | "setFloat64"
+            // #4365: DataView BigInt64/BigUint64 accessors (8-byte BigInt
+            // read/write). Route through `dispatch_buffer_method` like the
+            // other DataView numeric methods.
+            | "getBigInt64"
+            | "getBigUint64"
+            | "setBigInt64"
+            | "setBigUint64"
     )
 }
 
