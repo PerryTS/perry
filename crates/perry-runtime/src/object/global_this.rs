@@ -3204,7 +3204,7 @@ extern "C" fn subtle_crypto_decapsulate_key_thunk(
 /// `{ writable: true, enumerable: false, configurable: true }` data property
 /// (matching Node's descriptors for built-in statics). `has_rest` registers
 /// the func pointer as a rest-arg closure so trailing args arrive as an array.
-fn install_constructor_static(
+pub(super) fn install_constructor_static(
     ctor: *mut crate::closure::ClosureHeader,
     name: &str,
     func_ptr: *const u8,
@@ -3346,6 +3346,12 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "Date" => {
+            // `Date.now` / `Date.parse` / `Date.UTC` as real own data props
+            // (thunks live in `date_proto_thunks`). The functional calls are
+            // codegen intrinsics, so this only affects value reads + reflection.
+            date_proto_thunks::install_date_constructor_statics(ctor);
         }
         "Number" => {
             install_constructor_static(ctor, "isNaN", number_is_nan_thunk as *const u8, 1, false);

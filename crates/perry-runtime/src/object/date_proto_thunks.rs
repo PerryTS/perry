@@ -144,6 +144,63 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
     }
 }
 
+// --- Date constructor static methods (Date.now / Date.parse / Date.UTC) ---
+//
+// The functional call forms are codegen intrinsics (`Expr::DateNow` /
+// `DateParse` / `DateUtc`), recognized at HIR lowering before any property
+// lookup, so these closures never intercept `Date.now()` etc. They exist only
+// so the statics are real own properties of the `Date` constructor — readable
+// as values (`const f = Date.UTC; f(...)`) and observable through reflection
+// (`Date.UTC.name === "UTC"`, `Date.UTC.length === 7`,
+// `getOwnPropertyDescriptor(Date, "UTC")`).
+
+/// `Date.now()` — current time in milliseconds.
+extern "C" fn date_now_static(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::date::js_date_now()
+}
+
+/// `Date.parse(string)` — ToString the argument, then parse to a ms timestamp.
+extern "C" fn date_parse_static(_closure: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+    let s = crate::value::js_jsvalue_to_string(arg);
+    crate::date::js_date_parse(s as *const crate::string::StringHeader)
+}
+
+/// `Date.UTC(year, month?, day?, …)` — variadic; forwards to `js_date_utc`.
+extern "C" fn date_utc_static(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let vals = super::global_this::global_this_rest_array_values(rest);
+    crate::date::js_date_utc(vals.as_ptr(), vals.len() as i32)
+}
+
+/// Install `now` / `parse` / `UTC` as own data properties on the `Date`
+/// constructor closure. Called from `install_builtin_constructor_statics`.
+pub(crate) fn install_date_constructor_statics(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    // (name, fn-ptr, spec `.length`, has_rest)
+    super::global_this::install_constructor_static(
+        ctor,
+        "now",
+        date_now_static as *const u8,
+        0,
+        false,
+    );
+    super::global_this::install_constructor_static(
+        ctor,
+        "parse",
+        date_parse_static as *const u8,
+        1,
+        false,
+    );
+    super::global_this::install_constructor_static(
+        ctor,
+        "UTC",
+        date_utc_static as *const u8,
+        7,
+        true,
+    );
+}
+
 /// Legacy `Date.prototype.getYear` — `getFullYear() - 1900` (NaN-preserving).
 extern "C" fn date_get_year(_closure: *const crate::closure::ClosureHeader) -> f64 {
     let fy = crate::date::js_date_get_full_year(require_date_timestamp());
