@@ -382,6 +382,14 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_socket_address_get_family",            OwnerKind::WellKnown("net")),
     ("js_net_socket_address_get_port",              OwnerKind::WellKnown("net")),
     ("js_net_socket_address_get_flowlabel",         OwnerKind::WellKnown("net")),
+    // #2013 — net validation rows whose runtime helpers live only in
+    // `perry-ext-net`. These calls can be emitted by native-table lowering,
+    // so they must independently flip the net well-known provider.
+    ("js_net_get_default_auto_select_family",       OwnerKind::WellKnown("net")),
+    ("js_net_set_default_auto_select_family",       OwnerKind::WellKnown("net")),
+    ("js_net_get_default_auto_select_family_attempt_timeout", OwnerKind::WellKnown("net")),
+    ("js_net_set_default_auto_select_family_attempt_timeout", OwnerKind::WellKnown("net")),
+    ("js_net_socket_set_timeout",                   OwnerKind::WellKnown("net")),
     // #1852 — chainable no-op option setters for Socket/Server.
     ("js_net_socket_noop_self",                     OwnerKind::WellKnown("net")),
     ("js_net_socket_get_type_of_service",           OwnerKind::WellKnown("net")),
@@ -602,6 +610,28 @@ mod tests {
                 _ => OwnerKind::WellKnown("http"),
             };
             assert_symbol_routes_to(symbol, owner);
+        }
+    }
+
+    /// #2013 regression: net validation fixtures emit provider-only
+    /// `perry-ext-net` symbols through native-table lowering. Each one must
+    /// route to the net well-known archive so `PERRY_NO_AUTO_OPTIMIZE=1`
+    /// compiles the fixtures instead of linking unresolved `js_net_*` calls.
+    #[test]
+    fn emitted_net_validation_external_symbols_route_to_net() {
+        let _guard = PROVIDER_TEST_LOCK
+            .lock()
+            .expect("provider test lock poisoned");
+        for symbol in [
+            "js_net_create_server",
+            "js_net_server_listen",
+            "js_net_get_default_auto_select_family",
+            "js_net_set_default_auto_select_family",
+            "js_net_get_default_auto_select_family_attempt_timeout",
+            "js_net_set_default_auto_select_family_attempt_timeout",
+            "js_net_socket_set_timeout",
+        ] {
+            assert_symbol_routes_to(symbol, OwnerKind::WellKnown("net"));
         }
     }
 }
