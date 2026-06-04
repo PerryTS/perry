@@ -2,6 +2,16 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1120 — fix(release): unblock the publish build matrix (gtk4 + android cross-host UI crates)
+
+v0.5.1117 fixed the `await-tests` gate (publishing resumed after ~90 dark versions) but `release-packages` still concluded failure and skipped npm/brew/apt/winget — a second, separate breakage in the **cross-host UI crates**, which `cargo-test` excludes (so no PR CI catches them):
+
+- **perry-ui-gtk4** (`widgets/canvas.rs`) called `gtk4::gdk::cairo::set_source_pixbuf(cr, …)`, but in gdk4 0.9 `set_source_pixbuf` is the `GdkCairoContextExt` trait method on the cairo `Context` (`fn set_source_pixbuf(&self, pixbuf, x, y)`), in scope via `gtk4::prelude::*`. Changed to `cr.set_source_pixbuf(&scaled, *dx, *dy)`. This broke the **linux-gnu** primary build (the gtk4 lib is bundled into the Linux tarball), which — with the build matrix lacking `fail-fast: false` — cancelled the macOS/Windows/linux-arm builds and skipped every publish leg (they `needs: build`).
+- **perry-runtime** `fs/mod.rs` bound `_path_str_for_log` but the `#[cfg(target_os = "android")]` debug-log block referenced `path_str_for_log` (no underscore) — a name mismatch only the android cross-build compiled. Fixed the reference.
+- **release-packages.yml**: added `fail-fast: false` to the primary `build` matrix (mirrors `build-cross`) so one platform's failure no longer cancels the rest — partial publish beats no publish.
+
+Note: the gtk4/android crates can't be compiled on the macOS dev host (no GTK/NDK toolchain); fixes were validated against the cached `gdk4-0.9.6` trait signature and the exact name mismatch. Follow-up worth filing: cross-host UI crates have no PR CI coverage, so they rot silently between releases.
+
 ## v0.5.1119 — feat(runtime): implement DataView getBigInt64/setBigInt64/getBigUint64/setBigUint64 (#4365)
 
 `DataView.prototype.getBigInt64`/`setBigInt64`/`getBigUint64`/`setBigUint64` were unimplemented — `DataViewKind::from_method_suffix` didn't recognize the `"BigInt64"`/`"BigUint64"` suffixes, so the method names never routed to the DataView dispatch: reads returned `undefined` and setters silently no-op'd.

@@ -212,7 +212,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
             extern "C" {
                 fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
             }
-            let c_path = std::ffi::CString::new(path_str_for_log).unwrap_or_default();
+            let c_path = std::ffi::CString::new(_path_str_for_log).unwrap_or_default();
             __android_log_print(
                 3,
                 b"PerryFS\0".as_ptr(),

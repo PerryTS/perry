@@ -300,7 +300,10 @@ pub fn create(width: f64, height: f64) -> i64 {
                                     )
                                     .unwrap_or(src);
                                 cr.save().ok();
-                                gtk4::gdk::cairo::set_source_pixbuf(cr, &scaled, *dx, *dy);
+                                // gdk4's `GdkCairoContextExt::set_source_pixbuf` (in scope via
+                                // `gtk4::prelude::*`) — a method on the cairo Context, not a free
+                                // function under `gtk4::gdk::cairo`.
+                                cr.set_source_pixbuf(&scaled, *dx, *dy);
                                 cr.paint().ok();
                                 cr.restore().ok();
                             }

@@ -138,6 +138,10 @@ jobs:
   build:
     needs: await-tests
     strategy:
+      # Don't let one platform's build failure cancel the others (mirrors
+      # build-cross). A broken cross-host target should not strand the
+      # binaries that did build — partial publish beats no publish.
+      fail-fast: false
       matrix:
         include:
           - os: macos-14
