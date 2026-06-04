@@ -74,6 +74,17 @@ impl AtomicView {
         bigint_integer_kind(self.kind())
     }
 
+    fn has_shared_backing(&self) -> bool {
+        match self {
+            AtomicView::TypedArray { ptr, .. } => {
+                crate::typedarray::typed_array_has_shared_backing(*ptr)
+            }
+            AtomicView::Uint8ArrayBuffer(ptr) => {
+                crate::buffer::is_shared_array_buffer(*ptr as usize)
+            }
+        }
+    }
+
     fn length(&self) -> i32 {
         match self {
             AtomicView::TypedArray { ptr, .. } => js_typed_array_length(*ptr),
@@ -159,6 +170,24 @@ fn atomics_int32_view_arg(value: f64) -> AtomicView {
         };
     }
     throw_type_error(b"Atomics wait/notify requires an Int32Array");
+}
+
+fn atomics_wait_notify_view_arg(value: f64) -> AtomicView {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        throw_type_error(b"Atomics wait/notify requires an Int32Array or BigInt64Array");
+    }
+    let raw = clean_ta_ptr(js.as_pointer::<TypedArrayHeader>()) as usize;
+    if raw == 0 {
+        throw_type_error(b"Atomics wait/notify requires an Int32Array or BigInt64Array");
+    }
+    match lookup_typed_array_kind(raw) {
+        Some(kind @ (KIND_INT32 | KIND_BIGINT64)) => AtomicView::TypedArray {
+            ptr: raw as *mut TypedArrayHeader,
+            kind,
+        },
+        _ => throw_type_error(b"Atomics wait/notify requires an Int32Array or BigInt64Array"),
+    }
 }
 
 fn atomics_to_index(index: f64, length: i32) -> i32 {
@@ -375,6 +404,12 @@ fn int32_slot(view: f64, index: f64) -> (AtomicView, i32) {
     (view, idx)
 }
 
+fn wait_notify_slot(view: f64, index: f64) -> (AtomicView, i32) {
+    let view = atomics_wait_notify_view_arg(view);
+    let idx = atomics_to_index(index, view.length());
+    (view, idx)
+}
+
 fn wait_async_result(async_value: bool, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = crate::object::js_object_alloc(0, 2);
@@ -581,8 +616,11 @@ pub extern "C" fn js_atomics_notify(
     index: f64,
     count: f64,
 ) -> f64 {
-    let (_view, _idx) = int32_slot(view, index);
+    let (view, _idx) = wait_notify_slot(view, index);
     let _ = numeric_arg(count);
+    if !view.has_shared_backing() {
+        return 0.0;
+    }
     0.0
 }
 
@@ -594,10 +632,20 @@ pub extern "C" fn js_atomics_wait(
     expected: f64,
     timeout: f64,
 ) -> f64 {
-    let (view, idx) = int32_slot(view, index);
-    let expected = coerce_for_kind(KIND_INT32, expected);
-    if view.get_numeric(idx) != expected {
-        return string_value(b"not-equal");
+    let (view, idx) = wait_notify_slot(view, index);
+    if !view.has_shared_backing() {
+        throw_type_error(b"Atomics.wait requires a shared typed array");
+    }
+    if view.kind() == KIND_BIGINT64 {
+        let expected = bigint_bits(expected);
+        if view.get_bigint_bits(idx) != expected {
+            return string_value(b"not-equal");
+        }
+    } else {
+        let expected = coerce_for_kind(KIND_INT32, expected);
+        if view.get_numeric(idx) != expected {
+            return string_value(b"not-equal");
+        }
     }
 
     let _ = number_arg(timeout);
