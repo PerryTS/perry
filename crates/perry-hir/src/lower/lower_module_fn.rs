@@ -298,6 +298,31 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
     )
 }
 
+/// #4461: true when a `var/let/const X = class { ... }` declarator binds an
+/// identifier to a class *expression* (unwrapping `paren`/`as`/`!`/type-
+/// assertion layers that esbuild/rollup dist bundles emit). Such bindings are
+/// lowered to a class named after the binding in `stmt.rs`, so they must not be
+/// pre-registered as module-level locals (which would shadow the class ref).
+fn decl_init_is_class_expr(decl: &ast::VarDeclarator) -> bool {
+    if !matches!(decl.name, ast::Pat::Ident(_)) {
+        return false;
+    }
+    let mut e = match &decl.init {
+        Some(init) => init.as_ref(),
+        None => return false,
+    };
+    loop {
+        match e {
+            ast::Expr::Paren(p) => e = &p.expr,
+            ast::Expr::TsAs(a) => e = &a.expr,
+            ast::Expr::TsNonNull(n) => e = &n.expr,
+            ast::Expr::TsTypeAssertion(a) => e = &a.expr,
+            ast::Expr::Class(_) => return true,
+            _ => return false,
+        }
+    }
+}
+
 /// Issue #668: superset of the `_seed_and_entry` wrapper that also accepts
 /// `is_external_module`. Callers in `crates/perry/src/commands/compile/`
 /// pass `true` when the source file lives under any `node_modules/` segment
@@ -461,6 +486,18 @@ pub fn lower_module_full(
         };
         if let Some(var_decl) = var_decl {
             for decl in &var_decl.decls {
+                // #4461: `var X = class { ... }` is lowered as a class
+                // expression bound to the name `X` (see stmt.rs) — the class
+                // itself takes the role of the value referenced by name, and
+                // no `Stmt::Let` is ever emitted for `X`. Pre-registering `X`
+                // as a module-level local here would shadow that class with a
+                // never-assigned local, so a value read of `X` (`typeof X`,
+                // `X.staticMethod`, passing `X` around) resolved to the
+                // undefined local instead of the class ref. Skip the local so
+                // `Ident("X")` lowers to `Expr::ClassRef("X")`.
+                if decl_init_is_class_expr(decl) {
+                    continue;
+                }
                 if let ast::Pat::Ident(ident) = &decl.name {
                     let name = ident.id.sym.to_string();
                     if ctx.lookup_local(&name).is_none() {
