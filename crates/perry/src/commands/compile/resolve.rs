@@ -689,10 +689,7 @@ pub(super) fn declaration_sidecar_for_resolved_import(
         return canonical_existing_declaration(resolved_path.to_path_buf());
     }
 
-    if !(import_source.starts_with("./")
-        || import_source.starts_with("../")
-        || import_source.starts_with('/'))
-    {
+    if !(is_relative_import_spec(import_source) || import_source.starts_with('/')) {
         let (package_name, subpath) = parse_package_specifier(import_source);
         if let Some(package_dir) = package_dir_for_resolved_path(resolved_path, &package_name) {
             if let Some(sidecar) = resolve_package_declaration_entry(
@@ -706,6 +703,13 @@ pub(super) fn declaration_sidecar_for_resolved_import(
     }
 
     declaration_sidecar_for_implementation(resolved_path)
+}
+
+fn is_relative_import_spec(import_source: &str) -> bool {
+    import_source == "."
+        || import_source == ".."
+        || import_source.starts_with("./")
+        || import_source.starts_with("../")
 }
 
 /// Determine if a file is a JavaScript file (not TypeScript)
@@ -739,7 +743,7 @@ pub(super) fn resolve_relative_import_path(
     import_source: &str,
     importer_path: &Path,
 ) -> Option<PathBuf> {
-    if !import_source.starts_with("./") && !import_source.starts_with("../") {
+    if !is_relative_import_spec(import_source) {
         return None;
     }
     let parent = importer_path.parent()?;
@@ -768,8 +772,8 @@ pub(super) fn resolve_import(
         return None; // Native modules are handled by stdlib, not file imports
     }
 
-    // Handle relative imports (./ or ../)
-    if import_source.starts_with("./") || import_source.starts_with("../") {
+    // Handle relative imports (`.`, `..`, `./...`, or `../...`).
+    if is_relative_import_spec(import_source) {
         if let Some(canonical) = resolve_relative_import_path(import_source, importer_path) {
             // Refs #486: a relative `import './foo.js'` from inside a compile
             // package must classify as NativeCompiled even when the resolved
