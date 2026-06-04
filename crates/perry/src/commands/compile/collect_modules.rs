@@ -27,7 +27,7 @@ use super::{
     cached_resolve_import, declaration_sidecar_for_resolved_import, extract_compile_package_dir,
     has_perry_native_library, is_declaration_file, is_in_compile_package,
     is_in_perry_native_package, is_js_file, parse_cached, parse_native_library_manifest,
-    parse_package_specifier, CompilationContext, JsModule, ParseCache,
+    parse_package_specifier, CompilationContext, JsModule, JsRuntimeImportEdge, ParseCache,
 };
 
 mod crypto_ns;
@@ -953,6 +953,7 @@ fn collect_module_one(
             collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
             ..Default::default()
         });
+        let requested_source = import.source.clone();
 
         // Apply package alias (e.g., @parse/node-apn → perry-push from perry.packageAliases)
         if let Some(alias) = ctx.package_aliases.get(import.source.as_str()).cloned() {
@@ -1329,6 +1330,17 @@ fn collect_module_one(
                         OutputFormat::Json => {}
                     }
 
+                    if !ctx.js_runtime_import_edges.iter().any(|edge| {
+                        edge.importer == canonical
+                            && edge.specifier == requested_source
+                            && edge.resolved_path == resolved_path
+                    }) {
+                        ctx.js_runtime_import_edges.push(JsRuntimeImportEdge {
+                            importer: canonical.clone(),
+                            specifier: requested_source.clone(),
+                            resolved_path: resolved_path.clone(),
+                        });
+                    }
                     pending.push(resolved_path);
                 }
                 ModuleKind::NativeRust => {

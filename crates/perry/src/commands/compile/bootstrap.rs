@@ -254,7 +254,25 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
             .get(path)
             .map(|p| format!(" (declarations: {})", p.display()))
             .unwrap_or_default();
-        detail.push_str(&format!("\n  - {}{}{}", path.display(), pkg, declaration));
+        let edge = ctx
+            .js_runtime_import_edges
+            .iter()
+            .find(|edge| &edge.resolved_path == path)
+            .map(|edge| {
+                format!(
+                    "\n      imported by {} via `{}`",
+                    edge.importer.display(),
+                    edge.specifier
+                )
+            })
+            .unwrap_or_default();
+        detail.push_str(&format!(
+            "\n  - {}{}{}{}",
+            path.display(),
+            pkg,
+            declaration,
+            edge
+        ));
     }
     if importers.len() > limit {
         detail.push_str(&format!("\n  ... and {} more", importers.len() - limit));
@@ -315,6 +333,7 @@ mod js_runtime_gate_tests {
     use std::path::PathBuf;
 
     use super::{enforce_js_runtime_gate, CompilationContext};
+    use crate::commands::compile::JsRuntimeImportEdge;
 
     #[test]
     fn diagnostic_suggests_missing_compile_package_on_windows_paths() {
@@ -364,6 +383,25 @@ mod js_runtime_gate_tests {
         assert!(message.contains(&format!("declarations: {}", declaration.display())));
         assert!(message.contains("Declaration hint:"));
         assert!(message.contains("typed-js"));
+    }
+
+    #[test]
+    fn diagnostic_mentions_native_import_edge_for_runtime_js_module() {
+        let mut ctx = CompilationContext::new(PathBuf::from("/repo"));
+        let implementation = PathBuf::from("/repo/node_modules/untrusted/index.js");
+        let importer = PathBuf::from("/repo/src/local.ts");
+        ctx.js_runtime_importers.push(implementation.clone());
+        ctx.js_runtime_import_edges.push(JsRuntimeImportEdge {
+            importer: importer.clone(),
+            specifier: "untrusted".to_string(),
+            resolved_path: implementation,
+        });
+
+        let message = enforce_js_runtime_gate(&ctx)
+            .expect_err("runtime JS importer must fail the V8-free gate")
+            .to_string();
+
+        assert!(message.contains(&format!("imported by {} via `untrusted`", importer.display())));
     }
 }
 

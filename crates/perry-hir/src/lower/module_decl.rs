@@ -117,8 +117,18 @@ pub(crate) fn lower_module_decl(
             // so the check keys off `NODE_BUILTIN_MODULES` — the real Node
             // surface — not `is_known_module`.) `is_native` keeps any
             // node:-prefixed NATIVE_MODULES entry resolvable.
+            let whole_decl_type_only = import_decl.type_only;
+            let runtime_type_only = whole_decl_type_only
+                || (!import_decl.specifiers.is_empty()
+                    && import_decl.specifiers.iter().all(|spec| match spec {
+                        ast::ImportSpecifier::Named(named) => named.is_type_only,
+                        ast::ImportSpecifier::Default(_) | ast::ImportSpecifier::Namespace(_) => {
+                            whole_decl_type_only
+                        }
+                    }));
+
             if raw_source.starts_with("node:")
-                && !import_decl.type_only
+                && !runtime_type_only
                 && !is_node_builtin_module(&source)
                 && !is_native
             {
@@ -145,10 +155,9 @@ pub(crate) fn lower_module_decl(
             // method registry — `obj.method()` worked only via the
             // CLASS_VTABLE_REGISTRY runtime fallback (#392 followup) and
             // `typeof obj.method` returned `"undefined"`. Issue #446.
-            if import_decl.type_only && is_native {
+            if whole_decl_type_only && is_native {
                 return Ok(());
             }
-            let whole_decl_type_only = import_decl.type_only;
 
             // Parse import specifiers
             let mut specifiers = Vec::new();
@@ -436,7 +445,7 @@ pub(crate) fn lower_module_decl(
                 is_native,
                 module_kind,
                 resolved_path: None, // Will be set by compiler driver during module resolution
-                type_only: whole_decl_type_only,
+                type_only: runtime_type_only,
                 is_dynamic: false,
                 is_dynamic_target: false,
             });

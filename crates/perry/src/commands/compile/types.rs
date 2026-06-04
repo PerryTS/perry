@@ -542,6 +542,12 @@ pub struct CompilationContext {
     /// name (for `node_modules/<pkg>/...` files) is derived at
     /// diagnostic-emission time. Empty until `collect_modules` runs.
     pub js_runtime_importers: Vec<PathBuf>,
+    /// Native/importing source edge that first routed a module to runtime
+    /// JavaScript. This is a diagnostic companion to `js_runtime_importers`:
+    /// the latter remains the de-duplicated implementation file list used
+    /// for package/declaration hints, while this records where the edge came
+    /// from when collection reached the JS file from a native module.
+    pub js_runtime_import_edges: Vec<JsRuntimeImportEdge>,
     /// #501: host-controlled per-package capability policy. Map of
     /// `<package_name>` (or `"*"` for the default) → allowed
     /// capability token list (e.g. `["fs:read", "net:fetch"]`).
@@ -670,6 +676,13 @@ pub enum DefineValue {
     Null,
 }
 
+#[derive(Debug, Clone)]
+pub struct JsRuntimeImportEdge {
+    pub importer: PathBuf,
+    pub specifier: String,
+    pub resolved_path: PathBuf,
+}
+
 impl std::fmt::Debug for CompilationContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompilationContext")
@@ -720,6 +733,7 @@ impl CompilationContext {
             refuse_dynamic_stdlib_dispatch: true,
             allow_dynamic_stdlib_packages: HashSet::new(),
             js_runtime_importers: Vec::new(),
+            js_runtime_import_edges: Vec::new(),
             permissions: std::collections::BTreeMap::new(),
             host_package_name: None,
             allow_unsandboxed_build: Vec::new(),
