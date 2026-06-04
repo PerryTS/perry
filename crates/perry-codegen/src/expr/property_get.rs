@@ -34,8 +34,8 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::property_get_names::{
-    is_headers_method_name, is_http_client_request_method_name, is_net_native_method_value,
-    is_url_pattern_data_property,
+    is_builtin_prototype_method_value, is_date_prototype_method_name, is_headers_method_name,
+    is_http_client_request_method_name, is_net_native_method_value, is_url_pattern_data_property,
 };
 #[allow(unused_imports)]
 use super::{
@@ -100,16 +100,27 @@ fn lower_class_method_bind(
     ))
 }
 
-fn is_primitive_builtin_proto_method(builtin_name: &str, method_name: &str) -> bool {
-    match builtin_name {
-        "Number" => matches!(
-            method_name,
-            "toExponential" | "toFixed" | "toLocaleString" | "toPrecision" | "toString" | "valueOf"
-        ),
-        "Boolean" | "Symbol" => matches!(method_name, "toString" | "valueOf"),
-        "BigInt" => matches!(method_name, "toString" | "valueOf"),
-        _ => false,
-    }
+fn lower_builtin_prototype_method_value(
+    ctx: &mut FnCtx<'_>,
+    builtin_name: &str,
+    method_name: &str,
+) -> String {
+    let builtin_idx = ctx.strings.intern(builtin_name);
+    let builtin_bytes_global = format!("@{}", ctx.strings.entry(builtin_idx).bytes_global);
+    let builtin_len = builtin_name.len().to_string();
+    let method_idx = ctx.strings.intern(method_name);
+    let method_bytes_global = format!("@{}", ctx.strings.entry(method_idx).bytes_global);
+    let method_len = method_name.len().to_string();
+    ctx.block().call(
+        DOUBLE,
+        "js_builtin_prototype_method_value",
+        &[
+            (PTR, &builtin_bytes_global),
+            (I64, &builtin_len),
+            (PTR, &method_bytes_global),
+            (I64, &method_len),
+        ],
+    )
 }
 
 fn builtin_prototype_method_read<'a>(
@@ -136,7 +147,7 @@ fn builtin_prototype_method_read<'a>(
     if !matches!(global_object.as_ref(), Expr::GlobalGet(_)) {
         return None;
     }
-    is_primitive_builtin_proto_method(builtin_name, property)
+    is_builtin_prototype_method_value(builtin_name, property)
         .then_some((builtin_name.as_str(), property))
 }
 
@@ -454,24 +465,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some((builtin_name, method_name)) =
                 builtin_prototype_method_read(object, property)
             {
-                let builtin_idx = ctx.strings.intern(builtin_name);
-                let builtin_bytes_global =
-                    format!("@{}", ctx.strings.entry(builtin_idx).bytes_global);
-                let builtin_len = builtin_name.len().to_string();
-                let method_idx = ctx.strings.intern(method_name);
-                let method_bytes_global =
-                    format!("@{}", ctx.strings.entry(method_idx).bytes_global);
-                let method_len = method_name.len().to_string();
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_builtin_prototype_method_value",
-                    &[
-                        (PTR, &builtin_bytes_global),
-                        (I64, &builtin_len),
-                        (PTR, &method_bytes_global),
-                        (I64, &method_len),
-                    ],
+                return Ok(lower_builtin_prototype_method_value(
+                    ctx,
+                    builtin_name,
+                    method_name,
                 ));
+            }
+            if is_date_prototype_method_name(property)
+                && (matches!(object.as_ref(), Expr::DateNew(_))
+                    || matches!(receiver_class_name(ctx, object).as_deref(), Some("Date")))
+            {
+                return Ok(lower_builtin_prototype_method_value(ctx, "Date", property));
             }
             // date-fns `constructFrom(date, value)` reads `date.constructor`
             // to clone Dates without naming Date directly. Perry stores

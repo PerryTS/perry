@@ -464,10 +464,9 @@ unsafe fn bind_closure_value_to_receiver(value: JSValue, receiver: f64) -> JSVal
     JSValue::from_bits(crate::closure::clone_closure_rebind_this(bits, receiver))
 }
 
-unsafe fn primitive_builtin_prototype_property(
+unsafe fn builtin_prototype_property_value(
     builtin_name: &[u8],
     key: *const crate::StringHeader,
-    receiver: f64,
 ) -> Option<JSValue> {
     if key.is_null() {
         return None;
@@ -491,7 +490,30 @@ unsafe fn primitive_builtin_prototype_property(
     if value.is_undefined() {
         return None;
     }
+    Some(value)
+}
+
+unsafe fn primitive_builtin_prototype_property(
+    builtin_name: &[u8],
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    let value = builtin_prototype_property_value(builtin_name, key)?;
     Some(bind_closure_value_to_receiver(value, receiver))
+}
+
+unsafe fn date_cell_property_value(key: *const crate::StringHeader) -> Option<JSValue> {
+    if key.is_null() {
+        return None;
+    }
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+    if key_bytes == b"constructor" {
+        let v = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+        return Some(JSValue::from_bits(v.to_bits()));
+    }
+    builtin_prototype_property_value(b"Date", key)
 }
 
 unsafe fn string_index_value(str_value: f64, key: *const crate::StringHeader) -> Option<JSValue> {
@@ -2219,8 +2241,9 @@ pub extern "C" fn js_object_get_field_by_name(
     // read as a value) must NOT fall through to the object-deref path below —
     // the cell is far smaller than an `ObjectHeader`, so reading its
     // `keys_array`/field slots would deref unmapped memory. Resolve the few
-    // meaningful reads here and return `undefined` for everything else
-    // (matching property reads on the old value-type Date). `obj` may arrive
+    // meaningful reads here and return `undefined` for everything else.
+    // Prototype method reads are resolved from `Date.prototype` so `d.getTime`
+    // has the same identity as `Date.prototype.getTime`. `obj` may arrive
     // NaN-boxed (top16 == 0x7FFD) or as a raw-I64 pointer (top16 == 0).
     {
         let bits = obj as u64;
@@ -2235,13 +2258,8 @@ pub extern "C" fn js_object_get_field_by_name(
         if addr != 0 && crate::date::is_date_cell_addr(addr) {
             if !key.is_null() {
                 unsafe {
-                    let key_ptr =
-                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    let key_len = (*key).byte_len as usize;
-                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                    if key_bytes == b"constructor" {
-                        let v = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-                        return JSValue::from_bits(v.to_bits());
+                    if let Some(v) = date_cell_property_value(key) {
+                        return v;
                     }
                 }
             }
@@ -4391,6 +4409,14 @@ pub extern "C" fn js_object_get_field_ic_miss(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if (obj as usize) < 0x10000 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if crate::date::is_date_cell_addr(obj as usize) {
+        unsafe {
+            if let Some(value) = date_cell_property_value(key) {
+                return f64::from_bits(value.bits());
+            }
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     // When accessors are active anywhere in the program, skip the cache

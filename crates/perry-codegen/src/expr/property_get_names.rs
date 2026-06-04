@@ -114,6 +114,70 @@ pub(super) fn is_net_native_method_value(class_name: &str, name: &str) -> bool {
     }
 }
 
+pub(super) fn is_date_prototype_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "getTime"
+            | "valueOf"
+            | "getFullYear"
+            | "getMonth"
+            | "getDate"
+            | "getHours"
+            | "getMinutes"
+            | "getSeconds"
+            | "getMilliseconds"
+            | "getDay"
+            | "getUTCFullYear"
+            | "getUTCMonth"
+            | "getUTCDate"
+            | "getUTCHours"
+            | "getUTCMinutes"
+            | "getUTCSeconds"
+            | "getUTCMilliseconds"
+            | "getUTCDay"
+            | "getTimezoneOffset"
+            | "getYear"
+            | "setTime"
+            | "setFullYear"
+            | "setMonth"
+            | "setDate"
+            | "setHours"
+            | "setMinutes"
+            | "setSeconds"
+            | "setMilliseconds"
+            | "setYear"
+            | "setUTCFullYear"
+            | "setUTCMonth"
+            | "setUTCDate"
+            | "setUTCHours"
+            | "setUTCMinutes"
+            | "setUTCSeconds"
+            | "setUTCMilliseconds"
+            | "toDateString"
+            | "toISOString"
+            | "toJSON"
+            | "toLocaleDateString"
+            | "toLocaleString"
+            | "toLocaleTimeString"
+            | "toString"
+            | "toTimeString"
+            | "toUTCString"
+    )
+}
+
+pub(super) fn is_builtin_prototype_method_value(builtin_name: &str, method_name: &str) -> bool {
+    match builtin_name {
+        "Number" => matches!(
+            method_name,
+            "toExponential" | "toFixed" | "toLocaleString" | "toPrecision" | "toString" | "valueOf"
+        ),
+        "Boolean" | "Symbol" => matches!(method_name, "toString" | "valueOf"),
+        "BigInt" => matches!(method_name, "toString" | "valueOf"),
+        "Date" => is_date_prototype_method_name(method_name),
+        _ => false,
+    }
+}
+
 pub(super) fn is_url_pattern_data_property(name: &str) -> bool {
     matches!(
         name,
