@@ -2700,8 +2700,18 @@ pub extern "C" fn js_object_get_field_by_name(
                 if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
                     return JSValue::undefined();
                 }
+                // ECMAScript "poison pill": reading `caller` / `arguments` off a
+                // strict-mode function throws a TypeError (the %ThrowTypeError%
+                // accessor on `Function.prototype`). Perry has no sloppy mode —
+                // all TS/JS it compiles is strict — so this applies to every
+                // function (declarations, expressions, methods, classes, arrows,
+                // bound and built-in closures), matching `node`'s strict-mode
+                // behavior. A `delete fn.caller` (handled above) still wins, and a
+                // genuine own data prop of that name takes precedence so the rare
+                // `Object.defineProperty(fn, "caller", …)` round-trips.
                 if matches!(name_str, "caller" | "arguments")
-                    && crate::closure::closure_is_arrow(obj as *const crate::closure::ClosureHeader)
+                    && crate::closure::closure_get_dynamic_prop(obj as usize, name_str).to_bits()
+                        == crate::value::TAG_UNDEFINED
                 {
                     crate::fs::validate::throw_type_error_with_code(
                         "Restricted function property access",
@@ -3016,10 +3026,15 @@ pub extern "C" fn js_object_get_field_by_name(
                     if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
                         return JSValue::undefined();
                     }
+                    // ECMAScript "poison pill" — see the matching arm in
+                    // `js_object_get_field_by_name`. Reading `caller`/`arguments`
+                    // off any strict-mode function throws a TypeError; Perry has
+                    // no sloppy mode, so this covers every function. A genuine own
+                    // data prop of that name still wins.
                     if matches!(name_str, "caller" | "arguments")
-                        && crate::closure::closure_is_arrow(
-                            obj as *const crate::closure::ClosureHeader,
-                        )
+                        && crate::closure::closure_get_dynamic_prop(obj as usize, name_str)
+                            .to_bits()
+                            == crate::value::TAG_UNDEFINED
                     {
                         crate::fs::validate::throw_type_error_with_code(
                             "Restricted function property access",
