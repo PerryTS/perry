@@ -1415,6 +1415,7 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
         Expr::Bool(_) => Some(Type::Boolean),
         Expr::BigInt(_) | Expr::BigIntCoerce(_) => Some(Type::BigInt),
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
+        Expr::NetCreateServer { .. } => Some(Type::Named("Server".to_string())),
         // `const ta = new Int32Array(n)` — refine to Named("Int32Array") so
         // that `.length` and method dispatch use the typed-array fast paths.
         Expr::TypedArrayNew { kind, .. } => {
@@ -1432,6 +1433,9 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
                 _ => return None,
             };
             Some(Type::Named(name.to_string()))
+        }
+        e if crate::type_analysis_net::net_result_class(e).is_some() => {
+            crate::type_analysis_net::net_result_class(e).map(|name| Type::Named(name.to_string()))
         }
         Expr::NativeMethodCall {
             module,

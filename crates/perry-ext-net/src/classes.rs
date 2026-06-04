@@ -213,6 +213,7 @@ fn string_from_js_value(value: JsValue) -> Option<String> {
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_new() -> i64 {
     crate::ensure_gc_scanner_registered();
+    crate::dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     block_lists()
         .lock()
@@ -330,6 +331,7 @@ pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) ->
 }
 
 fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
+    crate::dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     socket_addresses().lock().unwrap().insert(
         id,
