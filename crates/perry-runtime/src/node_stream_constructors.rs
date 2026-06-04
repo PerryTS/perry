@@ -1718,6 +1718,21 @@ fn fallback_node_writable_to_web(node_stream: f64) -> f64 {
     ])
 }
 
+pub(crate) fn js_node_stream_readable_to_web_method_value(node_stream: f64) -> f64 {
+    fallback_node_readable_to_web(node_stream)
+}
+
+pub(crate) fn js_node_stream_writable_to_web_method_value(node_stream: f64) -> f64 {
+    fallback_node_writable_to_web(node_stream)
+}
+
+pub(crate) fn js_node_stream_duplex_to_web_method_value(node_stream: f64) -> f64 {
+    web_pair_object(
+        fallback_node_readable_to_web(node_stream),
+        fallback_node_writable_to_web(node_stream),
+    )
+}
+
 fn web_pair_object(readable: f64, writable: f64) -> f64 {
     build_enumerable_object(&[(b"readable", readable), (b"writable", writable)])
 }
