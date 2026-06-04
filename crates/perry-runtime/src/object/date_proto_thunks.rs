@@ -140,16 +140,31 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
         let s = crate::date::js_date_to_iso_string_or_throw(this);
         return crate::value::js_nanbox_string(s as i64);
     }
-    let name = b"toISOString";
-    unsafe {
-        crate::object::js_native_call_method(
-            this,
-            name.as_ptr() as *const i8,
-            name.len(),
-            std::ptr::null(),
-            0,
-        )
+    // Other receivers: a full `Invoke(O, "toISOString")` where
+    // `O = ToObject(this)`. `ToObject` boxes primitives (so
+    // `Date.prototype.toJSON.call(10)` reaches `Number.prototype.toISOString`),
+    // the property read fires accessor getters and walks the prototype chain
+    // (`{ get toISOString() {…} }`), and a non-callable result throws
+    // `TypeError` from `Call`. `js_native_call_method` does none of these — it
+    // only dispatches builtin/native methods — so it is not used here.
+    let o = crate::object::js_object_coerce(this);
+    let key = {
+        let k = crate::string::js_string_from_bytes(b"toISOString".as_ptr(), 11);
+        f64::from_bits(crate::value::js_nanbox_string(k as i64).to_bits())
+    };
+    let func = crate::proxy::js_reflect_get(o, key, o);
+    let closure = crate::value::js_nanbox_get_pointer(func) as *const crate::closure::ClosureHeader;
+    if crate::collection_iter::is_callable(func)
+        && !crate::closure::get_valid_func_ptr(closure).is_null()
+    {
+        // `Call(func, O, «»)` — toJSON's `key` argument is intentionally not
+        // forwarded (Invoke passes an empty argument list).
+        let prev = crate::object::js_implicit_this_set(o);
+        let r = crate::closure::js_closure_call0(closure);
+        crate::object::js_implicit_this_set(prev);
+        return r;
     }
+    super::object_ops::throw_object_type_error(b"toISOString is not a function")
 }
 
 // --- Date constructor static methods (Date.now / Date.parse / Date.UTC) ---
