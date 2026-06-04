@@ -1,0 +1,2 @@
+runPromise=effect:42
+runSync=sync:ok

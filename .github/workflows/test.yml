@@ -1033,6 +1033,58 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # effect-basic-smoke: runs the tier-3 release fixture
+  # `tests/release/packages/effect-basic/` as the CI counterpart to #802.
+  #
+  # This is intentionally advisory: #802 asks for a live Effect compile/run
+  # signal even while broader Effect end-to-end compatibility remains in
+  # progress. Gated to tag pushes + opt-in, matching the named package smokes.
+  # ---------------------------------------------------------------------------
+  effect-basic-smoke:
+    continue-on-error: true
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build perry compiler
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+
+      - name: Run Effect fixture
+        run: |
+          cd tests/release/packages/effect-basic
+          PERRY_EFFECT_BASIC_ADVISORY=1 PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
+
+      - name: Upload Effect fixture logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: effect-basic-smoke-logs
+          path: |
+            tests/release/packages/effect-basic/install.log
+            tests/release/packages/effect-basic/perry-compile.log
+            tests/release/packages/effect-basic/perry-run.log
+            tests/release/packages/effect-basic/perry-out.txt
+            tests/release/packages/effect-basic/diff.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # Doc-example tests: compile + run every .ts under docs/examples/.
   # UI examples launch with PERRY_UI_TEST_MODE=1 so they auto-exit after one
   # frame. Gallery screenshots are diffed against per-OS baselines (advisory
