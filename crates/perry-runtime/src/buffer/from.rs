@@ -706,7 +706,15 @@ fn dataview_to_index(value: f64, what: &str) -> i64 {
     if jv.is_undefined() {
         return 0;
     }
-    let n = jv.to_number();
+    // ToIndex → ToNumber: a BigInt throws a TypeError (ToNumber rejects it), and
+    // `js_number_coerce` is the full ToNumber — it throws a TypeError on a Symbol
+    // and runs an object's `valueOf`/`toString`. The bare `JSValue::to_number()`
+    // previously produced `NaN`→0 for those, so `new DataView(buf, Symbol())`
+    // didn't throw and a `valueOf` never ran.
+    if jv.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    let n = crate::builtins::js_number_coerce(value);
     if n.is_nan() {
         // ToIntegerOrInfinity(NaN) = 0.
         return 0;

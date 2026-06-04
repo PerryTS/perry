@@ -1,0 +1,83 @@
+name: TypeScript Feature Matrix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/feature-matrix.yml"
+      - "scripts/gen_feature_matrix.py"
+      - "test-features/**"
+      - "crates/perry/**"
+      - "crates/perry-codegen/**"
+      - "crates/perry-hir/**"
+      - "crates/perry-runtime/**"
+      - "crates/perry-stdlib/**"
+  workflow_dispatch:
+  schedule:
+    # Advisory language-feature drift signal. It is not a required gate.
+    - cron: "43 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feature-matrix-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  feature-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry-feature-matrix"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+
+      - name: Build Perry release binary
+        run: cargo build --release -p perry-runtime -p perry
+
+      - name: Check feature matrix
+        run: |
+          set -euo pipefail
+          mkdir -p .feature-matrix
+          python3 scripts/gen_feature_matrix.py \
+            --check \
+            --node-bin node \
+            --perry-bin "$GITHUB_WORKSPACE/target/release/perry" \
+            --report .feature-matrix/feature_matrix.json \
+            --generated-output .feature-matrix/feature_matrix.md
+
+      - name: Write matrix summary
+        if: always()
+        run: |
+          if [[ -f .feature-matrix/feature_matrix.md ]]; then
+            cat .feature-matrix/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat test-features/feature_matrix.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload feature matrix artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: feature-matrix-${{ github.sha }}
+          path: |
+            .feature-matrix/feature_matrix.json
+            .feature-matrix/feature_matrix.md
+          if-no-files-found: ignore
+          retention-days: 90

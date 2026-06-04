@@ -75,6 +75,36 @@ fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     )
 }
 
+fn is_async_dispose_symbol_index(index: &Expr) -> bool {
+    let Expr::SymbolFor(symbol_name) = index else {
+        return false;
+    };
+    match symbol_name.as_ref() {
+        Expr::String(name) => name == "@@__perry_wk_asyncDispose",
+        Expr::WtfString(name) => name.as_slice() == b"@@__perry_wk_asyncDispose",
+        _ => false,
+    }
+}
+
+fn lower_class_method_bind(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    method_name: &str,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    let key_idx = ctx.strings.intern(method_name);
+    let entry = ctx.strings.entry(key_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let len_str = entry.byte_len.to_string();
+    let blk = ctx.block();
+    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+    Ok(blk.call(
+        DOUBLE,
+        "js_class_method_bind",
+        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
+    ))
+}
+
 fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -396,6 +426,11 @@ fn lower_legacy_array_index_get(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::IndexGet { object, index } => {
+            if receiver_class_name(ctx, object).as_deref() == Some("Server")
+                && is_async_dispose_symbol_index(index)
+            {
+                return lower_class_method_bind(ctx, object, "@@__perry_wk_asyncDispose");
+            }
             // Issue #611: `globalThis[<key>]` reads from the persistent
             // global-this singleton. Pre-fix, `Expr::GlobalGet` lowered
             // to the `0.0` sentinel and the generic IndexGet path called

@@ -125,5 +125,8 @@ pub(crate) unsafe fn replay_class_object_constructor(
         final_args.len(),
         total_params,
         false,
+        // Capture-forwarding constructor args are materialized positionally
+        // above (including any caps), so no trailing rest re-packing here.
+        false,
     );
 }

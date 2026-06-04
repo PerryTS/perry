@@ -17,10 +17,10 @@
 //!    via `perry_hir::stable_hash::hash_module`) instead of the raw
 //!    source-bytes hash, so formatter-only and comment-only edits
 //!    that lower to identical HIR reuse the cached `.o`.
-//! 3. **`ObjectCache`** — the `lookup` / `store` surface used by the
-//!    rayon codegen workers. Atomic (tmp + rename) writes, silent
-//!    IO-error degradation, lock-free shared `&self` access (each
-//!    cache key is per-module so writes never conflict).
+//! 3. **`ObjectCache`** — the `lookup_path` / `lookup` / `store`
+//!    surface used by the rayon codegen workers. Atomic (tmp + rename)
+//!    writes, silent IO-error degradation, lock-free shared `&self`
+//!    access (each cache key is per-module so writes never conflict).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -723,13 +723,14 @@ fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out:
 }
 /// On-disk per-module object cache at `.perry-cache/objects/<target>/<hash:016x>.o`.
 ///
-/// Each rayon codegen worker calls `lookup(key)`; on hit, it skips the LLVM
-/// pipeline and hands the cached bytes to the linker; on miss, it runs
-/// `compile_module` as usual and then calls `store(key, bytes)` to
-/// populate the cache for the next build. Atomic (tmp + rename) writes
-/// and silent IO-error handling mean the cache is strictly an optimization
-/// — any corruption or permission failure degrades gracefully to the
-/// uncached codepath.
+/// Each rayon codegen worker calls `lookup_path(key)`; on hit, it skips the
+/// LLVM pipeline and links the cached object file directly. Older callers may
+/// still call `lookup(key)` to materialize cached bytes. On miss, the worker
+/// runs `compile_module` as usual and then calls `store_and_get_path(key,
+/// bytes)` to populate the cache and link from the same stable cache path
+/// future hits will use. Atomic (tmp + rename) writes and silent IO-error
+/// handling mean the cache is strictly an optimization — any missing or
+/// unreadable entry degrades gracefully to the uncached codepath.
 ///
 /// Shared across rayon workers via `&self` — no locking is needed because
 /// each key corresponds to a distinct file (the key includes this module's
@@ -743,6 +744,8 @@ pub struct ObjectCache {
     misses: AtomicUsize,
     stores: AtomicUsize,
     store_errors: AtomicUsize,
+    path_reuses: AtomicUsize,
+    bytes_materialized: AtomicUsize,
 }
 
 impl ObjectCache {
@@ -769,6 +772,8 @@ impl ObjectCache {
             misses: AtomicUsize::new(0),
             stores: AtomicUsize::new(0),
             store_errors: AtomicUsize::new(0),
+            path_reuses: AtomicUsize::new(0),
+            bytes_materialized: AtomicUsize::new(0),
         }
     }
 
@@ -782,11 +787,14 @@ impl ObjectCache {
 
     /// Look up a cached object by key. Returns `Some(bytes)` on hit,
     /// `None` on miss (cache disabled, file missing, or IO error).
+    #[allow(dead_code)]
     pub fn lookup(&self, key: u64) -> Option<Vec<u8>> {
         let path = self.path_for(key)?;
         match fs::read(&path) {
             Ok(bytes) => {
                 self.hits.fetch_add(1, Ordering::Relaxed);
+                self.bytes_materialized
+                    .fetch_add(bytes.len(), Ordering::Relaxed);
                 Some(bytes)
             }
             Err(_) => {
@@ -796,15 +804,32 @@ impl ObjectCache {
         }
     }
 
-    /// Store the freshly-compiled bytes under `key`. Atomic via tmp +
-    /// rename so a concurrent reader in another process never sees a
-    /// partial file. IO errors are counted but not reported — the cache
-    /// is strictly an optimization.
-    pub fn store(&self, key: u64, bytes: &[u8]) {
-        let path = match self.path_for(key) {
-            Some(p) => p,
-            None => return,
-        };
+    /// Look up a cached object by key and return its on-disk path without
+    /// reading the object bytes into memory. We still open the file once so
+    /// unreadable cache entries fall back to a fresh compile just like
+    /// `lookup` would.
+    pub fn lookup_path(&self, key: u64) -> Option<PathBuf> {
+        let path = self.path_for(key)?;
+        match fs::File::open(&path).and_then(|f| f.metadata()) {
+            Ok(meta) if meta.is_file() => {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                self.path_reuses.fetch_add(1, Ordering::Relaxed);
+                Some(path)
+            }
+            _ => {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Store the freshly-compiled bytes under `key` and return the final
+    /// cache path on success. Atomic via tmp + rename so a concurrent reader
+    /// in another process never sees a partial file. IO errors are counted
+    /// but not reported — the cache is strictly an optimization.
+    pub fn store_and_get_path(&self, key: u64, bytes: &[u8]) -> Option<PathBuf> {
+        let path = self.path_for(key)?;
+
         // Write to a unique tmp path in the same directory, then rename.
         // The tmp name mixes the key with a nanosecond timestamp so two
         // workers racing on the same key don't clobber each other's tmp
@@ -818,13 +843,22 @@ impl ObjectCache {
         match result {
             Ok(()) => {
                 self.stores.fetch_add(1, Ordering::Relaxed);
+                Some(path)
             }
             Err(_) => {
                 // Best-effort cleanup of the tmp file.
                 let _ = fs::remove_file(&tmp_path);
                 self.store_errors.fetch_add(1, Ordering::Relaxed);
+                None
             }
         }
+    }
+
+    /// Store the freshly-compiled bytes under `key`. This compatibility
+    /// wrapper keeps older tests/callers from depending on the returned path.
+    #[allow(dead_code)]
+    pub fn store(&self, key: u64, bytes: &[u8]) {
+        let _ = self.store_and_get_path(key, bytes);
     }
 
     /// Whether the cache is actually writing to disk. `false` when
@@ -848,6 +882,14 @@ impl ObjectCache {
 
     pub fn store_errors(&self) -> usize {
         self.store_errors.load(Ordering::Relaxed)
+    }
+
+    pub fn path_reuses(&self) -> usize {
+        self.path_reuses.load(Ordering::Relaxed)
+    }
+
+    pub fn bytes_materialized(&self) -> usize {
+        self.bytes_materialized.load(Ordering::Relaxed)
     }
 }
 #[cfg(test)]
@@ -1438,6 +1480,24 @@ mod object_cache_tests {
         assert_eq!(got, payload);
         assert_eq!(cache.hits(), 1);
         assert_eq!(cache.misses(), 0);
+        assert_eq!(cache.bytes_materialized(), payload.len());
+        assert_eq!(cache.path_reuses(), 0);
+    }
+
+    #[test]
+    fn store_then_lookup_path_reuses_cached_file_without_materializing_bytes() {
+        let dir = tempdir().unwrap();
+        let cache = ObjectCache::new(dir.path(), "test-target", true);
+        let key = 0xfeedface;
+        cache.store(key, b"object bytes");
+
+        let path = cache.lookup_path(key).expect("must hit by path");
+        assert!(path.is_file(), "missing cached object: {}", path.display());
+        assert_eq!(std::fs::read(path).unwrap(), b"object bytes");
+        assert_eq!(cache.hits(), 1);
+        assert_eq!(cache.misses(), 0);
+        assert_eq!(cache.path_reuses(), 1);
+        assert_eq!(cache.bytes_materialized(), 0);
     }
 
     #[test]
@@ -1445,8 +1505,9 @@ mod object_cache_tests {
         let dir = tempdir().unwrap();
         let cache = ObjectCache::new(dir.path(), "test-target", true);
         assert!(cache.lookup(0x1234).is_none());
+        assert!(cache.lookup_path(0x5678).is_none());
         assert_eq!(cache.hits(), 0);
-        assert_eq!(cache.misses(), 1);
+        assert_eq!(cache.misses(), 2);
     }
 
     #[test]

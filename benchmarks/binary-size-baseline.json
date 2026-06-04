@@ -1,10 +1,10 @@
 {
-  "commit": "f7aaed1a",
-  "generated_at": "2026-05-22T02:22:21Z",
+  "commit": "efd9286b",
+  "generated_at": "2026-06-04T20:47:55Z",
   "sizes": {
-    "perry": 19054064,
-    "libperry_runtime": 42489880,
-    "libperry_stdlib": 225526744
+    "perry": 27385088,
+    "libperry_runtime": 60365288,
+    "libperry_stdlib": 263376488
   },
-  "_note": "Refreshed at v0.5.1021 after the v0.5.455 → v0.5.1021 release cycle (566 patch versions of accumulated runtime + stdlib + CLI work). perry +22.6% / libperry_runtime +34.0% vs the prior 7fd1c8b3 baseline — both above the 15% per-release threshold, which is meant for incremental drift, not multi-release catch-up gates (same pattern as the v0.5.455 refresh from 7fd1c8b3). libperry_stdlib +6.5%, within threshold. Production binaries are stripped by the linker; these .a/.bin sizes are the unstripped release-build artefacts used as a regression-trend signal, not a deployment-size measurement. Sizes captured from `cargo build --release` on the Regression Check macos-14 runner (aarch64-apple-darwin)."
+  "_note": "Refreshed at v0.5.1122 after the v0.5.1021 → v0.5.1122 release cycle. This interval added substantial Node/runtime compatibility surface across child_process, crypto/WebCrypto, fs, streams, DNS, Atomics, Date, TypedArray/DataView, EventEmitter, and native compile/link cache paths. Compared with the v0.5.1021 f7aaed1a baseline: perry +43.7%, libperry_runtime +42.1%, and libperry_stdlib +16.8%. Those deltas are above the 15% per-release threshold, which is meant for incremental drift rather than multi-release catch-up gates. Production binaries are stripped by the linker; these .a/.bin sizes are the unstripped release-build artefacts used as a regression-trend signal, not a deployment-size measurement. Sizes captured from `cargo build --release` on the Regression Check macos-14 runner (aarch64-apple-darwin), release run 26960786294, binary-sizes artifact for commit efd9286bfbb96e20be245bd3c6866cfa3220a2bf."
 }

@@ -137,12 +137,11 @@ pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
 /// `zlib.brotliCompressSync(data)` -> Buffer.
 ///
 /// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(
-    data_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    match read_input_bytes(data_ptr) {
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut StringHeader {
+    js_zlib_validate_buffer_arg(data_bits);
+    match read_input_from_bits(data_bits) {
         Some(d) => alloc_bytes(&brotli_compress_bytes(&d)).as_raw(),
         None => std::ptr::null_mut(),
     }
@@ -151,12 +150,11 @@ pub unsafe extern "C" fn js_zlib_brotli_compress_sync(
 /// `zlib.brotliDecompressSync(data)` -> Buffer.
 ///
 /// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(
-    data_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    match read_input_bytes(data_ptr).map(|d| brotli_decompress_bytes(&d)) {
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut StringHeader {
+    js_zlib_validate_buffer_arg(data_bits);
+    match read_input_from_bits(data_bits).map(|d| brotli_decompress_bytes(&d)) {
         Some(Ok(out)) => alloc_bytes(&out).as_raw(),
         _ => std::ptr::null_mut(),
     }

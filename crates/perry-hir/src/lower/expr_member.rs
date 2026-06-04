@@ -1512,7 +1512,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         property_name
                     };
                     let class_filter =
-                        if matches!(module_name.as_str(), "http" | "https" | "events") {
+                        if matches!(module_name.as_str(), "http" | "https" | "events" | "net") {
                             Some(class_name.clone())
                         } else {
                             None
@@ -1787,6 +1787,25 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                     | "values"
                             )
                         );
+                    // #4437: value reads such as `JSON.stringify` /
+                    // `Reflect.apply` / `BigInt.asIntN` / `Symbol.for` need the
+                    // reified namespace/constructor receiver. Direct calls still
+                    // take the intrinsic path this reroute-undo protects.
+                    let outer_static_member = match &member.prop {
+                        ast::MemberProp::Ident(p) => Some(p.sym.as_ref()),
+                        ast::MemberProp::Computed(c) => match c.expr.as_ref() {
+                            ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
+                            _ => None,
+                        },
+                        ast::MemberProp::PrivateName(_) => None,
+                    };
+                    let outer_is_reified_builtin_static_value = !member_is_call_callee
+                        && matches!(property.as_str(), "JSON" | "Reflect" | "BigInt" | "Symbol")
+                        && outer_static_member
+                            .map(|member| {
+                                crate::analysis::is_builtin_static_function_member(property, member)
+                            })
+                            .unwrap_or(false);
                     // Non-callee `console.log` reads need the namespace
                     // receiver; the property-only GlobalGet path collides
                     // with detached `Math.log`.
@@ -1796,6 +1815,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         && !receiver_is_namespace_value
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
+                        && !outer_is_reified_builtin_static_value
                         && !receiver_is_detached_console_read
                     {
                         object_expr = Expr::GlobalGet(0);

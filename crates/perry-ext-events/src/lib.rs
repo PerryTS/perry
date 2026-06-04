@@ -21,8 +21,8 @@
 
 use perry_ffi::{
     js_array_alloc, js_array_get, js_array_push, js_array_set, nanbox_string_bits, read_string,
-    ArrayHeader, Handle, JsPromise, JsString, JsValue, ObjectHeader, Promise, RawClosureHeader,
-    StringHeader,
+    throw_with_code, ArrayHeader, ErrorKind, Handle, JsPromise, JsString, JsValue, ObjectHeader,
+    Promise, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -31,6 +31,7 @@ use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 const MIN_HEAP_POINTER: u64 = 0x1000;
 const EVENT_TARGET_MIN_HEAP_POINTER: u64 = 0x10000;
 const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
+const ABORT_SIGNAL_CLASS_ID: u32 = 0xFFFF_2402;
 
 // Direct hook into perry-runtime's sync Promise resolve.
 //
@@ -71,7 +72,10 @@ extern "C" {
     fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader;
     // #1557: AbortSignal listener attachment for events.addAbortListener.
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
+    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
     fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+    fn js_symbol_for(key_f64: f64) -> f64;
+    fn js_object_set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64;
     fn js_abort_signal_add_listener(signal: *mut u8, event: f64, listener: f64);
     fn js_event_target_is_event_target(target: *const u8) -> i32;
     fn js_event_target_get_event_listeners(
@@ -488,6 +492,52 @@ fn undefined_value() -> f64 {
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
 }
 
+fn js_bool_to_string(value: JsValue) -> &'static str {
+    if value.to_bool() {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+fn describe_received(value: f64) -> String {
+    let jsval = JsValue::from_bits(value.to_bits());
+    if jsval.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jsval.is_null() {
+        return "null".to_string();
+    }
+    if jsval.is_bool() {
+        return format!("type boolean ({})", js_bool_to_string(jsval));
+    }
+    if jsval.is_number() {
+        return format!("type number ({})", jsval.to_number());
+    }
+    if jsval.is_string() {
+        let text = unsafe { read_string(JsString::from_raw(jsval.as_string_ptr())) };
+        return match text {
+            Some(text) => format!("type string ({text:?})"),
+            None => "type string".to_string(),
+        };
+    }
+    if jsval.is_pointer() {
+        return "an instance of Object".to_string();
+    }
+    "unknown".to_string()
+}
+
+fn invalid_instance_arg_message(name: &str, expected: &str, value: f64) -> String {
+    format!(
+        "The \"{name}\" argument must be an instance of {expected}. Received {}",
+        describe_received(value)
+    )
+}
+
+fn throw_invalid_arg_type(message: &str) -> ! {
+    throw_with_code(message, "ERR_INVALID_ARG_TYPE", ErrorKind::TypeError)
+}
+
 fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     let jsval = JsValue::from_bits(value.to_bits());
     if jsval.is_undefined() || jsval.is_null() || !jsval.is_pointer() {
@@ -499,6 +549,20 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     } else {
         Some(ptr)
     }
+}
+
+unsafe fn is_abort_signal_value(value: f64) -> bool {
+    let Some(ptr) = object_ptr_from_value(value) else {
+        return false;
+    };
+    (*ptr).class_id == ABORT_SIGNAL_CLASS_ID
+}
+
+unsafe fn validate_abort_signal_arg(value: f64, name: &str) -> f64 {
+    if is_abort_signal_value(value) {
+        return value;
+    }
+    throw_invalid_arg_type(&invalid_instance_arg_message(name, "AbortSignal", value))
 }
 
 unsafe fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
@@ -1406,37 +1470,56 @@ pub unsafe extern "C" fn js_events_on(
     queue
 }
 
+extern "C" fn events_abort_listener_dispose(closure: *const RawClosureHeader) -> f64 {
+    unsafe {
+        let signal_ptr = js_closure_get_capture_ptr(closure, 0);
+        let callback_ptr = js_closure_get_capture_ptr(closure, 1);
+        if signal_ptr != 0 && callback_ptr != 0 {
+            js_abort_signal_remove_listener(
+                signal_ptr as *mut u8,
+                abort_event_value(),
+                nanbox_pointer_bits(callback_ptr),
+            );
+        }
+    }
+    undefined_value()
+}
+
 /// `events.addAbortListener(signal, listener)` — attach `listener` to the
-/// AbortSignal's "abort" event and return a `Disposable`-shaped plain object
-/// (currently a function-shaped placeholder — listener removal can be
-/// tightened later). Ported from `perry-stdlib/src/events.rs` (#1557).
+/// AbortSignal's "abort" event and return a `Disposable`-shaped plain object.
 ///
 /// # Safety
 ///
-/// `signal_ptr` must be null or a Perry-runtime `ObjectHeader` (the
-/// AbortSignal instance); `callback_ptr` must be null or a closure pointer.
+/// `signal` and `listener` are NaN-boxed JS values, matching codegen's
+/// module-helper ABI.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64) -> i64 {
-    let Some(signal_ptr) = object_ptr_from_value(signal) else {
-        return 0;
-    };
-    let callback_ptr = handle_from_value(listener);
-    if callback_ptr == 0 {
-        return 0;
-    }
-    let event_name = b"abort";
-    let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
-    let event_val = f64::from_bits(nanbox_string_bits(event_str));
+    let signal = validate_abort_signal_arg(signal, "signal");
+    let signal_ptr = object_ptr_from_value(signal).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "signal",
+            "AbortSignal",
+            signal,
+        ))
+    });
+    let callback_ptr = validate_event_listener(listener.to_bits() as i64);
+
     let listener_val = nanbox_pointer_bits(callback_ptr);
-    js_abort_signal_add_listener(signal_ptr as *mut u8, event_val, listener_val);
-    // Perry currently surfaces the disposable as the listener itself
-    // (matching node's `{ [Symbol.dispose]: () => signal.removeEventListener(...) }`
-    // shape requires symbol-property writes that this crate doesn't expose
-    // yet; perry-stdlib's version uses perry_runtime::symbol helpers). The
-    // returned pointer is callable, so `disposable[Symbol.dispose]?.()` won't
-    // crash — it just won't actually unsubscribe. Tightening this is tracked
-    // in #1557's follow-up bullet.
-    callback_ptr
+    js_abort_signal_add_listener(signal_ptr as *mut u8, abort_event_value(), listener_val);
+
+    let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
+    js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr as i64);
+    js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
+    let dispose_val = nanbox_pointer_bits(dispose_closure as i64);
+
+    let disposable = js_object_alloc(0, 0);
+    let disposable_val = nanbox_pointer_bits(disposable as i64);
+    let dispose_key = b"@@__perry_wk_dispose";
+    let dispose_key_ptr = js_string_from_bytes(dispose_key.as_ptr(), dispose_key.len() as u32);
+    let dispose_key_val = f64::from_bits(nanbox_string_bits(dispose_key_ptr));
+    let dispose_sym_val = js_symbol_for(dispose_key_val);
+    js_object_set_symbol_property(disposable_val, dispose_sym_val, dispose_val);
+    disposable as i64
 }
 
 /// `events.getEventListeners(emitter, eventName)` — alias for

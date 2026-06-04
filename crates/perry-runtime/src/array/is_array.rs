@@ -32,6 +32,9 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     if raw_ptr.is_null() {
         return false_val;
     }
+    if (raw_ptr as usize) < 0x100000 {
+        return false_val;
+    }
 
     // Check the GC header's obj_type. Both regular arrays and lazy
     // arrays (Phase 5 JSON.parse result) are arrays from the user's

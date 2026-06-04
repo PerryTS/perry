@@ -1136,75 +1136,174 @@ jobs:
           name: ${{ matrix.artifact }}
           path: staging/
 
-      - name: Build .deb package
+      - name: Build .deb packages
         run: |
           VERSION="${{ steps.release.outputs.version }}"
           ARCH="${{ matrix.arch }}"
-          PKG="perry_${VERSION}_${ARCH}"
+          umask 022
 
-          mkdir -p "${PKG}/DEBIAN"
-          mkdir -p "${PKG}/usr/bin"
-          mkdir -p "${PKG}/usr/lib/perry"
-
-          cat > "${PKG}/DEBIAN/control" << EOF
-          Package: perry
-          Version: ${VERSION}
-          Section: devel
-          Priority: optional
-          Architecture: ${ARCH}
-          Depends: gcc | clang
-          Maintainer: Perry Team <hello@perryts.com>
-          Homepage: https://github.com/PerryTS/perry
-          Description: Native TypeScript compiler
-           Perry compiles TypeScript source code directly to native
-           executables using Cranelift for code generation.
-          EOF
-          sed -i 's/^          //' "${PKG}/DEBIAN/control"
-
-          cp staging/perry "${PKG}/usr/bin/"
-          chmod 755 "${PKG}/usr/bin/perry"
-
-          for lib in libperry_runtime.a libperry_stdlib.a libperry_ui_gtk4.a; do
-            if [ -f "staging/$lib" ]; then
-              cp "staging/$lib" "${PKG}/usr/lib/perry/"
-              # Strip DWARF debug info but keep the symbol table.
-              # `strip = false` in [profile.release.package.perry-*]
-              # preserves the #[no_mangle] symbols perry-codegen needs
-              # at link time — but it also keeps multi-MB of DWARF that
-              # users don't need. `--strip-debug` removes the debug
-              # sections without touching .text / symbols.
-              #
-              # v0.5.891 fix: amd64 .deb crossed GitHub's 100 MB git
-              # push limit at v0.5.890. Strip drops ~30-50% off each
-              # .a, keeping the .deb under 100 MB so the apt-repo
-              # push doesn't reject.
-              strip --strip-debug "${PKG}/usr/lib/perry/$lib" || true
+          require_staging_file() {
+            local path="staging/$1"
+            if [ ! -f "$path" ]; then
+              echo "Missing required release artifact: $path" >&2
+              exit 1
             fi
-          done
+          }
 
-          # Add library path config so perry can find its libs
-          mkdir -p "${PKG}/etc/perry"
-          echo "/usr/lib/perry" > "${PKG}/etc/perry/lib-path"
+          write_control() {
+            local pkg_dir="$1"
+            local package="$2"
+            local depends="$3"
+            local description="$4"
+            local details="$5"
 
-          # `-Zxz -z9` overrides dpkg-deb's default (zstd on noble) with
-          # xz level 9. xz consistently 15-25% smaller than zstd on the
-          # libperry_*.a archive bodies. v0.5.921's arm64 .deb was
-          # 100.76 MB with zstd — under-100-MB push limit by 0.76 MB.
-          # xz pulls it well clear. Users decompress at install time; xz
-          # is supported by every dpkg version Perry's apt repo targets.
-          dpkg-deb --build -Zxz -z9 "${PKG}"
+            {
+              echo "Package: ${package}"
+              echo "Version: ${VERSION}"
+              echo "Section: devel"
+              echo "Priority: optional"
+              echo "Architecture: ${ARCH}"
+              if [ -n "$depends" ]; then
+                echo "Depends: ${depends}"
+              fi
+              echo "Maintainer: Perry Team <hello@perryts.com>"
+              echo "Homepage: https://github.com/PerryTS/perry"
+              echo "Description: ${description}"
+              echo " ${details}"
+            } > "${pkg_dir}/DEBIAN/control"
+          }
 
-      - name: Upload .deb as release asset
+          init_package() {
+            local pkg_dir="$1"
+            local package="$2"
+            local depends="$3"
+            local description="$4"
+            local details="$5"
+
+            rm -rf "$pkg_dir"
+            mkdir -p "${pkg_dir}/DEBIAN"
+            chmod 755 "$pkg_dir" "${pkg_dir}/DEBIAN"
+            write_control "$pkg_dir" "$package" "$depends" "$description" "$details"
+          }
+
+          copy_static_archive() {
+            local lib="$1"
+            local pkg_dir="$2"
+
+            require_staging_file "$lib"
+            mkdir -p "${pkg_dir}/usr/lib/perry"
+            cp "staging/$lib" "${pkg_dir}/usr/lib/perry/"
+
+            # Strip DWARF debug info but keep the symbol table. Perry's
+            # codegen linker still needs the #[no_mangle] symbols, while
+            # release users do not need archive debug sections.
+            strip --strip-debug "${pkg_dir}/usr/lib/perry/$lib" || true
+            chmod 644 "${pkg_dir}/usr/lib/perry/$lib"
+          }
+
+          build_deb() {
+            local pkg_dir="$1"
+
+            # `-Zxz -z9` overrides dpkg-deb's default (zstd on noble) with
+            # xz level 9. xz is consistently smaller on the libperry_*.a
+            # archive bodies, and every dpkg version Perry targets supports it.
+            dpkg-deb --build -Zxz -z9 "$pkg_dir"
+          }
+
+          check_deb_sizes() {
+            local max_git_blob_bytes=99000000
+            local failed=0
+
+            shopt -s nullglob
+            local debs=( *.deb )
+            if [ "${#debs[@]}" -eq 0 ]; then
+              echo "No .deb packages were produced" >&2
+              exit 1
+            fi
+
+            for deb in "${debs[@]}"; do
+              local size
+              size=$(stat -c %s "$deb")
+              if [ "$size" -gt "$max_git_blob_bytes" ]; then
+                echo "$deb is $size bytes; GitHub rejects git blobs near 100 MB" >&2
+                failed=1
+              fi
+            done
+
+            if [ "$failed" -ne 0 ]; then
+              exit 1
+            fi
+          }
+
+          require_staging_file perry
+          require_staging_file libperry_runtime.a
+          require_staging_file libperry_stdlib.a
+
+          MAIN_DEPENDS="gcc | clang, perry-runtime (= ${VERSION}), perry-stdlib (= ${VERSION})"
+          if [ -f staging/libperry_ui_gtk4.a ]; then
+            MAIN_DEPENDS="${MAIN_DEPENDS}, perry-ui-gtk4 (= ${VERSION})"
+          fi
+
+          MAIN_PKG="perry_${VERSION}_${ARCH}"
+          init_package "$MAIN_PKG" \
+            "perry" \
+            "$MAIN_DEPENDS" \
+            "Native TypeScript compiler" \
+            "Perry compiles TypeScript source code directly to native executables using Cranelift for code generation."
+          mkdir -p "${MAIN_PKG}/usr/bin" "${MAIN_PKG}/etc/perry"
+          install -m 755 staging/perry "${MAIN_PKG}/usr/bin/perry"
+          echo "/usr/lib/perry" > "${MAIN_PKG}/etc/perry/lib-path"
+          build_deb "$MAIN_PKG"
+
+          RUNTIME_PKG="perry-runtime_${VERSION}_${ARCH}"
+          init_package "$RUNTIME_PKG" \
+            "perry-runtime" \
+            "" \
+            "Perry runtime static library" \
+            "Static runtime archive required by the Perry compiler when linking generated executables."
+          copy_static_archive libperry_runtime.a "$RUNTIME_PKG"
+          build_deb "$RUNTIME_PKG"
+
+          STDLIB_PKG="perry-stdlib_${VERSION}_${ARCH}"
+          init_package "$STDLIB_PKG" \
+            "perry-stdlib" \
+            "" \
+            "Perry standard library static archive" \
+            "Static standard library archive required by the Perry compiler when linking generated executables."
+          copy_static_archive libperry_stdlib.a "$STDLIB_PKG"
+          build_deb "$STDLIB_PKG"
+
+          if [ -f staging/libperry_ui_gtk4.a ]; then
+            UI_PKG="perry-ui-gtk4_${VERSION}_${ARCH}"
+            init_package "$UI_PKG" \
+              "perry-ui-gtk4" \
+              "" \
+              "Perry GTK4 UI static archive" \
+              "Static GTK4 UI archive used by Perry programs that import the Linux UI backend."
+            copy_static_archive libperry_ui_gtk4.a "$UI_PKG"
+            build_deb "$UI_PKG"
+          fi
+
+          check_deb_sizes
+
+      - name: Upload .deb release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.release.outputs.version }}"
-          ARCH="${{ matrix.arch }}"
-          gh release upload "${{ github.event.release.tag_name }}" \
-            "perry_${VERSION}_${ARCH}.deb" \
-            --repo "${{ github.repository }}" --clobber
+          TAG="${{ steps.release.outputs.tag }}"
+          shopt -s nullglob
+          debs=( *.deb )
+          if [ "${#debs[@]}" -eq 0 ]; then
+            echo "No .deb packages were produced" >&2
+            exit 1
+          fi
 
-      - name: Upload .deb artifact (for apt-repo job)
+          for deb in "${debs[@]}"; do
+            gh release upload "$TAG" "$deb" \
+              --repo "${{ github.repository }}" --clobber
+          done
+
+      - name: Upload .deb artifacts (for apt-repo job)
         uses: actions/upload-artifact@v7
         with:
           name: deb-${{ matrix.arch }}
@@ -1254,6 +1353,19 @@ jobs:
           GPG_KEY_ID: ${{ secrets.APT_GPG_KEY_ID }}
         run: |
           cd apt-repo
+
+          max_git_blob_bytes=99000000
+          oversized=0
+          for deb in ../debs/*.deb; do
+            size=$(stat -c %s "$deb")
+            if [ "$size" -gt "$max_git_blob_bytes" ]; then
+              echo "$deb is $size bytes; GitHub rejects git blobs near 100 MB" >&2
+              oversized=1
+            fi
+          done
+          if [ "$oversized" -ne 0 ]; then
+            exit 1
+          fi
 
           # Copy new .deb files into pool
           mkdir -p pool/main/p/perry

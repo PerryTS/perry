@@ -21,6 +21,34 @@ use crate::OutputFormat;
 use super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
 use super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
 
+/// (#1529) Android's `libperry_app.so` is loaded via `dlopen`, so its TLS
+/// relocations must use the global-dynamic model — the aarch64-linux-android
+/// default (Initial-Executable) crashes at load with
+/// `TLS symbol "(null)" ... using IE access model`. The model is selected by a
+/// `tls-model` rustc flag, but that flag is exposed as a stable `-C` codegen
+/// option on some toolchains and is still nightly-gated (`-Z`) on others.
+/// Passing the `-C` form to a toolchain that only knows the `-Z` form aborts
+/// *every* Android build with `error: unknown codegen option: tls-model`.
+/// (This slipped past CI because release CI builds the runtime libs with plain
+/// `cargo build` and never compiles a full Android app through this path.)
+///
+/// Probe the active rustc and return the spelling it accepts. When only the
+/// `-Z` form is available, also set `RUSTC_BOOTSTRAP=1` on `cmd` so the gated
+/// flag is honored on a stable toolchain without requiring a nightly install.
+pub(crate) fn android_global_dynamic_tls_rustflag(cmd: &mut Command) -> &'static str {
+    let c_form_supported = Command::new("rustc")
+        .args(["-C", "help"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("tls-model"))
+        .unwrap_or(false);
+    if c_form_supported {
+        "-C tls-model=global-dynamic"
+    } else {
+        cmd.env("RUSTC_BOOTSTRAP", "1");
+        "-Z tls-model=global-dynamic"
+    }
+}
+
 pub struct OptimizedLibs {
     /// Path to the rebuilt `libperry_runtime.a` (or `perry_runtime.lib`).
     /// `None` means "fall back to the prebuilt one in target/release/".
@@ -63,11 +91,7 @@ impl OptimizedLibs {
 }
 
 fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<String> {
-    let mut iteration_set: BTreeSet<String> = ctx.native_module_imports.iter().cloned().collect();
-    if ctx.uses_fetch && !iteration_set.contains("fetch") && !iteration_set.contains("node-fetch") {
-        iteration_set.insert("fetch".to_string());
-    }
-    iteration_set
+    ctx.native_module_imports.iter().cloned().collect()
 }
 
 /// Resolve well-known wrapper archives without rebuilding runtime/stdlib.
@@ -207,19 +231,17 @@ pub(super) fn build_optimized_libs(
     // imported and routes to perry-ext-http — but perry-ext-http only
     // exports the HTTP-client surface (`js_http_*` / `js_node_http_*`),
     // not the Web Fetch ctors that hono's compiled output references.
-    // perry-ext-fetch is the staticlib that ships those symbols.
     //
     // When the user's TS code (or any compilePackages-resolved module like
     // hono) constructs `new Headers(...)` / `new Request(...)` / `new Response(...)`,
     // the HIR sets `ctx.uses_fetch = true` (see
     // `crates/perry-hir/src/destructuring.rs::1469-1492` + the explicit
-    // `fetch(...)` arms in `lower/expr_call.rs`). If that flag is set but
-    // the user didn't *also* import `'fetch'` / `'node-fetch'` (so the
-    // well-known table won't pull perry-ext-fetch in on its own), we
-    // synthetically add `"fetch"` here so the iteration below routes
-    // perry-ext-fetch into the link line. The `'fetch'` binding strips
-    // no perry-stdlib feature (see stdlib_features.rs — fetch falls
-    // through to `_ => &[]`), so this is a pure-add.
+    // `fetch(...)` arms in `lower/expr_call.rs`). Keep `http-client` below
+    // so perry-stdlib supplies both the constructors and the erased-type
+    // Request/Response/Headers/Blob dispatch registries. Do not synthesize
+    // the `"fetch"` well-known binding from `uses_fetch`: perry-ext-fetch has
+    // separate registries, so a builtin `new Request()` constructed there
+    // would make `(req as any).url` miss stdlib's dispatch path.
     if use_well_known {
         for module in &iteration_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);
@@ -691,7 +713,7 @@ pub(super) fn build_optimized_libs(
     // cdylib. Force global-dynamic so the dynamic linker can resolve TLS
     // slots after the process has started.
     if matches!(target, Some("android") | Some("android-x86_64")) {
-        rustflags.push("-C tls-model=global-dynamic");
+        rustflags.push(android_global_dynamic_tls_rustflag(&mut cargo_cmd));
     }
     if !rustflags.is_empty() {
         cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
@@ -1295,6 +1317,31 @@ mod tests {
         // Defensive default: if a module isn't in the allowlist,
         // treat it as CPU-only (existing v0.5.586 behavior).
         assert!(!binding_needs_shared_tokio("definitely-not-a-real-package"));
+    }
+
+    #[test]
+    fn builtin_fetch_usage_does_not_synthesize_well_known_fetch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.uses_fetch = true;
+
+        let modules = well_known_iteration_set(&ctx);
+
+        assert!(
+            !modules.contains("fetch"),
+            "built-in Web Fetch should stay on perry-stdlib so erased-type dispatch shares the constructor registry"
+        );
+    }
+
+    #[test]
+    fn explicit_node_fetch_import_still_routes_to_well_known_fetch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports.insert("node-fetch".to_string());
+
+        let modules = well_known_iteration_set(&ctx);
+
+        assert!(modules.contains("node-fetch"));
     }
 
     #[test]
