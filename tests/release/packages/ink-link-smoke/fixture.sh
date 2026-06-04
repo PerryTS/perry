@@ -6,6 +6,10 @@
 # compile/link and symbol inspection. Executing the binary currently reaches a
 # broader React/Object runtime interop gap (`hasOwnProperty is not a function`),
 # which is not the #678 contract.
+# The locked yoga-layout package bootstraps its default export from a WASM helper.
+# This fixture does not execute layout code, so we patch that default export to an
+# inert object after npm install to keep the link-only guard focused on Ink's
+# package graph and native symbol surface.
 
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -13,6 +17,35 @@ cd "$(dirname "$0")"
 
 NAME="ink-link-smoke"
 fixture_setup "$NAME" || exit 1
+
+node --input-type=commonjs <<'JS'
+const fs = require('fs');
+
+const patches = [
+  {
+    file: 'node_modules/yoga-layout/src/index.ts',
+    importBlock:
+      "// @ts-ignore untyped from Emscripten\nimport loadYoga from '../binaries/yoga-wasm-base64-esm.js';\nimport wrapAssembly from './wrapAssembly.ts';\n",
+  },
+  {
+    file: 'node_modules/yoga-layout/dist/src/index.js',
+    importBlock:
+      "// @ts-ignore untyped from Emscripten\nimport loadYoga from '../binaries/yoga-wasm-base64-esm.js';\nimport wrapAssembly from \"./wrapAssembly.js\";\n",
+  },
+];
+
+for (const patch of patches) {
+  let text = fs.readFileSync(patch.file, 'utf8');
+  if (text.includes(patch.importBlock)) {
+    text = text.replace(patch.importBlock, '');
+  }
+  text = text.replace('const Yoga = wrapAssembly(await loadYoga());', 'const Yoga = {};');
+  if (!text.includes('const Yoga = {};')) {
+    throw new Error(`failed to patch yoga-layout link stub in ${patch.file}`);
+  }
+  fs.writeFileSync(patch.file, text);
+}
+JS
 
 echo "  [perry compile/link] entry.tsx"
 if ! "$PERRY_BIN" compile entry.tsx -o ./out > perry-compile.log 2>&1; then

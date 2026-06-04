@@ -21,12 +21,12 @@ on:
       - '!CHANGELOG.md'
   # Manual escape hatch for the opt-in jobs. Maintainers (write access)
   # can dispatch the workflow against any ref with `run_extended_tests=true`
-  # to run parity / compile-smoke / doc-tests on demand without tagging
-  # a release.
+  # to run parity / compile-smoke / package smokes / doc-tests on demand
+  # without tagging a release.
   workflow_dispatch:
     inputs:
       run_extended_tests:
-        description: 'Run extended tests (parity, compile-smoke, doc-tests)'
+        description: 'Run extended tests (parity, compile-smoke, package smokes, doc-tests)'
         type: boolean
         default: false
 
@@ -942,6 +942,59 @@ jobs:
         run: |
           cd tests/release/packages/drizzle-mysql
           PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
+
+  # ---------------------------------------------------------------------------
+  # ink-link-smoke: runs the tier-3 release fixture
+  # `tests/release/packages/ink-link-smoke/` as the CI counterpart to #803.
+  #
+  # This is intentionally compile/link-only. #348 tracks broader Ink runtime
+  # and rendering compatibility; this job guards the package-graph +
+  # compilePackages linker contract that the fixture documents.
+  #
+  # Gated to tag pushes + opt-in (parity with drizzle-mysql-smoke /
+  # compile-smoke / doc-tests). The fixture installs Ink + React and builds a
+  # release Perry compiler, so PRs shouldn't pay it by default. Opt-in via the
+  # `run-extended-tests` label or workflow dispatch.
+  # ---------------------------------------------------------------------------
+  ink-link-smoke:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build perry compiler
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+
+      - name: Run Ink link fixture
+        run: |
+          cd tests/release/packages/ink-link-smoke
+          PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
+
+      - name: Upload Ink fixture logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ink-link-smoke-logs
+          path: |
+            tests/release/packages/ink-link-smoke/install.log
+            tests/release/packages/ink-link-smoke/perry-compile.log
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # Doc-example tests: compile + run every .ts under docs/examples/.

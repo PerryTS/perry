@@ -73,3 +73,9 @@ PERRY_TEST_SUMMARY_OUT=/tmp/x.json _harness.sh       # emit JSON summary
 
 The harness defines its own pass/fail/skip totals; downstream consumers
 (release_sweep tier 3) only care about the JSON summary.
+
+The `ink-link-smoke` fixture also has a named CI job in
+`.github/workflows/test.yml`. It runs on release tags, on manual dispatch with
+`run_extended_tests=true`, and on PRs with the `run-extended-tests` label. That
+job intentionally stops at compile/link plus symbol inspection; end-to-end Ink
+rendering remains tracked separately from the release fixture contract.
