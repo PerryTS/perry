@@ -28,6 +28,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         }
     };
     let algo_upper = algo_name.to_ascii_uppercase();
+    let algo_is_string = string_from_jsvalue(algo_bits.to_bits()).is_some();
     if algo_upper == "RSA-OAEP" || algo_upper == "RSASSA-PKCS1-V1_5" || algo_upper == "RSA-PSS" {
         let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha1);
         let key_algo = match algo_upper.as_str() {
@@ -489,6 +490,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         && algo_upper != "AES-KW"
         && algo_upper != "AES-CBC"
         && algo_upper != "AES-CTR"
+        && algo_upper != "AES-OCB"
     {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
@@ -500,9 +502,17 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         KeyAlgo::AesCtr
     } else if algo_upper == "AES-KW" {
         KeyAlgo::AesKw
+    } else if algo_upper == "AES-OCB" {
+        KeyAlgo::AesOcb
     } else {
         KeyAlgo::AesGcm
     };
+    if algo_upper == "AES-OCB" && algo_is_string {
+        return reject_with_dom_exception(
+            "TypeError",
+            "Failed to normalize algorithm: length is required",
+        );
+    }
     let usages = match validate_key_usages(
         key_algo,
         KeyKind::Secret,
@@ -514,10 +524,19 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         Ok(u) => u,
         Err((name, message)) => return reject_with_dom_exception(name, message),
     };
-    let length = object_field_number(algo_bits.to_bits(), b"length").unwrap_or(256);
+    let length = match object_field_number(algo_bits.to_bits(), b"length") {
+        Some(length) => length,
+        None if algo_upper == "AES-OCB" => {
+            return reject_with_dom_exception(
+                "TypeError",
+                "Failed to normalize algorithm: length is required",
+            )
+        }
+        None => 256,
+    };
     let byte_len = match (algo_upper.as_str(), length) {
         (_, 128) => 16,
-        ("AES-GCM" | "AES-KW" | "AES-CBC" | "AES-CTR", 192) => 24,
+        ("AES-GCM" | "AES-KW" | "AES-CBC" | "AES-CTR" | "AES-OCB", 192) => 24,
         (_, 256) => 32,
         _ => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
@@ -526,8 +545,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(&mut key_bytes);
 
-    // Allocate the CryptoKey-shaped buffer + register it as AES-GCM so
-    // the importKey/encrypt/decrypt path works on the result.
+    // Allocate the CryptoKey-shaped buffer and register the requested
+    // WebCrypto algorithm so later operations can validate it.
     let buf = alloc_uint8array_from_slice(&key_bytes);
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");

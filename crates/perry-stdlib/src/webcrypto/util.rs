@@ -2,7 +2,7 @@ pub(super) use std::collections::HashMap;
 pub(super) use std::sync::Mutex;
 
 pub(super) use aes::cipher::{
-    generic_array::GenericArray, BlockEncrypt, KeyInit as AesBlockKeyInit,
+    generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit as AesBlockKeyInit,
 };
 pub(super) use aes::{Aes128, Aes192, Aes256};
 pub(super) use base64::Engine as _;
@@ -112,6 +112,7 @@ pub(super) enum KeyAlgo {
     AesCbc,
     AesCtr,
     ChaCha20Poly1305,
+    AesOcb,
     EcdsaP256,
     EcdhP256,
     EcdsaP384,
@@ -303,6 +304,7 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::ChaCha20Poly1305 => 22,
         KeyAlgo::Kmac128 => 23,
         KeyAlgo::Kmac256 => 24,
+        KeyAlgo::AesOcb => 25,
     }
 }
 
@@ -357,6 +359,7 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 22 => KeyAlgo::ChaCha20Poly1305,
                 23 => KeyAlgo::Kmac128,
                 24 => KeyAlgo::Kmac256,
+                25 => KeyAlgo::AesOcb,
                 _ => return None,
             };
             let hash = match hash {
@@ -566,7 +569,11 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
         (KeyAlgo::Hmac, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
         (KeyAlgo::Kmac128 | KeyAlgo::Kmac256, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
         (
-            KeyAlgo::AesGcm | KeyAlgo::AesCbc | KeyAlgo::AesCtr | KeyAlgo::ChaCha20Poly1305,
+            KeyAlgo::AesGcm
+            | KeyAlgo::AesCbc
+            | KeyAlgo::AesCtr
+            | KeyAlgo::AesOcb
+            | KeyAlgo::ChaCha20Poly1305,
             KeyKind::Secret,
         ) => USAGE_ENCRYPT | USAGE_DECRYPT | USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
         (KeyAlgo::AesKw, KeyKind::Secret) => USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,

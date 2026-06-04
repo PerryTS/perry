@@ -104,6 +104,13 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         (KeyAlgo::AesCtr, HashAlgo::Sha256, KeyKind::Secret)
     } else if algo_upper == "CHACHA20-POLY1305" && format_lower == "jwk" {
         (KeyAlgo::ChaCha20Poly1305, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "AES-OCB" && format_lower == "raw" {
+        return reject_with_dom_exception(
+            "NotSupportedError",
+            "Unable to import AES-OCB using raw format",
+        );
+    } else if algo_upper == "AES-OCB" && format_lower == "jwk" {
+        (KeyAlgo::AesOcb, HashAlgo::Sha256, KeyKind::Secret)
     } else if algo_upper == "ECDSA" && (format_lower == "raw" || format_lower == "jwk") {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve")
             .and_then(|c| parse_ec_named_curve(&c))
@@ -227,6 +234,9 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     {
         return reject_with_dom_exception("DataError", "Key data is empty or could not be read");
     }
+    if key_algo == KeyAlgo::AesOcb && !matches!(key_bytes.len(), 16 | 24 | 32) {
+        return reject_with_dom_exception("DataError", "Invalid key length");
+    }
     if is_ec_key_algo(key_algo) {
         let ok = match (ec_curve_for_key_algo(key_algo), kind) {
             (Some(EcNamedCurve::P256), KeyKind::Public) => {
@@ -326,6 +336,12 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             "Unable to export ChaCha20-Poly1305 secret key using raw format",
         );
     }
+    if format_lower == "raw" && mat.algo == KeyAlgo::AesOcb {
+        return reject_with_dom_exception(
+            "NotSupportedError",
+            "Unable to export AES-OCB secret key using raw format",
+        );
+    }
     if format_lower == "raw" && mat.kind == KeyKind::Private {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
@@ -376,7 +392,10 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
             let field_count = if matches!(
                 mat.algo,
-                KeyAlgo::ChaCha20Poly1305 | KeyAlgo::Kmac128 | KeyAlgo::Kmac256
+                KeyAlgo::ChaCha20Poly1305
+                    | KeyAlgo::Kmac128
+                    | KeyAlgo::Kmac256
+                    | KeyAlgo::AesOcb
             ) {
                 3
             } else {
@@ -389,6 +408,15 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             set_object_string_field(obj, b"kty", "oct");
             if mat.algo == KeyAlgo::ChaCha20Poly1305 {
                 set_object_string_field(obj, b"alg", "C20P");
+            }
+            if mat.algo == KeyAlgo::AesOcb {
+                let alg = match aes_ocb_jwk_alg(key_bytes.len()) {
+                    Some(alg) => alg,
+                    None => {
+                        return reject_with_dom_exception("OperationError", "The operation failed")
+                    }
+                };
+                set_object_string_field(obj, b"alg", alg);
             }
             set_object_string_field(obj, b"k", &encoded);
             if mat.algo == KeyAlgo::Kmac128 {
@@ -458,6 +486,15 @@ pub(super) fn rsa_jwk_alg(algo: KeyAlgo, hash: HashAlgo) -> &'static str {
         (KeyAlgo::RsaPss, HashAlgo::Sha384) => "PS384",
         (KeyAlgo::RsaPss, HashAlgo::Sha512) => "PS512",
         _ => "",
+    }
+}
+
+pub(super) fn aes_ocb_jwk_alg(key_len: usize) -> Option<&'static str> {
+    match key_len {
+        16 => Some("A128OCB"),
+        24 => Some("A192OCB"),
+        32 => Some("A256OCB"),
+        _ => None,
     }
 }
 
@@ -551,6 +588,7 @@ pub(super) unsafe fn jwk_import_key_bytes(
             | KeyAlgo::AesCbc
             | KeyAlgo::AesCtr
             | KeyAlgo::ChaCha20Poly1305
+            | KeyAlgo::AesOcb
     ) {
         if kty != "oct" {
             return None;
@@ -568,9 +606,19 @@ pub(super) unsafe fn jwk_import_key_bytes(
             }
         }
         let k = object_field_string(obj_bits, b"k")?;
-        return base64::engine::general_purpose::URL_SAFE_NO_PAD
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(k.as_bytes())
-            .ok();
+            .ok()?;
+        if key_algo == KeyAlgo::AesOcb {
+            if let Some(alg) = object_field_string(obj_bits, b"alg") {
+                if let Some(expected) = aes_ocb_jwk_alg(bytes.len()) {
+                    if alg != expected {
+                        return None;
+                    }
+                }
+            }
+        }
+        return Some(bytes);
     }
     if !matches!(
         key_algo,

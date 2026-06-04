@@ -110,6 +110,14 @@ pub(super) unsafe fn resolve_aes_gcm_iv_aad(algo_bits: u64) -> Option<(Vec<u8>, 
     Some((iv, aad))
 }
 
+pub(super) unsafe fn resolve_aes_ocb_params(algo_bits: u64) -> Option<(Vec<u8>, Vec<u8>, u32)> {
+    let iv = object_field_bytes(algo_bits, b"iv")?;
+    let aad = object_field_bytes(algo_bits, b"additionalData").unwrap_or_default();
+    let tag_len = object_field_number(algo_bits, b"tagLength").unwrap_or(128);
+    aes_ocb_tag_len_bytes(tag_len)?;
+    Some((iv, aad, tag_len))
+}
+
 /// Read the canonical algorithm-name from an algorithm arg (string or
 /// `{ name }` object), upper-cased for matching.
 pub(super) unsafe fn wrap_algo_name(algo_bits: u64) -> Option<String> {
@@ -231,6 +239,33 @@ pub unsafe extern "C" fn js_webcrypto_wrap_key(
             }
         };
         match aes_gcm_encrypt(&wrapping_key_bytes, &iv, &aad, &key_bytes) {
+            Some(c) => c,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
+    } else if upper == "AES-OCB" {
+        if wrapping_mat.algo != KeyAlgo::AesOcb {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
+        if let Err((name, message)) = require_usage(
+            wrapping_mat,
+            USAGE_WRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
+        let (iv, aad, tag_len) = match resolve_aes_ocb_params(wrap_algo_bits.to_bits()) {
+            Some(t) => t,
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize wrap algorithm parameters",
+                )
+            }
+        };
+        match aes_ocb_encrypt(&wrapping_key_bytes, &iv, &aad, &key_bytes, tag_len) {
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
@@ -424,6 +459,33 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
             Some(p) => p,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         }
+    } else if upper == "AES-OCB" {
+        if unwrapping_mat.algo != KeyAlgo::AesOcb {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
+        if let Err((name, message)) = require_usage(
+            unwrapping_mat,
+            USAGE_UNWRAP_KEY,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
+        let (iv, aad, tag_len) = match resolve_aes_ocb_params(unwrap_algo_bits.to_bits()) {
+            Some(t) => t,
+            None => {
+                return reject_with_dom_exception(
+                    "TypeError",
+                    "Failed to normalize unwrap algorithm parameters",
+                )
+            }
+        };
+        match aes_ocb_decrypt(&unwrapping_key_bytes, &iv, &aad, &wrapped_bytes, tag_len) {
+            Some(p) => p,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if upper == "AES-CBC" {
         if unwrapping_mat.algo != KeyAlgo::AesCbc {
             return reject_with_dom_exception(
@@ -548,6 +610,7 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
         "AES-KW" => (KeyAlgo::AesKw, HashAlgo::Sha256),
         "AES-CBC" => (KeyAlgo::AesCbc, HashAlgo::Sha256),
         "AES-CTR" => (KeyAlgo::AesCtr, HashAlgo::Sha256),
+        "AES-OCB" => (KeyAlgo::AesOcb, HashAlgo::Sha256),
         _ => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
     let usages = match validate_key_usages(
