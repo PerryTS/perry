@@ -540,6 +540,13 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // which would read `keys_array` off a closure (out of bounds).
         if obj_js.is_pointer() {
             let ptr = obj_js.as_pointer::<u8>() as usize;
+            if crate::buffer::is_registered_buffer(ptr) {
+                let present = super::has_own_helpers::buffer_own_key_present(
+                    ptr as *const crate::buffer::BufferHeader,
+                    key_str,
+                );
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
             if crate::closure::is_closure_ptr(ptr) {
                 let present = super::has_own_helpers::str_from_string_header(key_str)
                     .map(|k| super::has_own_helpers::closure_own_key_present(ptr, k))

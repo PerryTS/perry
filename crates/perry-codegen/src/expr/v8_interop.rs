@@ -252,6 +252,16 @@ pub(crate) fn emit_v8_member_method_call(
 ///     class name; the rest of the lower_new path resolves it via the
 ///     usual `ctx.classes` lookup, which contains imported classes
 ///     under their original (un-namespaced) names.
+fn is_global_object_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::GlobalGet(_) => true,
+        Expr::PropertyGet { object, property } if property == "globalThis" => {
+            is_global_object_expr(object)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Option<&'a str> {
     match callee {
         Expr::ClassRef(name) => Some(name.as_str()),
@@ -267,7 +277,7 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
         // breaks on the resulting instance.
         Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => Some(name.as_str()),
         Expr::PropertyGet { object, property } => {
-            if matches!(object.as_ref(), Expr::GlobalGet(_)) {
+            if is_global_object_expr(object.as_ref()) {
                 return Some(property.as_str());
             }
             // Namespace import via local: `import * as ns from 'm'; new ns.Foo()`.

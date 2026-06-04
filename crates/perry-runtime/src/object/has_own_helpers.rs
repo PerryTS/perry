@@ -100,3 +100,16 @@ pub(super) unsafe fn array_own_key_present(
         (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
     std::ptr::read(elements.add(index as usize)) != crate::value::TAG_HOLE
 }
+
+pub(super) unsafe fn buffer_own_key_present(
+    buf: *const crate::buffer::BufferHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    let Some(key_name) = string_header_as_str(key) else {
+        return false;
+    };
+    let Some(index) = super::canonical_array_index(key_name) else {
+        return false;
+    };
+    index < (*buf).length
+}

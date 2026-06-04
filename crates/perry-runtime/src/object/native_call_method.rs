@@ -3312,6 +3312,13 @@ pub unsafe extern "C" fn js_native_call_method(
                 // `is_valid_obj_ptr`-false fallthrough returned `true` for
                 // *every* key (so a deleted slot still looked present).
                 let raw = jsval.as_pointer::<u8>() as usize;
+                if crate::buffer::is_registered_buffer(raw) {
+                    let present = super::has_own_helpers::buffer_own_key_present(
+                        raw as *const crate::buffer::BufferHeader,
+                        key_str,
+                    );
+                    return f64::from_bits(JSValue::bool(present).bits());
+                }
                 if crate::closure::is_closure_ptr(raw) {
                     let present = super::has_own_helpers::str_from_string_header(key_str)
                         .map(|k| super::has_own_helpers::closure_own_key_present(raw, k))
