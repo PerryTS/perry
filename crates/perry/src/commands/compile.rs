@@ -5388,13 +5388,17 @@ pub fn run_with_parse_cache(
     if let Some(path) = &wasm_host_lib {
         build_cache_runtime_inputs.push(path.clone());
     }
+    let build_cache_object_fingerprints: Vec<String> = obj_fingerprints
+        .iter()
+        .filter_map(|fp| fp.clone())
+        .collect();
     build_cache_probe.write_manifest_after_success(
         &mut build_cache_stats,
         &ctx,
         &exe_path,
         target.as_deref(),
         &compiled_features,
-        &obj_fingerprints,
+        &build_cache_object_fingerprints,
         &build_cache_runtime_inputs,
     );
 
