@@ -282,6 +282,7 @@ pub(crate) fn is_known_atomics_static_method(name: &str) -> bool {
             | "compareExchange"
             | "notify"
             | "wait"
+            | "waitAsync"
     )
 }
 

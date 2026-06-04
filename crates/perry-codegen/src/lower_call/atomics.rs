@@ -40,6 +40,7 @@ pub fn try_lower_atomics_static_call(
         "compareExchange" => ("js_atomics_compare_exchange", 4),
         "notify" => ("js_atomics_notify", 3),
         "wait" => ("js_atomics_wait", 4),
+        "waitAsync" => ("js_atomics_wait_async", 4),
         _ => return Ok(None),
     };
 

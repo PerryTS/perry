@@ -314,6 +314,7 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
                 | "compareExchange"
                 | "notify"
                 | "wait"
+                | "waitAsync"
         ),
         "WebAssembly" => matches!(
             member,
@@ -434,6 +435,7 @@ pub(crate) fn builtin_static_function_length(namespace: &str, member: &str) -> O
             "compareExchange" => 4,
             "notify" => 3,
             "wait" => 4,
+            "waitAsync" => 4,
             _ => return None,
         },
         "WebAssembly" => match member {

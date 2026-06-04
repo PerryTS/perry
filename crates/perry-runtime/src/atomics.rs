@@ -17,6 +17,10 @@ fn string_value(bytes: &[u8]) -> f64 {
     crate::value::js_nanbox_string(ptr as i64)
 }
 
+fn object_key(bytes: &[u8]) -> *const crate::StringHeader {
+    crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
 fn throw_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
@@ -371,6 +375,33 @@ fn int32_slot(view: f64, index: f64) -> (AtomicView, i32) {
     (view, idx)
 }
 
+fn wait_async_result(async_value: bool, value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = crate::object::js_object_alloc(0, 2);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let value_handle = scope.root_nanbox_f64(value);
+
+    let async_key = object_key(b"async");
+    let async_key_handle = scope.root_string_ptr(async_key);
+    crate::object::js_object_set_field_by_name(
+        obj_handle.get_raw_mut_ptr(),
+        async_key_handle.get_raw_const_ptr(),
+        nanbox_bool(async_value),
+    );
+
+    let value_key = object_key(b"value");
+    let value_key_handle = scope.root_string_ptr(value_key);
+    crate::object::js_object_set_field_by_name(
+        obj_handle.get_raw_mut_ptr(),
+        value_key_handle.get_raw_const_ptr(),
+        value_handle.get_nanbox_f64(),
+    );
+
+    crate::value::js_nanbox_pointer(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+    )
+}
+
 fn atomics_bitwise(view: f64, index: f64, value: f64, op: impl FnOnce(u64, u64) -> u64) -> f64 {
     let (view, idx) = slot(view, index);
     if view.is_bigint() {
@@ -571,4 +602,28 @@ pub extern "C" fn js_atomics_wait(
 
     let _ = number_arg(timeout);
     string_value(b"timed-out")
+}
+
+#[no_mangle]
+pub extern "C" fn js_atomics_wait_async(
+    _closure: *const ClosureHeader,
+    view: f64,
+    index: f64,
+    expected: f64,
+    timeout: f64,
+) -> f64 {
+    let (view, idx) = int32_slot(view, index);
+    let expected = coerce_for_kind(KIND_INT32, expected);
+    let timeout = number_arg(timeout);
+    if view.get_numeric(idx) != expected {
+        return wait_async_result(false, string_value(b"not-equal"));
+    }
+    if timeout <= 0.0 {
+        return wait_async_result(false, string_value(b"timed-out"));
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let timed_out = scope.root_nanbox_f64(string_value(b"timed-out"));
+    let promise = crate::promise::js_promise_resolved(timed_out.get_nanbox_f64());
+    wait_async_result(true, crate::value::js_nanbox_pointer(promise as i64))
 }

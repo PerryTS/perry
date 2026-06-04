@@ -1570,6 +1570,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_atomics_wait_async",
+        DOUBLE,
+        &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
 
     // ========== Number ==========
     module.declare_function("js_number_is_finite", DOUBLE, &[DOUBLE]);

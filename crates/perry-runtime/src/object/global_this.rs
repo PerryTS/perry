@@ -3602,6 +3602,11 @@ fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
         ),
         ("notify", crate::atomics::js_atomics_notify as *const u8, 3),
         ("wait", crate::atomics::js_atomics_wait as *const u8, 4),
+        (
+            "waitAsync",
+            crate::atomics::js_atomics_wait_async as *const u8,
+            4,
+        ),
     ] {
         install_proto_method(ns_obj, name, func_ptr, arity);
     }
