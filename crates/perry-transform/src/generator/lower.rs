@@ -519,7 +519,10 @@ pub fn transform_generator_function_with_extra_captures(
         // that itself `return`s supersedes `v` (rewritten to an iter-result
         // return inside build_finally_run_stmts); a finally that throws
         // propagates out of this closure.
-        return_body.push(Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))));
+        return_body.push(Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        )));
         return_body.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
         return_body.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
@@ -808,7 +811,10 @@ fn build_async_throw_body(
     // return {done: true}). Sync generators only — async generators keep the
     // existing deferred behavior to stay byte-identical.
     if fall_through {
-        fallback.push(Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))));
+        fallback.push(Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        )));
     }
     fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
     fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
@@ -913,7 +919,10 @@ fn build_async_catch_route_body(
         let mut fin_body = fin.body.clone();
         rewrite_hoisted_lets_in_stmts(&mut fin_body, hoisted_ids);
         rewrite_catch_returns_to_iter_result(&mut fin_body);
-        let mut handler = vec![Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true))))];
+        let mut handler = vec![Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        ))];
         handler.extend(fin_body);
         handler.push(Stmt::Throw(Expr::LocalGet(inner_catch_id)));
         body.push(Stmt::Try {
