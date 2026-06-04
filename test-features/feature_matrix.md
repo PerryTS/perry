@@ -12,7 +12,7 @@ Summary: 19/22 probes pass across 14 categories.
 | async | await-order | PASS | async/await-order:a:4\|b:6 |
 | classes | inheritance | PASS | class:hi perry! |
 | classes | mixin-expression | PASS | classes/mixin-expression:tag:base |
-| classes | private-static-fields | DIFF | Node `classes/private-static-fields:2,2` vs Perry `classes/private-static-fields:NaN,NaN` |
+| classes | private-static-fields | RUNTIME-FAIL | Perry exit 1: TypeError: Cannot read properties of undefined (reading '#total') |
 | closures | basic | PASS | closure:15:22 |
 | closures | captured-mutation | PASS | closures/captured-mutation:6,12 |
 | collections | map-set | PASS | map-set:2:2,4 |
@@ -29,7 +29,7 @@ Summary: 19/22 probes pass across 14 categories.
 | syntax | destructuring-defaults | PASS | syntax/destructuring-defaults:a:2,n2:0 |
 | syntax | optional-call | PASS | optional:0:7:skip |
 | syntax | optional-nullish | PASS | syntax/optional-nullish:fallback,ok |
-| typed-arrays | uint8array-basic | DIFF | Node `typed-array:3:1,9,3:1` vs Perry `typed-array:3:undefined:undefined` |
+| typed-arrays | uint8array-basic | DIFF | Node `typed-array:3:1,9,3:1` vs Perry `typed-array:3:undefined:1` |
 
 ## Categories
 
