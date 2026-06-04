@@ -293,6 +293,14 @@ fn should_apply_export_origin_name_override(
         && !exported_func_param_counts.contains_key(&public_origin_key)
 }
 
+fn should_register_exported_name_compat_alias(
+    local_name: &str,
+    exported_name: &str,
+    import_local_names: &HashSet<String>,
+) -> bool {
+    local_name == exported_name || !import_local_names.contains(exported_name)
+}
+
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn malloc_default_zone() -> *mut std::ffi::c_void;
@@ -2431,6 +2439,16 @@ pub fn run_with_parse_cache(
             // `js_closure_callN`; see the field doc in codegen.rs.
             let mut namespace_reexport_named_imports: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
+            let import_local_names: HashSet<String> = hir_module
+                .imports
+                .iter()
+                .flat_map(|import| import.specifiers.iter())
+                .filter_map(|spec| match spec {
+                    perry_hir::ImportSpecifier::Named { local, .. }
+                    | perry_hir::ImportSpecifier::Default { local }
+                    | perry_hir::ImportSpecifier::Namespace { local } => Some(local.clone()),
+                })
+                .collect();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
             let mut imported_async_set: std::collections::HashSet<String> =
@@ -2929,8 +2947,16 @@ pub fn run_with_parse_cache(
                         source_prefix.clone()
                     };
 
-                    import_function_prefixes
-                        .insert(exported_name.clone(), effective_prefix.clone());
+                    let register_exported_name_compat =
+                        should_register_exported_name_compat_alias(
+                            &local_name,
+                            &exported_name,
+                            &import_local_names,
+                        );
+                    if register_exported_name_compat {
+                        import_function_prefixes
+                            .insert(exported_name.clone(), effective_prefix.clone());
+                    }
                     if local_name != exported_name {
                         import_function_prefixes
                             .insert(local_name.clone(), effective_prefix.clone());
@@ -2960,8 +2986,10 @@ pub fn run_with_parse_cache(
                         .cloned();
                     if let Some(ref origin_name) = resolved_origin_name {
                         if origin_name != &exported_name {
-                            import_function_origin_names
-                                .insert(exported_name.clone(), origin_name.clone());
+                            if register_exported_name_compat {
+                                import_function_origin_names
+                                    .insert(exported_name.clone(), origin_name.clone());
+                            }
                             if local_name != exported_name {
                                 import_function_origin_names
                                     .insert(local_name.clone(), origin_name.clone());
@@ -3046,7 +3074,9 @@ pub fn run_with_parse_cache(
                             .map(|k| exported_var_names.contains(k))
                             .unwrap_or(false)
                     {
-                        imported_vars.insert(exported_name.clone());
+                        if register_exported_name_compat {
+                            imported_vars.insert(exported_name.clone());
+                        }
                         if local_name != exported_name {
                             imported_vars.insert(local_name.clone());
                         }
@@ -3192,7 +3222,9 @@ pub fn run_with_parse_cache(
 
                     // Imported param counts
                     if let Some(&param_count) = exported_func_param_counts.get(&key) {
-                        imported_param_counts.insert(exported_name.clone(), param_count);
+                        if register_exported_name_compat {
+                            imported_param_counts.insert(exported_name.clone(), param_count);
+                        }
                         if local_name != exported_name {
                             imported_param_counts.insert(local_name.clone(), param_count);
                         }
@@ -3202,13 +3234,17 @@ pub fn run_with_parse_cache(
                     // count so the cross-module call site can pack the
                     // trailing args into a rest array.
                     if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
-                        imported_has_rest.insert(exported_name.clone());
+                        if register_exported_name_compat {
+                            imported_has_rest.insert(exported_name.clone());
+                        }
                         if local_name != exported_name {
                             imported_has_rest.insert(local_name.clone());
                         }
                     }
                     if exported_func_synthetic_arguments.contains(&key) {
-                        imported_synthetic_arguments.insert(exported_name.clone());
+                        if register_exported_name_compat {
+                            imported_synthetic_arguments.insert(exported_name.clone());
+                        }
                         if local_name != exported_name {
                             imported_synthetic_arguments.insert(local_name.clone());
                         }
@@ -5708,10 +5744,10 @@ mod codegen_thread_tests {
     use super::{
         codegen_thread_count_with_override, codegen_thread_stack_size_with_override,
         nm_output_defines_symbol, object_file_stem_for_module,
-        should_apply_export_origin_name_override, LARGE_CODEGEN_MODULE_COUNT,
-        LARGE_CODEGEN_STACK_SIZE, MAX_OBJECT_FILE_STEM_BYTES,
+        should_apply_export_origin_name_override, should_register_exported_name_compat_alias,
+        LARGE_CODEGEN_MODULE_COUNT, LARGE_CODEGEN_STACK_SIZE, MAX_OBJECT_FILE_STEM_BYTES,
     };
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
 
     #[test]
     fn large_graph_caps_codegen_threads() {
@@ -5842,6 +5878,27 @@ libperry_runtime.a(global_this_webassembly.o):
             "/pkg/barrel.ts",
             &exported_var_names,
             &exported_func_param_counts,
+        ));
+    }
+
+    #[test]
+    fn exported_name_compat_alias_does_not_shadow_import_local() {
+        let import_local_names = HashSet::from(["a".to_string(), "t".to_string()]);
+
+        assert!(!should_register_exported_name_compat_alias(
+            "t",
+            "a",
+            &import_local_names,
+        ));
+        assert!(should_register_exported_name_compat_alias(
+            "a",
+            "a",
+            &import_local_names,
+        ));
+        assert!(should_register_exported_name_compat_alias(
+            "renamed",
+            "original",
+            &import_local_names,
         ));
     }
 }
