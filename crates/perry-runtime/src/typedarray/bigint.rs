@@ -51,7 +51,7 @@ pub(super) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
 /// abstract operation, a Number (including a NaN-boxed int32), `undefined`,
 /// `null`, and Symbols are NOT convertible and throw a `TypeError`; only
 /// BigInt, Boolean, and String inputs coerce.
-pub(super) fn to_bigint_for_store(value: f64) -> f64 {
+pub(crate) fn to_bigint_for_store(value: f64) -> f64 {
     use crate::value::JSValue;
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_bigint() {

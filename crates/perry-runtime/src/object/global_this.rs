@@ -2952,20 +2952,69 @@ extern "C" fn number_is_integer_thunk(
 /// (RangeError on negative/non-integer), brand-checks `value` is a BigInt
 /// (TypeError otherwise), and returns the NaN-boxed result. `signed` selects
 /// asIntN vs asUintN. Diverges (`!`) on bad input, matching Node.
+/// `ToBigInt(value)` for `BigInt.asIntN`/`asUintN`'s second argument. BigInt
+/// passes through; Boolean → 0n/1n; String → StringToBigInt; an object is first
+/// reduced through ToPrimitive("number") (running its `valueOf`/`toString`) and
+/// re-coerced; a Number/undefined/null/Symbol throws a TypeError. The
+/// primitive cases reuse the same `to_bigint_for_store` helper that backs
+/// `BigInt64Array` element writes.
+fn bigint_to_bigint_arg(value: f64) -> f64 {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_pointer() && !jv.is_bigint() {
+        // Array → ToPrimitive finds no `valueOf` override and falls to
+        // `Array.prototype.toString` = `join(",")`, then ToBigInt on that string
+        // (`[] => "" => 0n`, `[10n] => "10" => 10n`, `[1,2] => "1,2" => throws`).
+        // `js_to_primitive` doesn't apply array join, so handle it first —
+        // mirrors the array arm in `js_number_coerce`. #2378.
+        const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+        if crate::array::js_array_is_array(value).to_bits() == TAG_TRUE_BITS {
+            let arr_ptr = jv.as_pointer::<crate::array::ArrayHeader>();
+            let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
+            let joined = unsafe { crate::array::js_array_join(arr_ptr, comma) };
+            return bigint_to_bigint_arg(crate::value::js_nanbox_string(joined as i64));
+        }
+        // Object: ToPrimitive("number") then re-coerce. Try a custom
+        // [Symbol.toPrimitive] first, then OrdinaryToPrimitive
+        // (valueOf-before-toString). A primitive result recurses; anything
+        // unconvertible falls through to the TypeError in `to_bigint_for_store`.
+        let prim = unsafe { crate::symbol::js_to_primitive(value, 1) };
+        if prim.to_bits() != value.to_bits() {
+            return bigint_to_bigint_arg(prim);
+        }
+        if let crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) =
+            unsafe { crate::value::ordinary_to_primitive_number_for_add(value) }
+        {
+            if p.to_bits() != value.to_bits() {
+                return bigint_to_bigint_arg(p);
+            }
+        }
+    }
+    crate::typedarray::bigint::to_bigint_for_store(value)
+}
+
 pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) -> f64 {
-    if !bits_arg.is_finite() || bits_arg < 0.0 || bits_arg.fract() != 0.0 {
+    // Step 1: `bits = ? ToIndex(bits)`. ToIndex = ToIntegerOrInfinity(ToNumber)
+    // with a `0 <= n <= 2^53-1` range check. `js_number_coerce` is the full
+    // ToNumber (strings, booleans, null/undefined, and objects via
+    // ToPrimitive("number") — so a `bits` object's `valueOf`/`toString` runs
+    // here, BEFORE `value` is touched, preserving the spec coercion order).
+    let bits_num = crate::builtins::js_number_coerce(bits_arg);
+    let bits_int = if bits_num.is_nan() {
+        0.0
+    } else {
+        bits_num.trunc()
+    };
+    if bits_int < 0.0 || bits_int > 9_007_199_254_740_991.0 {
         crate::fs::validate::throw_range_error_with_code(
             "The number of bits is invalid (must be a non-negative integer)",
         );
     }
-    let jv = JSValue::from_bits(value_arg.to_bits());
-    if !jv.is_bigint() {
-        crate::fs::validate::throw_type_error_with_code(
-            "Cannot convert value to a BigInt",
-            "ERR_INVALID_ARG_TYPE",
-        );
-    }
-    let bits = bits_arg as u32;
+    // Step 2: `bigint = ? ToBigInt(bigint)`. ToBigInt coerces BigInt / Boolean /
+    // String (and objects via ToPrimitive); a Number/undefined/null/Symbol
+    // throws a TypeError. Runs strictly after ToIndex(bits) above.
+    let value_bigint = bigint_to_bigint_arg(value_arg);
+    let jv = JSValue::from_bits(value_bigint.to_bits());
+    let bits = bits_int as u32;
     let ptr = jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader;
     let r = if signed {
         crate::bigint::js_bigint_as_int_n(bits, ptr)

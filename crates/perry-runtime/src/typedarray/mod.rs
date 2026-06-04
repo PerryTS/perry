@@ -17,7 +17,7 @@ use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
 use crate::typedarray_half::{f16_bits_to_f64, f64_to_f16_bits};
 
-mod bigint;
+pub(crate) mod bigint;
 mod format;
 pub use format::format_typed_array;
 
