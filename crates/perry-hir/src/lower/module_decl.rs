@@ -1179,6 +1179,27 @@ pub(crate) fn lower_module_decl(
                                     module.exported_objects.push(name.clone());
                                 }
                             }
+                        } else {
+                            // ESM produced from TypeScript enums emits:
+                            //
+                            //   export var TraceFlags;
+                            //   (function (TraceFlags) { ... })(TraceFlags || (TraceFlags = {}));
+                            //
+                            // The no-init export still has a runtime binding: it starts as
+                            // `undefined`, then the following IIFE mutates it. Pre-fix we
+                            // recorded neither a module-level `Let` nor an exported object for
+                            // this declaration, so consumers linked against
+                            // `perry_fn_<module>__TraceFlags` with no producer-side getter.
+                            let mutable = var_decl.kind != ast::VarDeclKind::Const;
+                            let is_var = var_decl.kind == ast::VarDeclKind::Var;
+                            let stmts =
+                                lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
+                            module.init.extend(stmts);
+                            module.exports.push(Export::Named {
+                                local: name.clone(),
+                                exported: name.clone(),
+                            });
+                            module.exported_objects.push(name);
                         }
                     }
                 }
