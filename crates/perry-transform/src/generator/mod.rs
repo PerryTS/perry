@@ -40,7 +40,7 @@ pub(crate) use id_scan::{
     scan_stmts_for_max_local,
 };
 pub(crate) use iter_result_rewrite::{rewrite_expr, rewrite_expr_children, rewrite_stmt};
-pub(crate) use linearize::{linearize_body, CatchRoute, State, StateExit};
+pub(crate) use linearize::{linearize_body, CatchRoute, FinallyRoute, State, StateExit};
 pub(crate) use lower::{
     build_async_step_driver_direct, transform_generator_function,
     transform_generator_function_with_extra_captures,

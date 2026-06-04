@@ -26,6 +26,14 @@ pub struct CatchRoute {
     pub post_catch_state: u32,
 }
 
+#[derive(Clone)]
+pub struct FinallyRoute {
+    pub body: Vec<Stmt>,
+    pub protected_start_state: u32,
+    pub finally_state: u32,
+    pub post_finally_state: u32,
+}
+
 /// Linearize the generator body into a sequence of states.
 /// Splits at yield points and handles for-loops with yields.
 pub fn linearize_body(
@@ -37,6 +45,7 @@ pub fn linearize_body(
     #[allow(unused_variables)] next_local_id: &mut u32,
     sent_id: LocalId,
     catches: &mut Vec<CatchRoute>,
+    finally_routes: &mut Vec<FinallyRoute>,
 ) {
     for stmt in stmts {
         match stmt {
@@ -128,6 +137,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
             }
 
@@ -235,6 +245,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
 
                 // After the loop, the iterator's final `value` (from
@@ -403,6 +414,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
 
                 // Body-tail state: contains the user body's residual stmts
@@ -528,6 +540,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
 
                 // After body, goto condition
@@ -596,6 +609,7 @@ pub fn linearize_body(
                         next_local_id,
                         sent_id,
                         catches,
+                        finally_routes,
                     );
                 } else {
                     // Body has no yields: push as-is to current state.
@@ -643,8 +657,11 @@ pub fn linearize_body(
                     });
                 }
 
-                // Finally block: linearize if it has yields (await-using path),
-                // otherwise push as-is.
+                // Finally block: linearize if it has yields (await-using path).
+                // Non-yielding finalizers get their own state even though they
+                // could be appended to the current state: abrupt generator
+                // close/throw needs both the finalizer body and a concrete
+                // post-finally state to resume at after catch handling.
                 if let Some(fin) = finally {
                     if body_contains_yield(fin) {
                         linearize_body(
@@ -656,11 +673,26 @@ pub fn linearize_body(
                             next_local_id,
                             sent_id,
                             catches,
+                            finally_routes,
                         );
                     } else {
-                        for s in fin {
-                            current.push(s.clone());
-                        }
+                        let finally_state = *state_num;
+                        *state_num += 1;
+                        let post_finally_state = *state_num;
+
+                        let mut finally_body = std::mem::take(current);
+                        finally_body.extend(fin.iter().cloned());
+                        states.push(State {
+                            num: finally_state,
+                            body: finally_body,
+                            exit: StateExit::Goto(post_finally_state),
+                        });
+                        finally_routes.push(FinallyRoute {
+                            body: fin.clone(),
+                            protected_start_state,
+                            finally_state,
+                            post_finally_state,
+                        });
                     }
                 }
             }
@@ -719,6 +751,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
                 // After then-branch, flush into a goto-after state
                 let then_end_state = *state_num;
@@ -741,6 +774,7 @@ pub fn linearize_body(
                         next_local_id,
                         sent_id,
                         catches,
+                        finally_routes,
                     );
                 }
                 let else_end_state = *state_num;
@@ -854,6 +888,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
 
                 // After the loop, the iterator's final `value` (from
@@ -950,6 +985,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
             }
 
@@ -982,6 +1018,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finally_routes,
                 );
             }
 

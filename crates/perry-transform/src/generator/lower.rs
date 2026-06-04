@@ -96,6 +96,7 @@ pub fn transform_generator_function_with_extra_captures(
     // The .throw() closure uses that interval to route a rejected await to
     // the matching catch handler instead of always using the first catch.
     let mut catches: Vec<CatchRoute> = Vec::new();
+    let mut finally_routes: Vec<FinallyRoute> = Vec::new();
     linearize_body(
         &func.body,
         &mut states,
@@ -105,6 +106,7 @@ pub fn transform_generator_function_with_extra_captures(
         next_local_id,
         sent_id,
         &mut catches,
+        &mut finally_routes,
     );
     let extra_local_ids: Vec<LocalId> = (local_id_before..*next_local_id).collect();
 
@@ -251,6 +253,8 @@ pub fn transform_generator_function_with_extra_captures(
 
     // The next() closure parameter — receives the value from next(val) calls
     let next_param_id = alloc_local(next_local_id);
+
+    let resume_body = build_generator_resume_body(done_id, &while_body);
 
     // Build next() method body
     let mut next_body = vec![
@@ -489,13 +493,13 @@ pub fn transform_generator_function_with_extra_captures(
             *next_func_id += 1;
             id
         };
-        let mut return_body: Vec<Stmt> = vec![
-            Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-            Stmt::Return(Some(make_iter_result(
-                Expr::LocalGet(return_param_id),
-                true,
-            ))),
-        ];
+        let mut return_body: Vec<Stmt> = build_generator_return_body(
+            &finally_routes,
+            state_id,
+            done_id,
+            return_param_id,
+            &hoisted_ids,
+        );
         if is_async_generator {
             wrap_returns_in_promise(&mut return_body);
         }
@@ -531,8 +535,19 @@ pub fn transform_generator_function_with_extra_captures(
             *next_func_id += 1;
             id
         };
-        let mut throw_body =
-            build_async_throw_body(&catches, state_id, throw_param_id, &hoisted_ids);
+        let throw_route_result_id = alloc_local(next_local_id);
+        let throw_route_completed_id = alloc_local(next_local_id);
+        let mut throw_body = build_async_throw_body(
+            &catches,
+            &finally_routes,
+            state_id,
+            done_id,
+            throw_param_id,
+            &hoisted_ids,
+            &resume_body,
+            throw_route_result_id,
+            throw_route_completed_id,
+        );
         if is_async_generator {
             wrap_returns_in_promise(&mut throw_body);
         }
@@ -707,44 +722,89 @@ fn generator_expr_uses_call_this(expr: &Expr) -> bool {
     }
 }
 
-/// Build the async-step driver (issue #256). Returns the statements that
-/// take the place of the plain `return iter_obj` that a normal generator
-/// would emit. Equivalent TypeScript:
-///
-/// ```ts
-/// const __iter = <iter_obj>;
-/// let __step;
-/// __step = (value, isError) => {
-///     let r;
-///     try {
-///         r = isError ? __iter.throw(value) : __iter.next(value);
-///     } catch (e) {
-///         return Promise.reject(e);
-///     }
-///     if (r.done) return Promise.resolve(r.value);
-///     return Promise.resolve(r.value).then(
-///         v => __step(v, false),
-///         e => __step(e, true),
-///     );
-/// };
-/// return __step(undefined, false);
-/// ```
-///
-/// The two-step `let __step; __step = ...;` pattern is required because
-fn build_async_throw_body(
-    catches: &[CatchRoute],
+fn build_generator_resume_body(done_id: LocalId, while_body: &[Stmt]) -> Vec<Stmt> {
+    vec![
+        Stmt::If {
+            condition: Expr::LocalGet(done_id),
+            then_branch: vec![Stmt::Return(Some(make_iter_result(Expr::Undefined, true)))],
+            else_branch: None,
+        },
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body: while_body.to_vec(),
+        },
+    ]
+}
+
+fn build_generator_return_body(
+    finally_routes: &[FinallyRoute],
     state_id: LocalId,
-    throw_param_id: LocalId,
+    done_id: LocalId,
+    return_param_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
 ) -> Vec<Stmt> {
-    let mut fallback = vec![Stmt::Throw(Expr::LocalGet(throw_param_id))];
+    let mut body = vec![
+        Stmt::If {
+            condition: Expr::LocalGet(done_id),
+            then_branch: vec![Stmt::Return(Some(make_iter_result(
+                Expr::LocalGet(return_param_id),
+                true,
+            )))],
+            else_branch: None,
+        },
+        Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+    ];
+    body.extend(build_finally_dispatch(
+        finally_routes,
+        state_id,
+        done_id,
+        hoisted_ids,
+    ));
+    body.push(Stmt::Return(Some(make_iter_result(
+        Expr::LocalGet(return_param_id),
+        true,
+    ))));
+    body
+}
+
+fn build_async_throw_body(
+    catches: &[CatchRoute],
+    finally_routes: &[FinallyRoute],
+    state_id: LocalId,
+    done_id: LocalId,
+    throw_param_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+    resume_body: &[Stmt],
+    route_result_id: LocalId,
+    route_completed_id: LocalId,
+) -> Vec<Stmt> {
+    let mut fallback = vec![Stmt::Expr(Expr::LocalSet(
+        done_id,
+        Box::new(Expr::Bool(true)),
+    ))];
+    fallback.extend(build_finally_dispatch(
+        finally_routes,
+        state_id,
+        done_id,
+        hoisted_ids,
+    ));
+    fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
 
     // Build nested `if` dispatch in source order. We iterate from the back so
     // the first collected route is tested first; nested try/catch routes are
     // collected before their containing route and should win on overlap.
     for route in catches.iter().rev() {
-        let then_branch =
-            build_async_catch_route_body(route, state_id, throw_param_id, hoisted_ids);
+        let then_branch = build_async_catch_route_body(
+            route,
+            state_id,
+            throw_param_id,
+            done_id,
+            hoisted_ids,
+            finally_routes,
+            resume_body,
+            route_result_id,
+            route_completed_id,
+        );
         fallback = vec![Stmt::If {
             condition: catch_route_condition(route, state_id),
             then_branch,
@@ -752,7 +812,29 @@ fn build_async_throw_body(
         }];
     }
 
-    fallback
+    let mut body = vec![Stmt::If {
+        condition: Expr::LocalGet(done_id),
+        then_branch: vec![Stmt::Throw(Expr::LocalGet(throw_param_id))],
+        else_branch: None,
+    }];
+    if !catches.is_empty() {
+        body.push(Stmt::Let {
+            id: route_result_id,
+            name: "__throw_route_result".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        });
+        body.push(Stmt::Let {
+            id: route_completed_id,
+            name: "__throw_route_completed".to_string(),
+            ty: Type::Boolean,
+            mutable: true,
+            init: Some(Expr::Bool(false)),
+        });
+    }
+    body.extend(fallback);
+    body
 }
 
 fn catch_route_condition(route: &CatchRoute, state_id: LocalId) -> Expr {
@@ -774,11 +856,63 @@ fn catch_route_condition(route: &CatchRoute, state_id: LocalId) -> Expr {
     }
 }
 
+fn finally_route_condition(route: &FinallyRoute, state_id: LocalId) -> Expr {
+    Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(Expr::Compare {
+            op: CompareOp::Gt,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.protected_start_state as f64)),
+        }),
+        right: Box::new(Expr::Compare {
+            op: CompareOp::Le,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.finally_state as f64)),
+        }),
+    }
+}
+
+fn build_finally_dispatch(
+    routes: &[FinallyRoute],
+    state_id: LocalId,
+    done_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    routes
+        .iter()
+        .map(|route| Stmt::If {
+            condition: finally_route_condition(route, state_id),
+            then_branch: prepare_finally_body(route, done_id, hoisted_ids),
+            else_branch: None,
+        })
+        .collect()
+}
+
+fn prepare_finally_body(
+    route: &FinallyRoute,
+    done_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let mut rewritten = route.body.clone();
+    rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
+    rewrite_yield_to_await_in_stmts(&mut rewritten);
+    if body_contains_return(&rewritten) {
+        prepend_done_before_returns(&mut rewritten, done_id);
+        rewrite_returns_as_done(&mut rewritten);
+    }
+    rewritten
+}
+
 fn build_async_catch_route_body(
     route: &CatchRoute,
     state_id: LocalId,
     throw_param_id: LocalId,
+    done_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
+    finally_routes: &[FinallyRoute],
+    resume_body: &[Stmt],
+    route_result_id: LocalId,
+    route_completed_id: LocalId,
 ) -> Vec<Stmt> {
     let mut body = Vec::new();
     if let Some(cp_id) = route.param_id {
@@ -791,15 +925,179 @@ fn build_async_catch_route_body(
     let mut rewritten = route.body.clone();
     rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
     rewrite_yield_to_await_in_stmts(&mut rewritten);
-    rewrite_catch_returns_to_iter_result(&mut rewritten);
-    body.extend(rewritten);
+    let route_done_label = format!("__throw_route_done_{}", route.post_catch_state);
+    rewrite_returns_to_route_result(
+        &mut rewritten,
+        route_result_id,
+        route_completed_id,
+        &route_done_label,
+    );
+    body.push(Stmt::Labeled {
+        label: route_done_label,
+        body: Box::new(Stmt::DoWhile {
+            body: rewritten,
+            condition: Expr::Bool(false),
+        }),
+    });
 
-    body.push(Stmt::Expr(Expr::LocalSet(
-        state_id,
-        Box::new(Expr::Number(route.post_catch_state as f64)),
-    )));
-    body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, false))));
+    if let Some(finally_route) = finally_routes
+        .iter()
+        .find(|finally_route| finally_route.finally_state == route.post_catch_state)
+    {
+        body.push(Stmt::If {
+            condition: Expr::LocalGet(route_completed_id),
+            then_branch: vec![Stmt::Expr(Expr::LocalSet(
+                done_id,
+                Box::new(Expr::Bool(true)),
+            ))],
+            else_branch: None,
+        });
+        body.extend(prepare_finally_body(finally_route, done_id, hoisted_ids));
+        body.push(Stmt::If {
+            condition: Expr::LocalGet(route_completed_id),
+            then_branch: vec![Stmt::Return(Some(Expr::LocalGet(route_result_id)))],
+            else_branch: None,
+        });
+        body.push(Stmt::Expr(Expr::LocalSet(
+            state_id,
+            Box::new(Expr::Number(finally_route.post_finally_state as f64)),
+        )));
+    } else {
+        body.push(Stmt::If {
+            condition: Expr::LocalGet(route_completed_id),
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Return(Some(Expr::LocalGet(route_result_id))),
+            ],
+            else_branch: None,
+        });
+        body.push(Stmt::Expr(Expr::LocalSet(
+            state_id,
+            Box::new(Expr::Number(route.post_catch_state as f64)),
+        )));
+    }
+
+    body.extend(resume_body.iter().cloned());
     body
+}
+
+fn rewrite_returns_to_route_result(
+    stmts: &mut Vec<Stmt>,
+    route_result_id: LocalId,
+    route_completed_id: LocalId,
+    label: &str,
+) {
+    let mut i = 0;
+    while i < stmts.len() {
+        let stmt = std::mem::replace(&mut stmts[i], Stmt::Continue);
+        match stmt {
+            Stmt::Return(value) => {
+                let value = value.unwrap_or(Expr::Undefined);
+                stmts[i] = Stmt::Expr(Expr::LocalSet(
+                    route_result_id,
+                    Box::new(make_iter_result(value, true)),
+                ));
+                stmts.insert(
+                    i + 1,
+                    Stmt::Expr(Expr::LocalSet(
+                        route_completed_id,
+                        Box::new(Expr::Bool(true)),
+                    )),
+                );
+                stmts.insert(i + 2, Stmt::LabeledBreak(label.to_string()));
+                i += 3;
+            }
+            mut other => {
+                rewrite_returns_to_route_result_in_stmt(
+                    &mut other,
+                    route_result_id,
+                    route_completed_id,
+                    label,
+                );
+                stmts[i] = other;
+                i += 1;
+            }
+        }
+    }
+}
+
+fn rewrite_returns_to_route_result_in_stmt(
+    stmt: &mut Stmt,
+    route_result_id: LocalId,
+    route_completed_id: LocalId,
+    label: &str,
+) {
+    match stmt {
+        Stmt::Return(_) => {
+            unreachable!("rewrite_returns_to_route_result_in_stmt should not see a bare Return");
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_returns_to_route_result(
+                then_branch,
+                route_result_id,
+                route_completed_id,
+                label,
+            );
+            if let Some(eb) = else_branch.as_mut() {
+                rewrite_returns_to_route_result(eb, route_result_id, route_completed_id, label);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            rewrite_returns_to_route_result(body, route_result_id, route_completed_id, label);
+        }
+        Stmt::For { init, body, .. } => {
+            if let Some(init_stmt) = init.as_mut() {
+                rewrite_returns_to_route_result_in_stmt(
+                    init_stmt.as_mut(),
+                    route_result_id,
+                    route_completed_id,
+                    label,
+                );
+            }
+            rewrite_returns_to_route_result(body, route_result_id, route_completed_id, label);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_returns_to_route_result(body, route_result_id, route_completed_id, label);
+            if let Some(c) = catch.as_mut() {
+                rewrite_returns_to_route_result(
+                    &mut c.body,
+                    route_result_id,
+                    route_completed_id,
+                    label,
+                );
+            }
+            if let Some(f) = finally.as_mut() {
+                rewrite_returns_to_route_result(f, route_result_id, route_completed_id, label);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases.iter_mut() {
+                rewrite_returns_to_route_result(
+                    &mut case.body,
+                    route_result_id,
+                    route_completed_id,
+                    label,
+                );
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            rewrite_returns_to_route_result_in_stmt(
+                body.as_mut(),
+                route_result_id,
+                route_completed_id,
+                label,
+            );
+        }
+        _ => {}
+    }
 }
 
 fn build_async_throw_body_direct(
@@ -860,6 +1158,29 @@ fn build_async_catch_route_body_direct(
     body
 }
 
+/// Build the async-step driver (issue #256). Returns the statements that
+/// take the place of the plain `return iter_obj` that a normal generator
+/// would emit. Equivalent TypeScript:
+///
+/// ```ts
+/// const __iter = <iter_obj>;
+/// let __step;
+/// __step = (value, isError) => {
+///     let r;
+///     try {
+///         r = isError ? __iter.throw(value) : __iter.next(value);
+///     } catch (e) {
+///         return Promise.reject(e);
+///     }
+///     if (r.done) return Promise.resolve(r.value);
+///     return Promise.resolve(r.value).then(
+///         v => __step(v, false),
+///         e => __step(e, true),
+///     );
+/// };
+/// return __step(undefined, false);
+/// ```
+///
 /// Build the async step driver without allocating the `__iter` object.
 /// allocation entirely. Used for `was_plain_async = true` generators
 /// where the iter object is never observable from user code (the
