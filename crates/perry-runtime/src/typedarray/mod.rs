@@ -742,6 +742,12 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
                 raw_addr as *const TypedArrayHeader,
             );
         }
+        if crate::buffer::is_registered_buffer(raw_addr)
+            && crate::buffer::is_any_array_buffer(raw_addr)
+        {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            return crate::typedarray_view::js_typed_array_view(kind, val, undefined, undefined);
+        }
         return js_typed_array_new_from_array(kind, arr);
     }
     if top16 == 0x7FFE {
