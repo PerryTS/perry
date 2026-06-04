@@ -1207,6 +1207,24 @@ pub unsafe extern "C" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // `new <primitive>()` is a TypeError — a primitive is never a constructor
+    // (`new undefined()`, `new 5n()`, `new "s"()`, `new true()`). Checked via
+    // the unambiguous NaN-box tags only (NOT `is_number`, whose f64 range
+    // overlaps the raw-i64 pointer encoding of module-level objects). Without
+    // this, `new x.method()` where `x.method` reads back `undefined`, and other
+    // primitive callees, silently fell through to the empty-object fallback.
+    {
+        let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+        if jv.is_undefined()
+            || jv.is_null()
+            || jv.is_bool()
+            || jv.is_int32()
+            || jv.is_any_string()
+            || jv.is_bigint()
+        {
+            super::object_ops::throw_object_type_error(b"is not a constructor");
+        }
+    }
     // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
