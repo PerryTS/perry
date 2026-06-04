@@ -56,19 +56,21 @@ pub fn parse_typescript_with_cache(
         Lrc::new(FileName::Custom(filename.to_string())),
         parse_source.clone(),
     );
-
-    let mut parser = parser_for_source_file(&source_file, filename);
     let mut diagnostics = Diagnostics::new();
 
-    let module = parse_module_or_script(&mut parser, filename, &parse_source).map_err(|e| {
-        // Convert SWC error to our diagnostic
-        let span = Span::new(file_id, e.span().lo.0, e.span().hi.0);
-        let diag = Diagnostic::error(DiagnosticCode::ParseError, format!("{}", e.kind().msg()))
-            .with_span(span)
-            .build();
-        diagnostics.push(diag);
-        anyhow::anyhow!("Parse error: {}", e.kind().msg())
-    })?;
+    let (module, mut parser) =
+        parse_source_file_with_typescript_fallback(&source_file, filename, &parse_source).map_err(
+            |e| {
+                // Convert SWC error to our diagnostic
+                let span = Span::new(file_id, e.span().lo.0, e.span().hi.0);
+                let diag =
+                    Diagnostic::error(DiagnosticCode::ParseError, format!("{}", e.kind().msg()))
+                        .with_span(span)
+                        .build();
+                diagnostics.push(diag);
+                anyhow::anyhow!("Parse error: {}", e.kind().msg())
+            },
+        )?;
 
     // Collect recoverable errors as warnings
     for error in parser.take_errors() {
@@ -102,10 +104,9 @@ pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
         parse_source,
     );
 
-    let mut parser = parser_for_source_file(&source_file, filename);
-
-    let module = parse_module_or_script(&mut parser, filename, &source_file.src)
-        .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
+    let (module, mut parser) =
+        parse_source_file_with_typescript_fallback(&source_file, filename, &source_file.src)
+            .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
 
     // Check for recoverable errors
     for error in parser.take_errors() {
@@ -115,12 +116,12 @@ pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
     Ok(module)
 }
 
-fn parser_for_source_file<'a>(
+fn parser_for_source_file_with_syntax<'a>(
     source_file: &'a swc_common::SourceFile,
-    filename: &str,
+    syntax: Syntax,
 ) -> Parser<Lexer<'a>> {
     let lexer = Lexer::new(
-        syntax_for_filename(filename),
+        syntax,
         swc_ecma_ast::EsVersion::Es2022,
         StringInput::from(source_file),
         None,
@@ -128,23 +129,44 @@ fn parser_for_source_file<'a>(
     Parser::new_from(lexer)
 }
 
+fn parse_source_file_with_typescript_fallback<'a>(
+    source_file: &'a swc_common::SourceFile,
+    filename: &str,
+    source: &str,
+) -> swc_ecma_parser::PResult<(Module, Parser<Lexer<'a>>)> {
+    let syntax = syntax_for_filename(filename);
+    let is_typescript = matches!(syntax, Syntax::Typescript(_));
+    let mut parser = parser_for_source_file_with_syntax(source_file, syntax);
+
+    match parse_module_or_script(&mut parser, filename, source) {
+        Ok(module) => Ok((module, parser)),
+        Err(first_error) => {
+            if !is_typescript && source_looks_like_typescript(source) {
+                let mut retry_parser = parser_for_source_file_with_syntax(
+                    source_file,
+                    typescript_syntax_for_filename(filename),
+                );
+                if let Ok(module) = parse_module_or_script(&mut retry_parser, filename, source) {
+                    return Ok((module, retry_parser));
+                }
+            }
+            Err(first_error)
+        }
+    }
+}
+
 fn syntax_for_filename(filename: &str) -> Syntax {
     let path = filename.split(['?', '#']).next().unwrap_or(filename);
-    if path.ends_with(".ts")
-        || path.ends_with(".tsx")
-        || path.ends_with(".mts")
-        || path.ends_with(".cts")
+    let lower_path = path.to_ascii_lowercase();
+    if lower_path.ends_with(".ts")
+        || lower_path.ends_with(".tsx")
+        || lower_path.ends_with(".mts")
+        || lower_path.ends_with(".cts")
     {
-        Syntax::Typescript(TsSyntax {
-            tsx: path.ends_with(".tsx"),
-            decorators: true,
-            dts: false,
-            no_early_errors: false,
-            disallow_ambiguous_jsx_like: false,
-        })
+        typescript_syntax_for_path(&lower_path)
     } else {
         Syntax::Es(EsSyntax {
-            jsx: path.ends_with(".jsx"),
+            jsx: lower_path.ends_with(".jsx"),
             decorators: true,
             decorators_before_export: true,
             export_default_from: true,
@@ -152,6 +174,121 @@ fn syntax_for_filename(filename: &str) -> Syntax {
             ..Default::default()
         })
     }
+}
+
+fn typescript_syntax_for_filename(filename: &str) -> Syntax {
+    let path = filename.split(['?', '#']).next().unwrap_or(filename);
+    typescript_syntax_for_path(&path.to_ascii_lowercase())
+}
+
+fn typescript_syntax_for_path(path: &str) -> Syntax {
+    Syntax::Typescript(TsSyntax {
+        tsx: path.ends_with(".tsx"),
+        decorators: true,
+        dts: false,
+        no_early_errors: false,
+        disallow_ambiguous_jsx_like: false,
+    })
+}
+
+fn strip_comments_and_strings(source: &str) -> String {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Code,
+        String(u8),
+        LineComment,
+        BlockComment,
+    }
+
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    let mut state = State::Code;
+    while i < bytes.len() {
+        match state {
+            State::Code => {
+                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                    state = State::String(bytes[i]);
+                    out.push(' ');
+                    i += 1;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                    state = State::LineComment;
+                    out.push(' ');
+                    out.push(' ');
+                    i += 2;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    state = State::BlockComment;
+                    out.push(' ');
+                    out.push(' ');
+                    i += 2;
+                } else {
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+            }
+            State::String(quote) => {
+                if bytes[i] == b'\\' {
+                    out.push(' ');
+                    i += 1;
+                    if i < bytes.len() {
+                        let ch = source[i..].chars().next().unwrap();
+                        out.push(if ch == '\n' { '\n' } else { ' ' });
+                        i += ch.len_utf8();
+                    }
+                } else {
+                    let ch = source[i..].chars().next().unwrap();
+                    if bytes[i] == quote {
+                        state = State::Code;
+                    }
+                    out.push(if ch == '\n' { '\n' } else { ' ' });
+                    i += ch.len_utf8();
+                }
+            }
+            State::LineComment => {
+                let ch = source[i..].chars().next().unwrap();
+                if bytes[i] == b'\n' {
+                    state = State::Code;
+                    out.push('\n');
+                } else {
+                    out.push(' ');
+                }
+                i += ch.len_utf8();
+            }
+            State::BlockComment => {
+                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    out.push(' ');
+                    out.push(' ');
+                    i += 2;
+                    state = State::Code;
+                } else {
+                    let ch = source[i..].chars().next().unwrap();
+                    out.push(if ch == '\n' { '\n' } else { ' ' });
+                    i += ch.len_utf8();
+                }
+            }
+        }
+    }
+    out
+}
+
+fn source_looks_like_typescript(source: &str) -> bool {
+    let stripped = strip_comments_and_strings(source);
+    stripped.contains("):")
+        || stripped.contains(": number")
+        || stripped.contains(": string")
+        || stripped.contains(": boolean")
+        || stripped.contains(": Promise")
+        || stripped.contains(": void")
+        || stripped.contains(": any")
+        || stripped.contains(": unknown")
+        || stripped.contains(": bigint")
+        || stripped.contains(": symbol")
+        || stripped.contains(": object")
+        || stripped.contains(" as ")
+        || stripped.contains("interface ")
+        || stripped.contains("type ")
+        || stripped.contains("enum ")
 }
 
 fn parse_module_or_script(
@@ -580,6 +717,55 @@ mod tests {
         "#;
 
         let module = parse_typescript(source, "test.ts").unwrap();
+        assert_eq!(module.body.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_thread_promise_void_regression_source() {
+        let source = r#"
+            import { parallelFilter, parallelMap, spawn } from "perry/thread";
+
+            async function spawnNonBlocking(): Promise<void> {
+                const bgThread = spawn(() => {
+                    let n = 0;
+                    for (let i = 0; i < 10; i++) n++;
+                    return n;
+                });
+
+                const result: number = await bgThread;
+                console.log(result.toLocaleString("en-US"));
+            }
+
+            await spawnNonBlocking();
+        "#;
+
+        let module = parse_typescript(source, "thread.ts").unwrap();
+        assert_eq!(module.body.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_thread_promise_void_windows_uppercase_ts_path() {
+        let source = r#"
+            async function spawnNonBlocking(): Promise<void> {
+                const result: number = await Promise.resolve(1);
+                console.log(result);
+            }
+        "#;
+
+        let module = parse_typescript(source, r"C:\repo\src\THREAD.TS").unwrap();
+        assert_eq!(module.body.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_thread_promise_void_extensionless_fallback() {
+        let source = r#"
+            async function spawnNonBlocking(): Promise<void> {
+                const result: number = await Promise.resolve(1);
+                console.log(result);
+            }
+        "#;
+
+        let module = parse_typescript(source, "thread").unwrap();
         assert_eq!(module.body.len(), 1);
     }
 

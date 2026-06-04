@@ -93,25 +93,16 @@ pub(super) fn throw_out_of_range() -> ! {
 /// here (no `code` property), message
 /// `"Offset is outside the bounds of the DataView"` — see #2878.
 pub(super) fn throw_dataview_offset_out_of_bounds() -> ! {
-    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_RANGE_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
-    });
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    let set = |key: &[u8], value: f64| {
-        let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-    };
-    let str_val = |s: &[u8]| -> f64 {
-        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
-    };
-    set(b"name", str_val(b"RangeError"));
-    set(
-        b"message",
-        str_val(b"Offset is outside the bounds of the DataView"),
-    );
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+    // Use the standard `RangeError` constructor (same path as `new RangeError`)
+    // so the thrown error carries the real prototype chain — `.constructor`,
+    // `Error.prototype` methods, etc. The previous hand-rolled `js_object_alloc`
+    // produced an error where `instanceof RangeError` held but `.constructor` was
+    // `undefined`, which crashed test262's `assert.throws` (`err.constructor.name`).
+    // Node throws a plain `RangeError` here with no `code` property (#2878).
+    const MSG: &[u8] = b"Offset is outside the bounds of the DataView";
+    let msg = crate::string::js_string_from_bytes(MSG.as_ptr(), MSG.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 fn throw_buffer_out_of_bounds() -> ! {

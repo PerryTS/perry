@@ -63,6 +63,7 @@ mod lifecycle;
 pub use lifecycle::*;
 mod classes;
 pub use classes::*;
+mod dispatch;
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
 mod raw_bridge;
@@ -77,7 +78,10 @@ pub use option_setters::{
     js_net_socket_set_timeout, js_net_socket_set_type_of_service,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
+
 mod server_state;
+#[cfg(test)]
+mod test_async_shims;
 pub use server_state::*;
 
 use crate::tls::do_tls_handshake;
@@ -242,8 +246,8 @@ pub(crate) struct SocketState {
     /// `js_net_socket_method_connect`. Held here so the deferred-connect
     /// path (issue #422: `new net.Socket()` then `sock.connect(port,host)`)
     /// can move it into the spawned task at connect time.
-    pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
-    is_open: bool,
+    pub(crate) pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
+    pub(crate) is_open: bool,
     /// Issue #2131 — the kernel-assigned local address, populated after
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
@@ -709,6 +713,7 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     ensure_gc_scanner_registered();
+    dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     statics::sockets().lock().unwrap().insert(
@@ -743,6 +748,7 @@ pub unsafe extern "C" fn js_net_create_server(
     connection_listener_i64: i64,
 ) -> i64 {
     ensure_gc_scanner_registered();
+    dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     statics::listeners()
         .lock()
@@ -1210,6 +1216,7 @@ pub unsafe extern "C" fn js_tls_connect(
 /// firing 'connect'; None keeps the socket in plain TCP mode.
 fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>) -> i64 {
     ensure_gc_scanner_registered();
+    dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
 
@@ -1724,24 +1731,10 @@ fn listeners_for(id: i64, event: &str) -> Vec<i64> {
 // `drain_once_listeners` lives in `lifecycle::drain_once_listeners` so
 // the file-size gate keeps a single owner for the EventEmitter surface.
 
-/// Returns 1 if there are pending events or live sockets keeping the
-/// runtime's main loop alive.
+/// Returns 1 if queued events or live net handles keep the loop alive.
 #[no_mangle]
 pub extern "C" fn js_net_has_pending() -> i32 {
-    if !statics::pending_events().lock().unwrap().is_empty() {
-        return 1;
-    }
-    if !statics::sockets().lock().unwrap().is_empty() {
-        return 1;
-    }
-    // Issue #1123 followup — a listening `net.Server` keeps the loop
-    // alive too: pre-fix, `createServer(...).listen(port, cb)` would
-    // exit before any client ever connected because the gate only
-    // counted accepted sockets.
-    if !statics::servers().lock().unwrap().is_empty() {
-        return 1;
-    }
-    0
+    server_state::has_active_handles() as i32
 }
 
 /// True iff `handle` is a currently-registered net socket id. Mirrors the
@@ -1801,34 +1794,10 @@ pub extern "C" fn js_ext_net_is_server_handle(handle: i64) -> i32 {
     }
 }
 
-/// Returns 1 if there are pending socket events or live socket handles
-/// keeping the runtime's event loop alive.
-///
-/// "Live" here means *registered* — including sockets still establishing
-/// their TCP connection. Counting only fully-open sockets caused the
-/// runtime to exit before async `connect` ever completed (the open flag
-/// flips inside the spawned task, after `await TcpStream::connect`).
-///
-/// Without this, `await new Promise(r => sock.on('connect', r))` from
-/// a TS-source npm driver (e.g. `@perryts/mysql`) returns a Promise the
-/// runtime can't see is pending, so the event loop exits before the
-/// socket's 'connect' event ever fires through the pump. Issue #536.
+/// Auxiliary liveness hook registered with the runtime for mixed stdlib links.
 #[no_mangle]
 pub extern "C" fn js_ext_net_has_active_handles() -> i32 {
-    if !statics::pending_events().lock().unwrap().is_empty() {
-        return 1;
-    }
-    if !statics::sockets().lock().unwrap().is_empty() {
-        return 1;
-    }
-    // Issue #1123 followup — same rationale as `js_net_has_pending`:
-    // a listening server must keep the event loop alive until
-    // `.close()` drops the shutdown sender and the accept-loop task
-    // pushes its terminal `ServerClose` event.
-    if !statics::servers().lock().unwrap().is_empty() {
-        return 1;
-    }
-    0
+    server_state::has_active_handles() as i32
 }
 
 #[cfg(test)]

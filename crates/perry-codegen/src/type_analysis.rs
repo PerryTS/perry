@@ -8,6 +8,7 @@ use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
+use crate::type_analysis_net::{net_result_class, net_result_type};
 
 pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
     matches!(e, Expr::GlobalGet(_))
@@ -249,6 +250,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::BufferConcat(_)
         | Expr::BufferConcatWithLength { .. }
         | Expr::CryptoRandomBytes(_) => Some(HirType::Named("Uint8Array".into())),
+        e if net_result_type(e).is_some() => net_result_type(e),
         Expr::NativeMethodCall {
             module,
             method,
@@ -1654,6 +1656,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // info on the static method's return, assume it's the same class
         // so chained `.toString()` finds the user's toString.
         Expr::StaticMethodCall { class_name, .. } => Some(class_name.clone()),
+        e if net_result_class(e).is_some() => net_result_class(e).map(str::to_string),
         // `this` inside a constructor or method body — the class name is
         // at the top of class_stack (for inlined constructors) or comes
         // from the enclosing method's owning class.
@@ -1802,6 +1805,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
         Expr::Bool(_) => Some(HirType::Boolean),
         Expr::LocalGet(id) => ctx.local_types.get(id).cloned(),
+        e if net_result_type(e).is_some() => net_result_type(e),
         Expr::PropertyGet { object, property } => {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return Some(HirType::Number);

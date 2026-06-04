@@ -34,7 +34,8 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::property_get_names::{
-    is_headers_method_name, is_http_client_request_method_name, is_url_pattern_data_property,
+    is_headers_method_name, is_http_client_request_method_name, is_net_native_method_value,
+    is_url_pattern_data_property,
 };
 #[allow(unused_imports)]
 use super::{
@@ -77,6 +78,25 @@ fn lower_runtime_property_get_by_name(
         DOUBLE,
         "js_object_get_field_by_name_f64",
         &[(I64, &obj_bits), (I64, &key_handle)],
+    ))
+}
+
+fn lower_class_method_bind(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    method_name: &str,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    let key_idx = ctx.strings.intern(method_name);
+    let entry = ctx.strings.entry(key_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let len_str = entry.byte_len.to_string();
+    let blk = ctx.block();
+    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+    Ok(blk.call(
+        DOUBLE,
+        "js_class_method_bind",
+        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
     ))
 }
 
@@ -1271,6 +1291,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_class_method_bind",
                         &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
                     ));
+                }
+                if is_net_native_method_value(&class_name, property) {
+                    return lower_class_method_bind(ctx, object, property);
                 }
                 if class_has_computed_runtime_members(ctx, &class_name) {
                     return lower_runtime_property_get_by_name(ctx, object, property);
