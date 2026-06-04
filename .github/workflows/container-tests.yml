@@ -84,7 +84,7 @@ jobs:
         os: [macos-14, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Free up disk space (macOS)
         if: runner.os == 'macOS'
@@ -159,7 +159,7 @@ jobs:
     runs-on: macos-14
     if: github.event_name != 'pull_request' || github.base_ref == 'main'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Free up disk space (macOS)
         run: |
@@ -205,7 +205,7 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request' || github.base_ref == 'main'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -247,7 +247,7 @@ jobs:
       startsWith(github.ref, 'refs/tags/v') ||
       github.event.inputs.run_e2e == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -311,7 +311,7 @@ jobs:
       matrix:
         target: [compose_yaml_parse, env_interpolation, compose_spec_json_round_trip]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install nightly Rust + cargo-fuzz
         run: |
