@@ -630,6 +630,8 @@ mod tests {
             "js_net_get_default_auto_select_family_attempt_timeout",
             "js_net_set_default_auto_select_family_attempt_timeout",
             "js_net_socket_set_timeout",
+            "js_net_socket_get_type_of_service",
+            "js_net_socket_set_type_of_service",
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown("net"));
         }

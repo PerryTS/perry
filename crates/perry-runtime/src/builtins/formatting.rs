@@ -1229,7 +1229,7 @@ unsafe fn format_object_as_json(
         // object's class chain when the instance lookup misses.
         let class_id = (*obj_ptr).class_id;
         if class_id != 0 {
-            if let Some((func_ptr, param_count, has_synthetic_arguments)) =
+            if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                 crate::object::lookup_class_method_in_chain(class_id, "__perry_inspect_custom__")
             {
                 let _guard = InspectCustomInspectGuard::new(false);
@@ -1245,6 +1245,7 @@ unsafe fn format_object_as_json(
                     args.len(),
                     param_count,
                     has_synthetic_arguments,
+                    has_rest,
                 );
                 let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
                 if ret_jv.is_any_string() {

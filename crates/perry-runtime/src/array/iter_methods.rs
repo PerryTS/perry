@@ -695,6 +695,19 @@ pub extern "C" fn js_array_join(
                 } else {
                     result.push_str("[object Object]");
                 }
+            } else if jsvalue.is_bigint() {
+                // BigInt elements are NaN-boxed with BIGINT_TAG (not POINTER_TAG),
+                // so they bypass the pointer arm above and previously fell through
+                // to the `[object Object]` catch-all. ToString(BigInt) is the plain
+                // decimal digits with NO `n` suffix (`[10n].join() === "10"`).
+                let s_ptr = crate::bigint::js_bigint_to_string(jsvalue.as_bigint_ptr());
+                if !s_ptr.is_null() {
+                    let str_len = (*s_ptr).byte_len as usize;
+                    let str_data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                    result.push_str(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        str_data, str_len,
+                    )));
+                }
             } else if jsvalue.is_number() {
                 let n = jsvalue.as_number();
                 if n.is_nan() {

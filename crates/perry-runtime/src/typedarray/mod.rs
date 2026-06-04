@@ -17,7 +17,7 @@ use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
 use crate::typedarray_half::{f16_bits_to_f64, f64_to_f16_bits};
 
-mod bigint;
+pub(crate) mod bigint;
 mod format;
 pub use format::format_typed_array;
 
@@ -142,6 +142,11 @@ thread_local! {
     /// (~1.0% leaf samples on perf-comprehensive).
     static TYPED_ARRAY_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, u8>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    /// Perry currently materializes typed-array views over ArrayBuffer storage
+    /// as owning TypedArrayHeader values. Track which views came from
+    /// SharedArrayBuffer so Atomics.wait can apply Node's shared-buffer guard.
+    static TYPED_ARRAY_SHARED_BACKING: RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
 pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
@@ -155,6 +160,9 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     TYPED_ARRAY_REGISTRY.with(|r| {
         r.borrow_mut().remove(&owner);
     });
+    TYPED_ARRAY_SHARED_BACKING.with(|r| {
+        r.borrow_mut().remove(&owner);
+    });
     crate::typedarray_props::typed_array_clear_own_props(owner);
 }
 
@@ -162,6 +170,17 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
 /// typed array, else None.
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     TYPED_ARRAY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
+}
+
+pub(crate) fn mark_typed_array_shared_backing(ptr: *const TypedArrayHeader) {
+    TYPED_ARRAY_SHARED_BACKING.with(|r| {
+        r.borrow_mut().insert(ptr as usize);
+    });
+}
+
+pub(crate) fn typed_array_has_shared_backing(ptr: *const TypedArrayHeader) -> bool {
+    let ptr = clean_ta_ptr(ptr);
+    TYPED_ARRAY_SHARED_BACKING.with(|r| r.borrow().contains(&(ptr as usize)))
 }
 
 #[inline]
@@ -535,6 +554,17 @@ fn jsvalue_to_f64(v: f64) -> f64 {
     if !(0x7FFA..0x8000).contains(&top16) {
         return v;
     }
+    // ECMA-262 IntegerIndexedElementSet on a non-bigint view performs
+    // ToNumber on the value. ToNumber(Symbol) and ToNumber(BigInt) are both
+    // TypeErrors (§7.1.4). Bigint views never reach here (js_typed_array_set
+    // routes ToBigInt separately), so a BigInt at this point is being written
+    // into a numeric view and must throw. Symbols are POINTER_TAG.
+    if top16 == 0x7FFA {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    if top16 == 0x7FFD && unsafe { crate::symbol::js_is_symbol(v) } != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+    }
     // INT32 tag
     if top16 == 0x7FFE {
         let n = (bits & 0xFFFF_FFFF) as i32;
@@ -727,6 +757,16 @@ pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut Typed
 pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHeader {
     let bits = val.to_bits();
     let top16 = (bits >> 48) as u16;
+    // `new TA(arg)` with a non-object arg performs ToIndex(arg) = ToNumber(arg)
+    // for the length. ToNumber(BigInt) and ToNumber(Symbol) are TypeErrors
+    // (§7.1.4), so `new Int8Array(5n)` / `new Int8Array(Symbol())` must throw
+    // rather than yielding an empty (BigInt) or garbage-copied (Symbol) array.
+    if top16 == 0x7FFA {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    if top16 == 0x7FFD && unsafe { crate::symbol::js_is_symbol(val) } != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+    }
     if top16 == 0x7FFD {
         // POINTER_TAG — existing array pointer; copy its elements.
         let arr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::array::ArrayHeader;
@@ -741,6 +781,12 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
                 kind as u8,
                 raw_addr as *const TypedArrayHeader,
             );
+        }
+        if crate::buffer::is_registered_buffer(raw_addr)
+            && crate::buffer::is_any_array_buffer(raw_addr)
+        {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            return crate::typedarray_view::js_typed_array_view(kind, val, undefined, undefined);
         }
         return js_typed_array_new_from_array(kind, arr);
     }

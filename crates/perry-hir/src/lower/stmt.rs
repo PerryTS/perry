@@ -46,6 +46,65 @@ fn class_computed_member_registration_expr(class_name: &str, member: &ClassCompu
     }
 }
 
+fn emit_class_expression_value_binding(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    bind_name: &str,
+    mutable: bool,
+    is_var: bool,
+) {
+    let ty = Type::Any;
+    let id = if ctx.scope_depth == 0
+        && ctx.inside_block_scope == 0
+        && ctx.pre_registered_module_vars.remove(bind_name)
+    {
+        ctx.pre_registered_module_var_decls.remove(bind_name);
+        let id = ctx
+            .lookup_local(bind_name)
+            .unwrap_or_else(|| ctx.define_local(bind_name.to_string(), ty.clone()));
+        if let Some((_, _, existing_ty)) =
+            ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
+        {
+            *existing_ty = ty.clone();
+        }
+        id
+    } else if is_var {
+        if let Some(id) = ctx
+            .locals
+            .iter()
+            .rev()
+            .find(|(name, id, _)| name == bind_name && ctx.var_hoisted_ids.contains(id))
+            .map(|(_, id, _)| *id)
+        {
+            if let Some((_, _, existing_ty)) =
+                ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
+            {
+                *existing_ty = ty.clone();
+            }
+            id
+        } else {
+            ctx.define_local(bind_name.to_string(), ty.clone())
+        }
+    } else {
+        ctx.define_local(bind_name.to_string(), ty.clone())
+    };
+
+    if is_var {
+        ctx.var_hoisted_ids.insert(id);
+    }
+    if !mutable {
+        ctx.mark_local_immutable(id);
+    }
+    ctx.register_let_class_alias(bind_name.to_string(), bind_name.to_string());
+    module.init.push(Stmt::Let {
+        id,
+        name: bind_name.to_string(),
+        ty,
+        mutable,
+        init: Some(Expr::ClassRef(bind_name.to_string())),
+    });
+}
+
 /// Recursively walk a destructuring pattern collecting every leaf identifier
 /// (and pre-defining each as a local). Used by the for-of binding pre-pass so
 /// the loop body can reference variables introduced by *nested* patterns like
@@ -604,9 +663,9 @@ pub(crate) fn lower_stmt(
                                     // (no-op lookup, but marks the binding as a class).
                                     ctx.class_expr_aliases
                                         .insert(bind_name.clone(), bind_name.clone());
-                                    // We intentionally DO NOT push a Stmt::Let for
-                                    // this binding — the class itself takes the
-                                    // role of a "static value" referenced by name.
+                                    emit_class_expression_value_binding(
+                                        ctx, module, &bind_name, mutable, is_var,
+                                    );
                                     continue;
                                 }
                             }
@@ -737,6 +796,8 @@ pub(crate) fn lower_stmt(
                                     // dispatches via the class-filtered entries.
                                     ("net", "Socket") => Some("Socket"),
                                     ("net", "Server") => Some("Server"),
+                                    ("net", "BlockList") => Some("BlockList"),
+                                    ("net", "SocketAddress") => Some("SocketAddress"),
                                     ("vm", "SourceTextModule") => Some("SourceTextModule"),
                                     ("vm", "SyntheticModule") => Some("SyntheticModule"),
                                     _ => None,

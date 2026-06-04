@@ -165,6 +165,21 @@ fn is_fs_promises_glob_for_await_target(ctx: &LoweringContext, expr: &ast::Expr)
     }
 }
 
+/// `for await (const line of rl)` where `rl = readline.createInterface(...)`.
+/// The interface is registered as a `("readline", "Interface")` native
+/// instance, so its method calls (`.on`, `.close`, and now `.iterator`)
+/// dispatch to the readline runtime. Mirrors the node:stream Readable arm.
+fn is_readline_interface_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    matches!(
+        strip_for_of_expr_wrappers(expr),
+        ast::Expr::Ident(ident)
+            if matches!(
+                ctx.lookup_native_instance(ident.sym.as_ref()),
+                Some(("readline", "Interface"))
+            )
+    )
+}
+
 fn async_iterator_method_call(iterable: Expr) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::IndexGet {
@@ -337,6 +352,8 @@ pub(crate) fn lower_stmt_for_of(
         for_of_stmt.is_await && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
     let is_fs_promises_glob_for_await =
         for_of_stmt.is_await && is_fs_promises_glob_for_await_target(ctx, &for_of_stmt.right);
+    let is_readline_interface_for_await =
+        for_of_stmt.is_await && is_readline_interface_for_await_target(ctx, &for_of_stmt.right);
 
     if is_generator_call
         || iter_from_class.is_some()
@@ -344,6 +361,7 @@ pub(crate) fn lower_stmt_for_of(
         || is_node_readable_for_await
         || is_filehandle_readlines_for_await
         || is_fs_promises_glob_for_await
+        || is_readline_interface_for_await
     {
         // Lower to iterator protocol:
         //   let __iter = genFunc(...);                     // generator-fn path
@@ -372,6 +390,16 @@ pub(crate) fn lower_stmt_for_of(
                 }),
                 args: vec![],
                 type_args: vec![],
+            }
+        } else if is_readline_interface_for_await {
+            // rl.iterator() -> readline async-iterator object; .next() then
+            // awaits each line. Dispatched explicitly to js_readline_iterator.
+            Expr::NativeMethodCall {
+                module: "readline".to_string(),
+                class_name: Some("Interface".to_string()),
+                object: Some(Box::new(iter_expr)),
+                method: "iterator".to_string(),
+                args: vec![],
             }
         } else {
             iter_expr
@@ -459,7 +487,10 @@ pub(crate) fn lower_stmt_for_of(
             lower_stmt(ctx, module, &for_of_stmt.body)?;
         }
         let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-        if is_node_readable_for_await || is_filehandle_readlines_for_await {
+        if is_node_readable_for_await
+            || is_filehandle_readlines_for_await
+            || is_readline_interface_for_await
+        {
             insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
         }
         body_stmts.append(&mut user_body);

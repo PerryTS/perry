@@ -383,6 +383,18 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         let ptr = jsval.as_bigint_ptr();
         crate::bigint::js_bigint_to_f64(ptr)
     } else if jsval.is_pointer() {
+        // ECMA-262 ToNumber(Symbol) is a TypeError (§7.1.4). Symbols are
+        // NaN-boxed with POINTER_TAG, so they would otherwise fall through to
+        // the object/toPrimitive path below and stringify to "Symbol(...)" or
+        // produce NaN. Throw before any of the pointer-shape handling. This
+        // covers both explicit `Number(sym)` and the implicit arithmetic
+        // ToNumber the codegen routes here (`sym * 2`, `-sym`, etc.). BigInt is
+        // intentionally NOT thrown here: `Number(1n)` converts (handled in the
+        // is_bigint arm above); the arithmetic-throws-on-BigInt rule lives at
+        // the arithmetic call sites (see dynamic_arith.rs both_bigint_or_throw).
+        if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+        }
         let id = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
         // #2089: a Date is a NaN-boxed pointer to a `DateCell`. `Number(date)`
         // / `+date` / `date - other` coerce to the millisecond timestamp.

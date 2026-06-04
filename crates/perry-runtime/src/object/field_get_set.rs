@@ -27,7 +27,7 @@ const CRYPTO_USAGE_DECAPSULATE_BITS: u32 = 1 << 9;
 const CRYPTO_USAGE_ENCAPSULATE_KEY: u32 = 1 << 10;
 const CRYPTO_USAGE_DECAPSULATE_KEY: u32 = 1 << 11;
 
-unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
+pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
     let (algo, hash, kind, extractable, usages) = crate::buffer::crypto_key_meta(addr)?;
     match key_bytes {
         b"algorithm" => Some(crypto_key_algorithm_value(addr, algo, hash)),
@@ -38,6 +38,10 @@ unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSV
             _ => "secret",
         })),
         b"usages" => Some(crypto_key_usages_value(usages)),
+        b"constructor" => {
+            let ctor = super::js_get_global_this_builtin_value(b"CryptoKey".as_ptr(), 9);
+            Some(JSValue::from_bits(ctor.to_bits()))
+        }
         _ => None,
     }
 }
@@ -2043,6 +2047,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                 let ta = addr as *const crate::typedarray::TypedArrayHeader;
+                if let Some(value) = crypto_key_property_value(addr, key_bytes) {
+                    return value;
+                }
                 if let Some(value) =
                     crate::typedarray_props::typed_array_get_own_property_value(ta, key)
                 {
@@ -2700,8 +2707,18 @@ pub extern "C" fn js_object_get_field_by_name(
                 if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
                     return JSValue::undefined();
                 }
+                // ECMAScript "poison pill": reading `caller` / `arguments` off a
+                // strict-mode function throws a TypeError (the %ThrowTypeError%
+                // accessor on `Function.prototype`). Perry has no sloppy mode —
+                // all TS/JS it compiles is strict — so this applies to every
+                // function (declarations, expressions, methods, classes, arrows,
+                // bound and built-in closures), matching `node`'s strict-mode
+                // behavior. A `delete fn.caller` (handled above) still wins, and a
+                // genuine own data prop of that name takes precedence so the rare
+                // `Object.defineProperty(fn, "caller", …)` round-trips.
                 if matches!(name_str, "caller" | "arguments")
-                    && crate::closure::closure_is_arrow(obj as *const crate::closure::ClosureHeader)
+                    && crate::closure::closure_get_dynamic_prop(obj as usize, name_str).to_bits()
+                        == crate::value::TAG_UNDEFINED
                 {
                     crate::fs::validate::throw_type_error_with_code(
                         "Restricted function property access",
@@ -3016,10 +3033,15 @@ pub extern "C" fn js_object_get_field_by_name(
                     if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
                         return JSValue::undefined();
                     }
+                    // ECMAScript "poison pill" — see the matching arm in
+                    // `js_object_get_field_by_name`. Reading `caller`/`arguments`
+                    // off any strict-mode function throws a TypeError; Perry has
+                    // no sloppy mode, so this covers every function. A genuine own
+                    // data prop of that name still wins.
                     if matches!(name_str, "caller" | "arguments")
-                        && crate::closure::closure_is_arrow(
-                            obj as *const crate::closure::ClosureHeader,
-                        )
+                        && crate::closure::closure_get_dynamic_prop(obj as usize, name_str)
+                            .to_bits()
+                            == crate::value::TAG_UNDEFINED
                     {
                         crate::fs::validate::throw_type_error_with_code(
                             "Restricted function property access",

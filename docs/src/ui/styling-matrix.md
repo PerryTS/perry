@@ -27,6 +27,9 @@ Legend: `✓` Wired (real native impl), `~` Stub (symbol exists, no-op), `✗` M
 | `on_click` | `perry_ui_widget_set_on_click` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `on_double_click` | `perry_ui_widget_set_on_double_click` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `on_hover` | `perry_ui_widget_set_on_hover` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `on_mouse_down` | `perry_ui_widget_set_on_mouse_down` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `on_mouse_up` | `perry_ui_widget_set_on_mouse_up` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `on_mouse_move` | `perry_ui_widget_set_on_mouse_move` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `animate_opacity` | `perry_ui_widget_animate_opacity` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `animate_position` | `perry_ui_widget_animate_position` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `context_menu` | `perry_ui_widget_set_context_menu` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -66,6 +69,7 @@ Legend: `✓` Wired (real native impl), `~` Stub (symbol exists, no-op), `✗` M
 | `font_family` | `perry_ui_text_set_font_family` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `selectable` | `perry_ui_text_set_selectable` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `wraps` | `perry_ui_text_set_wraps` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `text_alignment` | `perry_ui_text_set_text_alignment` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `decoration` | `perry_ui_text_set_decoration` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## `textfield` widget
@@ -81,13 +85,13 @@ Legend: `✓` Wired (real native impl), `~` Stub (symbol exists, no-op), `✗` M
 
 | Platform | Wired | Stub | Missing | Not applicable |
 |---|---|---|---|---|
-| macOS | 43 | 0 | 0 | 0 |
-| iOS | 43 | 0 | 0 | 0 |
-| tvOS | 43 | 0 | 0 | 0 |
-| visionOS | 43 | 0 | 0 | 0 |
-| watchOS | 43 | 0 | 0 | 0 |
-| Android | 43 | 0 | 0 | 0 |
-| GTK4 | 43 | 0 | 0 | 0 |
-| Windows | 43 | 0 | 0 | 0 |
-| Web | 43 | 0 | 0 | 0 |
+| macOS | 47 | 0 | 0 | 0 |
+| iOS | 47 | 0 | 0 | 0 |
+| tvOS | 47 | 0 | 0 | 0 |
+| visionOS | 47 | 0 | 0 | 0 |
+| watchOS | 47 | 0 | 0 | 0 |
+| Android | 47 | 0 | 0 | 0 |
+| GTK4 | 47 | 0 | 0 | 0 |
+| Windows | 47 | 0 | 0 | 0 |
+| Web | 47 | 0 | 0 | 0 |
 

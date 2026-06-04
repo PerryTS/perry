@@ -65,6 +65,13 @@ pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
     widgets::text::set_font_family(handle, family_ptr as *const u8);
 }
 
+/// Issue #3621 — horizontal text alignment (GtkLabel xalign/justify).
+/// `alignment`: 0=left, 1=right, 2=center, 3=justified, 4=natural.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) {
+    widgets::text::set_text_alignment(handle, alignment);
+}
+
 // =============================================================================
 // Button Ops
 // =============================================================================

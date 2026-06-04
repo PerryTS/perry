@@ -21,6 +21,21 @@ const rejectName = async (label: string, fn: () => Promise<unknown>) => {
   }
 };
 
+const cryptoKeyGetterNames = ["algorithm", "type", "extractable", "usages"] as const;
+type CryptoKeyGetterName = typeof cryptoKeyGetterNames[number];
+
+const cryptoKeyGetter = (name: CryptoKeyGetterName) =>
+  Object.getOwnPropertyDescriptor(CryptoKey.prototype, name)!.get!;
+
+const cryptoKeyGetterBrand = (name: CryptoKeyGetterName) => {
+  try {
+    cryptoKeyGetter(name).call({});
+    return "ok";
+  } catch (error: any) {
+    return error.name;
+  }
+};
+
 for (const algorithm of variants) {
   console.log(`algorithm: ${algorithm}`);
   console.log("supports generate:", SubtleCrypto.supports("generateKey", algorithm));
@@ -32,6 +47,24 @@ for (const algorithm of variants) {
   console.log("generated type:", pair.publicKey.type, pair.privateKey.type);
   console.log("generated usages:", JSON.stringify(pair.publicKey.usages), JSON.stringify(pair.privateKey.usages));
   console.log("generated extractable:", pair.publicKey.extractable, pair.privateKey.extractable);
+  console.log("generated instance:", pair.publicKey instanceof CryptoKey, pair.privateKey instanceof CryptoKey);
+  console.log(
+    "generated ctor:",
+    pair.publicKey.constructor === CryptoKey,
+    pair.privateKey.constructor === CryptoKey,
+  );
+  const descriptorAlgorithm = cryptoKeyGetter("algorithm").call(pair.publicKey) as any;
+  console.log(
+    "descriptor getters:",
+    descriptorAlgorithm.name,
+    cryptoKeyGetter("type").call(pair.privateKey),
+    cryptoKeyGetter("extractable").call(pair.publicKey),
+    JSON.stringify(cryptoKeyGetter("usages").call(pair.publicKey)),
+  );
+  console.log(
+    "descriptor brands:",
+    cryptoKeyGetterNames.map(cryptoKeyGetterBrand).join(","),
+  );
 
   const spki = await subtle.exportKey("spki", pair.publicKey);
   const pkcs8 = await subtle.exportKey("pkcs8", pair.privateKey);

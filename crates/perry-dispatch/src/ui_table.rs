@@ -418,6 +418,13 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
+    // ---- Issue #3621: Text horizontal alignment ----
+    MethodRow {
+        method: "textSetTextAlignment",
+        runtime: "perry_ui_text_set_text_alignment",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "textSetWraps",
         runtime: "perry_ui_text_set_wraps",

@@ -4655,6 +4655,13 @@ thread_local! {
     /// the spec count. #3143.
     static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<std::collections::HashMap<usize, u32>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Built-in method closures are callable but lack ECMAScript
+    /// `[[Construct]]`. Track the installed closure values so the dynamic
+    /// `new` / `Reflect.construct` paths can reject them without changing
+    /// ordinary user closures or global constructor closures.
+    static BUILTIN_CLOSURE_NON_CONSTRUCTABLE: std::cell::RefCell<std::collections::HashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
 /// Record the spec `.length` for a built-in prototype-method closure. See
@@ -4669,6 +4676,28 @@ pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
 /// closure, or `None` if this closure isn't one. See [`BUILTIN_CLOSURE_LENGTH`].
 pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
     BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
+}
+
+pub(crate) fn set_builtin_closure_non_constructable(closure: usize) {
+    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| {
+        m.borrow_mut().insert(closure);
+    });
+}
+
+pub(crate) fn builtin_closure_is_non_constructable(closure: usize) -> bool {
+    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&closure))
+}
+
+pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+    if ptr.is_null() {
+        return false;
+    }
+    builtin_closure_is_non_constructable(ptr as usize)
 }
 
 /// Whitelist of (module, property) pairs for which property-read should

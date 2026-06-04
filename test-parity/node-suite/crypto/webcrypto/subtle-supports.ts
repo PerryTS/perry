@@ -60,6 +60,8 @@ for (const [label, op, algorithm] of [
   ["wrap aes ocb false", "wrapKey", "AES-OCB"],
   ["sign kmac false", "sign", "KMAC128"],
   ["derive x448 false", "deriveBits", "X448"],
+  ["encapsulateBits mlkem", "encapsulateBits", "ML-KEM-768"],
+  ["decapsulateBits mlkem", "decapsulateBits", "ML-KEM-768"],
   ["encapsulateKey mlkem false", "encapsulateKey", "ML-KEM-768"],
 ] as const) {
   console.log(`${label}:`, SubtleCrypto.supports(op, algorithm as any));

@@ -8,18 +8,6 @@
       "reason": "Free-text explanation. Keep the most-actionable signal first \u2014 what changes the verdict (a fixture, a Perry fix, a Node spec change)."
     }
   },
-  "test_parity_dns": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:dns` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_dns_promises": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:dns/promises` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
   "test_parity_http": {
     "issue": "793",
     "added": "2026-05-15",
@@ -31,12 +19,6 @@
     "added": "2026-05-15",
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:https` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
-  },
-  "test_parity_net": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:net` socket-layer surface not implemented (Server/Socket classes, BlockList, SocketAddress). Classification helpers landed via #811. Tracker for surface coverage; flips to PASS as each API lands."
   },
   "test_parity_stream": {
     "issue": "793",
@@ -50,12 +32,6 @@
     "category": "module-inventory",
     "reason": "Node.js module inventory \u2014 `node:stream/web` (WHATWG streams) surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
-  "test_parity_tls": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Node.js module inventory \u2014 `node:tls` surface not fully implemented (Socket-level TLS upgrade works via net.upgradeToTLS; the higher-level tls.connect/Server is partial). Tracker for surface coverage."
-  },
   "test_sock_write_map": {
     "issue": "1634",
     "added": "2026-05-15",
@@ -67,11 +43,5 @@
     "added": "2026-05-18",
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
-  },
-  "node-suite/stream/web/abort-during-pipeto": {
-    "issue": "1545",
-    "added": "2026-05-24",
-    "category": "bug-open",
-    "reason": "node:stream/web: ws.abort() during active pipeTo \u2014 pipeTo Promise doesn't reject. Flips to PASS when #1545 lands."
   }
 }

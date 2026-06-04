@@ -172,6 +172,41 @@ pub fn set_truncation_mode(handle: i64, mode: i64) {
     }
 }
 
+/// Set horizontal text alignment on a Text widget (issue #3621).
+/// Public `alignment` follows the canonical Perry/AppKit scheme:
+/// 0=left, 1=right, 2=center, 3=justified, 4=natural. Maps to GtkLabel's
+/// `xalign` (horizontal anchor) plus `justify` (multi-line wrapping).
+pub fn set_text_alignment(handle: i64, alignment: i64) {
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(label) = widget.downcast_ref::<Label>() {
+            match alignment {
+                1 => {
+                    label.set_xalign(1.0);
+                    label.set_justify(gtk4::Justification::Right);
+                }
+                2 => {
+                    label.set_xalign(0.5);
+                    label.set_justify(gtk4::Justification::Center);
+                }
+                3 => {
+                    label.set_xalign(0.0);
+                    label.set_justify(gtk4::Justification::Fill);
+                }
+                4 => {
+                    // Natural: follow locale base direction. GtkLabel
+                    // honours the widget's text direction at xalign 0.0.
+                    label.set_xalign(0.0);
+                    label.set_justify(gtk4::Justification::Left);
+                }
+                _ => {
+                    label.set_xalign(0.0);
+                    label.set_justify(gtk4::Justification::Left);
+                }
+            }
+        }
+    }
+}
+
 /// Set the font family of a Text widget.
 pub fn set_font_family(handle: i64, family_ptr: *const u8) {
     let family = str_from_header(family_ptr);

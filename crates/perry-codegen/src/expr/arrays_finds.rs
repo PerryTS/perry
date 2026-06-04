@@ -236,13 +236,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // minute?, second?, ms?)` in local time. dayjs's parseDate
                 // takes this branch with regex-captured string args — see
                 // js_date_new_local_components for the coercion path.
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let mut vals: Vec<String> = Vec::with_capacity(7);
                 for a in args.iter().take(7) {
                     vals.push(lower_expr(ctx, a)?);
                 }
+                // Pad *absent* trailing components with their ECMA-262 default
+                // literal (slot 2 `day` → 1, time slots 3-6 → 0) rather than
+                // `undefined`, so the runtime can run a plain ToNumber on every
+                // forwarded slot: a *present* `undefined` then coerces to NaN
+                // (Invalid Date), while a truly-omitted arg uses its default.
+                // Slots: 0 year, 1 month, 2 day, 3 hour, 4 min, 5 sec, 6 ms.
                 while vals.len() < 7 {
-                    vals.push(undef.clone());
+                    let default = if vals.len() == 2 { 1.0 } else { 0.0 };
+                    vals.push(double_literal(default));
                 }
                 let blk = ctx.block();
                 let call_args: Vec<(crate::types::LlvmType, &str)> =
@@ -870,8 +876,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // compile-time-constant numeric lengths, or `js_typed_array_new(kind, val)`
         // for runtime-dispatched arguments (which inspects the NaN-box tag to
         // distinguish a numeric length from a source-array pointer).
-        // Result is a raw pointer bitcast to f64 (no NaN-box tag) — the runtime
-        // formatter and `js_array_*` dispatch helpers detect it via TYPED_ARRAY_REGISTRY.
+        // Result is a normal POINTER_TAG JS value. Element/property fast paths
+        // mask off the tag before consulting TYPED_ARRAY_REGISTRY, and runtime
+        // consumers such as Atomics require the value to satisfy is_pointer().
         Expr::TypedArrayNew { kind, arg } => {
             let kind_str = (*kind as i32).to_string();
             match arg {
@@ -882,7 +889,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_typed_array_new_empty",
                         &[(I32, &kind_str), (I32, &zero)],
                     );
-                    Ok(ctx.block().bitcast_i64_to_double(&p))
+                    Ok(nanbox_pointer_inline(ctx.block(), &p))
                 }
                 Some(arg_expr) => match arg_expr.as_ref() {
                     // Literal integer length: `new Int32Array(3)`. A negative
@@ -895,7 +902,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_typed_array_new_empty",
                             &[(I32, &kind_str), (I32, &len_str)],
                         );
-                        Ok(ctx.block().bitcast_i64_to_double(&p))
+                        Ok(nanbox_pointer_inline(ctx.block(), &p))
                     }
                     // Literal float that is a non-negative integer: `new Int32Array(3.0)`.
                     Expr::Number(f) if f.fract() == 0.0 && *f >= 0.0 && *f < (i32::MAX as f64) => {
@@ -905,7 +912,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_typed_array_new_empty",
                             &[(I32, &kind_str), (I32, &len_str)],
                         );
-                        Ok(ctx.block().bitcast_i64_to_double(&p))
+                        Ok(nanbox_pointer_inline(ctx.block(), &p))
                     }
                     // Non-literal: dispatch at runtime based on the NaN-box tag.
                     // `js_typed_array_new` detects POINTER_TAG → copy from array,
@@ -918,7 +925,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_typed_array_new",
                             &[(I32, &kind_str), (DOUBLE, &val_box)],
                         );
-                        Ok(blk.bitcast_i64_to_double(&p))
+                        Ok(nanbox_pointer_inline(blk, &p))
                     }
                 },
             }

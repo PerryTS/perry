@@ -38,8 +38,8 @@ use super::{
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    lower_index_set_fast, lower_js_args_array, lower_math_operand, lower_object_literal,
+    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
@@ -268,7 +268,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::MathClz32(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_clz32", &[(DOUBLE, &v)]))
         }
         Expr::FsReadFileSync(p) => {

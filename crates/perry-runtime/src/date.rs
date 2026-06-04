@@ -297,7 +297,11 @@ pub extern "C" fn js_date_new_from_value(value: f64) -> f64 {
         // (rather than silently producing an Invalid Date from raw pointer bits).
         jsvalue_to_number(value)
     };
-    alloc_date_cell(result)
+    // `new Date(number)` applies TimeClip: `abs(t) > 8.64e15` → Invalid, and a
+    // fractional timestamp truncates toward zero (`new Date(123.9).getTime()`
+    // === 123). Copying another Date or parsing a string already yields an
+    // integral in-range value, so this is idempotent for those paths.
+    alloc_date_cell(time_clip(result))
 }
 
 /// Number of days from the civil date 1970-01-01 to `y-m-d` (m is 1-based,
@@ -329,6 +333,26 @@ fn make_utc_ms(year: i64, month0: i64, day: i64, hour: i64, min: i64, sec: i64, 
     let days = days_from_civil(norm_year, norm_month1, day);
     let secs = days * 86400 + hour * 3600 + min * 60 + sec;
     (secs * 1000 + ms) as f64
+}
+
+/// ECMA-262 `TimeClip(time)`: a constructed/derived millisecond time value is
+/// `NaN` when it is non-finite or `abs(t) > 8.64e15`, otherwise it is truncated
+/// toward zero (`ToIntegerOrInfinity`) with `-0` normalized to `+0`. Every
+/// public Date construction/`UTC`/setter result path funnels its computed time
+/// through this so out-of-range dates become Invalid and fractional inputs
+/// (`new Date(123.9)`) drop their fraction, matching Node.
+#[inline]
+pub(crate) fn time_clip(t: f64) -> f64 {
+    if !t.is_finite() || t.abs() > 8.64e15 {
+        return f64::NAN;
+    }
+    let i = t.trunc();
+    // Normalize -0 to +0 (TimeClip step 3: `ToInteger(time) + (+0)`).
+    if i == 0.0 {
+        0.0
+    } else {
+        i
+    }
 }
 
 /// Apply the ECMA-262 `0..=99 => 1900 + y` rebasing for an integral year
@@ -707,8 +731,11 @@ pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHea
         return invalid_date_string();
     }
     let ts_ms = timestamp as i64;
-    let secs = ts_ms / 1000;
-    let millis = (ts_ms % 1000).unsigned_abs() as u32;
+    // Floor-divide so sub-epoch timestamps round toward -∞: `new Date(-1)` is
+    // `1969-12-31T23:59:59.999Z`, not `1970-01-01T00:00:00.001Z`. Truncating
+    // division (`/`, `%`) gave `secs = 0, millis = 1` for `-1`.
+    let secs = ts_ms.div_euclid(1000);
+    let millis = ts_ms.rem_euclid(1000) as u32;
 
     // Calculate date components from Unix timestamp
     // This is a simplified implementation - proper implementation would use chrono crate
@@ -911,17 +938,21 @@ pub extern "C" fn js_date_utc(args_ptr: *const f64, argc: i32) -> f64 {
     let minute = get(4, 0.0);
     let second = get(5, 0.0);
     let ms = get(6, 0.0);
-    if year.is_nan()
-        || month.is_nan()
-        || day.is_nan()
-        || hour.is_nan()
-        || minute.is_nan()
-        || second.is_nan()
-        || ms.is_nan()
+    // MakeDay/MakeTime return NaN when any component is non-finite (`Infinity`,
+    // `-Infinity`, or `NaN`); a bare `is_nan` check would let `Infinity` through
+    // and saturate `as i64` to a bogus timestamp, so reject every non-finite
+    // component before assembling.
+    if !year.is_finite()
+        || !month.is_finite()
+        || !day.is_finite()
+        || !hour.is_finite()
+        || !minute.is_finite()
+        || !second.is_finite()
+        || !ms.is_finite()
     {
         return f64::NAN;
     }
-    make_utc_ms(
+    time_clip(make_utc_ms(
         year as i64,
         month as i64,
         day as i64,
@@ -929,7 +960,7 @@ pub extern "C" fn js_date_utc(args_ptr: *const f64, argc: i32) -> f64 {
         minute as i64,
         second as i64,
         ms as i64,
-    )
+    ))
 }
 
 /// Keepalive anchor for `js_date_utc` — codegen-only `#[no_mangle]` symbols
@@ -1050,14 +1081,54 @@ pub extern "C" fn js_date_apply_setter(
     } else {
         unsafe { std::slice::from_raw_parts(args_ptr, argc) }
     };
-    // setTime: single value, replaces the whole time.
+    // Spec: every `Date.prototype.set*` reads `thisTimeValue` (the receiver's
+    // current `[[DateValue]]`) BEFORE coercing any argument via ToNumber. A
+    // user `valueOf` on an argument can re-enter and mutate this very cell
+    // (test262 `set*/date-value-read-before-tonumber-when-date-is-{valid,
+    // invalid}`); the timestamp captured here is the one the rebuild must use,
+    // not whatever the cell holds after the ToNumber side effects. The brand
+    // check (`this` must be a Date) happens earlier, in the reflective setter
+    // thunks (`object::date_proto_thunks`) and on the codegen instance path.
+    let captured = date_cell_timestamp(date);
+    // setTime: single value, replaces the whole time. The old value is unused
+    // (beyond the brand check above), so no read-before ordering applies.
     if field == 7 {
         let v = if argc == 0 {
             f64::NAN
         } else {
             jsvalue_to_number(args[0])
         };
-        return date_cell_store(date, v);
+        return date_cell_store(date, time_clip(v));
+    }
+    // setYear (annexB): like setFullYear but rebases a truncated year in
+    // `0..=99` to `1900 + y`, operates in local time, and has no UTC variant.
+    if field == 8 {
+        let y_raw = if argc == 0 {
+            f64::NAN
+        } else {
+            jsvalue_to_number(args[0])
+        };
+        let yyyy = if y_raw.is_nan() {
+            f64::NAN
+        } else {
+            let yi = y_raw.trunc();
+            if (0.0..=99.0).contains(&yi) {
+                1900.0 + yi
+            } else {
+                y_raw
+            }
+        };
+        return rebuild_local_with(
+            date,
+            captured,
+            Some(yyyy),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
     }
     // `req(0)` is the *leading*, required component: an omitted leading
     // argument coerces to NaN (e.g. `setHours()` → Invalid Date). Trailing
@@ -1092,9 +1163,9 @@ pub extern "C" fn js_date_apply_setter(
         _ => return date_cell_store(date, f64::NAN),
     };
     if is_utc != 0 {
-        rebuild_with(date, year, month0, day, hour, minute, second, ms)
+        rebuild_with(date, captured, year, month0, day, hour, minute, second, ms)
     } else {
-        rebuild_local_with(date, year, month0, day, hour, minute, second, ms)
+        rebuild_local_with(date, captured, year, month0, day, hour, minute, second, ms)
     }
 }
 
@@ -1125,34 +1196,28 @@ pub extern "C" fn js_date_new_local_components(
     second: f64,
     millisecond: f64,
 ) -> f64 {
-    fn coerce(v: f64, default: f64) -> f64 {
-        let bits = v.to_bits();
-        let tag = (bits >> 48) & 0xFFFF;
-        if tag == 0x7FFC && (bits & 0xFF) == 0x01 {
-            // undefined — optional trailing args take their default; a required
-            // leading `undefined` passes NaN (callers supply `default = NaN`).
-            default
-        } else {
-            // Everything else goes through ECMAScript ToNumber: strings parse,
-            // booleans/null coerce numerically, objects run a single valueOf,
-            // and Symbol/BigInt throw.
-            jsvalue_to_number(v)
-        }
-    }
-    let y = coerce(year, f64::NAN);
-    let m = coerce(month, f64::NAN);
-    let d = coerce(day, 1.0);
-    let h = coerce(hour, 0.0);
-    let mi = coerce(minute, 0.0);
-    let s = coerce(second, 0.0);
-    let ms = coerce(millisecond, 0.0);
-    if y.is_nan()
-        || m.is_nan()
-        || d.is_nan()
-        || h.is_nan()
-        || mi.is_nan()
-        || s.is_nan()
-        || ms.is_nan()
+    // Every argument codegen forwards is a *present* component: omitted
+    // trailing parameters are padded with their ECMA-262 default literal
+    // (`day = 1`, time fields = 0) at the call site, so here we run a plain
+    // ToNumber on each — a *present* `undefined` (e.g. `new Date(1899, 11,
+    // undefined)` or `DateValue(1899, 11)` where the wrapper forwards all seven
+    // params) coerces to NaN and produces an Invalid Date, matching Node.
+    let y = jsvalue_to_number(year);
+    let m = jsvalue_to_number(month);
+    let d = jsvalue_to_number(day);
+    let h = jsvalue_to_number(hour);
+    let mi = jsvalue_to_number(minute);
+    let s = jsvalue_to_number(second);
+    let ms = jsvalue_to_number(millisecond);
+    // MakeDay/MakeTime yield NaN for any non-finite component (Infinity as well
+    // as NaN), so reject all non-finite values before assembling.
+    if !y.is_finite()
+        || !m.is_finite()
+        || !d.is_finite()
+        || !h.is_finite()
+        || !mi.is_finite()
+        || !s.is_finite()
+        || !ms.is_finite()
     {
         return alloc_date_cell(f64::NAN);
     }
@@ -1172,7 +1237,7 @@ pub extern "C" fn js_date_new_local_components(
     );
     let local_secs = (local_ms as i64).div_euclid(1000);
     let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
-    alloc_date_cell(local_ms - (tz_offset * 1000) as f64)
+    alloc_date_cell(time_clip(local_ms - (tz_offset * 1000) as f64))
 }
 
 // --- UTC getters: same impl as the regular getters since we store UTC internally ---
@@ -1291,6 +1356,7 @@ pub extern "C" fn js_date_get_timezone_offset(timestamp: f64) -> f64 {
 #[allow(clippy::too_many_arguments)]
 fn rebuild_with(
     date: f64,
+    timestamp: f64,
     year: Option<f64>,
     month0: Option<f64>,
     day: Option<f64>,
@@ -1299,12 +1365,15 @@ fn rebuild_with(
     second: Option<f64>,
     millisecond: Option<f64>,
 ) -> f64 {
-    let timestamp = date_cell_timestamp(date);
     let (cy, cm0, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
         // Setting the year revives an Invalid Date (ECMA MakeDate seeds from
-        // year/0/1); any other component setter on an Invalid Date is a no-op.
+        // year/0/1); any other component setter on an Invalid Date returns NaN
+        // WITHOUT writing `[[DateValue]]` (spec step "If t is NaN, return NaN"
+        // precedes SetDateValue), so a `valueOf` that mutated the cell during
+        // argument coercion keeps its effect (test262
+        // `date-value-read-before-tonumber-when-date-is-invalid`).
         if year.is_none() {
-            return date_cell_store(date, timestamp);
+            return f64::NAN;
         }
         (1970i64, 0i64, 1i64, 0i64, 0i64, 0i64, 0i64)
     } else {
@@ -1322,12 +1391,13 @@ fn rebuild_with(
             cur_ms,
         )
     };
-    // If any provided override is NaN, the Date becomes Invalid.
+    // If any provided override is non-finite (NaN or ±Infinity), the Date
+    // becomes Invalid.
     for o in [year, month0, day, hour, minute, second, millisecond]
         .into_iter()
         .flatten()
     {
-        if o.is_nan() {
+        if !o.is_finite() {
             return date_cell_store(date, f64::NAN);
         }
     }
@@ -1340,7 +1410,9 @@ fn rebuild_with(
         second.map(|v| v as i64).unwrap_or(cs),
         millisecond.map(|v| v as i64).unwrap_or(cur_ms),
     );
-    date_cell_store(date, ms)
+    // TimeClip the rebuilt value: a setter that overflows ±8.64e15 makes the
+    // Date Invalid (`new Date(8.64e15).setHours(24)` → NaN).
+    date_cell_store(date, time_clip(ms))
 }
 
 // --- Local-time setters (#1187 / #2851) ---
@@ -1358,6 +1430,7 @@ fn rebuild_with(
 #[allow(clippy::too_many_arguments)]
 fn rebuild_local_with(
     date: f64,
+    timestamp: f64,
     year: Option<f64>,
     month0: Option<f64>,
     day: Option<f64>,
@@ -1366,10 +1439,11 @@ fn rebuild_local_with(
     second: Option<f64>,
     millisecond: Option<f64>,
 ) -> f64 {
-    let timestamp = date_cell_timestamp(date);
     let (cy, cm0, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
+        // See `rebuild_with`: a NaN time value with no year override returns NaN
+        // without touching `[[DateValue]]`.
         if year.is_none() {
-            return date_cell_store(date, timestamp);
+            return f64::NAN;
         }
         (1970i64, 0i64, 1i64, 0i64, 0i64, 0i64, 0i64)
     } else {
@@ -1391,7 +1465,7 @@ fn rebuild_local_with(
         .into_iter()
         .flatten()
     {
-        if o.is_nan() {
+        if !o.is_finite() {
             return date_cell_store(date, f64::NAN);
         }
     }
@@ -1406,7 +1480,9 @@ fn rebuild_local_with(
     );
     let local_secs = (local_ms as i64).div_euclid(1000);
     let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
-    date_cell_store(date, local_ms - (tz_offset * 1000) as f64)
+    // TimeClip after the local→UTC adjustment so an overflowing local setter
+    // (`new Date(8.64e15).setHours(24)`) makes the Date Invalid.
+    date_cell_store(date, time_clip(local_ms - (tz_offset * 1000) as f64))
 }
 
 // --- String-returning Date methods ---

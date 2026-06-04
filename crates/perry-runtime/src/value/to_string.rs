@@ -95,6 +95,83 @@ pub(crate) enum OrdinaryToPrimitiveOutcome {
     TypeError,
 }
 
+enum CustomToPrimitiveOutcome {
+    Absent,
+    Primitive(f64),
+    TypeError,
+}
+
+fn is_primitive_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    jsval.is_any_string()
+        || jsval.is_number()
+        || jsval.is_int32()
+        || jsval.is_bool()
+        || jsval.is_null()
+        || jsval.is_undefined()
+        || jsval.is_bigint()
+        || ((value.to_bits() & 0xFFFF_0000_0000_0000) == POINTER_TAG
+            && crate::symbol::is_registered_symbol((value.to_bits() & POINTER_MASK) as usize))
+}
+
+/// `ToPrimitive(O, "number"|"default")`: consult a user
+/// `[Symbol.toPrimitive]("number")` method first, then fall back to the
+/// ordinary `valueOf`/`toString` order.
+pub(crate) unsafe fn to_primitive_number(value: f64) -> OrdinaryToPrimitiveOutcome {
+    if is_primitive_value(value) {
+        return OrdinaryToPrimitiveOutcome::Primitive(value);
+    }
+
+    match custom_to_primitive_number(value) {
+        CustomToPrimitiveOutcome::Absent => {}
+        CustomToPrimitiveOutcome::Primitive(p) => return OrdinaryToPrimitiveOutcome::Primitive(p),
+        CustomToPrimitiveOutcome::TypeError => return OrdinaryToPrimitiveOutcome::TypeError,
+    }
+
+    ordinary_to_primitive_number_for_add(value)
+}
+
+unsafe fn custom_to_primitive_number(value: f64) -> CustomToPrimitiveOutcome {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let to_primitive = crate::symbol::well_known_symbol("toPrimitive");
+    let sym_value = f64::from_bits(POINTER_TAG | (to_primitive as u64 & POINTER_MASK));
+    let method =
+        crate::symbol::js_object_get_symbol_property(value_handle.get_nanbox_f64(), sym_value);
+    let method_jsv = JSValue::from_bits(method.to_bits());
+    if method_jsv.is_undefined() || method_jsv.is_null() {
+        return CustomToPrimitiveOutcome::Absent;
+    }
+
+    let method_bits = method.to_bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return CustomToPrimitiveOutcome::TypeError;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return CustomToPrimitiveOutcome::TypeError;
+    }
+
+    let method_handle = scope.root_nanbox_f64(method);
+    let hint_ptr = crate::string::js_string_from_bytes(b"number".as_ptr(), 6);
+    let hint_handle = scope.root_string_ptr(hint_ptr);
+    let hint = f64::from_bits(
+        STRING_TAG
+            | (hint_handle.get_raw_const_ptr::<crate::string::StringHeader>() as u64
+                & POINTER_MASK),
+    );
+    let receiver = value_handle.get_nanbox_f64();
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let result = crate::closure::js_native_call_value(method_handle.get_nanbox_f64(), &hint, 1);
+    crate::object::js_implicit_this_set(prev_this);
+
+    if is_primitive_value(result) {
+        CustomToPrimitiveOutcome::Primitive(result)
+    } else {
+        CustomToPrimitiveOutcome::TypeError
+    }
+}
+
 /// `OrdinaryToPrimitive(O, "number"|"default")` for addition. The method
 /// order is `valueOf` then `toString`; Perry synthesizes the usual inherited
 /// defaults for boxed primitives, arrays, and plain objects because those

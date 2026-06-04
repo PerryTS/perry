@@ -38,8 +38,8 @@ use super::{
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    lower_index_set_fast, lower_js_args_array, lower_math_operand, lower_object_literal,
+    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
@@ -218,11 +218,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::MathExpm1(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_expm1", &[(DOUBLE, &v)]))
         }
         Expr::MathExp(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]))
         }
         Expr::DateSetUtcFullYear { date, args } => super::os_uri_dates::lower_date_setter(
@@ -348,45 +348,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.sin/cos via LLVM intrinsics --------
         Expr::MathSin(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "llvm.sin.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathCos(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "llvm.cos.f64", &[(DOUBLE, &v)]))
         }
         // Hyperbolic + extra trig via runtime (uses Rust's f64 methods).
         Expr::MathSinh(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_sinh", &[(DOUBLE, &v)]))
         }
         Expr::MathCosh(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_cosh", &[(DOUBLE, &v)]))
         }
         Expr::MathTanh(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_tanh", &[(DOUBLE, &v)]))
         }
         Expr::MathTan(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_tan", &[(DOUBLE, &v)]))
         }
         Expr::MathAsin(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_asin", &[(DOUBLE, &v)]))
         }
         Expr::MathAcos(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_acos", &[(DOUBLE, &v)]))
         }
         Expr::MathAtan(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_atan", &[(DOUBLE, &v)]))
         }
         Expr::MathAtan2(y, x) => {
-            let y_v = lower_expr(ctx, y)?;
-            let x_v = lower_expr(ctx, x)?;
+            let y_v = lower_math_operand(ctx, y)?;
+            let x_v = lower_math_operand(ctx, x)?;
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_math_atan2", &[(DOUBLE, &y_v), (DOUBLE, &x_v)]))
@@ -423,15 +423,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ProcessStdout => Ok(ctx.block().call(DOUBLE, "js_process_stdout", &[])),
         Expr::ProcessStderr => Ok(ctx.block().call(DOUBLE, "js_process_stderr", &[])),
         Expr::MathAsinh(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_asinh", &[(DOUBLE, &v)]))
         }
         Expr::MathAcosh(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_acosh", &[(DOUBLE, &v)]))
         }
         Expr::MathAtanh(o) => {
-            let v = lower_expr(ctx, o)?;
+            let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_atanh", &[(DOUBLE, &v)]))
         }
         Expr::DateSetUtcDate { date, args } => super::os_uri_dates::lower_date_setter(

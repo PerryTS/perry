@@ -1633,9 +1633,9 @@ pub(super) enum CpStdio {
     Fd(i32),
 }
 
-fn cp_stdio_kind(value: f64) -> CpStdio {
+fn cp_stdio_number_fd(value: f64) -> Option<i32> {
     let js_value = JSValue::from_bits(value.to_bits());
-    let fd = if js_value.is_int32() {
+    if js_value.is_int32() {
         Some(js_value.as_int32())
     } else if js_value.is_number() {
         let n = js_value.as_number();
@@ -1646,8 +1646,27 @@ fn cp_stdio_kind(value: f64) -> CpStdio {
         }
     } else {
         None
+    }
+}
+
+fn cp_stdio_stream_fd(value: f64, fd_index: usize) -> Option<i32> {
+    let expected_stream = match fd_index {
+        0 => crate::fs::is_fs_stream_instance_value(value, "ReadStream"),
+        1 | 2 => crate::fs::is_fs_stream_instance_value(value, "WriteStream"),
+        _ => false,
     };
-    if let Some(fd) = fd {
+    if !expected_stream {
+        return None;
+    }
+    let fd = cp_get_field(value, b"fd");
+    cp_stdio_number_fd(fd).filter(|fd| crate::fs::fd_is_registered(*fd))
+}
+
+fn cp_stdio_kind(value: f64, fd_index: usize) -> CpStdio {
+    if let Some(fd) = cp_stdio_number_fd(value) {
+        return CpStdio::Fd(fd);
+    }
+    if let Some(fd) = cp_stdio_stream_fd(value, fd_index) {
         return CpStdio::Fd(fd);
     }
 
@@ -1659,8 +1678,8 @@ fn cp_stdio_kind(value: f64) -> CpStdio {
 }
 
 /// Read the deterministic live-stdio subset: `pipe` (default), `ignore`,
-/// `inherit`, and numeric fd entries. Custom stream handles intentionally
-/// remain in #2555.
+/// `inherit`, numeric fd entries, and opened fs stream objects backed by a
+/// registered fd.
 pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     let mut out = vec![CpStdio::Pipe; fds];
     if cp_object_ptr(opts_val).is_none() {
@@ -1671,7 +1690,7 @@ pub(super) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     if let Some(arr) = cp_array_ptr(stdio) {
         let n = crate::array::js_array_length(arr).min(fds as u32);
         for i in 0..n {
-            out[i as usize] = cp_stdio_kind(crate::array::js_array_get_f64(arr, i));
+            out[i as usize] = cp_stdio_kind(crate::array::js_array_get_f64(arr, i), i as usize);
         }
         return out;
     }

@@ -492,6 +492,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // and prints as `<Buffer xx xx ...>`.
     module.declare_function("js_fs_read_file_binary", I64, &[DOUBLE]);
     module.declare_function("js_number_coerce", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_to_number", DOUBLE, &[DOUBLE]);
     module.declare_function("js_set_add", I64, &[I64, DOUBLE]);
     module.declare_function("js_set_has", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_delete", I32, &[I64, DOUBLE]);

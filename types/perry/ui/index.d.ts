@@ -713,6 +713,25 @@ export function textSetNumberOfLines(widget: Widget, lines: number): void;
  */
 export function textSetTruncationMode(widget: Widget, mode: number): void;
 /**
+ * Set the horizontal text alignment of a Text widget (issue #3621),
+ * equivalent to CSS `text-align`. Removes the need to wrap a `Text` in an
+ * extra alignment container just to centre or right-align it.
+ *
+ * `alignment` values follow the macOS `NSTextAlignment` convention and are
+ * translated to each platform's native enum so a single value renders the
+ * same everywhere:
+ * - `0` = left
+ * - `1` = right
+ * - `2` = center
+ * - `3` = justified
+ * - `4` = natural (follows the locale's writing direction)
+ *
+ * Wired on all native backends (macOS, iOS, tvOS, visionOS, watchOS,
+ * Android, GTK4, Windows). `justified`/`natural` degrade gracefully to the
+ * nearest supported alignment where a platform lacks a native equivalent.
+ */
+export function textSetTextAlignment(widget: Widget, alignment: number): void;
+/**
  * Set text decoration on a Text widget (issue #185 Phase B).
  * `decoration`: 0 = none, 1 = underline, 2 = strikethrough.
  * Wired on every backend except Windows, which stores the value but

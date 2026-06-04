@@ -8,16 +8,6 @@
   "min_parity_pct": 83.0,
   "default_category_min_parity_pct": 100.0,
   "categories": {
-    "parity/dns": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:dns module-inventory gap tracked in known_failures.json."
-    },
-    "parity/dns_promises": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:dns/promises module-inventory gap tracked in known_failures.json."
-    },
     "parity/http": {
       "min_parity_pct": 0.0,
       "issue": "793",
@@ -33,11 +23,6 @@
       "issue": "793",
       "reason": "Known node:https module-inventory gap tracked in known_failures.json."
     },
-    "parity/net": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:net module-inventory gap tracked in known_failures.json."
-    },
     "parity/sqlite": {
       "min_parity_pct": 0.0,
       "issue": "793",
@@ -52,11 +37,6 @@
       "min_parity_pct": 0.0,
       "issue": "793",
       "reason": "Known node:stream/web module-inventory gap tracked in known_failures.json."
-    },
-    "parity/tls": {
-      "min_parity_pct": 0.0,
-      "issue": "793",
-      "reason": "Known node:tls module-inventory gap tracked in known_failures.json."
     },
     "parity/zlib": {
       "min_parity_pct": 0.0,

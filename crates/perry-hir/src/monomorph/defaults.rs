@@ -11,8 +11,20 @@ pub(crate) fn fill_default_arguments(module: &mut Module) {
     let mut ctor_defaults: HashMap<String, Vec<Option<Expr>>> = HashMap::new();
     for class in &module.classes {
         if let Some(ref ctor) = class.constructor {
-            let defaults: Vec<Option<Expr>> =
-                ctor.params.iter().map(|p| p.default.clone()).collect();
+            // Stop at a trailing rest parameter. `constructor(...e)` (or
+            // `constructor(a, b = 5, ...e)`) accepts zero or more trailing
+            // args, so the call-site padding below must never synthesize an
+            // `undefined` for the rest slot: doing so makes `new C()` collect
+            // `[undefined]` instead of `[]`, and any `e.forEach(...)` over that
+            // bogus element throws (marked's `new q` / hono's verb-method
+            // setup). Only the leading fixed params (which DO get default-fill
+            // checks prepended to the ctor body) are eligible for padding.
+            let defaults: Vec<Option<Expr>> = ctor
+                .params
+                .iter()
+                .take_while(|p| !p.is_rest)
+                .map(|p| p.default.clone())
+                .collect();
             ctor_defaults.insert(class.name.clone(), defaults);
         }
     }

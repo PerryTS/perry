@@ -1001,6 +1001,8 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     };
 
     let mut had_listeners = false;
+    let mut domain_error: Option<(Handle, f64)> = None;
+    let mut throw_error: Option<f64> = None;
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         // Snapshot the listener vec, then prune `once`-listeners from
         // the live vec before dispatching. This matches Node semantics:
@@ -1032,32 +1034,38 @@ pub unsafe extern "C" fn js_event_emitter_emit(
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
                 if let Some(domain) = emitter.domain_handle {
-                    let _ = crate::domain::js_domain_emit_error(
-                        domain,
-                        first_arg,
-                        js_nanbox_pointer(handle),
-                        false,
-                    );
-                    return TAG_FALSE_F64;
-                }
-                perry_runtime::exception::js_throw(first_arg);
-            }
-        }
-
-        // Resolve any pending `events.once` Promises before dispatch.
-        drain_pending_once_promises(emitter, &event_name, args_ptr);
-
-        let capture_rejections = emitter.capture_rejections && event_name != "error";
-        let async_resource_handle = emitter.async_resource_handle;
-        for l in snapshot {
-            if l.callback != 0 {
-                let result =
-                    call_emitter_listener(handle, async_resource_handle, l.callback, &emitted_args);
-                if capture_rejections {
-                    capture_listener_rejection(handle, result);
+                    domain_error = Some((domain, first_arg));
+                } else {
+                    throw_error = Some(first_arg);
                 }
             }
         }
+
+        if domain_error.is_none() && throw_error.is_none() {
+            // Resolve any pending `events.once` Promises before dispatch.
+            drain_pending_once_promises(emitter, &event_name, args_ptr);
+
+            let capture_rejections = emitter.capture_rejections && event_name != "error";
+            let async_handle = emitter.async_resource_handle;
+            for l in snapshot {
+                if l.callback != 0 {
+                    let result =
+                        call_emitter_listener(handle, async_handle, l.callback, &emitted_args);
+                    if capture_rejections {
+                        capture_listener_rejection(handle, result);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((domain, error)) = domain_error {
+        let _ =
+            crate::domain::js_domain_emit_error(domain, error, js_nanbox_pointer(handle), false);
+        return TAG_FALSE_F64;
+    }
+    if let Some(error) = throw_error {
+        perry_runtime::exception::js_throw(error);
     }
 
     bool_to_js(had_listeners)
@@ -1072,6 +1080,8 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
     };
 
     let mut had_listeners = false;
+    let mut domain_error: Option<(Handle, f64)> = None;
+    let mut throw_error: Option<f64> = None;
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         let snapshot: Vec<Listener> = match emitter.events.get(&event_name) {
             Some(v) if !v.is_empty() => v.clone(),
@@ -1088,45 +1098,46 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
         }
 
         let empty_args = js_array_alloc(0);
-        let emitted_args: &[f64] = &[];
         if event_name == "error" {
+            let error_value = f64::from_bits(TAG_UNDEFINED_F64_BITS);
             dispatch_error_monitor(emitter, None);
             let has_error_once = emitter
                 .pending_once_promises
                 .get("error")
                 .is_some_and(|pending| !pending.is_empty());
-            let rejected_once = reject_pending_once_promises_for_error(
-                emitter,
-                f64::from_bits(TAG_UNDEFINED_F64_BITS),
-            );
+            let rejected_once = reject_pending_once_promises_for_error(emitter, error_value);
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
                 if let Some(domain) = emitter.domain_handle {
-                    let err = f64::from_bits(TAG_UNDEFINED_F64_BITS);
-                    let _ = crate::domain::js_domain_emit_error(
-                        domain,
-                        err,
-                        js_nanbox_pointer(handle),
-                        false,
-                    );
-                    return TAG_FALSE_F64;
+                    domain_error = Some((domain, error_value));
+                } else {
+                    throw_error = Some(error_value);
                 }
-                perry_runtime::exception::js_throw(f64::from_bits(TAG_UNDEFINED_F64_BITS));
             }
         }
-        drain_pending_once_promises(emitter, &event_name, empty_args);
+        if domain_error.is_none() && throw_error.is_none() {
+            drain_pending_once_promises(emitter, &event_name, empty_args);
 
-        let capture_rejections = emitter.capture_rejections && event_name != "error";
-        let async_resource_handle = emitter.async_resource_handle;
-        for l in snapshot {
-            if l.callback != 0 {
-                let result =
-                    call_emitter_listener(handle, async_resource_handle, l.callback, emitted_args);
-                if capture_rejections {
-                    capture_listener_rejection(handle, result);
+            let capture_rejections = emitter.capture_rejections && event_name != "error";
+            let async_handle = emitter.async_resource_handle;
+            for l in snapshot {
+                if l.callback != 0 {
+                    let result = call_emitter_listener(handle, async_handle, l.callback, &[]);
+                    if capture_rejections {
+                        capture_listener_rejection(handle, result);
+                    }
                 }
             }
         }
+    }
+
+    if let Some((domain, error)) = domain_error {
+        let _ =
+            crate::domain::js_domain_emit_error(domain, error, js_nanbox_pointer(handle), false);
+        return TAG_FALSE_F64;
+    }
+    if let Some(error) = throw_error {
+        perry_runtime::exception::js_throw(error);
     }
 
     bool_to_js(had_listeners)

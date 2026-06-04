@@ -689,6 +689,18 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_VOID,
     },
+    // Async iteration: `rl.iterator()` returns the async-iterator object that
+    // backs `for await (const line of rl)`. Lowered from the readline-Interface
+    // for-await arm in perry-hir (mirrors the node:stream Readable path).
+    NativeModSig {
+        module: "readline",
+        has_receiver: true,
+        method: "iterator",
+        class_filter: None,
+        runtime: "js_readline_iterator",
+        args: &[],
+        ret: NR_PTR,
+    },
     NativeModSig {
         module: "readline",
         has_receiver: true,

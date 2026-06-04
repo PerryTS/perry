@@ -2979,6 +2979,19 @@ function perry_ui_text_set_decoration(h, decoration) {
     : "none";
   el.style.textDecoration = css;
 }
+// Issue #3621 — horizontal text alignment. Canonical Perry/AppKit values:
+// 0=left, 1=right, 2=center, 3=justified, 4=natural. Maps to CSS
+// `text-align` (natural → `start`, which follows the element's direction).
+function perry_ui_text_set_text_alignment(h, alignment) {
+  const el = uiGet(h);
+  if (!el) return;
+  const css = alignment === 1 ? "right"
+    : alignment === 2 ? "center"
+    : alignment === 3 ? "justify"
+    : alignment === 4 ? "start"
+    : "left";
+  el.style.textAlign = css;
+}
 // Issue #185 Phase B closure 11 — TextField borderless. Drops the
 // rendered border so the input visually matches a non-bordered
 // borderless setter on the Apple side.
@@ -4651,6 +4664,7 @@ const __perryUiDispatch = {
   perry_ui_foreach_register, perry_ui_navstack_register_route,
   // Text/Button/TextField ops
   perry_ui_text_set_string, perry_ui_text_set_selectable, perry_ui_text_set_wraps, perry_ui_text_set_color,
+  perry_ui_text_set_text_alignment,
   perry_ui_button_set_bordered, perry_ui_button_set_title, perry_ui_button_set_text_color,
   perry_ui_button_set_image, perry_ui_button_set_content_tint_color, perry_ui_button_set_image_position,
   perry_ui_textfield_focus, perry_ui_textfield_set_string, perry_ui_textfield_get_string,

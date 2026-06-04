@@ -1001,7 +1001,7 @@ unsafe fn js_readable_stream_cancel_inner(
         return promise;
     }
     if let Some(writable_id) = transform_writable_for_readable(id) {
-        let _ = js_writable_stream_abort(writable_id as f64, reason);
+        let _ = js_writable_stream_abort_inner(writable_id as f64, reason, true);
     }
     if cb != 0 {
         js_closure_call1(cb as *const ClosureHeader, reason);
@@ -2026,23 +2026,41 @@ pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Pr
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f64) -> *mut Promise {
+    js_writable_stream_abort_inner(stream_handle, reason, false)
+}
+
+unsafe fn js_writable_stream_abort_inner(
+    stream_handle: f64,
+    reason: f64,
+    allow_locked: bool,
+) -> *mut Promise {
     let promise = js_promise_new();
     let id = stream_handle as usize;
     let reason_bits = reason.to_bits();
+    let mut locked_reject = false;
     let (cb, closed_p, close_request) = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
             Some(s) => {
-                s.state = WritableState::Errored;
-                s.error_value = reason_bits;
-                let close_request = s.close_request_promise;
-                s.close_request_promise = std::ptr::null_mut();
-                s.close_started = false;
-                (s.abort_cb, s.closed_promise, close_request)
+                if !allow_locked && s.writer_handle.is_some() {
+                    locked_reject = true;
+                    (0, std::ptr::null_mut(), std::ptr::null_mut())
+                } else {
+                    s.state = WritableState::Errored;
+                    s.error_value = reason_bits;
+                    let close_request = s.close_request_promise;
+                    s.close_request_promise = std::ptr::null_mut();
+                    s.close_started = false;
+                    (s.abort_cb, s.closed_promise, close_request)
+                }
             }
             None => (0, std::ptr::null_mut(), std::ptr::null_mut()),
         }
     };
+    if locked_reject {
+        reject_type_error(promise, "Invalid state: WritableStream is locked");
+        return promise;
+    }
     if cb != 0 {
         js_closure_call1(cb as *const ClosureHeader, reason);
     }
@@ -2558,7 +2576,7 @@ pub unsafe extern "C" fn js_writer_abort(writer_handle: f64, reason: f64) -> *mu
             return p;
         }
     };
-    js_writable_stream_abort(stream_id as f64, reason)
+    js_writable_stream_abort_inner(stream_id as f64, reason, true)
 }
 
 #[no_mangle]

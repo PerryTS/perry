@@ -336,42 +336,49 @@ fn fmt_fixed_int(value: f64, dp: usize) -> Option<*mut StringHeader> {
 pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut StringHeader {
     let s = if is_undefined_arg(precision) {
         format_number_for_js(value)
-    } else if value.is_nan() {
-        "NaN".to_string()
-    } else if value.is_infinite() {
-        if value > 0.0 {
-            "Infinity".to_string()
-        } else {
-            "-Infinity".to_string()
-        }
     } else {
+        // ECMA-262 §21.1.3.5: `p = ? ToIntegerOrInfinity(precision)` (step 3)
+        // runs *before* the non-finite check on x (step 4). A Symbol/abrupt
+        // precision must therefore throw even when x is NaN/±Infinity — e.g.
+        // `Number.prototype.toPrecision(Symbol())`, whose [[NumberData]] is +0
+        // but which V8 also exercises with non-finite receivers (test262
+        // built-ins/Number/prototype/toPrecision/return-abrupt-*-symbol).
         let p_number = to_integer_or_infinity(precision);
-        if p_number < 1.0 || p_number > 100.0 {
-            throw_number_format_range_error("toPrecision() argument must be between 1 and 100");
-        }
-        let p = p_number as usize;
-        if value == 0.0 {
-            // 0.toPrecision(3) = "0.00"
-            if p == 1 {
-                "0".to_string()
+        if value.is_nan() {
+            "NaN".to_string()
+        } else if value.is_infinite() {
+            if value > 0.0 {
+                "Infinity".to_string()
             } else {
-                format!("0.{}", "0".repeat(p - 1))
+                "-Infinity".to_string()
             }
+        } else if p_number < 1.0 || p_number > 100.0 {
+            throw_number_format_range_error("toPrecision() argument must be between 1 and 100");
         } else {
-            // Find the decimal exponent: floor(log10(|x|))
-            let abs = value.abs();
-            let exp = abs.log10().floor() as i32;
-            // JS uses exponential notation when exp < -6 or exp >= precision
-            if exp < -6 || exp >= p as i32 {
-                // Exponential: precision-1 digits after decimal, e+/-exp
-                let mantissa_digits = p.saturating_sub(1);
-                let formatted = format!("{:.*e}", mantissa_digits, value);
-                // Rust's "{:e}" format produces "1.23e4"; JS uses "1.23e+4"
-                fix_exponent_format(&formatted)
+            let p = p_number as usize;
+            if value == 0.0 {
+                // 0.toPrecision(3) = "0.00"
+                if p == 1 {
+                    "0".to_string()
+                } else {
+                    format!("0.{}", "0".repeat(p - 1))
+                }
             } else {
-                // Fixed: precision - exp - 1 digits after decimal
-                let dp = (p as i32 - exp - 1).max(0) as usize;
-                format!("{:.prec$}", value, prec = dp)
+                // Find the decimal exponent: floor(log10(|x|))
+                let abs = value.abs();
+                let exp = abs.log10().floor() as i32;
+                // JS uses exponential notation when exp < -6 or exp >= precision
+                if exp < -6 || exp >= p as i32 {
+                    // Exponential: precision-1 digits after decimal, e+/-exp
+                    let mantissa_digits = p.saturating_sub(1);
+                    let formatted = format!("{:.*e}", mantissa_digits, value);
+                    // Rust's "{:e}" format produces "1.23e4"; JS uses "1.23e+4"
+                    fix_exponent_format(&formatted)
+                } else {
+                    // Fixed: precision - exp - 1 digits after decimal
+                    let dp = (p as i32 - exp - 1).max(0) as usize;
+                    format!("{:.prec$}", value, prec = dp)
+                }
             }
         }
     };
@@ -382,25 +389,40 @@ pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut Str
 /// Format a number in exponential notation (Number.prototype.toExponential).
 #[no_mangle]
 pub extern "C" fn js_number_to_exponential(value: f64, decimals: f64) -> *mut StringHeader {
-    let s = if value.is_nan() {
-        "NaN".to_string()
-    } else if value.is_infinite() {
-        if value > 0.0 {
-            "Infinity".to_string()
+    let s = if is_undefined_arg(decimals) {
+        if value.is_nan() {
+            "NaN".to_string()
+        } else if value.is_infinite() {
+            if value > 0.0 {
+                "Infinity".to_string()
+            } else {
+                "-Infinity".to_string()
+            }
         } else {
-            "-Infinity".to_string()
+            fix_exponent_format(&format!("{:e}", value))
         }
-    } else if is_undefined_arg(decimals) {
-        fix_exponent_format(&format!("{:e}", value))
     } else {
+        // ECMA-262 §21.1.3.2: `f = ? ToIntegerOrInfinity(fractionDigits)`
+        // (step 2) runs *before* the non-finite check on x (step 3), so a
+        // Symbol/abrupt fractionDigits throws even when x is NaN/±Infinity
+        // (test262 .../toExponential/return-abrupt-tointeger-*-symbol).
         let dp_number = to_integer_or_infinity(decimals);
-        if !(0.0..=100.0).contains(&dp_number) {
+        if value.is_nan() {
+            "NaN".to_string()
+        } else if value.is_infinite() {
+            if value > 0.0 {
+                "Infinity".to_string()
+            } else {
+                "-Infinity".to_string()
+            }
+        } else if !(0.0..=100.0).contains(&dp_number) {
             throw_number_format_range_error("toExponential() argument must be between 0 and 100");
+        } else {
+            let dp = dp_number as usize;
+            // Rust's `{:e}` produces e.g. "1.23e4"; JS expects "1.23e+4"
+            let formatted = format!("{:.*e}", dp, value);
+            fix_exponent_format(&formatted)
         }
-        let dp = dp_number as usize;
-        // Rust's `{:e}` produces e.g. "1.23e4"; JS expects "1.23e+4"
-        let formatted = format!("{:.*e}", dp, value);
-        fix_exponent_format(&formatted)
     };
     let bytes = s.as_bytes();
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)

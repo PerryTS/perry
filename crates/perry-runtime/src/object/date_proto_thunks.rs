@@ -69,6 +69,166 @@ date_getter_thunk!(
     crate::date::js_date_get_timezone_offset
 );
 
+/// `Date.prototype.toISOString` reflective thunk. The instance fast path
+/// (`d.toISOString()`) is lowered by codegen straight to
+/// `js_date_to_iso_string_or_throw`, but the value form
+/// (`Date.prototype.toISOString.call(x)`) reaches here: brand-check `this`
+/// (TypeError on a non-Date receiver), then format-or-throw (RangeError when
+/// the time value is `NaN`).
+extern "C" fn date_to_iso_string(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    if !crate::date::is_date_value(this) {
+        super::object_ops::throw_object_type_error(b"this is not a Date object.");
+    }
+    let s = crate::date::js_date_to_iso_string_or_throw(this);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+/// `Date.prototype.toJSON` reflective thunk. Unlike the getters this is a
+/// *generic* method — it is not brand-checked to Date. Per ECMA-262
+/// (`thisTimeValue` is NOT used): `ToObject(this)`, then `ToPrimitive(this,
+/// number)`; if that primitive is a Number and not finite, return `null`;
+/// otherwise return `Invoke(this, "toISOString")`. So it works for a real Date
+/// (Invalid → `null`), a plain object carrying its own `toISOString`, and a
+/// `Number(-Infinity)` wrapper (→ `null`).
+extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let jsv = crate::value::JSValue::from_bits(this.to_bits());
+    // ToObject(this): null / undefined throw a TypeError.
+    if jsv.is_undefined() || jsv.is_null() {
+        super::object_ops::throw_object_type_error(b"Cannot convert undefined or null to object");
+    }
+    // ToPrimitive(this, hint Number).
+    let tv = if crate::date::is_date_value(this) {
+        crate::date::date_cell_timestamp(this)
+    } else {
+        match unsafe { crate::value::to_primitive_number(this) } {
+            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
+            // A plain object's default `"[object Object]"` is a String, never a
+            // Number, so step 3 (non-finite Number → null) never fires; fall
+            // through to the `toISOString` invocation.
+            crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            }
+            crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+                super::object_ops::throw_object_type_error(
+                    b"Cannot convert object to primitive value",
+                )
+            }
+        }
+    };
+    // Step 3: if the primitive is a Number and is not finite, return null.
+    let tv_jsv = crate::value::JSValue::from_bits(tv.to_bits());
+    let as_num = if tv_jsv.is_int32() {
+        Some(((tv.to_bits() & 0xFFFF_FFFF) as u32 as i32) as f64)
+    } else if tv_jsv.is_number() {
+        Some(tv)
+    } else {
+        None
+    };
+    if let Some(n) = as_num {
+        if !n.is_finite() {
+            return f64::from_bits(crate::value::TAG_NULL);
+        }
+    }
+    // Step 4: Invoke(this, "toISOString"). For a real Date, dispatch straight
+    // to the runtime helper: `js_native_call_method` does not resolve the
+    // reflective `toISOString` on a `DateCell` receiver and would fall back to
+    // the generic `[object Object]` Object.prototype.toString. Other receivers
+    // (a plain object carrying its own `toISOString`) use the ordinary Invoke.
+    if crate::date::is_date_value(this) {
+        let s = crate::date::js_date_to_iso_string_or_throw(this);
+        return crate::value::js_nanbox_string(s as i64);
+    }
+    // Other receivers: a full `Invoke(O, "toISOString")` where
+    // `O = ToObject(this)`. `ToObject` boxes primitives (so
+    // `Date.prototype.toJSON.call(10)` reaches `Number.prototype.toISOString`),
+    // the property read fires accessor getters and walks the prototype chain
+    // (`{ get toISOString() {…} }`), and a non-callable result throws
+    // `TypeError` from `Call`. `js_native_call_method` does none of these — it
+    // only dispatches builtin/native methods — so it is not used here.
+    let o = crate::object::js_object_coerce(this);
+    let key = {
+        let k = crate::string::js_string_from_bytes(b"toISOString".as_ptr(), 11);
+        f64::from_bits(crate::value::js_nanbox_string(k as i64).to_bits())
+    };
+    let func = crate::proxy::js_reflect_get(o, key, o);
+    let closure = crate::value::js_nanbox_get_pointer(func) as *const crate::closure::ClosureHeader;
+    if crate::collection_iter::is_callable(func)
+        && !crate::closure::get_valid_func_ptr(closure).is_null()
+    {
+        // `Call(func, O, «»)` — toJSON's `key` argument is intentionally not
+        // forwarded (Invoke passes an empty argument list).
+        let prev = crate::object::js_implicit_this_set(o);
+        let r = crate::closure::js_closure_call0(closure);
+        crate::object::js_implicit_this_set(prev);
+        return r;
+    }
+    super::object_ops::throw_object_type_error(b"toISOString is not a function")
+}
+
+#[cfg(test)]
+pub(crate) fn test_date_to_json_current_this() -> f64 {
+    date_to_json(std::ptr::null())
+}
+
+// --- Date constructor static methods (Date.now / Date.parse / Date.UTC) ---
+//
+// The functional call forms are codegen intrinsics (`Expr::DateNow` /
+// `DateParse` / `DateUtc`), recognized at HIR lowering before any property
+// lookup, so these closures never intercept `Date.now()` etc. They exist only
+// so the statics are real own properties of the `Date` constructor — readable
+// as values (`const f = Date.UTC; f(...)`) and observable through reflection
+// (`Date.UTC.name === "UTC"`, `Date.UTC.length === 7`,
+// `getOwnPropertyDescriptor(Date, "UTC")`).
+
+/// `Date.now()` — current time in milliseconds.
+extern "C" fn date_now_static(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::date::js_date_now()
+}
+
+/// `Date.parse(string)` — ToString the argument, then parse to a ms timestamp.
+extern "C" fn date_parse_static(_closure: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+    let s = crate::value::js_jsvalue_to_string(arg);
+    crate::date::js_date_parse(s as *const crate::string::StringHeader)
+}
+
+/// `Date.UTC(year, month?, day?, …)` — variadic; forwards to `js_date_utc`.
+extern "C" fn date_utc_static(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    let vals = super::global_this::global_this_rest_array_values(rest);
+    crate::date::js_date_utc(vals.as_ptr(), vals.len() as i32)
+}
+
+/// Install `now` / `parse` / `UTC` as own data properties on the `Date`
+/// constructor closure. Called from `install_builtin_constructor_statics`.
+pub(crate) fn install_date_constructor_statics(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    // (name, fn-ptr, spec `.length`, has_rest)
+    super::global_this::install_constructor_static(
+        ctor,
+        "now",
+        date_now_static as *const u8,
+        0,
+        false,
+    );
+    super::global_this::install_constructor_static(
+        ctor,
+        "parse",
+        date_parse_static as *const u8,
+        1,
+        false,
+    );
+    super::global_this::install_constructor_static(
+        ctor,
+        "UTC",
+        date_utc_static as *const u8,
+        7,
+        true,
+    );
+}
+
 /// Legacy `Date.prototype.getYear` — `getFullYear() - 1900` (NaN-preserving).
 extern "C" fn date_get_year(_closure: *const crate::closure::ClosureHeader) -> f64 {
     let fy = crate::date::js_date_get_full_year(require_date_timestamp());
@@ -110,5 +270,120 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
     ];
     for (name, ptr) in methods.iter().copied() {
         super::global_this::install_proto_method(proto_obj, name, ptr, 0);
+    }
+    // String-returning / generic methods that also need real reflective thunks
+    // (overwriting their no-op entries). `toJSON` is generic (`.length === 1`),
+    // `toISOString` brand-checks `this` (`.length === 0`).
+    super::global_this::install_proto_method(
+        proto_obj,
+        "toISOString",
+        date_to_iso_string as *const u8,
+        0,
+    );
+    super::global_this::install_proto_method(proto_obj, "toJSON", date_to_json as *const u8, 1);
+}
+
+// --- Setters ---------------------------------------------------------------
+//
+// Like the getters, the instance fast path (`d.setHours(...)`) is lowered by
+// codegen straight to `js_date_apply_setter`. But `Date.prototype.setHours` is
+// also a plain value (`.call`/`.apply`, method extraction, the legacy
+// `setYear`/`setUTC*` family with no codegen fast path), and on that reflective
+// path the methods were generic no-ops: `setDate.call(realDate, 1)` no-op'd and
+// `setDate.call(nonDate, 1)` silently produced garbage instead of throwing.
+//
+// Each setter performs `thisTimeValue(this)` (TypeError if `this` is not a
+// Date) and is variadic, so these thunks read the `IMPLICIT_THIS` receiver,
+// brand-check it, collect the `rest` arguments, and dispatch to the same
+// `js_date_apply_setter` the instance path uses. `js_date_apply_setter` reads
+// `[[DateValue]]` BEFORE coercing the arguments, so the read-before-ToNumber
+// ordering holds on the reflective path too.
+
+/// Resolve the `IMPLICIT_THIS` receiver to a Date value, or throw a `TypeError`
+/// (`thisTimeValue` brand check) when it is not a Date. Returns the NaN-boxed
+/// `DateCell` value (the setter dispatch needs the receiver itself, not just
+/// its timestamp, so it can mutate the cell in place).
+fn require_date_this() -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    if crate::date::is_date_value(this) {
+        this
+    } else {
+        super::object_ops::throw_object_type_error(b"this is not a Date object.")
+    }
+}
+
+/// `field`/`is_utc` selectors mirror `crate::date::js_date_apply_setter`:
+/// 0=FullYear 1=Month 2=Date 3=Hours 4=Minutes 5=Seconds 6=Milliseconds
+/// 7=Time, plus 8=setYear (annexB; local-only). `is_utc != 0` picks the UTC
+/// rebuild.
+macro_rules! date_setter_thunk {
+    ($name:ident, $is_utc:expr, $field:expr) => {
+        extern "C" fn $name(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+            let this = require_date_this();
+            let args = super::global_this::global_this_rest_array_values(rest);
+            crate::date::js_date_apply_setter(
+                this,
+                $is_utc,
+                $field,
+                args.as_ptr(),
+                args.len() as i32,
+            )
+        }
+    };
+}
+
+date_setter_thunk!(date_set_time, 0, 7);
+date_setter_thunk!(date_set_full_year, 0, 0);
+date_setter_thunk!(date_set_month, 0, 1);
+date_setter_thunk!(date_set_date, 0, 2);
+date_setter_thunk!(date_set_hours, 0, 3);
+date_setter_thunk!(date_set_minutes, 0, 4);
+date_setter_thunk!(date_set_seconds, 0, 5);
+date_setter_thunk!(date_set_milliseconds, 0, 6);
+date_setter_thunk!(date_set_year, 0, 8);
+date_setter_thunk!(date_set_utc_full_year, 1, 0);
+date_setter_thunk!(date_set_utc_month, 1, 1);
+date_setter_thunk!(date_set_utc_date, 1, 2);
+date_setter_thunk!(date_set_utc_hours, 1, 3);
+date_setter_thunk!(date_set_utc_minutes, 1, 4);
+date_setter_thunk!(date_set_utc_seconds, 1, 5);
+date_setter_thunk!(date_set_utc_milliseconds, 1, 6);
+
+/// Install the brand-checked `Date.prototype` setter thunks. Called from
+/// `global_this::populate_builtin_prototype_methods`'s `"Date"` arm AFTER the
+/// no-op block, so these overwrite the no-op setter entries. Each is installed
+/// as a variadic (`rest`) method so the optional trailing components arrive in
+/// the `rest` array; `spec_length` is the ECMAScript `.length`.
+pub(crate) fn install_date_proto_setters(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    // (name, func_ptr, spec `.length`)
+    let methods: &[(&str, *const u8, u32)] = &[
+        ("setTime", date_set_time as *const u8, 1),
+        ("setFullYear", date_set_full_year as *const u8, 3),
+        ("setMonth", date_set_month as *const u8, 2),
+        ("setDate", date_set_date as *const u8, 1),
+        ("setHours", date_set_hours as *const u8, 4),
+        ("setMinutes", date_set_minutes as *const u8, 3),
+        ("setSeconds", date_set_seconds as *const u8, 2),
+        ("setMilliseconds", date_set_milliseconds as *const u8, 1),
+        ("setYear", date_set_year as *const u8, 1),
+        ("setUTCFullYear", date_set_utc_full_year as *const u8, 3),
+        ("setUTCMonth", date_set_utc_month as *const u8, 2),
+        ("setUTCDate", date_set_utc_date as *const u8, 1),
+        ("setUTCHours", date_set_utc_hours as *const u8, 4),
+        ("setUTCMinutes", date_set_utc_minutes as *const u8, 3),
+        ("setUTCSeconds", date_set_utc_seconds as *const u8, 2),
+        (
+            "setUTCMilliseconds",
+            date_set_utc_milliseconds as *const u8,
+            1,
+        ),
+    ];
+    for (name, ptr, length) in methods.iter().copied() {
+        // call_fixed_arity = 0: every argument arrives in the `rest` array, so
+        // one thunk shape covers the 0..=4-arg setters uniformly.
+        super::global_this::install_proto_method_rest_with_length(proto_obj, name, ptr, length, 0);
     }
 }

@@ -146,6 +146,19 @@ fn is_node_readable_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) ->
     )
 }
 
+/// `for await (const line of rl)` where `rl = readline.createInterface(...)`.
+/// Async-function-body counterpart of the same check in `lower/stmt_loops.rs`.
+fn is_readline_interface_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    matches!(
+        strip_for_of_expr_wrappers(expr),
+        ast::Expr::Ident(ident)
+            if matches!(
+                ctx.lookup_native_instance(ident.sym.as_ref()),
+                Some(("readline", "Interface"))
+            )
+    )
+}
+
 fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     let call = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -387,6 +400,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             ("tls", "createServer" | "Server") => Some(("tls", "Server")),
                             ("net", "Socket") => Some(("net", "Socket")),
                             ("net", "Server") => Some(("net", "Server")),
+                            ("net", "BlockList") => Some(("net", "BlockList")),
+                            ("net", "SocketAddress") => Some(("net", "SocketAddress")),
                             _ => None,
                         };
                         if let Some((m, c)) = native_class {
@@ -990,12 +1005,15 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
             let is_filehandle_readlines_for_await = for_of_stmt.is_await
                 && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
+            let is_readline_interface_for_await = for_of_stmt.is_await
+                && is_readline_interface_for_await_target(ctx, &for_of_stmt.right);
 
             if is_generator_call
                 || iter_from_class.is_some()
                 || is_timer_promises_interval_call
                 || is_node_readable_for_await
                 || is_filehandle_readlines_for_await
+                || is_readline_interface_for_await
             {
                 let scope_mark = ctx.push_block_scope();
                 let iter_expr_raw = lower_expr(ctx, &for_of_stmt.right)?;
@@ -1015,6 +1033,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         }),
                         args: vec![],
                         type_args: vec![],
+                    }
+                } else if is_readline_interface_for_await {
+                    Expr::NativeMethodCall {
+                        module: "readline".to_string(),
+                        class_name: Some("Interface".to_string()),
+                        object: Some(Box::new(iter_expr_raw)),
+                        method: "iterator".to_string(),
+                        args: vec![],
                     }
                 } else {
                     iter_expr_raw
@@ -1081,7 +1107,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     }),
                 });
                 let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
-                if is_node_readable_for_await || is_filehandle_readlines_for_await {
+                if is_node_readable_for_await
+                    || is_filehandle_readlines_for_await
+                    || is_readline_interface_for_await
+                {
                     insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
                 }
                 body_stmts.extend(user_body);

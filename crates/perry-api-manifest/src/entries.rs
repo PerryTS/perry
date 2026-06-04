@@ -2637,6 +2637,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("readline", "question", true, None),
     method("readline", "on", true, None),
     method("readline", "close", true, None),
+    method("readline", "iterator", true, None),
     method("readline", "pause", true, None),
     method("readline", "resume", true, None),
     method("readline", "prompt", true, None),

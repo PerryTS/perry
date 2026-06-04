@@ -7,10 +7,10 @@ This document is a structured gap analysis comparing the public Node.js + Bun ru
 | Category | Modules | Gap APIs | Verified-covered |
 |----------|---------|----------|------------------|
 | Whole-module gaps (zero coverage) | 15 | 410 | n/a |
-| Partial-module gaps | 32 | 1285 | 607 |
+| Partial-module gaps | 31 | 1230 | 630 |
 | Web-global gaps | — | 282 | 107 |
 | Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **1977** |  |
+| **Total true gaps** |  | **1922** |  |
 
 **Top modules by remaining true gaps (Node + Web):**
 
@@ -897,86 +897,6 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 | `worker.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
 | `port.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
 | `bc.postMessage(message)` | `stdlib worker_threads receiver methods` |
-
-### node:net
-
-**Gap APIs: 55** · Already covered: 23
-
-#### Missing from Perry
-
-- `net.isIP(input)`
-- `net.isIPv4(input)`
-- `net.isIPv6(input)`
-- `net.getDefaultAutoSelectFamily()`
-- `net.setDefaultAutoSelectFamily(value)`
-- `net.getDefaultAutoSelectFamilyAttemptTimeout()`
-- `net.setDefaultAutoSelectFamilyAttemptTimeout(value)`
-- `new net.BlockList()`
-- `blockList.addAddress(address[, type])`
-- `blockList.addRange(start, end[, type])`
-- `blockList.addSubnet(net, prefix[, type])`
-- `blockList.check(address[, type])`
-- `blockList.fromJSON(value)`
-- `blockList.toJSON()`
-- `blockList.rules`
-- `BlockList.isBlockList(value)`
-- `new net.SocketAddress([options])`
-- `socketAddress.address`
-- `socketAddress.family`
-- `socketAddress.flowlabel`
-- `socketAddress.port`
-- `SocketAddress.parse(input)`
-- `new net.Server([options][, connectionListener])`
-- `server.getConnections(callback)`
-- `server.ref()`
-- `server.unref()`
-- `server[Symbol.asyncDispose]()`
-- `server.listening`
-- `server.maxConnections`
-- `server.dropMaxConnection`
-- `socket.address()`
-- `socket.destroySoon()`
-- `socket.pause()`
-- `socket.ref()`
-- `socket.resetAndDestroy()`
-- `socket.resume()`
-- `socket.setEncoding([encoding])`
-- `socket.setKeepAlive([enable][, initialDelay])`
-- `socket.setNoDelay([noDelay])`
-- `socket.setTimeout(timeout[, callback])`
-- `socket.getTypeOfService()`
-- `socket.setTypeOfService(tos)`
-- `socket.unref()`
-- `socket.autoSelectFamilyAttemptedAddresses`
-- `socket.bufferSize`
-- `socket.bytesRead`
-- `socket.bytesWritten`
-- `socket.connecting`
-- `socket.destroyed`
-- `socket.localAddress`
-- … and 5 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `net.connect(options[, connectListener])` | `manifest:net.connect` |
-| `net.connect(path[, connectListener])` | `manifest:net.connect` |
-| `net.connect(port[, host][, connectListener])` | `manifest:net.connect` |
-| `net.createConnection(options[, connectListener])` | `expr:NetCreateConnection` |
-| `net.createConnection(path[, connectListener])` | `expr:NetCreateConnection` |
-| `net.createConnection(port[, host][, connectListener])` | `expr:NetCreateConnection` |
-| `net.createServer([options][, connectionListener])` | `expr:NetCreateServer` |
-| `server.address()` | `ffi:js_net_server_address` |
-| `server.close([callback])` | `ffi:js_net_server_close` |
-| `server.listen(handle[, backlog][, callback])` | `ffi:js_net_server_listen` |
-| `server.listen(options[, callback])` | `ffi:js_net_server_listen` |
-| `server.listen(path[, backlog][, callback])` | `ffi:js_net_server_listen` |
-| `server.listen([port[, host[, backlog]]][, callback])` | `ffi:js_net_server_listen` |
-| `new net.Socket([options])` | `manifest:net.Socket` |
-| `new net.Stream([options])` | `manifest:net.Stream` |
-| `socket.connect(options[, connectListener])` | `manifest:net.connect` |
-| … | 7 more covered APIs |
 
 ### node:stream/web
 

@@ -16,6 +16,27 @@ use super::{find_library, find_llvm_tool, find_stdlib_library};
 
 const FORCE_EXCLUDE_SYMBOLS: &[&str] = &["js_stdlib_init_dispatch", "js_stdlib_process_pending"];
 
+const RUST_ALLOCATOR_SYMBOL_PARTS: &[&str] = &[
+    "__rust_alloc",
+    "__rust_dealloc",
+    "__rust_realloc",
+    "__rust_alloc_zeroed",
+    "__rust_alloc_error_handler",
+    "__rust_no_alloc_shim_is_unstable",
+    "__rdl_alloc",
+    "__rdl_dealloc",
+    "__rdl_realloc",
+    "__rdl_alloc_zeroed",
+    "__rdl_alloc_error_handler",
+];
+
+fn force_localize_symbol(symbol: &str) -> bool {
+    FORCE_EXCLUDE_SYMBOLS.iter().any(|forced| symbol == *forced)
+        || RUST_ALLOCATOR_SYMBOL_PARTS
+            .iter()
+            .any(|part| symbol.contains(part))
+}
+
 fn find_path_tool(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
@@ -562,18 +583,24 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
     let abs_staticlib = std::fs::canonicalize(lib_path)?;
     let symbols_by_member = collect_archive_symbols_by_member(&nm, &abs_staticlib)
         .ok_or_else(|| anyhow::anyhow!("failed to inspect archive symbols"))?;
-    let affected: std::collections::HashSet<String> = symbols_by_member
-        .iter()
-        .filter(|(_, symbols)| {
-            symbols.iter().any(|s| {
-                FORCE_EXCLUDE_SYMBOLS
+    let forced_symbols_by_member: std::collections::BTreeMap<String, Vec<String>> =
+        symbols_by_member
+            .iter()
+            .filter_map(|(member, symbols)| {
+                let mut forced_symbols: Vec<String> = symbols
                     .iter()
-                    .any(|forced| s.as_str() == *forced)
+                    .filter(|symbol| force_localize_symbol(symbol))
+                    .cloned()
+                    .collect();
+                if forced_symbols.is_empty() {
+                    None
+                } else {
+                    forced_symbols.sort();
+                    Some((member.clone(), forced_symbols))
+                }
             })
-        })
-        .map(|(member, _)| member.clone())
-        .collect();
-    if affected.is_empty() {
+            .collect();
+    if forced_symbols_by_member.is_empty() {
         return Ok(lib_path.clone());
     }
 
@@ -606,9 +633,9 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
         return Err(anyhow::anyhow!("failed to extract {lib_name}: {stderr}"));
     }
 
-    for member in &affected {
+    for (member, symbols) in &forced_symbols_by_member {
         let member_path = extract_dir.join(member);
-        for symbol in FORCE_EXCLUDE_SYMBOLS {
+        for symbol in symbols {
             let out = Command::new(&objcopy)
                 .arg("--localize-symbol")
                 .arg(symbol)
@@ -637,8 +664,8 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
     }
 
     eprintln!(
-        "[strip-dedup] {lib_name}: localized stdlib dispatch stubs in {} member(s)",
-        affected.len()
+        "[strip-dedup] {lib_name}: localized wrapper-only globals in {} member(s)",
+        forced_symbols_by_member.len()
     );
     let _ = std::fs::remove_dir_all(&extract_dir);
     Ok(trimmed_lib)
