@@ -173,6 +173,30 @@ pub(super) fn stream_auto_destroy_enabled(stream: f64) -> bool {
         .unwrap_or(true)
 }
 
+pub(super) fn set_stream_emit_close(stream: f64, opts: f64) {
+    let enabled = get_hidden_value(opts, hidden_key(b"emitClose"))
+        .map(|v| v.to_bits() != TAG_FALSE)
+        .unwrap_or(true);
+    set_hidden_value(
+        stream,
+        hidden_stream_emit_close_key(),
+        f64::from_bits(if enabled { TAG_TRUE } else { TAG_FALSE }),
+    );
+}
+
+pub(super) fn stream_emit_close_enabled(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_stream_emit_close_key())
+        .map(|v| v.to_bits() != TAG_FALSE)
+        .unwrap_or(true)
+}
+
+pub(super) fn mark_stream_closed_and_emit_close(stream: f64) {
+    mark_stream_closed(stream);
+    if stream_emit_close_enabled(stream) {
+        let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+    }
+}
+
 pub(super) fn mark_stream_destroyed(stream: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_TRUE));
     refresh_readable_aborted_flag(stream);
@@ -779,9 +803,6 @@ pub(super) fn emit_readable_end_once(stream: f64) {
             if !writable_pending {
                 destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
             }
-        } else if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
-            mark_stream_closed(stream);
-            let _ = emit_stream_event(stream, string_value(b"close"), &[]);
         }
     }
 }

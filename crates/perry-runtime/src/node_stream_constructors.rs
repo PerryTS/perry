@@ -122,6 +122,7 @@ pub(super) fn resolve_hwm(opts: f64, specific: &[u8], specific_object_mode: &[u8
 /// Initialize visible lifecycle flags shared by all stream sides.
 pub(super) fn init_lifecycle_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    set_stream_emit_close(stream, opts);
     set_hidden_value(
         stream,
         hidden_capture_rejections_key(),

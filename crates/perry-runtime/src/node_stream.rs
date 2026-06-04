@@ -127,6 +127,7 @@ const READABLE_BASE64_REMAINDER_KEY: &[u8] = b"__perryReadableBase64Remainder";
 const STREAM_PIPE_NO_END_KEY: &[u8] = b"__perryStreamPipeNoEnd";
 const STREAM_PIPE_END_PENDING_KEY: &[u8] = b"__perryStreamPipeEndPending";
 const STREAM_AUTO_DESTROY_KEY: &[u8] = b"__perryStreamAutoDestroy";
+const STREAM_EMIT_CLOSE_KEY: &[u8] = b"__perryStreamEmitClose";
 const STREAM_PIPELINE_CALLBACK_DONE_KEY: &[u8] = b"__perryStreamPipelineCallbackDone";
 const STREAM_COMPOSE_LIVE_PIPE_CONSUME_KEY: &[u8] = b"__perryStreamComposeLivePipeConsume";
 
@@ -389,11 +390,10 @@ extern "C" fn ns_writable_finish_microtask(closure: *const ClosureHeader) -> f64
         let readable_done = get_hidden_value(stream, hidden_readable_flag_key()).is_none()
             || has_truthy_hidden(stream, hidden_end_emitted_key());
         if readable_done {
-            mark_stream_closed(stream);
             if stream_auto_destroy_enabled(stream) {
                 mark_stream_destroyed(stream);
             }
-            let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+            mark_stream_closed_and_emit_close(stream);
         }
     }
     f64::from_bits(TAG_UNDEFINED)
