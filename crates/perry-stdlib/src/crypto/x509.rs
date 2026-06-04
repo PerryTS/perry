@@ -222,7 +222,12 @@ fn x509_check_ip_value(cert: &x509_cert::Certificate, ip: &str) -> Option<String
     use std::net::IpAddr;
     use x509_cert::ext::pkix::name::GeneralName;
 
-    let parsed = ip.parse::<IpAddr>().ok()?;
+    let parsed = ip.parse::<IpAddr>().unwrap_or_else(|_| {
+        perry_runtime::fs::validate::throw_type_error_with_code(
+            "Invalid IP",
+            "ERR_INVALID_ARG_VALUE",
+        )
+    });
     let san = x509_decoded_subject_alt_name(cert)?;
     san.0.iter().find_map(|general_name| {
         let GeneralName::IpAddress(value) = general_name else {
@@ -230,8 +235,8 @@ fn x509_check_ip_value(cert: &x509_cert::Certificate, ip: &str) -> Option<String
         };
         let bytes = value.as_bytes();
         match parsed {
-            IpAddr::V4(addr) if bytes == addr.octets().as_slice() => Some(addr.to_string()),
-            IpAddr::V6(addr) if bytes == addr.octets().as_slice() => Some(addr.to_string()),
+            IpAddr::V4(addr) if bytes == addr.octets().as_slice() => Some(ip.to_string()),
+            IpAddr::V6(addr) if bytes == addr.octets().as_slice() => Some(ip.to_string()),
             _ => None,
         }
     })
