@@ -121,6 +121,7 @@ pub(super) enum KeyAlgo {
     EcdhP521,
     Ed25519,
     X25519,
+    X448,
     RsaOaep,
     RsassaPkcs1,
     RsaPss,
@@ -305,6 +306,7 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::Kmac128 => 23,
         KeyAlgo::Kmac256 => 24,
         KeyAlgo::AesOcb => 25,
+        KeyAlgo::X448 => 26,
     }
 }
 
@@ -360,6 +362,7 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 23 => KeyAlgo::Kmac128,
                 24 => KeyAlgo::Kmac256,
                 25 => KeyAlgo::AesOcb,
+                26 => KeyAlgo::X448,
                 _ => return None,
             };
             let hash = match hash {
@@ -604,11 +607,19 @@ pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
             KeyKind::Public,
         ) => USAGE_VERIFY,
         (
-            KeyAlgo::EcdhP256 | KeyAlgo::EcdhP384 | KeyAlgo::EcdhP521 | KeyAlgo::X25519,
+            KeyAlgo::EcdhP256
+            | KeyAlgo::EcdhP384
+            | KeyAlgo::EcdhP521
+            | KeyAlgo::X25519
+            | KeyAlgo::X448,
             KeyKind::Private,
         ) => USAGE_DERIVE_KEY | USAGE_DERIVE_BITS,
         (
-            KeyAlgo::EcdhP256 | KeyAlgo::EcdhP384 | KeyAlgo::EcdhP521 | KeyAlgo::X25519,
+            KeyAlgo::EcdhP256
+            | KeyAlgo::EcdhP384
+            | KeyAlgo::EcdhP521
+            | KeyAlgo::X25519
+            | KeyAlgo::X448,
             KeyKind::Public,
         ) => 0,
         (KeyAlgo::RsaOaep, KeyKind::Public) => USAGE_ENCRYPT | USAGE_WRAP_KEY,
@@ -696,32 +707,18 @@ pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
     js_promise_resolved(f64::from_bits(bits))
 }
 
-/// Construct a DOMException-shaped object (`{ name, message, stack: "" }`)
-/// and return a rejected Promise carrying it. WebCrypto spec demands
-/// `DOMException` instances on subtle.* error paths (`OperationError`,
-/// `NotSupportedError`, `InvalidAccessError`, `DataError`, `SyntaxError`),
-/// and consumers (`.catch(e => e.name === "...")`) match on `.name` —
-/// we model that shape rather than the full DOM `code` lookup table.
-/// Issue #1431.
+/// Construct a DOMException and return a rejected Promise carrying it.
 pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
-    let obj = js_object_alloc(0, 3);
-    if obj.is_null() {
-        return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
-    }
-    let name_key = perry_runtime::js_string_from_bytes(b"name".as_ptr(), 4);
-    let message_key = perry_runtime::js_string_from_bytes(b"message".as_ptr(), 7);
-    let stack_key = perry_runtime::js_string_from_bytes(b"stack".as_ptr(), 5);
     let name_str = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let empty_str = perry_runtime::js_string_from_bytes(b"".as_ptr(), 0);
     let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
     let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
-    let stack_val = f64::from_bits(JSValue::string_ptr(empty_str).bits());
-    js_object_set_field_by_name(obj, name_key, name_val);
-    js_object_set_field_by_name(obj, message_key, message_val);
-    js_object_set_field_by_name(obj, stack_key, stack_val);
-    let obj_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    perry_runtime::js_promise_rejected(obj_val)
+    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    if err.is_null() {
+        return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
+    }
+    let err_val = f64::from_bits(JSValue::pointer(err as *const u8).bits());
+    perry_runtime::js_promise_rejected(err_val)
 }
 
 /// Resolve a Promise with a Uint8Array view of `bytes`.

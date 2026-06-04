@@ -147,14 +147,21 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
                 KeyKind::Public
             };
         (KeyAlgo::Ed25519, HashAlgo::Sha256, kind)
-    } else if algo_upper == "X25519" && (format_lower == "raw" || format_lower == "jwk") {
+    } else if (algo_upper == "X25519" || algo_upper == "X448")
+        && (format_lower == "raw" || format_lower == "jwk")
+    {
         let kind =
             if format_lower == "jwk" && object_field_string(key_bits.to_bits(), b"d").is_some() {
                 KeyKind::Private
             } else {
                 KeyKind::Public
             };
-        (KeyAlgo::X25519, HashAlgo::Sha256, kind)
+        let key_algo = if algo_upper == "X448" {
+            KeyAlgo::X448
+        } else {
+            KeyAlgo::X25519
+        };
+        (key_algo, HashAlgo::Sha256, kind)
     } else if (algo_upper == "RSA-OAEP"
         || algo_upper == "RSASSA-PKCS1-V1_5"
         || algo_upper == "RSA-PSS")
@@ -257,9 +264,15 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
     }
-    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
-        if key_bytes.len() != 32 {
-            return reject_with_dom_exception("OperationError", "The operation failed");
+    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519 | KeyAlgo::X448) {
+        let expected_len = if key_algo == KeyAlgo::X448 { 56 } else { 32 };
+        if key_bytes.len() != expected_len {
+            let name = if key_algo == KeyAlgo::X448 {
+                "DataError"
+            } else {
+                "OperationError"
+            };
+            return reject_with_dom_exception(name, "The operation failed");
         }
         if key_algo == KeyAlgo::Ed25519 {
             let ok = if kind == KeyKind::Private {
@@ -369,6 +382,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
                 | KeyAlgo::EcdhP521
                 | KeyAlgo::Ed25519
                 | KeyAlgo::X25519
+                | KeyAlgo::X448
         )
     {
         return reject_with_dom_exception("OperationError", "The operation failed");
@@ -443,7 +457,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             };
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
-        if matches!(mat.algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
+        if matches!(mat.algo, KeyAlgo::Ed25519 | KeyAlgo::X25519 | KeyAlgo::X448) {
             let obj = match okp_jwk_export_object(&key_bytes, mat) {
                 Some(o) => o,
                 None => return reject_with_dom_exception("OperationError", "The operation failed"),
@@ -549,6 +563,7 @@ pub(super) unsafe fn jwk_okp_bytes(
     let expected_crv = match key_algo {
         KeyAlgo::Ed25519 => "Ed25519",
         KeyAlgo::X25519 => "X25519",
+        KeyAlgo::X448 => "X448",
         _ => return None,
     };
     if kty != "OKP" || crv != expected_crv {
@@ -559,7 +574,8 @@ pub(super) unsafe fn jwk_okp_bytes(
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(value.as_bytes())
         .ok()?;
-    if bytes.len() == 32 {
+    let expected_len = if key_algo == KeyAlgo::X448 { 56 } else { 32 };
+    if bytes.len() == expected_len {
         Some(bytes)
     } else {
         None
@@ -575,7 +591,7 @@ pub(super) unsafe fn jwk_import_key_bytes(
     if is_ec_key_algo(key_algo) {
         return jwk_ec_bytes(obj_bits, key_algo, kind);
     }
-    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519) {
+    if matches!(key_algo, KeyAlgo::Ed25519 | KeyAlgo::X25519 | KeyAlgo::X448) {
         return jwk_okp_bytes(obj_bits, key_algo, kind);
     }
     if matches!(
@@ -698,12 +714,14 @@ pub(super) unsafe fn okp_jwk_export_object(
     key_bytes: &[u8],
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
-    if key_bytes.len() != 32 {
+    let expected_len = if mat.algo == KeyAlgo::X448 { 56 } else { 32 };
+    if key_bytes.len() != expected_len {
         return None;
     }
     let crv = match mat.algo {
         KeyAlgo::Ed25519 => "Ed25519",
         KeyAlgo::X25519 => "X25519",
+        KeyAlgo::X448 => "X448",
         _ => return None,
     };
     let public_bytes = if mat.kind == KeyKind::Private {
@@ -719,6 +737,11 @@ pub(super) unsafe fn okp_jwk_export_object(
                 let secret: [u8; 32] = key_bytes.try_into().ok()?;
                 let secret = x25519_dalek::StaticSecret::from(secret);
                 x25519_dalek::PublicKey::from(&secret).to_bytes().to_vec()
+            }
+            KeyAlgo::X448 => {
+                let secret: [u8; 56] = key_bytes.try_into().ok()?;
+                let secret = x448::StaticSecret::from(secret);
+                x448::PublicKey::from(&secret).as_bytes().to_vec()
             }
             _ => return None,
         }

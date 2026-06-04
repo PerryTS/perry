@@ -453,7 +453,7 @@ pub(super) unsafe fn ecdh_shared_secret_bytes(
         None => return None,
     };
     let algo_upper = algo_name.to_ascii_uppercase();
-    if algo_upper != "ECDH" && algo_upper != "X25519" {
+    if algo_upper != "ECDH" && algo_upper != "X25519" && algo_upper != "X448" {
         return None;
     }
     let public_bits = object_field_bits(algo_bits, b"public")?;
@@ -474,6 +474,15 @@ pub(super) unsafe fn ecdh_shared_secret_bytes(
         let public: [u8; 32] = public_bytes.as_slice().try_into().ok()?;
         let private = x25519_dalek::StaticSecret::from(private);
         let public = x25519_dalek::PublicKey::from(public);
+        return Some(private.diffie_hellman(&public).as_bytes().to_vec());
+    }
+    if algo_upper == "X448" {
+        if public_mat.algo != KeyAlgo::X448 || base_mat.algo != KeyAlgo::X448 {
+            return None;
+        }
+        let private: [u8; 56] = private_bytes.as_slice().try_into().ok()?;
+        let public = x448::PublicKey::from_bytes_unchecked(&public_bytes)?;
+        let private = x448::StaticSecret::from(private);
         return Some(private.diffie_hellman(&public).as_bytes().to_vec());
     }
     match (public_mat.algo, base_mat.algo) {
