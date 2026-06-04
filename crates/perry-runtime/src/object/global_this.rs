@@ -492,10 +492,52 @@ extern "C" fn webcrypto_subtle_getter_thunk(_closure: *const crate::closure::Clo
     super::native_module::subtle_crypto_namespace()
 }
 
-extern "C" fn cryptokey_property_getter_thunk(
+fn cryptokey_receiver_addr() -> Option<usize> {
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = crate::value::JSValue::from_bits(this_bits);
+    let raw = if this_jsv.is_pointer() {
+        (this_bits & crate::value::POINTER_MASK) as usize
+    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
+        this_bits as usize
+    } else {
+        return None;
+    };
+    crate::buffer::crypto_key_meta(raw).map(|_| raw)
+}
+
+fn cryptokey_brand_error() -> ! {
+    super::object_ops::throw_object_type_error(
+        b"Value of CryptoKey getter must be an instance of CryptoKey",
+    )
+}
+
+fn cryptokey_property_getter(key: &[u8]) -> f64 {
+    let addr = cryptokey_receiver_addr().unwrap_or_else(|| cryptokey_brand_error());
+    unsafe {
+        super::crypto_key_property_value(addr, key)
+            .map(|value| f64::from_bits(value.bits()))
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+    }
+}
+
+extern "C" fn cryptokey_algorithm_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    cryptokey_property_getter(b"algorithm")
+}
+
+extern "C" fn cryptokey_extractable_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    cryptokey_property_getter(b"extractable")
+}
+
+extern "C" fn cryptokey_type_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    cryptokey_property_getter(b"type")
+}
+
+extern "C" fn cryptokey_usages_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    cryptokey_property_getter(b"usages")
 }
 
 pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
@@ -4221,12 +4263,16 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "CryptoKey" => {
-            for name in ["algorithm", "extractable", "type", "usages"] {
-                install_webcrypto_proto_getter(
-                    proto_obj,
-                    name,
-                    cryptokey_property_getter_thunk as *const u8,
-                );
+            for (name, func_ptr) in [
+                ("algorithm", cryptokey_algorithm_getter_thunk as *const u8),
+                (
+                    "extractable",
+                    cryptokey_extractable_getter_thunk as *const u8,
+                ),
+                ("type", cryptokey_type_getter_thunk as *const u8),
+                ("usages", cryptokey_usages_getter_thunk as *const u8),
+            ] {
+                install_webcrypto_proto_getter(proto_obj, name, func_ptr);
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }

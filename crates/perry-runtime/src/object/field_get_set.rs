@@ -27,7 +27,7 @@ const CRYPTO_USAGE_DECAPSULATE_BITS: u32 = 1 << 9;
 const CRYPTO_USAGE_ENCAPSULATE_KEY: u32 = 1 << 10;
 const CRYPTO_USAGE_DECAPSULATE_KEY: u32 = 1 << 11;
 
-unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
+pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
     let (algo, hash, kind, extractable, usages) = crate::buffer::crypto_key_meta(addr)?;
     match key_bytes {
         b"algorithm" => Some(crypto_key_algorithm_value(addr, algo, hash)),
@@ -38,6 +38,10 @@ unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSV
             _ => "secret",
         })),
         b"usages" => Some(crypto_key_usages_value(usages)),
+        b"constructor" => {
+            let ctor = super::js_get_global_this_builtin_value(b"CryptoKey".as_ptr(), 9);
+            Some(JSValue::from_bits(ctor.to_bits()))
+        }
         _ => None,
     }
 }
@@ -2043,6 +2047,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                 let ta = addr as *const crate::typedarray::TypedArrayHeader;
+                if let Some(value) = crypto_key_property_value(addr, key_bytes) {
+                    return value;
+                }
                 if let Some(value) =
                     crate::typedarray_props::typed_array_get_own_property_value(ta, key)
                 {
