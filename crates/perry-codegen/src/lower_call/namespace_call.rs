@@ -234,10 +234,13 @@ pub fn try_lower_namespace_member_call(
     // sources even when both modules export `make`. Falls
     // back to the flat `import_function_prefixes` for
     // namespaces with no overlapping conflicts.
-    let Some(source_prefix) = ctx
+    let namespace_member_key = (ns_name.clone(), property.clone());
+    let scoped_source_prefix = ctx
         .namespace_member_prefixes
-        .get(&(ns_name.clone(), property.clone()))
-        .cloned()
+        .get(&namespace_member_key)
+        .cloned();
+    let Some(source_prefix) = scoped_source_prefix
+        .clone()
         .or_else(|| ctx.import_function_prefixes.get(property).cloned())
     else {
         return Ok(None);
@@ -260,8 +263,14 @@ pub fn try_lower_namespace_member_call(
     // Issue #678: re-exported names (e.g. `export { default as
     // render }`) emit `perry_fn_<src>__default` in the origin —
     // resolve the actual origin suffix before forming the symbol.
-    let origin_suffix =
-        crate::expr::import_origin_suffix(ctx.import_function_origin_names, property);
+    let origin_suffix = if scoped_source_prefix.is_some() {
+        ctx.namespace_member_origin_names
+            .get(&namespace_member_key)
+            .map(String::as_str)
+            .unwrap_or(property)
+    } else {
+        crate::expr::import_origin_suffix(ctx.import_function_origin_names, property)
+    };
     let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
     if ctx.imported_vars.contains(property) {
         // Var-shaped export: fetch closure via zero-arg

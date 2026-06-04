@@ -16,6 +16,7 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
@@ -200,6 +201,18 @@ fn module_with_export_all_function_barrel() -> Module {
     module.exports = vec![Export::ExportAll {
         source: "./node.js".to_string(),
     }];
+    module
+}
+
+fn module_with_named_namespace_reexport_static_call() -> Module {
+    let mut module = module_with_duplicate_local_function_names();
+    module.name = "consumer.ts".to_string();
+    module.functions = Vec::new();
+    module.init = vec![Stmt::Expr(Expr::StaticMethodCall {
+        class_name: "Context".to_string(),
+        method_name: "add".to_string(),
+        args: vec![Expr::Number(1.0)],
+    })];
     module
 }
 
@@ -440,4 +453,33 @@ fn export_all_barrel_emits_callable_function_forwarder() {
         .count(),
         1
     );
+}
+
+#[test]
+fn named_namespace_reexport_static_call_prefers_scoped_member_prefix() {
+    let mut opts = empty_opts();
+    opts.namespace_imports.push("Context".to_string());
+    opts.namespace_reexport_named_imports
+        .insert("Context".to_string());
+    opts.namespace_member_prefixes.insert(
+        ("Context".to_string(), "add".to_string()),
+        "Context_ts".to_string(),
+    );
+    opts.namespace_member_origin_names.insert(
+        ("Context".to_string(), "add".to_string()),
+        "add".to_string(),
+    );
+    opts.import_function_prefixes
+        .insert("add".to_string(), "Other_ts".to_string());
+    opts.import_function_origin_names
+        .insert("add".to_string(), "a".to_string());
+
+    let ir = String::from_utf8(
+        compile_module(&module_with_named_namespace_reexport_static_call(), opts).unwrap(),
+    )
+    .unwrap();
+
+    assert!(ir.contains("call double @perry_fn_Context_ts__add(double"));
+    assert!(!ir.contains("call double @perry_fn_Other_ts__add(double"));
+    assert!(!ir.contains("call double @perry_fn_Context_ts__a(double"));
 }

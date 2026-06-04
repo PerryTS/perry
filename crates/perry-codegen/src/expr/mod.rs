@@ -399,6 +399,10 @@ pub(crate) struct FnCtx<'a> {
     /// by namespace member access lowering to disambiguate when the same
     /// export name appears in multiple `import * as X / Y` sources.
     pub namespace_member_prefixes: &'a std::collections::HashMap<(String, String), String>,
+    /// Issue #678 / #680: per-namespace member origin suffix overrides.
+    /// Keeps namespace re-export aliases scoped to `ns.member` so bare
+    /// same-named imports in the same module continue to use their own origin.
+    pub namespace_member_origin_names: &'a std::collections::HashMap<(String, String), String>,
     /// Names of imported functions that are async. Used to wrap
     /// cross-module calls in promise machinery.
     // #854: cross-module async-import wrapping context; currently routed via

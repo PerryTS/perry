@@ -1124,13 +1124,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         None
                     };
-                    let source_prefix_opt = _ns_lookup_name
+                    let namespace_member_key = _ns_lookup_name
                         .as_ref()
-                        .and_then(|ns| {
-                            ctx.namespace_member_prefixes
-                                .get(&(ns.clone(), property.clone()))
-                                .cloned()
-                        })
+                        .map(|ns| (ns.clone(), property.clone()));
+                    let scoped_source_prefix = namespace_member_key
+                        .as_ref()
+                        .and_then(|key| ctx.namespace_member_prefixes.get(key).cloned());
+                    let source_prefix_opt = scoped_source_prefix
+                        .clone()
                         .or_else(|| ctx.import_function_prefixes.get(property).cloned());
                     if let Some(source_prefix) = source_prefix_opt {
                         // Issue #678 followup: V8-fallback namespace member
@@ -1182,8 +1183,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // both modules have finished `__init`.
                         // Issue #678: re-export renames mean the suffix in the
                         // origin module differs from the consumer-visible name.
-                        let origin_suffix =
-                            import_origin_suffix(ctx.import_function_origin_names, property);
+                        let origin_suffix = if scoped_source_prefix.is_some() {
+                            namespace_member_key
+                                .as_ref()
+                                .and_then(|key| ctx.namespace_member_origin_names.get(key))
+                                .map(String::as_str)
+                                .unwrap_or(property)
+                        } else {
+                            import_origin_suffix(ctx.import_function_origin_names, property)
+                        };
                         if ctx.imported_vars.contains(property) {
                             let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));

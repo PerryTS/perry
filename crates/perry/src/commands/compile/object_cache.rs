@@ -402,6 +402,19 @@ fn compute_object_cache_key_with_env(
             .join(",");
         h.field("namespace_member_prefixes", &s);
     }
+    // Issue #678 / #680: per-namespace origin names change the callee suffix
+    // for `ns.member` without changing the consumer module's HIR.
+    {
+        let mut v: Vec<(&(String, String), &String)> =
+            opts.namespace_member_origin_names.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|((ns, member), origin_name)| format!("{}:{}={}", ns, member, origin_name))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_member_origin_names", &s);
+    }
 
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
@@ -868,6 +881,7 @@ mod object_cache_tests {
             namespace_node_submodules: std::collections::HashMap::new(),
             namespace_v8_specifiers: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
+            namespace_member_origin_names: std::collections::HashMap::new(),
             emit_ir_only: false,
             verify_native_regions: false,
             disable_buffer_fast_path: false,
@@ -1161,6 +1175,20 @@ mod object_cache_tests {
             .insert(("ns".into(), "make".into()), "src_a".into());
         b.namespace_member_prefixes
             .insert(("ns".into(), "make".into()), "src_b".into());
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_namespace_member_origin_names() {
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.namespace_member_origin_names
+            .insert(("ns".into(), "make".into()), "make".into());
+        b.namespace_member_origin_names
+            .insert(("ns".into(), "make".into()), "a".into());
         assert_ne!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")

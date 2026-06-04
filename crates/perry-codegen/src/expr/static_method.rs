@@ -167,8 +167,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
                 }
-                if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
-                {
+                let namespace_member_key = (class_name.clone(), method_name.clone());
+                let scoped_source_prefix = ctx
+                    .namespace_member_prefixes
+                    .get(&namespace_member_key)
+                    .cloned();
+                let source_prefix_opt = scoped_source_prefix
+                    .clone()
+                    .or_else(|| ctx.import_function_prefixes.get(method_name).cloned());
+                if let Some(source_prefix) = source_prefix_opt {
                     // Issue #678 followup: V8-fallback namespace member route —
                     // the origin module emits no native symbol, so dispatch
                     // through the runtime bridge.
@@ -183,8 +190,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     // Issue #678: namespace member resolved through a re-export
                     // rename uses the origin name as the symbol suffix.
-                    let origin_suffix =
-                        import_origin_suffix(ctx.import_function_origin_names, method_name);
+                    let origin_suffix = if scoped_source_prefix.is_some() {
+                        ctx.namespace_member_origin_names
+                            .get(&namespace_member_key)
+                            .map(String::as_str)
+                            .unwrap_or(method_name)
+                    } else {
+                        import_origin_suffix(ctx.import_function_origin_names, method_name)
+                    };
                     let fn_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                     // Issue #321: var-shaped exports (e.g. `export const succeed
                     // = (v) => new EffectInst(v)`) emit a ZERO-ARG getter

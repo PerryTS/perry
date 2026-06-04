@@ -273,6 +273,26 @@ fn object_file_stem_for_module(module_name: &str) -> String {
     format!("{}_{}", &sanitized[..prefix_len], hash)
 }
 
+fn should_apply_export_origin_name_override(
+    exported_name: &str,
+    origin_name: &str,
+    origin_path: &str,
+    exported_var_names: &BTreeSet<(String, String)>,
+    exported_func_param_counts: &BTreeMap<(String, String), usize>,
+) -> bool {
+    if origin_name == exported_name {
+        return false;
+    }
+
+    // The producer emits public getter/function symbols for renamed
+    // var/function exports (`perry_fn_<origin>__<exported>`). The private
+    // local name is only an implementation detail inside that producer-side
+    // wrapper, so consumers must not carry it into their extern symbol suffix.
+    let public_origin_key = (origin_path.to_string(), exported_name.to_string());
+    !exported_var_names.contains(&public_origin_key)
+        && !exported_func_param_counts.contains_key(&public_origin_key)
+}
+
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn malloc_default_zone() -> *mut std::ffi::c_void;
@@ -940,6 +960,42 @@ pub fn run_with_parse_cache(
             }
             let key = (path_str.clone(), obj_name.clone());
             exported_var_names.insert(key);
+        }
+    }
+    for (path, hir_module) in &ctx.native_modules {
+        let path_str = path.to_string_lossy().to_string();
+        for export in &hir_module.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            if local == exported {
+                continue;
+            }
+
+            let local_key = (path_str.clone(), local.clone());
+            let exported_key = (path_str.clone(), exported.clone());
+            if exported_var_names.contains(&local_key) {
+                exported_var_names.insert(exported_key.clone());
+            }
+            if let Some(param_count) = exported_func_param_counts.get(&local_key).copied() {
+                exported_func_param_counts.insert(exported_key.clone(), param_count);
+            }
+            if exported_func_has_rest
+                .get(&local_key)
+                .copied()
+                .unwrap_or(false)
+            {
+                exported_func_has_rest.insert(exported_key.clone(), true);
+            }
+            if exported_func_synthetic_arguments.contains(&local_key) {
+                exported_func_synthetic_arguments.insert(exported_key.clone());
+            }
+            if let Some(return_type) = exported_func_return_types.get(&local_key).cloned() {
+                exported_func_return_types.insert(exported_key.clone(), return_type);
+            }
+            if exported_async_funcs.contains(&local_key) {
+                exported_async_funcs.insert(exported_key);
+            }
         }
     }
 
@@ -2362,6 +2418,10 @@ pub fn run_with_parse_cache(
             // member_name)` → `source_prefix`.
             let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
+            let mut namespace_member_origin_names: std::collections::HashMap<
+                (String, String),
+                String,
+            > = std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
             // Issue #321: subset of `namespace_imports` populated only by the
             // named-import-of-namespace-reexport branch below (`import { Effect
@@ -2502,8 +2562,6 @@ pub fn run_with_parse_cache(
                             for (export_name, origin_path) in exports {
                                 let origin_prefix =
                                     compute_module_prefix(origin_path, &ctx.project_root);
-                                import_function_prefixes
-                                    .insert(export_name.clone(), origin_prefix.clone());
                                 // Issue #678: surface origin-name overrides
                                 // for namespace-imported members too. A
                                 // member reached via a re-export rename
@@ -2514,9 +2572,17 @@ pub fn run_with_parse_cache(
                                     .get(&resolved_path_str)
                                     .and_then(|m| m.get(export_name))
                                 {
-                                    if origin_name != export_name {
-                                        import_function_origin_names
-                                            .insert(export_name.clone(), origin_name.clone());
+                                    if should_apply_export_origin_name_override(
+                                        export_name,
+                                        origin_name,
+                                        origin_path,
+                                        &exported_var_names,
+                                        &exported_func_param_counts,
+                                    ) {
+                                        namespace_member_origin_names.insert(
+                                            (local.clone(), export_name.clone()),
+                                            origin_name.clone(),
+                                        );
                                     }
                                 }
                                 // Issue #680: also register under the
@@ -2692,17 +2758,38 @@ pub fn run_with_parse_cache(
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
-                                    import_function_prefixes
-                                        .insert(export_name.clone(), origin_prefix.clone());
+                                    // Named imports of namespace re-exports
+                                    // behave like namespace imports:
+                                    //
+                                    //   import { Context } from "effect"
+                                    //
+                                    // where effect's root has
+                                    // `export * as Context from "./Context.ts"`.
+                                    // Keep member routing scoped to the local
+                                    // namespace binding so same-named exports
+                                    // from sibling namespaces do not collide in
+                                    // the flat export table.
+                                    namespace_member_prefixes.insert(
+                                        (local_name.clone(), export_name.clone()),
+                                        origin_prefix.clone(),
+                                    );
                                     // Issue #678: surface origin-name overrides
                                     // for the NamespaceReExport branch too.
                                     if let Some(origin_name) = all_module_export_origin_names
                                         .get(&ns_target_str)
                                         .and_then(|m| m.get(export_name))
                                     {
-                                        if origin_name != export_name {
-                                            import_function_origin_names
-                                                .insert(export_name.clone(), origin_name.clone());
+                                        if should_apply_export_origin_name_override(
+                                            export_name,
+                                            origin_name,
+                                            origin_path,
+                                            &exported_var_names,
+                                            &exported_func_param_counts,
+                                        ) {
+                                            namespace_member_origin_names.insert(
+                                                (local_name.clone(), export_name.clone()),
+                                                origin_name.clone(),
+                                            );
                                         }
                                     }
 
@@ -2861,6 +2948,15 @@ pub fn run_with_parse_cache(
                     let resolved_origin_name = all_module_export_origin_names
                         .get(&resolved_path_str)
                         .and_then(|m| m.get(&exported_name))
+                        .filter(|origin_name| {
+                            should_apply_export_origin_name_override(
+                                &exported_name,
+                                origin_name,
+                                &origin_path,
+                                &exported_var_names,
+                                &exported_func_param_counts,
+                            )
+                        })
                         .cloned();
                     if let Some(ref origin_name) = resolved_origin_name {
                         if origin_name != &exported_name {
@@ -3950,6 +4046,7 @@ pub fn run_with_parse_cache(
                 namespace_node_submodules,
                 namespace_v8_specifiers,
                 namespace_member_prefixes,
+                namespace_member_origin_names,
                 emit_ir_only: bitcode_link,
                 verify_native_regions,
                 disable_buffer_fast_path,
@@ -5610,9 +5707,11 @@ pub fn run_with_parse_cache(
 mod codegen_thread_tests {
     use super::{
         codegen_thread_count_with_override, codegen_thread_stack_size_with_override,
-        nm_output_defines_symbol, object_file_stem_for_module, LARGE_CODEGEN_MODULE_COUNT,
+        nm_output_defines_symbol, object_file_stem_for_module,
+        should_apply_export_origin_name_override, LARGE_CODEGEN_MODULE_COUNT,
         LARGE_CODEGEN_STACK_SIZE, MAX_OBJECT_FILE_STEM_BYTES,
     };
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn large_graph_caps_codegen_threads() {
@@ -5700,6 +5799,50 @@ libperry_runtime.a(global_this_webassembly.o):
         assert!(darwin.len() <= MAX_OBJECT_FILE_STEM_BYTES);
         assert!(linux.len() <= MAX_OBJECT_FILE_STEM_BYTES);
         assert_ne!(darwin, linux);
+    }
+
+    #[test]
+    fn export_origin_override_keeps_default_aliases() {
+        let exported_var_names = BTreeSet::new();
+        let exported_func_param_counts = BTreeMap::new();
+
+        assert!(should_apply_export_origin_name_override(
+            "render",
+            "default",
+            "/pkg/render.js",
+            &exported_var_names,
+            &exported_func_param_counts,
+        ));
+    }
+
+    #[test]
+    fn export_origin_override_skips_public_var_getters() {
+        let mut exported_var_names = BTreeSet::new();
+        exported_var_names.insert(("/pkg/Context.ts".to_string(), "omit".to_string()));
+        let exported_func_param_counts = BTreeMap::new();
+
+        assert!(!should_apply_export_origin_name_override(
+            "omit",
+            "a",
+            "/pkg/Context.ts",
+            &exported_var_names,
+            &exported_func_param_counts,
+        ));
+    }
+
+    #[test]
+    fn export_origin_override_skips_public_function_forwarders() {
+        let exported_var_names = BTreeSet::new();
+        let mut exported_func_param_counts = BTreeMap::new();
+        exported_func_param_counts.insert(("/pkg/barrel.ts".to_string(), "map".to_string()), 2);
+
+        assert!(!should_apply_export_origin_name_override(
+            "map",
+            "a",
+            "/pkg/barrel.ts",
+            &exported_var_names,
+            &exported_func_param_counts,
+        ));
     }
 }
 

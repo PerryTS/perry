@@ -170,6 +170,11 @@ pub struct CompileOptions {
     /// it dispatched `tracer.make(Math.random())` instead of
     /// `random.make(Math.random())`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// Issue #678 / #680: per-namespace member origin-name overrides. The
+    /// flat `import_function_origin_names` map is keyed only by member name,
+    /// so namespace re-export aliases like `Context.omit` must not write an
+    /// override for every bare `omit(...)` import in the module.
+    pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     /// When true, `compile_module` returns the textual LLVM IR (`.ll`)
     /// as bytes instead of invoking `clang -c` to produce an object file.
     /// Used by the bitcode-link path (`PERRY_LLVM_BITCODE_LINK=1`).
@@ -506,6 +511,8 @@ pub(crate) struct CrossModuleCtx {
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// Issue #678 / #680: see `CompileOptions::namespace_member_origin_names`.
+    pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
