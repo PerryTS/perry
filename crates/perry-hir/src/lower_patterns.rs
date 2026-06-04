@@ -836,6 +836,23 @@ pub(crate) fn predeclare_implicit_assignment_targets(
 
     let mut stmts = Vec::new();
     for name in names {
+        // Inside a closure (scope_depth > 0), an assignment to a name that
+        // resolves to a MODULE-LEVEL binding (e.g. a `var` declared later at
+        // module scope) must NOT be re-declared as a closure-local: doing so
+        // emits a localizing `Let <id> = undefined` that makes codegen treat
+        // the id as a closure-local instead of the module var's global slot, so
+        // the write never reaches the module binding the post-declaration read
+        // uses (`var f = function(){ later = 5 }; var later; f();` → undefined).
+        // The assignment resolves to the module var via the global-slot path; no
+        // hoist Let is needed. A closure-local shadow (`function(){ var x; … }`)
+        // has its own non-module id and is unaffected.
+        if ctx.scope_depth > 0 {
+            if let Some(id) = ctx.lookup_local(&name) {
+                if ctx.module_level_ids.contains(&id) {
+                    continue;
+                }
+            }
+        }
         let mut assigned = false;
         if !ctx.pre_registered_module_var_decls.contains(&name)
             && expr_reads_name_before_assignment(expr, &name, &mut assigned)
