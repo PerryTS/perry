@@ -298,7 +298,8 @@ fn push_unique_name(names: &mut Vec<String>, name: String) {
 fn should_predeclare_implicit_assignment_name(ctx: &LoweringContext, name: &str) -> bool {
     ctx.lookup_class(name).is_none()
         && ctx.lookup_func(name).is_none()
-        && (ctx.lookup_local(name).is_none() || ctx.pre_registered_module_var_decls.contains(name))
+        && (ctx.lookup_local(name).is_none()
+            || (ctx.scope_depth == 0 && ctx.pre_registered_module_var_decls.contains(name)))
 }
 
 fn collect_implicit_assignment_pat_names(
@@ -845,7 +846,7 @@ pub(crate) fn predeclare_implicit_assignment_targets(
         if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
             continue;
         }
-        let id = if ctx.pre_registered_module_var_decls.remove(&name) {
+        let id = if ctx.scope_depth == 0 && ctx.pre_registered_module_var_decls.remove(&name) {
             ctx.pre_registered_module_vars.remove(&name);
             let id = ctx.lookup_local(&name).unwrap();
             ctx.var_hoisted_ids.insert(id);
