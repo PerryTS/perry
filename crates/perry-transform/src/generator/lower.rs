@@ -83,6 +83,7 @@ pub fn transform_generator_function_with_extra_captures(
     let state_id = alloc_local(next_local_id);
     let done_id = alloc_local(next_local_id);
     let sent_id = alloc_local(next_local_id); // value passed by caller via next(val)
+    let executing_id = alloc_local(next_local_id);
 
     // Collect all states from the generator body
     let mut states: Vec<State> = Vec::new();
@@ -266,7 +267,7 @@ pub fn transform_generator_function_with_extra_captures(
     let while_body_for_throw = while_body.clone();
 
     // Build next() method body
-    let mut next_body = vec![
+    let mut next_resume_body = vec![
         // __sent = <param from next(val)>
         Stmt::Expr(Expr::LocalSet(
             sent_id,
@@ -284,9 +285,6 @@ pub fn transform_generator_function_with_extra_captures(
             body: while_body,
         },
     ];
-    if is_async_generator {
-        wrap_returns_in_promise(&mut next_body);
-    }
 
     // Build the new function body
     let mut new_body: Vec<Stmt> = Vec::new();
@@ -336,7 +334,7 @@ pub fn transform_generator_function_with_extra_captures(
     // box. Net effect per call: one js_box_alloc + one js_box_set per id,
     // versus the pre-fix path which did one js_box_alloc inside the Let
     // (same cost, but the cache then hit on stale captures).
-    let mut prealloc_ids: Vec<LocalId> = vec![state_id, done_id, sent_id];
+    let mut prealloc_ids: Vec<LocalId> = vec![state_id, done_id, sent_id, executing_id];
     for (var_id, _, _) in &hoisted {
         prealloc_ids.push(*var_id);
     }
@@ -360,6 +358,14 @@ pub fn transform_generator_function_with_extra_captures(
     new_body.push(Stmt::Let {
         id: done_id,
         name: "__gen_done".to_string(),
+        ty: Type::Boolean,
+        mutable: true,
+        init: Some(Expr::Bool(false)),
+    });
+
+    new_body.push(Stmt::Let {
+        id: executing_id,
+        name: "__gen_executing".to_string(),
         ty: Type::Boolean,
         mutable: true,
         init: Some(Expr::Bool(false)),
@@ -398,8 +404,8 @@ pub fn transform_generator_function_with_extra_captures(
     });
 
     // Build captures: state, done, sent, params, hoisted vars, extra locals
-    let mut captures = vec![state_id, done_id, sent_id];
-    let mut mutable_captures = vec![state_id, done_id, sent_id];
+    let mut captures = vec![state_id, done_id, sent_id, executing_id];
+    let mut mutable_captures = vec![state_id, done_id, sent_id, executing_id];
     for param in &func.params {
         captures.push(param.id);
     }
@@ -469,7 +475,7 @@ pub fn transform_generator_function_with_extra_captures(
         } else {
             Some((catches, state_id, hoisted_ids.clone()))
         };
-        let mut next_body_for_step = next_body;
+        let mut next_body_for_step = next_resume_body;
         rewrite_iter_results_in_stmts(&mut next_body_for_step);
         let wrapper_stmts = build_async_step_driver_direct(
             next_body_for_step,
@@ -504,10 +510,10 @@ pub fn transform_generator_function_with_extra_captures(
         };
         // #4374: `.return(v)` on a generator suspended inside a `try` must run
         // the pending `finally` blocks (innermost first) before completing.
-        let mut return_body: Vec<Stmt> = Vec::new();
+        let mut return_resume_body: Vec<Stmt> = Vec::new();
         // Already-done generators just complete with {value: v, done: true} —
         // no finally re-run (the finally already ran on normal completion).
-        return_body.push(Stmt::If {
+        return_resume_body.push(Stmt::If {
             condition: Expr::LocalGet(done_id),
             then_branch: vec![Stmt::Return(Some(make_iter_result(
                 Expr::LocalGet(return_param_id),
@@ -519,18 +525,27 @@ pub fn transform_generator_function_with_extra_captures(
         // that itself `return`s supersedes `v` (rewritten to an iter-result
         // return inside build_finally_run_stmts); a finally that throws
         // propagates out of this closure.
-        return_body.push(Stmt::Expr(Expr::LocalSet(
+        return_resume_body.push(Stmt::Expr(Expr::LocalSet(
+            executing_id,
+            Box::new(Expr::Bool(true)),
+        )));
+        return_resume_body.push(Stmt::Expr(Expr::LocalSet(
             done_id,
             Box::new(Expr::Bool(true)),
         )));
-        return_body.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
-        return_body.push(Stmt::Return(Some(make_iter_result(
+        return_resume_body.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_resume_body.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
             true,
         ))));
-        if is_async_generator {
-            wrap_returns_in_promise(&mut return_body);
-        }
+        let return_catch_id = alloc_local(next_local_id);
+        let return_body = wrap_generator_resume_body(
+            return_resume_body,
+            executing_id,
+            done_id,
+            return_catch_id,
+            is_async_generator,
+        );
         let return_closure = Expr::Closure {
             func_id: return_func_id_val,
             params: vec![perry_hir::Param {
@@ -575,7 +590,11 @@ pub fn transform_generator_function_with_extra_captures(
         // #4374: fresh binding for the inner catch that re-runs a try's finally
         // when its catch handler itself throws (catch-rethrow-with-finally).
         let inner_catch_id = alloc_local(next_local_id);
-        let mut throw_body = build_async_throw_body(
+        let mut throw_resume_body = vec![Stmt::Expr(Expr::LocalSet(
+            executing_id,
+            Box::new(Expr::Bool(true)),
+        ))];
+        throw_resume_body.extend(build_async_throw_body(
             &catches,
             &finallys,
             state_id,
@@ -584,10 +603,15 @@ pub fn transform_generator_function_with_extra_captures(
             inner_catch_id,
             &hoisted_ids,
             throw_continuation,
+        ));
+        let throw_catch_id = alloc_local(next_local_id);
+        let throw_body = wrap_generator_resume_body(
+            throw_resume_body,
+            executing_id,
+            done_id,
+            throw_catch_id,
+            is_async_generator,
         );
-        if is_async_generator {
-            wrap_returns_in_promise(&mut throw_body);
-        }
         let throw_closure = Expr::Closure {
             func_id: throw_func_id_val,
             params: vec![perry_hir::Param {
@@ -613,6 +637,18 @@ pub fn transform_generator_function_with_extra_captures(
         };
 
         // Plain generator: build the iterator object and return it directly.
+        let next_catch_id = alloc_local(next_local_id);
+        next_resume_body.insert(
+            2,
+            Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
+        );
+        let next_body = wrap_generator_resume_body(
+            next_resume_body,
+            executing_id,
+            done_id,
+            next_catch_id,
+            is_async_generator,
+        );
         let next_closure = Expr::Closure {
             func_id: next_func_id_val,
             params: vec![perry_hir::Param {
@@ -661,6 +697,124 @@ pub fn transform_generator_function_with_extra_captures(
 
 fn generator_body_uses_call_this(body: &[Stmt]) -> bool {
     body.iter().any(generator_stmt_uses_call_this)
+}
+
+fn wrap_generator_resume_body(
+    mut body: Vec<Stmt>,
+    executing_id: LocalId,
+    done_id: LocalId,
+    catch_id: LocalId,
+    is_async_generator: bool,
+) -> Vec<Stmt> {
+    prepend_executing_clear_before_returns(&mut body, executing_id);
+    if is_async_generator {
+        wrap_returns_in_promise(&mut body);
+    }
+
+    vec![
+        generator_executing_guard(executing_id, is_async_generator),
+        Stmt::Try {
+            body,
+            catch: Some(CatchClause {
+                param: Some((catch_id, "__gen_exec_e".to_string())),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                    Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
+                    generator_resume_rethrow(Expr::LocalGet(catch_id), is_async_generator),
+                ],
+            }),
+            finally: None,
+        },
+    ]
+}
+
+fn generator_executing_guard(executing_id: LocalId, is_async_generator: bool) -> Stmt {
+    Stmt::If {
+        condition: Expr::LocalGet(executing_id),
+        then_branch: vec![generator_resume_rethrow(
+            generator_executing_type_error(),
+            is_async_generator,
+        )],
+        else_branch: None,
+    }
+}
+
+fn generator_resume_rethrow(value: Expr, is_async_generator: bool) -> Stmt {
+    if is_async_generator {
+        Stmt::Return(Some(promise_reject(value)))
+    } else {
+        Stmt::Throw(value)
+    }
+}
+
+fn generator_executing_type_error() -> Expr {
+    Expr::TypeErrorNew(Box::new(Expr::String(
+        "Generator is already executing".to_string(),
+    )))
+}
+
+fn promise_reject(value: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::GlobalGet(0)),
+            property: "reject".to_string(),
+        }),
+        args: vec![value],
+        type_args: vec![],
+    }
+}
+
+fn prepend_executing_clear_before_returns(stmts: &mut Vec<Stmt>, executing_id: LocalId) {
+    let mut new_body: Vec<Stmt> = Vec::with_capacity(stmts.len());
+    for mut stmt in stmts.drain(..) {
+        match &mut stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                prepend_executing_clear_before_returns(then_branch, executing_id);
+                if let Some(else_branch) = else_branch {
+                    prepend_executing_clear_before_returns(else_branch, executing_id);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                prepend_executing_clear_before_returns(body, executing_id);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                prepend_executing_clear_before_returns(body, executing_id);
+                if let Some(catch) = catch {
+                    prepend_executing_clear_before_returns(&mut catch.body, executing_id);
+                }
+                if let Some(finally) = finally {
+                    prepend_executing_clear_before_returns(finally, executing_id);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    prepend_executing_clear_before_returns(&mut case.body, executing_id);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                let mut wrapped = vec![std::mem::replace(body.as_mut(), Stmt::Break)];
+                prepend_executing_clear_before_returns(&mut wrapped, executing_id);
+                **body = wrapped.into_iter().next().unwrap();
+            }
+            _ => {}
+        }
+        if matches!(stmt, Stmt::Return(_)) {
+            new_body.push(Stmt::Expr(Expr::LocalSet(
+                executing_id,
+                Box::new(Expr::Bool(false)),
+            )));
+        }
+        new_body.push(stmt);
+    }
+    *stmts = new_body;
 }
 
 fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
