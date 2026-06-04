@@ -9,7 +9,9 @@ fn e2e_redis_smoke() {
         eprintln!("[skipped] PERRY_E2E_TESTS=1 not set");
         return;
     }
-    let port = std::process::id().to_string()[..5].parse::<u16>().unwrap_or(57399);
+    let port = std::process::id().to_string()[..5]
+        .parse::<u16>()
+        .unwrap_or(57399);
     let port_str = port.to_string();
     let result = run_e2e("redis-smoke", &[("PERRY_E2E_PORT", port_str.as_str())]);
     assert_e2e_pass("redis-smoke", &result);

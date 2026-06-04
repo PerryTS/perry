@@ -63,12 +63,11 @@ pub struct E2eResult {
 /// per-test `extra_env` to set `PERRY_E2E_PORT` etc.
 pub fn run_e2e(name: &str, extra_env: &[(&str, &str)]) -> E2eResult {
     let root = workspace_root();
-    let src = root.join("tests").join("e2e").join(format!("{}.e2e.ts", name));
-    assert!(
-        src.exists(),
-        "missing e2e source: {}",
-        src.display()
-    );
+    let src = root
+        .join("tests")
+        .join("e2e")
+        .join(format!("{}.e2e.ts", name));
+    assert!(src.exists(), "missing e2e source: {}", src.display());
 
     // Compile to a per-test binary in a tmp subdir so parallel runs
     // (if a future user disables --test-threads=1) don't clobber.
@@ -94,8 +93,8 @@ pub fn run_e2e(name: &str, extra_env: &[(&str, &str)]) -> E2eResult {
     }
 
     // Run with a 5-minute walltime ceiling (image pulls can be slow).
-    let run = run_with_timeout(&bin_path, extra_env, Duration::from_secs(300))
-        .expect("run e2e binary");
+    let run =
+        run_with_timeout(&bin_path, extra_env, Duration::from_secs(300)).expect("run e2e binary");
 
     E2eResult {
         exit_code: run.0,
