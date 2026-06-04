@@ -16,31 +16,43 @@ use crate::value::JSValue;
 /// Node emits. A missing (`undefined`) argument is allowed: Node defaults the
 /// delay and treats absent options as the empty object. `NaN` is a number, so
 /// it passes here (the warn/coerce path is tracked by #2966).
-fn validate_delay(delay: f64) {
+fn type_error_value_with_code(message: &str, code: &'static str) -> f64 {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    boxed_ptr(crate::error::js_typeerror_new(msg) as *const u8)
+}
+
+fn validation_error(message: String) -> f64 {
+    type_error_value_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn rejected_promise(reason: f64) -> f64 {
+    boxed_ptr(crate::promise::js_promise_rejected(reason) as *const u8)
+}
+
+fn validate_delay(delay: f64) -> Result<(), f64> {
     let jv = JSValue::from_bits(delay.to_bits());
     if jv.is_undefined() || crate::fs::validate::is_numeric(jv) {
-        return;
+        return Ok(());
     }
-    let message = format!(
+    Err(validation_error(format!(
         "The \"delay\" argument must be of type number. Received {}",
         crate::fs::validate::describe_received(delay)
-    );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    )))
 }
 
 /// Accept `undefined` (no options) or a non-null, non-array object; anything
-/// else throws like Node's `validateObject`. Mirrors the `Array`/`null`
-/// detection used by `describe_received`.
-fn validate_options(options: f64) {
+/// else becomes the rejection reason Node's `validateObject` would throw.
+/// Mirrors the `Array`/`null` detection used by `describe_received`.
+fn validate_options(options: f64) -> Result<(), f64> {
     let jv = JSValue::from_bits(options.to_bits());
     if jv.is_undefined() || is_plain_object(options) {
-        return;
+        return Ok(());
     }
-    let message = format!(
+    Err(validation_error(format!(
         "The \"options\" argument must be of type object. Received {}",
         crate::fs::validate::describe_received(options)
-    );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    )))
 }
 
 /// True when `value` is a heap object that is not an array — the shape Node's
@@ -58,19 +70,18 @@ fn is_plain_object(value: f64) -> bool {
     gc_header.obj_type != crate::gc::GC_TYPE_ARRAY
 }
 
-fn options_ref(options: f64) -> bool {
+fn options_ref(options: f64) -> Result<bool, f64> {
     let Some(value) = super::stream_promises::get_object_property(options, b"ref") else {
-        return true;
+        return Ok(true);
     };
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_bool() {
-        return jv.as_bool();
+        return Ok(jv.as_bool());
     }
-    let message = format!(
+    Err(validation_error(format!(
         "The \"options.ref\" property must be of type boolean. Received {}",
         crate::fs::validate::describe_received(value)
-    );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    )))
 }
 
 fn promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut crate::promise::Promise {
@@ -88,16 +99,21 @@ pub(crate) extern "C" fn timers_promises_set_timeout(
     value: f64,
     options: f64,
 ) -> f64 {
-    validate_delay(delay_ms);
-    validate_options(options);
+    if let Err(err) = validate_delay(delay_ms) {
+        return rejected_promise(err);
+    }
+    if let Err(err) = validate_options(options) {
+        return rejected_promise(err);
+    }
     let signal = super::stream_promises::options_signal(options);
-    let has_ref = options_ref(options);
+    let has_ref = match options_ref(options) {
+        Ok(has_ref) => has_ref,
+        Err(err) => return rejected_promise(err),
+    };
     if let Some(signal) = signal {
         if super::stream_promises::signal_aborted(signal) {
             let reason = super::stream_promises::signal_reason(signal);
-            return crate::value::js_nanbox_pointer(
-                crate::promise::js_promise_rejected(reason) as i64
-            );
+            return rejected_promise(reason);
         }
     }
     let promise = promise_timer(delay_ms, value, has_ref);
@@ -116,15 +132,18 @@ pub(crate) extern "C" fn timers_promises_set_immediate(
     value: f64,
     options: f64,
 ) -> f64 {
-    validate_options(options);
+    if let Err(err) = validate_options(options) {
+        return rejected_promise(err);
+    }
     let signal = super::stream_promises::options_signal(options);
-    let has_ref = options_ref(options);
+    let has_ref = match options_ref(options) {
+        Ok(has_ref) => has_ref,
+        Err(err) => return rejected_promise(err),
+    };
     if let Some(signal) = signal {
         if super::stream_promises::signal_aborted(signal) {
             let reason = super::stream_promises::signal_reason(signal);
-            return crate::value::js_nanbox_pointer(
-                crate::promise::js_promise_rejected(reason) as i64
-            );
+            return rejected_promise(reason);
         }
     }
     let promise = promise_timer(0.0, value, has_ref);
@@ -202,6 +221,35 @@ extern "C" fn timers_promises_interval_next(closure: *const ClosureHeader) -> f6
     boxed_ptr(promise as *const u8)
 }
 
+extern "C" fn timers_promises_interval_rejected_next(closure: *const ClosureHeader) -> f64 {
+    let reason = js_closure_get_capture_f64(closure, 0);
+    rejected_promise(reason)
+}
+
+fn rejected_interval(reason: f64) -> f64 {
+    let obj = js_object_alloc(0, 2);
+    let obj_value = boxed_ptr(obj as *const u8);
+
+    let next = js_closure_alloc(timers_promises_interval_rejected_next as *const u8, 1);
+    js_closure_set_capture_f64(next, 0, reason);
+    js_object_set_field_by_name(obj, string_key(b"next"), boxed_ptr(next as *const u8));
+
+    let ret = js_closure_alloc(timers_promises_interval_self as *const u8, 1);
+    js_closure_set_capture_f64(ret, 0, obj_value);
+    let sym = crate::symbol::well_known_symbol("asyncIterator");
+    if !sym.is_null() {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                obj_value,
+                boxed_ptr(sym as *const u8),
+                boxed_ptr(ret as *const u8),
+            );
+        }
+    }
+
+    obj_value
+}
+
 extern "C" fn timers_promises_interval_self(closure: *const ClosureHeader) -> f64 {
     js_closure_get_capture_f64(closure, 0)
 }
@@ -225,11 +273,18 @@ pub(crate) extern "C" fn timers_promises_set_interval(
     value: f64,
     options: f64,
 ) -> f64 {
-    validate_delay(delay_ms);
-    validate_options(options);
+    if let Err(err) = validate_delay(delay_ms) {
+        return rejected_interval(err);
+    }
+    if let Err(err) = validate_options(options) {
+        return rejected_interval(err);
+    }
     let signal = super::stream_promises::options_signal(options)
         .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
-    let has_ref = options_ref(options);
+    let has_ref = match options_ref(options) {
+        Ok(has_ref) => has_ref,
+        Err(err) => return rejected_interval(err),
+    };
     let obj = js_object_alloc(0, 4);
     let obj_value = boxed_ptr(obj as *const u8);
 
