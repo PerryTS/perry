@@ -494,10 +494,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
             let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
             let field_count = if matches!(
                 mat.algo,
-                KeyAlgo::ChaCha20Poly1305
-                    | KeyAlgo::Kmac128
-                    | KeyAlgo::Kmac256
-                    | KeyAlgo::AesOcb
+                KeyAlgo::ChaCha20Poly1305 | KeyAlgo::Kmac128 | KeyAlgo::Kmac256 | KeyAlgo::AesOcb
             ) {
                 3
             } else {
