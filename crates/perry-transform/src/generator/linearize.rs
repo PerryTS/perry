@@ -24,6 +24,19 @@ pub struct CatchRoute {
     pub body: Vec<Stmt>,
     pub protected_start_state: u32,
     pub post_catch_state: u32,
+    /// #4438: upper bound of the protected suspended-state interval for routing
+    /// a thrown error into this catch. Covers the try-body states (and the
+    /// post-last-yield happy landing state) but EXCLUDES the catch's own states,
+    /// so a `throw` executing inside the catch propagates to an enclosing
+    /// handler instead of re-entering this one. For sync generators the catch
+    /// body is linearized into the state machine (`catch_entry_state`); async
+    /// generators still inline `body` into the `.throw()` closure and ignore
+    /// these two fields.
+    pub protected_end_state: u32,
+    /// #4438: first state of the linearized catch body. `Some` for sync
+    /// generators (runtime throws + `.throw()` route here); `None` when the
+    /// catch was not linearized into states.
+    pub catch_entry_state: Option<u32>,
 }
 
 /// A `finally` block that protects a state interval. On abrupt completion
@@ -587,17 +600,22 @@ pub fn linearize_body(
                 );
             }
 
-            // Try-catch containing yield(s) — linearize the try body directly and
-            // stash the catch body so the .throw() closure can inline it.
-            // Limitations: no per-state exception handler tracking, so only the
-            // first catch encountered will run on .throw(). Catches themselves
-            // must not yield — they run to completion inside the throw closure.
+            // Try-catch/finally containing yield(s) — linearize the try body and
+            // the catch body into states (#4438) so a `throw` during dispatch is
+            // routed to the catch and a `yield` inside the catch suspends.
+            //
+            // #4438: the guard must also fire when the yield lives ONLY in the
+            // catch body (e.g. `try { throw } catch (e) { yield }`). Pre-fix that
+            // fell into the catch-all, which emitted the whole `Stmt::Try`
+            // literally and the catch's `yield` hit the codegen
+            // `Expr::Yield => double_literal(0.0)` arm and was swallowed.
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } if body_contains_yield(body)
-                || finally.as_ref().is_some_and(|f| body_contains_yield(f)) =>
+                || finally.as_ref().is_some_and(|f| body_contains_yield(f))
+                || catch.as_ref().is_some_and(|c| body_contains_yield(&c.body)) =>
             {
                 let protected_start_state = *state_num;
 
@@ -629,31 +647,74 @@ pub fn linearize_body(
                     }
                 }
 
-                // Issue #621: if the try has a catch handler, split the
+                // Issue #621 / #4438: if the try has a catch handler, split the
                 // post-await happy-path continuation (currently in `current`)
-                // from the post-try-catch continuation. Stmts that follow
-                // the LAST yield in the try body should only run on the
-                // happy path; the throw path runs the catch body and then
-                // resumes at the stmts AFTER the try/catch. Without this
-                // split, both paths land in the same state and the catch
-                // path incorrectly runs the post-await stmts.
-                if catch.is_some() {
-                    if !current.is_empty() {
-                        let happy_state = *state_num;
-                        *state_num += 1;
-                        let goto_target = *state_num;
-                        states.push(State {
-                            num: happy_state,
-                            body: std::mem::take(current),
-                            exit: StateExit::Goto(goto_target),
-                        });
-                    }
-                }
-                let post_catch_state = *state_num;
-
-                // Stash the catch so transform_generator_function can inline it
-                // into the .throw() closure later.
+                // from the catch and post-try-catch continuations, and linearize
+                // the catch body into its own states.
+                //
+                // Pre-#4438 the catch body was stashed and only inlined into the
+                // `.throw()` closure, so the catch handler did not exist in the
+                // normal `.next()` dispatch at all. Two consequences:
+                //   (a) a runtime `throw` executing inside the try during a plain
+                //       `.next()` was never caught — it propagated out of next();
+                //   (b) a `yield` inside the catch was swallowed (it was rewritten
+                //       to an `await` in the throw closure).
+                // Now the catch body is real states. The happy path skips them;
+                // runtime throws (via the dispatch-loop try/catch in lower.rs) and
+                // `.throw()` route into `catch_entry_state` for sync generators.
+                let post_catch_state;
                 if let Some(catch_clause) = catch {
+                    // Flush the happy-path tail (post-last-yield-in-try code) as
+                    // its own landing state. The last yield inside the try resumes
+                    // here on a normal `.next()`; it must skip the catch states.
+                    let happy_state = *state_num;
+                    *state_num += 1;
+                    let happy_idx = states.len();
+                    states.push(State {
+                        num: happy_state,
+                        body: std::mem::take(current),
+                        exit: StateExit::Goto(0), // patched to post_catch below
+                    });
+                    // Throws while suspended in the try body (states
+                    // protected_start..=happy_state) route to the catch. Catch
+                    // states (> happy_state) are EXCLUDED so a `throw` inside the
+                    // catch escapes to an enclosing handler, not back into here.
+                    let protected_end_state = happy_state;
+
+                    // Linearize the catch body into states.
+                    let catch_entry_state = *state_num;
+                    let mut catch_current = Vec::new();
+                    if body_contains_yield(&catch_clause.body) {
+                        linearize_body(
+                            &catch_clause.body,
+                            states,
+                            &mut catch_current,
+                            state_num,
+                            state_id,
+                            next_local_id,
+                            sent_id,
+                            catches,
+                            finallys,
+                        );
+                    } else {
+                        for s in &catch_clause.body {
+                            catch_current.push(s.clone());
+                        }
+                    }
+                    // The catch tail falls through to the code after try/catch.
+                    let catch_tail_state = *state_num;
+                    *state_num += 1;
+                    let catch_tail_idx = states.len();
+                    states.push(State {
+                        num: catch_tail_state,
+                        body: std::mem::take(&mut catch_current),
+                        exit: StateExit::Goto(0), // patched below
+                    });
+
+                    post_catch_state = *state_num;
+                    states[happy_idx].exit = StateExit::Goto(post_catch_state);
+                    states[catch_tail_idx].exit = StateExit::Goto(post_catch_state);
+
                     let (param_id, param_name) = catch_clause
                         .param
                         .as_ref()
@@ -665,7 +726,11 @@ pub fn linearize_body(
                         body: catch_clause.body.clone(),
                         protected_start_state,
                         post_catch_state,
+                        protected_end_state,
+                        catch_entry_state: Some(catch_entry_state),
                     });
+                } else {
+                    post_catch_state = *state_num;
                 }
 
                 // Finally block: linearize if it has yields (await-using path),
