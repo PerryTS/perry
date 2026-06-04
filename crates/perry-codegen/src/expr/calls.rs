@@ -2172,6 +2172,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &p), (DOUBLE, &options)],
                     ))
                 }
+                "symlink" if args.len() >= 2 => {
+                    let target = lower_expr(ctx, &args[0])?;
+                    let path = lower_expr(ctx, &args[1])?;
+                    let arg2 = if args.len() >= 3 {
+                        lower_expr(ctx, &args[2])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let arg3 = if args.len() >= 4 {
+                        lower_expr(ctx, &args[3])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_symlink_callback",
+                        &[
+                            (DOUBLE, &target),
+                            (DOUBLE, &path),
+                            (DOUBLE, &arg2),
+                            (DOUBLE, &arg3),
+                        ],
+                    ))
+                }
                 "rmdirSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
                     let options = if args.len() >= 2 {

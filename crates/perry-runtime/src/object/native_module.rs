@@ -3693,7 +3693,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("fs", "ReadStream" | "WriteStream") => Some(2),
         ("fs", "Utf8Stream") => Some(0),
         ("fs", "Dir" | "Dirent") => Some(3),
-        ("fs", "Stats") => Some(14),
+        ("fs", "Stats") => Some(18),
         ("fs", "mkdtempDisposableSync") => Some(2),
         ("fs", "openAsBlob") => Some(1),
         ("fs", "_toUnixTimestamp") => Some(1),

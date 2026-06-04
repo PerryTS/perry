@@ -402,6 +402,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_fs_glob_sync_options", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_link_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_symlink_sync", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_fs_symlink_callback",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_fs_readlink_sync", I64, &[DOUBLE]);
     module.declare_function("js_fs_readlink_sync_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_fs_readlink_dispatch", DOUBLE, &[DOUBLE, DOUBLE]);
