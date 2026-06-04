@@ -71,6 +71,13 @@ fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool
     )
 }
 
+fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(
+        receiver_class_name(ctx, object).as_deref(),
+        Some("Uint8Array")
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::IndexSet {
@@ -150,6 +157,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                 );
                 return Ok(val_double);
+            }
+            if is_uint8array_receiver(ctx, object) && !is_numeric_expr(ctx, index) {
+                let arr_box = lower_expr(ctx, object)?;
+                let idx_double = lower_expr(ctx, index)?;
+                let val_double = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_set_dynamic",
+                    &[
+                        (I64, &arr_i64),
+                        (DOUBLE, &idx_double),
+                        (DOUBLE, &val_double),
+                    ],
+                ));
             }
             // Issue #637 / hono r2 followup: `arr[stringKey] = val` where
             // the index is statically string-typed (e.g. `for (const i in

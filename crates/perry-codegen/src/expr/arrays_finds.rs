@@ -654,6 +654,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::Uint8ArrayGet { array, index } => {
+            if !is_numeric_expr(ctx, index) {
+                let a = lower_expr(ctx, array)?;
+                let key = lower_expr(ctx, index)?;
+                let blk = ctx.block();
+                let handle = unbox_to_i64(blk, &a);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_get_dynamic",
+                    &[(I64, &handle), (DOUBLE, &key)],
+                ));
+            }
             let value = lower_uint8array_get_i32(ctx, array, index)?;
             let reason = buffer_access_materialization_reason(ctx, array);
             Ok(materialize_js_value(ctx, value, reason))
@@ -668,6 +679,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             index,
             value,
         } => {
+            if !is_numeric_expr(ctx, index) {
+                let a = lower_expr(ctx, array)?;
+                let key = lower_expr(ctx, index)?;
+                let val = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                let handle = unbox_to_i64(blk, &a);
+                let result = blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_set_dynamic",
+                    &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                );
+                if ctx.discard_expr_value {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(result);
+            }
             if let Some(store) =
                 lower_buffer_store(ctx, array, index, value, BufferAccessSpec::uint8array_set())?
             {

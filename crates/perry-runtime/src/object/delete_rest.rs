@@ -28,6 +28,14 @@ pub extern "C" fn js_object_delete_field(
         return 1;
     }
     unsafe {
+        if let Some(addr) =
+            crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
+        {
+            return crate::typedarray_props::typed_array_delete_own_property(
+                addr as *mut crate::typedarray::TypedArrayHeader,
+                key,
+            );
+        }
         if let Some(result) = super::arguments_object_before_delete(obj, key) {
             return result;
         }
