@@ -265,6 +265,38 @@ fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receive
     }
 }
 
+fn try_lower_process_env_put_value_set(
+    ctx: &mut FnCtx<'_>,
+    target: &Expr,
+    key: &Expr,
+    value: &Expr,
+    receiver: &Expr,
+) -> Result<Option<String>> {
+    if !matches!(target, Expr::ProcessEnv) || !matches!(receiver, Expr::ProcessEnv) {
+        return Ok(None);
+    }
+
+    let key_handle = match key {
+        Expr::String(property) => {
+            let key_idx = ctx.strings.intern(property);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let blk = ctx.block();
+            let key_box = blk.load(DOUBLE, &key_handle_global);
+            unbox_to_i64(blk, &key_box)
+        }
+        _ => {
+            let key_box = lower_expr(ctx, key)?;
+            let blk = ctx.block();
+            let property_key = blk.call(DOUBLE, "js_to_property_key", &[(DOUBLE, &key_box)]);
+            unbox_str_handle(blk, &property_key)
+        }
+    };
+    let val_double = lower_expr(ctx, value)?;
+    ctx.block()
+        .call_void("js_setenv", &[(I64, &key_handle), (DOUBLE, &val_double)]);
+    Ok(Some(val_double))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::ProxyNew { target, handler } => {
@@ -379,6 +411,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             receiver,
             strict,
         } => {
+            if let Some(value) =
+                try_lower_process_env_put_value_set(ctx, target, key, value, receiver)?
+            {
+                return Ok(value);
+            }
             if let Expr::String(property) = key.as_ref() {
                 if matches!(property.as_str(), "caller" | "arguments")
                     && same_side_effect_free_receiver(target, receiver)
