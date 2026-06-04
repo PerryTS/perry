@@ -146,6 +146,54 @@ pub(super) fn aes_gcm_decrypt(
     }
 }
 
+pub(super) fn chacha20_poly1305_encrypt(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Option<Vec<u8>> {
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+
+    if key.len() != 32 || iv.len() != 12 {
+        return None;
+    }
+    let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
+    cipher
+        .encrypt(
+            Nonce::from_slice(iv),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .ok()
+}
+
+pub(super) fn chacha20_poly1305_decrypt(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Option<Vec<u8>> {
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+
+    if key.len() != 32 || iv.len() != 12 {
+        return None;
+    }
+    let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
+    cipher
+        .decrypt(
+            Nonce::from_slice(iv),
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
+        .ok()
+}
+
 pub(super) type Aes128CbcEnc = Encryptor<Aes128>;
 pub(super) type Aes192CbcEnc = Encryptor<Aes192>;
 pub(super) type Aes256CbcEnc = Encryptor<Aes256>;
@@ -306,6 +354,32 @@ pub(super) unsafe fn extract_aes_gcm_args(
     Some((key_bytes, iv, aad, data_bytes))
 }
 
+pub(super) unsafe fn extract_chacha20_poly1305_args(
+    algo_bits: u64,
+    key_bits: u64,
+    data_bits: u64,
+) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let algo_name = extract_algo_name(algo_bits)?;
+    if !algo_name.eq_ignore_ascii_case("ChaCha20-Poly1305") {
+        return None;
+    }
+    let iv = object_field_bytes(algo_bits, b"iv")?;
+    if let Some(tag_length) = object_field_number(algo_bits, b"tagLength") {
+        if tag_length != 128 {
+            return None;
+        }
+    }
+    let aad = object_field_bytes(algo_bits, b"additionalData").unwrap_or_default();
+    let key_addr = strip_ptr(key_bits);
+    let mat = lookup_crypto_key(key_addr)?;
+    if mat.algo != KeyAlgo::ChaCha20Poly1305 {
+        return None;
+    }
+    let key_bytes = bytes_from_jsvalue(key_bits);
+    let data_bytes = bytes_from_jsvalue(data_bits);
+    Some((key_bytes, iv, aad, data_bytes))
+}
+
 /// `crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData? }, key, data)`
 /// → Promise<Uint8Array>
 #[no_mangle]
@@ -427,6 +501,44 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let ciphertext = match aes_ctr_apply(&key, &counter, length, &data) {
+            Some(c) => c,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        return resolve_with_bytes(&ciphertext);
+    }
+    if algo_name.eq_ignore_ascii_case("ChaCha20-Poly1305") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
+        };
+        if mat.algo != KeyAlgo::ChaCha20Poly1305 {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_ENCRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
+        let (key, iv, aad, data) = match extract_chacha20_poly1305_args(
+            algo_bits.to_bits(),
+            key_bits.to_bits(),
+            data_bits.to_bits(),
+        ) {
+            Some(t) => t,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let ciphertext = match chacha20_poly1305_encrypt(&key, &iv, &aad, &data) {
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
@@ -588,6 +700,44 @@ pub unsafe extern "C" fn js_webcrypto_decrypt(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         let plaintext = match aes_ctr_apply(&key, &counter, length, &data) {
+            Some(p) => p,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        return resolve_with_bytes(&plaintext);
+    }
+    if algo_name.eq_ignore_ascii_case("ChaCha20-Poly1305") {
+        let key_addr = strip_ptr(key_bits.to_bits());
+        let mat = match lookup_crypto_key(key_addr) {
+            Some(m) => m,
+            None => {
+                return reject_with_dom_exception(
+                    "InvalidAccessError",
+                    "Key is not a valid CryptoKey",
+                )
+            }
+        };
+        if mat.algo != KeyAlgo::ChaCha20Poly1305 {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "The requested operation is not valid for the provided key",
+            );
+        }
+        if let Err((name, message)) = require_usage(
+            mat,
+            USAGE_DECRYPT,
+            "The requested operation is not valid for the provided key",
+        ) {
+            return reject_with_dom_exception(name, message);
+        }
+        let (key, iv, aad, data) = match extract_chacha20_poly1305_args(
+            algo_bits.to_bits(),
+            key_bits.to_bits(),
+            data_bits.to_bits(),
+        ) {
+            Some(t) => t,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        };
+        let plaintext = match chacha20_poly1305_decrypt(&key, &iv, &aad, &data) {
             Some(p) => p,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };

@@ -98,7 +98,12 @@ thread_local! {
     static SECRET_KEY_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// Buffers that should behave as WebCrypto CryptoKey values. Metadata is
     /// numeric to keep perry-runtime independent from perry-stdlib enums:
-    /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF, 7 PBKDF2
+    /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF,
+    ///       7 PBKDF2, 8 ECDSA, 9 ECDH, 10 Ed25519, 11 X25519,
+    ///       12 RSASSA-PKCS1-v1_5, 13 RSA-OAEP, 14 RSA-PSS,
+    ///       15 ECDSA P-384, 16 ECDH P-384, 17 ECDSA P-521,
+    ///       18 ECDH P-521, 19 Argon2d, 20 Argon2i, 21 Argon2id,
+    ///       22 ChaCha20-Poly1305
     /// hash: 1 SHA-1, 2 SHA-256, 3 SHA-384, 4 SHA-512
     /// kind: 1 secret, 2 private, 3 public
     /// extractable: WebCrypto CryptoKey.extractable
@@ -365,7 +370,7 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
 
     match (algo, kind) {
         (1, 1) => SIGN | VERIFY,
-        (2 | 4 | 5, 1) => ENCRYPT | DECRYPT | WRAP_KEY | UNWRAP_KEY,
+        (2 | 4 | 5 | 22, 1) => ENCRYPT | DECRYPT | WRAP_KEY | UNWRAP_KEY,
         (3, 1) => WRAP_KEY | UNWRAP_KEY,
         (6 | 7 | 19 | 20 | 21, 1) => DERIVE_KEY | DERIVE_BITS,
         (8 | 10 | 12 | 14 | 15 | 17, 2) => SIGN,

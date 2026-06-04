@@ -27,6 +27,7 @@ unsafe fn supports_generate_key(algorithm_bits: u64, algorithm: &str) -> bool {
     let object_form = algorithm_is_object(algorithm_bits);
     match algorithm {
         "ED25519" | "X25519" => true,
+        "CHACHA20-POLY1305" => true,
         "HMAC" | "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" => object_form,
         "ECDSA" | "ECDH" => {
             object_form
@@ -41,8 +42,8 @@ unsafe fn supports_generate_key(algorithm_bits: u64, algorithm: &str) -> bool {
 
 unsafe fn supports_import_key(algorithm_bits: u64, algorithm: &str) -> bool {
     match algorithm {
-        "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" | "PBKDF2" | "HKDF" | "ARGON2D"
-        | "ARGON2I" | "ARGON2ID" | "ED25519" | "X25519" => true,
+        "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" | "CHACHA20-POLY1305" | "PBKDF2" | "HKDF"
+        | "ARGON2D" | "ARGON2I" | "ARGON2ID" | "ED25519" | "X25519" => true,
         "HMAC" => algorithm_is_object(algorithm_bits),
         "ECDSA" | "ECDH" => algorithm_curve(algorithm_bits)
             .as_deref()
@@ -61,6 +62,7 @@ fn supports_export_key(algorithm: &str) -> bool {
             | "AES-CBC"
             | "AES-CTR"
             | "AES-KW"
+            | "CHACHA20-POLY1305"
             | "ECDSA"
             | "ECDH"
             | "ED25519"
@@ -97,7 +99,16 @@ pub unsafe extern "C" fn js_webcrypto_supports(
         "SIGN" | "VERIFY" => {
             matches!(algorithm.as_str(), "HMAC" | "ED25519" | "RSASSA-PKCS1-V1_5")
         }
-        "ENCRYPT" | "DECRYPT" => algorithm == "RSA-OAEP",
+        "ENCRYPT" | "DECRYPT" => {
+            algorithm == "RSA-OAEP"
+                || (algorithm == "CHACHA20-POLY1305"
+                    && object_field_bytes(algorithm_bits.to_bits(), b"iv")
+                        .map(|iv| iv.len() == 12)
+                        .unwrap_or(false)
+                    && object_field_number(algorithm_bits.to_bits(), b"tagLength")
+                        .map(|tag_length| tag_length == 128)
+                        .unwrap_or(true))
+        }
         "GENERATEKEY" => supports_generate_key(algorithm_bits.to_bits(), &algorithm),
         "IMPORTKEY" => supports_import_key(algorithm_bits.to_bits(), &algorithm),
         "EXPORTKEY" => supports_export_key(&algorithm),

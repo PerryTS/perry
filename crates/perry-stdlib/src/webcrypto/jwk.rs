@@ -90,6 +90,8 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         (KeyAlgo::AesCbc, HashAlgo::Sha256, KeyKind::Secret)
     } else if algo_upper == "AES-CTR" && (format_lower == "raw" || format_lower == "jwk") {
         (KeyAlgo::AesCtr, HashAlgo::Sha256, KeyKind::Secret)
+    } else if algo_upper == "CHACHA20-POLY1305" && format_lower == "jwk" {
+        (KeyAlgo::ChaCha20Poly1305, HashAlgo::Sha256, KeyKind::Secret)
     } else if algo_upper == "ECDSA" && (format_lower == "raw" || format_lower == "jwk") {
         let curve = match object_field_string(algo_bits.to_bits(), b"namedCurve")
             .and_then(|c| parse_ec_named_curve(&c))
@@ -193,6 +195,9 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
     } else {
         bytes_from_jsvalue(key_bits.to_bits())
     };
+    if key_algo == KeyAlgo::ChaCha20Poly1305 && key_bytes.len() != 32 {
+        return reject_with_dom_exception("DataError", "Invalid key length");
+    }
     if key_bytes.is_empty()
         && !matches!(
             key_algo,
@@ -298,6 +303,12 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
     if !mat.extractable {
         return reject_with_dom_exception("InvalidAccessError", "key is not extractable");
     }
+    if format_lower == "raw" && mat.algo == KeyAlgo::ChaCha20Poly1305 {
+        return reject_with_dom_exception(
+            "NotSupportedError",
+            "Unable to export ChaCha20-Poly1305 secret key using raw format",
+        );
+    }
     if format_lower == "raw" && mat.kind == KeyKind::Private {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
@@ -337,11 +348,21 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
     if format_lower == "jwk" {
         if mat.kind == KeyKind::Secret {
             let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
-            let obj = js_object_alloc(0, 2);
+            let obj = js_object_alloc(
+                0,
+                if mat.algo == KeyAlgo::ChaCha20Poly1305 {
+                    3
+                } else {
+                    2
+                },
+            );
             if obj.is_null() {
                 return reject_with_dom_exception("OperationError", "The operation failed");
             }
             set_object_string_field(obj, b"kty", "oct");
+            if mat.algo == KeyAlgo::ChaCha20Poly1305 {
+                set_object_string_field(obj, b"alg", "C20P");
+            }
             set_object_string_field(obj, b"k", &encoded);
             return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
         }
@@ -490,7 +511,12 @@ pub(super) unsafe fn jwk_import_key_bytes(
     }
     if matches!(
         key_algo,
-        KeyAlgo::Hmac | KeyAlgo::AesGcm | KeyAlgo::AesKw | KeyAlgo::AesCbc | KeyAlgo::AesCtr
+        KeyAlgo::Hmac
+            | KeyAlgo::AesGcm
+            | KeyAlgo::AesKw
+            | KeyAlgo::AesCbc
+            | KeyAlgo::AesCtr
+            | KeyAlgo::ChaCha20Poly1305
     ) {
         if kty != "oct" {
             return None;

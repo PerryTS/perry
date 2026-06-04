@@ -111,6 +111,7 @@ pub(super) enum KeyAlgo {
     AesKw,
     AesCbc,
     AesCtr,
+    ChaCha20Poly1305,
     EcdsaP256,
     EcdhP256,
     EcdsaP384,
@@ -297,6 +298,7 @@ fn runtime_algo_id(algo: KeyAlgo) -> u8 {
         KeyAlgo::Argon2d => 19,
         KeyAlgo::Argon2i => 20,
         KeyAlgo::Argon2id => 21,
+        KeyAlgo::ChaCha20Poly1305 => 22,
     }
 }
 
@@ -348,6 +350,7 @@ pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
                 19 => KeyAlgo::Argon2d,
                 20 => KeyAlgo::Argon2i,
                 21 => KeyAlgo::Argon2id,
+                22 => KeyAlgo::ChaCha20Poly1305,
                 _ => return None,
             };
             let hash = match hash {
@@ -555,9 +558,10 @@ pub(super) fn argon2_key_algo(name: &str) -> Option<KeyAlgo> {
 pub(super) fn supported_usages(algo: KeyAlgo, kind: KeyKind) -> u32 {
     match (algo, kind) {
         (KeyAlgo::Hmac, KeyKind::Secret) => USAGE_SIGN | USAGE_VERIFY,
-        (KeyAlgo::AesGcm | KeyAlgo::AesCbc | KeyAlgo::AesCtr, KeyKind::Secret) => {
-            USAGE_ENCRYPT | USAGE_DECRYPT | USAGE_WRAP_KEY | USAGE_UNWRAP_KEY
-        }
+        (
+            KeyAlgo::AesGcm | KeyAlgo::AesCbc | KeyAlgo::AesCtr | KeyAlgo::ChaCha20Poly1305,
+            KeyKind::Secret,
+        ) => USAGE_ENCRYPT | USAGE_DECRYPT | USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
         (KeyAlgo::AesKw, KeyKind::Secret) => USAGE_WRAP_KEY | USAGE_UNWRAP_KEY,
         (
             KeyAlgo::Hkdf

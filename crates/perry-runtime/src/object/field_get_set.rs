@@ -87,6 +87,7 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         19 => "Argon2d",
         20 => "Argon2i",
         21 => "Argon2id",
+        22 => "ChaCha20-Poly1305",
         _ => "",
     }
 }
