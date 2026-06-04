@@ -320,6 +320,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         "generatePrime" | "generatePrimeSync" => js_crypto_generate_prime_sync(arg(0), arg(1)),
         "checkPrime" if args_len >= 3 => js_crypto_check_prime_async(arg(0), arg(1), arg(2)),
         "checkPrime" | "checkPrimeSync" => js_crypto_check_prime_sync(arg(0), arg(1)),
+        "getFips" => 0.0,
         "setFips" => undefined,
         "secureHeapUsed" => pointer_value(js_crypto_secure_heap_used() as *mut u8),
         "hkdf" => js_crypto_hkdf_async_alg(
@@ -628,6 +629,15 @@ mod tests {
             perry_runtime::exception::js_clear_exception();
             true
         }
+    }
+
+    #[test]
+    fn crypto_native_dispatch_get_fips_matches_default_node_mode() {
+        let method = b"getFips";
+        let result = unsafe {
+            js_crypto_native_dispatch(method.as_ptr(), method.len(), std::ptr::null(), 0)
+        };
+        assert_eq!(result.to_bits(), 0.0f64.to_bits());
     }
 
     #[test]
