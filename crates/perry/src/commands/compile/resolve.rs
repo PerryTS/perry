@@ -549,6 +549,15 @@ fn resolve_exports_with_conditions(
 ) -> Option<String> {
     match exports {
         serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(entries) => {
+            for entry in entries {
+                if let Some(resolved) = resolve_exports_with_conditions(entry, subpath, conditions)
+                {
+                    return Some(resolved);
+                }
+            }
+            None
+        }
         serde_json::Value::Object(map) => {
             // Try the specific subpath first
             if let Some(entry) = map.get(subpath) {

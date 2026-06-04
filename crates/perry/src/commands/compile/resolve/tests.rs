@@ -1500,6 +1500,41 @@ mod declaration_sidecar_tests {
     }
 
     #[test]
+    fn package_exports_array_prefers_import_condition_before_module_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package_dir = dir.path().join("node_modules/y18n");
+        std::fs::create_dir_all(package_dir.join("build/lib")).expect("mkdir package");
+        std::fs::write(
+            package_dir.join("index.mjs"),
+            "export default function y18n() {}\n",
+        )
+        .expect("write esm entry");
+        std::fs::write(
+            package_dir.join("build/lib/index.js"),
+            "export function y18n() {}\n",
+        )
+        .expect("write module entry");
+        std::fs::write(
+            package_dir.join("package.json"),
+            r#"{
+              "exports": {
+                ".": [
+                  { "import": "./index.mjs", "require": "./build/index.cjs" },
+                  "./build/index.cjs"
+                ]
+              },
+              "module": "./build/lib/index.js",
+              "main": "./build/index.cjs"
+            }"#,
+        )
+        .expect("write package json");
+
+        let resolved = resolve_package_entry(&package_dir, None).expect("resolve package");
+
+        assert_eq!(resolved, package_dir.join("index.mjs"));
+    }
+
+    #[test]
     fn declaration_file_detection_includes_mts_and_cts_sidecars() {
         assert!(is_declaration_file(Path::new("index.d.ts")));
         assert!(is_declaration_file(Path::new("index.d.mts")));
