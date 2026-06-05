@@ -3226,6 +3226,25 @@ extern "C" fn number_is_safe_integer_thunk(
     crate::builtins::js_number_is_safe_integer(value)
 }
 
+// #4627: reified `String.fromCharCode(...units)` / `fromCodePoint(...points)`.
+// Both collect all arguments into `rest` (call-arity 0), so `rest` is already
+// the array-like the array-form runtime helpers expect.
+extern "C" fn string_from_char_code_static(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let s = crate::string::js_string_from_char_code_array(rest);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+extern "C" fn string_from_code_point_static(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let s = crate::string::js_string_from_code_point_array(rest);
+    crate::value::js_nanbox_string(s as i64)
+}
+
 extern "C" fn number_parse_float_thunk(
     closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -3630,6 +3649,29 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
         "Symbol" => {
             install_constructor_static(ctor, "for", symbol_for_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "keyFor", symbol_key_for_thunk as *const u8, 1, false);
+        }
+        "String" => {
+            // #4627: reify the variadic `String.fromCharCode` / `fromCodePoint`
+            // statics so they are real function values (correct `.name` /
+            // `.length`, usable via reference / spread). Call-arity 0 (all args
+            // collected into `rest`) with spec `.length` 1. `String.raw` (a tag
+            // function) is left on its intrinsic path for now.
+            install_constructor_static_with_call_arity(
+                ctor,
+                "fromCharCode",
+                string_from_char_code_static as *const u8,
+                1,
+                0,
+                true,
+            );
+            install_constructor_static_with_call_arity(
+                ctor,
+                "fromCodePoint",
+                string_from_code_point_static as *const u8,
+                1,
+                0,
+                true,
+            );
         }
         "ArrayBuffer" => {
             install_constructor_static(

@@ -293,6 +293,32 @@ pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
     js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
 }
 
+/// `String.fromCodePoint(...codePoints)` — variadic form. Builds a string from
+/// an array-like of code points, validating each (RangeError on a non-integer /
+/// negative / > 0x10FFFF value) per ECMAScript. A lone surrogate emits U+FFFD
+/// (WTF-8 categorical gap), matching `js_string_from_code_point`. Used by the
+/// reified `String.fromCodePoint` constructor static so value reads / spread
+/// calls work. (#4627)
+pub fn js_string_from_code_point_array(value: f64) -> *mut StringHeader {
+    let arr = crate::object::js_array_like_to_array(value);
+    if arr.is_null() {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
+    let len = crate::array::js_array_length(arr) as usize;
+    let mut out = String::with_capacity(len);
+    for i in 0..len {
+        let code = crate::array::js_array_get_f64(arr, i as u32);
+        if !code.is_finite() || code.fract() != 0.0 || code < 0.0 || code > 0x10FFFF as f64 {
+            throw_invalid_code_point(code);
+        }
+        match char::from_u32(code as u32) {
+            Some(c) => out.push(c),
+            None => out.push('\u{FFFD}'),
+        }
+    }
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
+
 /// String.prototype.at(index) — supports negative indices.
 /// Returns NaN-boxed single-char string, or NaN-boxed undefined if out of bounds.
 /// Index is in UTF-16 code units (matches JS spec).

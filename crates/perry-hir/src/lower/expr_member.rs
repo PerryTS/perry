@@ -1887,12 +1887,23 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         && outer_static_member
                             .map(|member| matches!(member, "now" | "parse" | "UTC"))
                             .unwrap_or(false);
+                    // #4627: `String.fromCharCode` / `fromCodePoint` are reified
+                    // (variadic) statics — value reads need the reified String
+                    // receiver for correct `.name`/`.length`. Explicit list (NOT
+                    // the whole namespace) because `String.raw` is not reified
+                    // yet and must stay on its current intrinsic path.
+                    let outer_is_reified_string_static_value = !member_is_call_callee
+                        && property == "String"
+                        && outer_static_member
+                            .map(|member| matches!(member, "fromCharCode" | "fromCodePoint"))
+                            .unwrap_or(false);
                     if !outer_is_prototype_or_proto
                         && !receiver_is_namespace_value
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
                         && !outer_is_reified_builtin_static_value
                         && !outer_is_reified_date_static_value
+                        && !outer_is_reified_string_static_value
                         && !receiver_is_detached_console_read
                     {
                         object_expr = Expr::GlobalGet(0);
