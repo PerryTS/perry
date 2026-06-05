@@ -1226,28 +1226,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
                 if ctx.imported_vars.contains(name) {
                     if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
-                    // Issue #678: re-export renames mean the suffix in the
-                    // origin module differs from the consumer-visible name.
-                    let origin_suffix =
-                        import_origin_suffix(ctx.import_function_origin_names, name);
-                    let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-                    ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
-                    let obj_val = ctx.block().call(DOUBLE, &getter, &[]);
-                    // Now do property access on the actual object.
-                    let key_idx = ctx.strings.intern(property);
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(&obj_val);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_object_get_field_by_name_f64",
-                        &[(I64, &obj_handle), (I64, &key_handle)],
-                    ));
+                        // Issue #678: re-export renames mean the suffix in the
+                        // origin module differs from the consumer-visible name.
+                        let origin_suffix =
+                            import_origin_suffix(ctx.import_function_origin_names, name);
+                        let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                        ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
+                        let obj_val = ctx.block().call(DOUBLE, &getter, &[]);
+                        // Now do property access on the actual object.
+                        let key_idx = ctx.strings.intern(property);
+                        let key_handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        let blk = ctx.block();
+                        let obj_bits = blk.bitcast_double_to_i64(&obj_val);
+                        let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                        let key_box = blk.load(DOUBLE, &key_handle_global);
+                        let key_bits = blk.bitcast_double_to_i64(&key_box);
+                        let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                        return Ok(blk.call(
+                            DOUBLE,
+                            "js_object_get_field_by_name_f64",
+                            &[(I64, &obj_handle), (I64, &key_handle)],
+                        ));
                     }
                 }
             }
