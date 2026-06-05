@@ -305,21 +305,28 @@ pub(super) fn build_and_run_link(
     // entry object file so the perry runtime's main() (from ios_game_loop.rs)
     // becomes the process entry point. It spawns _perry_user_main on a game thread.
     if (is_ios || is_tvos) && compiled_features.iter().any(|f| f == "ios-game-loop") {
-        if let Some(entry_obj) = obj_paths
-            .iter()
-            .find(|f| f.to_string_lossy().contains("main_ts"))
-        {
-            // Try rust-objcopy first (newer Rust), then llvm-objcopy (older Rust)
-            let objcopy = std::env::var("HOME").ok()
-                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
-                .filter(|p| p.exists())
-                .or_else(|| std::env::var("HOME").ok()
-                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
-                    .filter(|p| p.exists()))
-                .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+        // Resolve an objcopy: rust-objcopy / llvm-objcopy from the host Rust
+        // toolchain (macOS), then llvm-objcopy on Linux builders, then PATH.
+        let objcopy = std::env::var("HOME").ok()
+            .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
+            .filter(|p| p.exists())
+            .or_else(|| std::env::var("HOME").ok()
+                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
+                .filter(|p| p.exists()))
+            .or_else(|| ["/usr/lib/llvm-18/bin/llvm-objcopy", "/usr/bin/llvm-objcopy-18", "/usr/bin/llvm-objcopy"]
+                .iter().map(PathBuf::from).find(|p| p.exists()))
+            .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+        // Rename _main -> __perry_user_main so the perry runtime's main()
+        // (ios_game_loop.rs) becomes the process entry point and spawns the
+        // user's main on a game thread. The entry object can't be located by
+        // filename — with the object cache on it's named by content hash, not
+        // "main_ts" — so apply the rename to every user object. objcopy
+        // --redefine-sym is a no-op on objects that don't define _main, so this
+        // only ever rewrites the single entry object regardless of its name.
+        for obj in obj_paths.iter() {
             let _ = Command::new(&objcopy)
                 .args(["--redefine-sym", "_main=__perry_user_main"])
-                .arg(entry_obj)
+                .arg(obj)
                 .status();
         }
     }
