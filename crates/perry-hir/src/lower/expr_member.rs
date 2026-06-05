@@ -1851,11 +1851,27 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // with detached `Math.log`.
                     let receiver_is_detached_console_read =
                         property == "console" && !member_is_call_callee;
+                    // #4596: `Date.now` / `Date.parse` / `Date.UTC` read as a
+                    // VALUE needs the reified Date constructor receiver so it
+                    // resolves to the real native function object (typeof
+                    // "function", correct `.name`/`.length`, callable). Undoing
+                    // the reroute collapses it to `GlobalGet(0).now`, for which
+                    // codegen has no intrinsic handler (unlike `Object.keys` /
+                    // `Math.max`) — so the read mis-folds to a number. Direct
+                    // CALLS (`Date.now()`) are intercepted earlier as
+                    // `Expr::DateNow` / `DateParse` / `DateUtc`, so gate on a
+                    // non-callee read.
+                    let outer_is_reified_date_static_value = !member_is_call_callee
+                        && property == "Date"
+                        && outer_static_member
+                            .map(|member| matches!(member, "now" | "parse" | "UTC"))
+                            .unwrap_or(false);
                     if !outer_is_prototype_or_proto
                         && !receiver_is_namespace_value
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
                         && !outer_is_reified_builtin_static_value
+                        && !outer_is_reified_date_static_value
                         && !receiver_is_detached_console_read
                     {
                         object_expr = Expr::GlobalGet(0);
