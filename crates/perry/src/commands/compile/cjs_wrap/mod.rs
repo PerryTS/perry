@@ -281,6 +281,179 @@ module.exports = inner;
     }
 
     #[test]
+    fn wrap_rewrites_depd_dynamic_deprecation_wrapper() {
+        let src = r#"function wrapfunction (fn, message) {
+  var args = createArgumentsString(fn.length)
+  var stack = getStack()
+  var site = callSiteLocation(stack[1])
+
+  site.name = fn.name
+
+  // eslint-disable-next-line no-new-func
+  var deprecatedfn = new Function('fn', 'log', 'deprecate', 'message', 'site',
+    '"use strict"\n' +
+    'return function (' + args + ') {' +
+    'log.call(deprecate, message, site)\n' +
+    'return fn.apply(this, arguments)\n' +
+    '}')(fn, log, this, message, site)
+
+  return deprecatedfn
+}
+module.exports = wrapfunction;"#;
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/app/node_modules/depd/index.js"));
+        assert!(
+            !wrapped.contains("new Function"),
+            "depd dynamic wrapper must be compiled as a normal closure, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("return function () {"),
+            "expected arity-erased wrapper closure, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("return fn.apply(this, arguments)"),
+            "wrapper must preserve this/arguments forwarding, got:\n{}",
+            wrapped
+        );
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "depd/index.js").is_ok(),
+            "wrapped depd source must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_rewrites_function_bind_dynamic_wrapper() {
+        let src = r#"module.exports = function bind(that) {
+    var target = this;
+    var args = slicy(arguments, 1);
+
+    var bound;
+    var binder = function () {
+        if (this instanceof bound) {
+            var result = target.apply(
+                this,
+                concatty(args, arguments)
+            );
+            if (Object(result) === result) {
+                return result;
+            }
+            return this;
+        }
+        return target.apply(
+            that,
+            concatty(args, arguments)
+        );
+
+    };
+
+    var boundLength = max(0, target.length - args.length);
+    var boundArgs = [];
+    for (var i = 0; i < boundLength; i++) {
+        boundArgs[i] = '$' + i;
+    }
+
+    bound = Function('binder', 'return function (' + joiny(boundArgs, ',') + '){ return binder.apply(this,arguments); }')(binder);
+
+    return bound;
+};"#;
+        let wrapped = wrap_commonjs(
+            src,
+            &PathBuf::from("/tmp/app/node_modules/function-bind/implementation.js"),
+        );
+        assert!(
+            !wrapped.contains("Function('binder'"),
+            "function-bind dynamic wrapper must be compiled as a normal closure, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("bound = function () {"),
+            "expected arity-erased bound closure, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("return binder.apply(this, arguments);"),
+            "wrapper must preserve this/arguments forwarding, got:\n{}",
+            wrapped
+        );
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "function-bind/implementation.js").is_ok(),
+            "wrapped function-bind source must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_rewrites_safer_buffer_private_binding_probe() {
+        let src = r#"var safer = {}
+
+if (!safer.kStringMaxLength) {
+  try {
+    safer.kStringMaxLength = process.binding('buffer').kStringMaxLength
+  } catch (e) {
+    // we can't determine kStringMaxLength in environments where process.binding
+    // is unsupported, so let's not set it
+  }
+}
+
+module.exports = safer;"#;
+        let wrapped = wrap_commonjs(
+            src,
+            &PathBuf::from("/tmp/app/node_modules/safer-buffer/safer.js"),
+        );
+        assert!(
+            !wrapped.contains("process.binding"),
+            "safer-buffer private binding probe must be rewritten, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("safer.kStringMaxLength = 536870888"),
+            "expected public max string length constant, got:\n{}",
+            wrapped
+        );
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "safer-buffer/safer.js").is_ok(),
+            "wrapped safer-buffer source must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_rewrites_safe_buffer_slow_buffer_fallback() {
+        let src = r#"var buffer = require('buffer')
+var Buffer = buffer.Buffer
+
+SafeBuffer.allocUnsafeSlow = function (size) {
+  if (typeof size !== 'number') {
+    throw new TypeError('Argument must be a number')
+  }
+  return buffer.SlowBuffer(size)
+}
+
+module.exports = SafeBuffer;"#;
+        let wrapped = wrap_commonjs(
+            src,
+            &PathBuf::from("/tmp/app/node_modules/safe-buffer/index.js"),
+        );
+        assert!(
+            !wrapped.contains("buffer.SlowBuffer"),
+            "safe-buffer fallback must avoid deprecated SlowBuffer, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("return Buffer.allocUnsafeSlow(size)"),
+            "expected Buffer.allocUnsafeSlow fallback, got:\n{}",
+            wrapped
+        );
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "safe-buffer/index.js").is_ok(),
+            "wrapped safe-buffer source must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn issue_1721_blanks_adopted_alias_require_in_body() {
         // #1721: `const c = require('./common')` adopts `c` as the import
         // local name (so `import c from './common'`). The original body line
