@@ -2,14 +2,16 @@
 //! deflate, inflate. Sync + async variants.
 //!
 //! First binary-bytes wrapper port under #466 Phase 5 — exercises
-//! perry-ffi's `read_bytes` / `alloc_bytes` helpers (added in
+//! perry-ffi's byte-reading / Buffer allocation helpers (added in
 //! v0.5.x alongside the JsValue surface). Compressed payloads
 //! aren't valid UTF-8, so the wrapper can't go through the
 //! standard `read_string` / `alloc_string` path.
 
 use flate2::read::{GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use perry_ffi::{alloc_bytes, spawn_blocking, JsPromise, JsValue, Promise, StringHeader};
+use perry_ffi::{
+    alloc_buffer, spawn_blocking, BufferHeader, JsPromise, JsValue, Promise, StringHeader,
+};
 use std::io::Read;
 
 // #1843 — Transform-stream objects (`createGzip`/`createDeflate`/… with
@@ -83,12 +85,12 @@ fn inflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 /// `opts` is the raw NaN-boxed options value (or `undefined`); an out-of-range
 /// `{ level }` throws `RangeError` before any compression runs (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
     stream::js_zlib_validate_options(opts, 9); // gzip needs windowBits >= 9 (#3662)
     stream::js_zlib_validate_buffer_arg(data_bits); // options validate before the buffer
     let level = stream::compression_from_opts(opts);
     match stream::read_input_from_bits(data_bits).map(|d| gzip_bytes_with(&d, level)) {
-        Some(Ok(out)) => alloc_bytes(&out).as_raw(),
+        Some(Ok(out)) => alloc_buffer(&out),
         _ => std::ptr::null_mut(),
     }
 }
@@ -99,10 +101,10 @@ pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut St
 ///
 /// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut BufferHeader {
     stream::js_zlib_validate_buffer_arg(data_bits); // #3662
     match stream::read_input_from_bits(data_bits).map(|d| gunzip_bytes(&d)) {
-        Some(Ok(out)) => alloc_bytes(&out).as_raw(),
+        Some(Ok(out)) => alloc_buffer(&out),
         _ => std::ptr::null_mut(),
     }
 }
@@ -115,12 +117,12 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut StringHeade
 /// the raw NaN-boxed options value. An out-of-range `{ level }` throws
 /// `RangeError` before any compression runs (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
     stream::js_zlib_validate_options(opts, 8); // deflate accepts windowBits >= 8 (#3662)
     stream::js_zlib_validate_buffer_arg(data_bits);
     let level = stream::compression_from_opts(opts);
     match stream::read_input_from_bits(data_bits).map(|d| deflate_bytes_with(&d, level)) {
-        Some(Ok(out)) => alloc_bytes(&out).as_raw(),
+        Some(Ok(out)) => alloc_buffer(&out),
         _ => std::ptr::null_mut(),
     }
 }
@@ -131,10 +133,10 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut
 ///
 /// `data_bits` is the raw NaN-box bit pattern of the data argument (#2935).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut BufferHeader {
     stream::js_zlib_validate_buffer_arg(data_bits); // #3662
     match stream::read_input_from_bits(data_bits).map(|d| inflate_bytes(&d)) {
-        Some(Ok(out)) => alloc_bytes(&out).as_raw(),
+        Some(Ok(out)) => alloc_buffer(&out),
         _ => std::ptr::null_mut(),
     }
 }
@@ -158,14 +160,8 @@ where
 
     spawn_blocking(move || match op(&data) {
         Ok(out) => {
-            // Compressed payloads aren't valid UTF-8. perry-stdlib's
-            // existing zlib NaN-boxes the result as POINTER_TAG so
-            // the runtime never tries to read it as a string —
-            // TS-side `Buffer` / typed-array consumers see it as
-            // an opaque pointer with raw bytes underneath. Same
-            // trick here.
-            let bytes_handle = alloc_bytes(&out);
-            promise.resolve(JsValue::from_object_ptr(bytes_handle.as_raw()));
+            let bytes_handle = alloc_buffer(&out);
+            promise.resolve(JsValue::from_object_ptr(bytes_handle));
         }
         Err(e) => promise.reject_string(&format!("{} error: {}", label, e)),
     });

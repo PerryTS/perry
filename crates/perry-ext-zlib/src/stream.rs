@@ -18,9 +18,8 @@
 //! registered after `.write()` still fire and `.pipe()` can forward chunks.
 
 use perry_ffi::{
-    alloc_buffer, alloc_bytes, alloc_string, gc_register_mutable_root_scanner_named,
-    notify_main_thread, BufferHeader, GcRootVisitor, JsClosure, JsValue, RawClosureHeader,
-    StringHeader,
+    alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
+    BufferHeader, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -139,10 +138,10 @@ pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
 /// # Safety
 /// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut BufferHeader {
     js_zlib_validate_buffer_arg(data_bits);
     match read_input_from_bits(data_bits) {
-        Some(d) => alloc_bytes(&brotli_compress_bytes(&d)).as_raw(),
+        Some(d) => alloc_buffer(&brotli_compress_bytes(&d)),
         None => std::ptr::null_mut(),
     }
 }
@@ -152,10 +151,10 @@ pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut St
 /// # Safety
 /// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut BufferHeader {
     js_zlib_validate_buffer_arg(data_bits);
     match read_input_from_bits(data_bits).map(|d| brotli_decompress_bytes(&d)) {
-        Some(Ok(out)) => alloc_bytes(&out).as_raw(),
+        Some(Ok(out)) => alloc_buffer(&out),
         _ => std::ptr::null_mut(),
     }
 }
@@ -197,7 +196,7 @@ where
         return raw;
     };
     perry_ffi::spawn_blocking(move || match op(&data) {
-        Ok(out) => promise.resolve(JsValue::from_object_ptr(alloc_bytes(&out).as_raw())),
+        Ok(out) => promise.resolve(JsValue::from_object_ptr(alloc_buffer(&out))),
         Err(e) => promise.reject_string(&format!("{} error: {}", label, e)),
     });
     raw

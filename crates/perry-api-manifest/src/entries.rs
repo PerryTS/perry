@@ -1977,7 +1977,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_any("p0"), ZLIB_OPTIONS_PARAM],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -1985,7 +1985,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_any("p0")],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -1993,7 +1993,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_any("p0"), ZLIB_OPTIONS_PARAM],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -2001,7 +2001,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_any("p0")],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -2027,7 +2027,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_str("p0")],
-        TypeSpec::Any,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -2035,7 +2035,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_str("p0")],
-        TypeSpec::Any,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -2043,7 +2043,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_str("p0")],
-        TypeSpec::Any,
+        TypeSpec::Buffer,
     ),
     // `crc32(data, seed?)` — `seed` is the running CRC from a prior chunk
     // so callers can stream a long input. Dispatch declares 2 args; mirror
@@ -2141,7 +2141,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_str("p0")],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -2149,7 +2149,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_str("p0")],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -2174,7 +2174,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_any("p0"), ZLIB_OPTIONS_PARAM],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
@@ -2182,7 +2182,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         false,
         None,
         &[p_any("p0"), ZLIB_OPTIONS_PARAM],
-        TypeSpec::String,
+        TypeSpec::Buffer,
     ),
     method_sig(
         "zlib",
