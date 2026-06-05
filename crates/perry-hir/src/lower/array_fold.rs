@@ -315,6 +315,7 @@ pub(crate) fn is_known_namespace_static_function(obj_name: &str, prop_name: &str
         "Math" => is_known_math_static_method(prop_name),
         "JSON" => is_known_json_static_method(prop_name),
         "Atomics" => is_known_atomics_static_method(prop_name),
+        "Date" => matches!(prop_name, "now" | "parse" | "UTC"),
         "Number" => is_known_number_static_method(prop_name),
         "String" => is_known_string_static_method(prop_name),
         // #2877: `ArrayBuffer.isView` is a real static function (folded to the

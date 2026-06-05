@@ -220,11 +220,12 @@ pub(crate) fn install_date_constructor_statics(ctor: *mut crate::closure::Closur
         1,
         false,
     );
-    super::global_this::install_constructor_static(
+    super::global_this::install_constructor_static_with_call_arity(
         ctor,
         "UTC",
         date_utc_static as *const u8,
         7,
+        0,
         true,
     );
 }
