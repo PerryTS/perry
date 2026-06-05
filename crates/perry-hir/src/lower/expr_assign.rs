@@ -127,6 +127,26 @@ fn expr_ident_name(expr: &ast::Expr) -> Option<&str> {
     }
 }
 
+fn logical_assignment_op(op: ast::AssignOp) -> Option<LogicalOp> {
+    match op {
+        ast::AssignOp::AndAssign => Some(LogicalOp::And),
+        ast::AssignOp::OrAssign => Some(LogicalOp::Or),
+        ast::AssignOp::NullishAssign => Some(LogicalOp::Coalesce),
+        _ => None,
+    }
+}
+
+fn lower_logical_assignment(
+    ctx: &mut LoweringContext,
+    assign: &ast::AssignExpr,
+    rhs: Expr,
+    op: LogicalOp,
+) -> Result<Expr> {
+    let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
+    let right = Box::new(lower_assignment_target(ctx, &assign.left, Box::new(rhs))?);
+    Ok(Expr::Logical { op, left, right })
+}
+
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
     // Detect assignments from native module calls and register for cross-function tracking.
     // e.g., `mongoClient = await MongoClient.connect(uri)` registers mongoClient as a mongodb instance.
@@ -222,41 +242,29 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             .flatten(),
     )?;
 
-    // #4586: logical assignments (`&&=`, `||=`, `??=`) to a PROPERTY target
-    // must not store unconditionally. Desugaring to `a.b = (a.b OP rhs)` (the
-    // generic compound-assign shape below) always runs PutValue, which fires
-    // setters spuriously and throws `TypeError: Cannot assign to read only
-    // property` on non-writable `Object.defineProperty` data props — e.g.
-    // Zod v4's `inst._zod ??= {}` where `_zod` is already non-nullish and
+    // #4586 / #4594: logical assignments (`&&=`, `||=`, `??=`) must not store
+    // unconditionally. Desugaring to `a = (a OP rhs)` (the generic
+    // compound-assign shape below) always runs PutValue, which for a property
+    // target fires setters spuriously and throws `TypeError: Cannot assign to
+    // read only property` on non-writable `Object.defineProperty` data props —
+    // e.g. Zod v4's `inst._zod ??= {}` where `_zod` is already non-nullish and
     // read-only, breaking every check/refinement-based schema under
     // `perry.compilePackages`.
     //
     // Per ECMAScript LogicalAssignment, the store (PutValue) must be skipped
-    // entirely when the short-circuit holds. We desugar to
-    // `read(a.b) OP (a.b = rhs)` so the assignment lives on the RHS of the
-    // logical operator and is therefore only evaluated on the branch that
-    // actually needs to write. `rhs` is consumed exactly once.
+    // entirely when the short-circuit holds. `lower_logical_assignment`
+    // desugars to `read(target) OP (target = rhs)` so the assignment lives on
+    // the RHS of the logical operator and is therefore only evaluated on the
+    // branch that actually needs to write. `rhs` is consumed exactly once.
     //
-    // Scoped to `Member` targets: plain `Ident` locals/globals have no
-    // setters and no read-only data descriptors, so an unconditional
-    // `LocalSet` there is observationally identical to the spec — leaving
-    // that path untouched keeps the blast radius minimal.
-    if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) = &assign.left {
-        if let Some(logical_op) = match assign.op {
-            ast::AssignOp::AndAssign => Some(LogicalOp::And),
-            ast::AssignOp::OrAssign => Some(LogicalOp::Or),
-            ast::AssignOp::NullishAssign => Some(LogicalOp::Coalesce),
-            _ => None,
-        } {
-            let read_left = lower_assign_target_to_expr(ctx, &assign.left)?;
-            let target_expr = ast::Expr::Member(member.clone());
-            let store = lower_expr_assignment(ctx, &target_expr, Box::new(rhs))?;
-            return Ok(Expr::Logical {
-                op: logical_op,
-                left: Box::new(read_left),
-                right: Box::new(store),
-            });
-        }
+    // This covers both `Ident` and `Member` targets via the shared
+    // `lower_assignment_target` helper: while plain `Ident` locals have no
+    // setters, routing them through the short-circuit keeps the const-reassign
+    // path spec-correct (the RHS is still evaluated before the
+    // `TypeError: Assignment to constant variable` is thrown) and avoids a
+    // dead, Member-only special case.
+    if let Some(op) = logical_assignment_op(assign.op) {
+        return lower_logical_assignment(ctx, assign, rhs, op);
     }
 
     // Handle compound assignment operators (+=, -=, *=, /=, etc.)
@@ -360,38 +368,22 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 right: Box::new(rhs),
             })
         }
-        ast::AssignOp::AndAssign => {
-            // a &&= b becomes a = a && b (short-circuit: only evaluates b if a is truthy)
-            let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Logical {
-                op: LogicalOp::And,
-                left,
-                right: Box::new(rhs),
-            })
-        }
-        ast::AssignOp::OrAssign => {
-            // a ||= b becomes a = a || b (short-circuit: only evaluates b if a is falsy)
-            let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Logical {
-                op: LogicalOp::Or,
-                left,
-                right: Box::new(rhs),
-            })
-        }
-        ast::AssignOp::NullishAssign => {
-            // a ??= b becomes a = a ?? b (short-circuit: only evaluates b if a is null/undefined)
-            let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Logical {
-                op: LogicalOp::Coalesce,
-                left,
-                right: Box::new(rhs),
-            })
+        ast::AssignOp::AndAssign | ast::AssignOp::OrAssign | ast::AssignOp::NullishAssign => {
+            unreachable!("logical assignment is lowered before compound assignment")
         } // #853: the match above exhausts every `ast::AssignOp` variant
           // SWC ships today. If SWC adds a new operator, the build breaks
           // here — preferable to a silent runtime error path. No catch-all.
     };
 
-    match &assign.left {
+    lower_assignment_target(ctx, &assign.left, value)
+}
+
+fn lower_assignment_target(
+    ctx: &mut LoweringContext,
+    target: &ast::AssignTarget,
+    value: Box<Expr>,
+) -> Result<Expr> {
+    match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
             let name = ident.id.sym.to_string();
             if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
@@ -406,7 +398,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             }
             if let Some(id) = ctx.lookup_local(&name) {
                 if ctx.is_local_immutable(id) {
-                    return Ok(throw_type_error_const_assignment(&name));
+                    return Ok(Expr::Sequence(vec![
+                        *value,
+                        throw_type_error_const_assignment(&name),
+                    ]));
                 }
                 Ok(Expr::LocalSet(id, value))
             } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
