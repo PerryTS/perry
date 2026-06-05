@@ -126,3 +126,135 @@ pub extern "C" fn js_string_replace_all_string_fn(
         js_string_from_str(&result)
     }
 }
+
+/// Expand a replacement template against a single string-pattern match, per
+/// ECMAScript `GetSubstitution` (22.1.3.19.1) for a *string* `searchValue`:
+/// `$$` → `$`, `$&` → matched, `` $` `` → text before the match, `$'` → text
+/// after it. There are no capture groups for a string pattern, so `$n` /
+/// `$<name>` are left verbatim. A `$` not starting a recognised escape is also
+/// left verbatim.
+fn expand_string_pattern_replacement(
+    repl: &str,
+    full: &str,
+    match_start: usize,
+    matched: &str,
+) -> String {
+    let mut out = String::with_capacity(repl.len());
+    let mut chars = repl.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('$') => {
+                out.push('$');
+                chars.next();
+            }
+            Some('&') => {
+                out.push_str(matched);
+                chars.next();
+            }
+            Some('`') => {
+                out.push_str(&full[..match_start]);
+                chars.next();
+            }
+            Some('\'') => {
+                out.push_str(&full[match_start + matched.len()..]);
+                chars.next();
+            }
+            // `$` followed by anything else (incl. a digit, since a string
+            // pattern has no captures) stays literal.
+            _ => out.push('$'),
+        }
+    }
+    out
+}
+
+/// Replace with a simple string pattern (not regex)
+/// string.replace(pattern, replacement) -> string
+#[no_mangle]
+pub extern "C" fn js_string_replace_string(
+    s: *const StringHeader,
+    pattern: *const StringHeader,
+    replacement: *const StringHeader,
+) -> *mut StringHeader {
+    if !is_valid_ptr(s) {
+        return js_string_from_str("");
+    }
+
+    let str_data = string_as_str(s);
+    let pattern_str = if is_valid_ptr(pattern) {
+        string_as_str(pattern)
+    } else {
+        ""
+    };
+    let repl_str = if is_valid_ptr(replacement) {
+        string_as_str(replacement)
+    } else {
+        "undefined"
+    };
+
+    // String.replace with a string pattern only replaces the first occurrence.
+    // Fast path: a replacement with no `$` needs no substitution.
+    if !repl_str.contains('$') || pattern_str.is_empty() {
+        let result = str_data.replacen(pattern_str, repl_str, 1);
+        return js_string_from_str(&result);
+    }
+    let result = match str_data.find(pattern_str) {
+        Some(pos) => {
+            let expanded = expand_string_pattern_replacement(repl_str, str_data, pos, pattern_str);
+            let mut out = String::with_capacity(str_data.len() + expanded.len());
+            out.push_str(&str_data[..pos]);
+            out.push_str(&expanded);
+            out.push_str(&str_data[pos + pattern_str.len()..]);
+            out
+        }
+        None => str_data.to_string(),
+    };
+    js_string_from_str(&result)
+}
+
+/// Replace ALL occurrences with a simple string pattern (not regex)
+/// string.replaceAll(pattern, replacement) -> string
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_string(
+    s: *const StringHeader,
+    pattern: *const StringHeader,
+    replacement: *const StringHeader,
+) -> *mut StringHeader {
+    if !is_valid_ptr(s) {
+        return js_string_from_str("");
+    }
+
+    let str_data = string_as_str(s);
+    let pattern_str = if is_valid_ptr(pattern) {
+        string_as_str(pattern)
+    } else {
+        ""
+    };
+    let repl_str = if is_valid_ptr(replacement) {
+        string_as_str(replacement)
+    } else {
+        "undefined"
+    };
+
+    // Fast path: a replacement with no `$` (or an empty pattern, whose
+    // between-every-char match positions are left to Rust's `replace`) needs
+    // no `$$`/`$&`/`` $` ``/`$'` substitution.
+    if !repl_str.contains('$') || pattern_str.is_empty() {
+        let result = str_data.replace(pattern_str, repl_str);
+        return js_string_from_str(&result);
+    }
+    let mut result = String::with_capacity(str_data.len());
+    let mut last = 0;
+    for (pos, m) in str_data.match_indices(pattern_str) {
+        result.push_str(&str_data[last..pos]);
+        result.push_str(&expand_string_pattern_replacement(
+            repl_str, str_data, pos, m,
+        ));
+        last = pos + m.len();
+    }
+    result.push_str(&str_data[last..]);
+    js_string_from_str(&result)
+}

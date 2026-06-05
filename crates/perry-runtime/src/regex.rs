@@ -24,7 +24,10 @@ pub use match_all::{
     REGEXP_STRING_ITERATOR_CLASS_ID,
 };
 use replace_fn::call_replace_callback;
-pub use replace_fn::{js_string_replace_all_string_fn, js_string_replace_string_fn};
+pub use replace_fn::{
+    js_string_replace_all_string, js_string_replace_all_string_fn, js_string_replace_string,
+    js_string_replace_string_fn,
+};
 
 thread_local! {
     /// Last exec result metadata: (index, groups_object_ptr)
@@ -886,63 +889,6 @@ pub extern "C" fn js_string_replace_all_regex(
 
     ensure_replace_all_regex_global(re);
     js_string_replace_regex(s, re, replacement)
-}
-
-/// Replace with a simple string pattern (not regex)
-/// string.replace(pattern, replacement) -> string
-#[no_mangle]
-pub extern "C" fn js_string_replace_string(
-    s: *const StringHeader,
-    pattern: *const StringHeader,
-    replacement: *const StringHeader,
-) -> *mut StringHeader {
-    if !is_valid_ptr(s) {
-        return js_string_from_str("");
-    }
-
-    let str_data = string_as_str(s);
-    let pattern_str = if is_valid_ptr(pattern) {
-        string_as_str(pattern)
-    } else {
-        ""
-    };
-    let repl_str = if is_valid_ptr(replacement) {
-        string_as_str(replacement)
-    } else {
-        "undefined"
-    };
-
-    // String.replace with a string pattern only replaces the first occurrence
-    let result = str_data.replacen(pattern_str, repl_str, 1);
-    js_string_from_str(&result)
-}
-
-/// Replace ALL occurrences with a simple string pattern (not regex)
-/// string.replaceAll(pattern, replacement) -> string
-#[no_mangle]
-pub extern "C" fn js_string_replace_all_string(
-    s: *const StringHeader,
-    pattern: *const StringHeader,
-    replacement: *const StringHeader,
-) -> *mut StringHeader {
-    if !is_valid_ptr(s) {
-        return js_string_from_str("");
-    }
-
-    let str_data = string_as_str(s);
-    let pattern_str = if is_valid_ptr(pattern) {
-        string_as_str(pattern)
-    } else {
-        ""
-    };
-    let repl_str = if is_valid_ptr(replacement) {
-        string_as_str(replacement)
-    } else {
-        "undefined"
-    };
-
-    let result = str_data.replace(pattern_str, repl_str);
-    js_string_from_str(&result)
 }
 
 /// Split a string by a regex delimiter
