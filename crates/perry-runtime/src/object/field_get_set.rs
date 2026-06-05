@@ -4228,7 +4228,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                     // Getters take `this` as f64 (NaN-boxed
                                     // POINTER_TAG), matching the codegen
                                     // calling convention for class methods.
-                                                                    let this_f64: f64 = class_getter_this(obj);
+                                    let this_f64: f64 = class_getter_this(obj);
                                     let f: extern "C" fn(f64) -> f64 =
                                         std::mem::transmute(getter_ptr);
                                     return JSValue::from_bits(f(this_f64).to_bits());
