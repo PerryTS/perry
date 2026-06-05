@@ -3814,22 +3814,17 @@ fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
     }
 }
 
-/// Install a list of `(method_name, arity)` pairs on a prototype object,
-/// each backed by `global_this_builtin_noop_thunk`. The shared no-op thunk
-/// is fine because every method shares the same backing func pointer (the
-/// arity registration on that pointer is overwritten harmlessly with each
-/// call — the last winner is whichever arity matches the dominant call
-/// site, but no current code path depends on the registered arity for the
-/// noop thunk; the real dispatch arms each register their own arity on
-/// their own thunk pointer).
+/// Install a list of `(method_name, arity)` pairs on a prototype object.
+/// Most entries are reflection-only methods backed by
+/// `global_this_builtin_noop_thunk`, but inherited Object methods with
+/// observable receiver-sensitive behavior use their real thunk.
 fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u32)]) {
     for (name, arity) in methods.iter().copied() {
-        install_proto_method(
-            proto_obj,
-            name,
-            global_this_builtin_noop_thunk as *const u8,
-            arity,
-        );
+        let func_ptr = match name {
+            "isPrototypeOf" => object_prototype_is_prototype_of_thunk as *const u8,
+            _ => global_this_builtin_noop_thunk as *const u8,
+        };
+        install_proto_method(proto_obj, name, func_ptr, arity);
     }
 }
 

@@ -877,8 +877,7 @@ pub fn lower_class_decl(
         // every read, so `this.method` reads the uninitialised slot (`undefined`) BEFORE
         // the assignment runs — exactly what made `this.parse.bind(this)` throw "Bind must
         // be called on a function" in zod. Mirrors the accessor exclusion (#665).
-        let mut method_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut method_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for member in &class_decl.class.body {
             match member {
                 ast::ClassMember::Method(m) if matches!(m.kind, ast::MethodKind::Method) => {
@@ -889,9 +888,7 @@ pub fn lower_class_decl(
                     };
                     method_names.insert(key);
                 }
-                ast::ClassMember::PrivateMethod(m)
-                    if matches!(m.kind, ast::MethodKind::Method) =>
-                {
+                ast::ClassMember::PrivateMethod(m) if matches!(m.kind, ast::MethodKind::Method) => {
                     method_names.insert(format!("#{}", m.key.name));
                 }
                 _ => {}

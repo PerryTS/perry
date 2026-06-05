@@ -1736,6 +1736,41 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         }
         None
     };
+    let buffer_backed_prototype = |addr: usize| -> Option<f64> {
+        let name = if crate::buffer::is_array_buffer(addr) {
+            "ArrayBuffer"
+        } else if crate::buffer::is_shared_array_buffer(addr) {
+            "SharedArrayBuffer"
+        } else {
+            return None;
+        };
+        let proto = crate::object::builtin_prototype_value(name);
+        if proto.to_bits() != crate::value::TAG_UNDEFINED {
+            Some(proto)
+        } else {
+            None
+        }
+    };
+    let buffer_backed_uint8array_prototype = |addr: usize| -> Option<f64> {
+        if !crate::buffer::is_uint8array_buffer(addr) {
+            return None;
+        }
+        let proto = crate::object::builtin_prototype_value("Uint8Array");
+        if proto.to_bits() != crate::value::TAG_UNDEFINED {
+            Some(proto)
+        } else {
+            None
+        }
+    };
+    let typed_array_instance_prototype = |addr: usize| -> Option<f64> {
+        let kind = crate::typedarray::lookup_typed_array_kind(addr)?;
+        let proto = crate::object::builtin_prototype_value(crate::typedarray::name_for_kind(kind));
+        if proto.to_bits() != crate::value::TAG_UNDEFINED {
+            Some(proto)
+        } else {
+            None
+        }
+    };
     let function_prototype_or_null = || {
         let proto = crate::object::builtin_prototype_value("Function");
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
@@ -1774,6 +1809,15 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     if top16 == 0x7FFD {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
         if raw_addr != 0 && raw_addr >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            if let Some(proto) = typed_array_instance_prototype(raw_addr as usize) {
+                return proto;
+            }
+            if let Some(proto) = buffer_backed_prototype(raw_addr as usize) {
+                return proto;
+            }
+            if let Some(proto) = buffer_backed_uint8array_prototype(raw_addr as usize) {
+                return proto;
+            }
             if let Some(proto) = collection_prototype(raw_addr as usize) {
                 return proto;
             }
@@ -1871,6 +1915,15 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     }
     if top16 == 0 {
         if bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            if let Some(proto) = typed_array_instance_prototype(bits as usize) {
+                return proto;
+            }
+            if let Some(proto) = buffer_backed_prototype(bits as usize) {
+                return proto;
+            }
+            if let Some(proto) = buffer_backed_uint8array_prototype(bits as usize) {
+                return proto;
+            }
             if let Some(proto) = collection_prototype(bits as usize) {
                 return proto;
             }

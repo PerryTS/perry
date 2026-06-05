@@ -394,17 +394,32 @@ fn throw_object_to_string_not_function() -> ! {
 #[inline]
 unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
     let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_pointer() {
-        return None;
-    }
-    let ptr = jsval.as_pointer::<u8>();
-    if ptr.is_null()
-        || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
-        || !is_valid_obj_ptr(ptr as *const u8)
-    {
+    let ptr = if jsval.is_pointer() {
+        jsval.as_pointer::<u8>()
+    } else {
+        let bits = value.to_bits();
+        if (bits >> 48) == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            bits as *const u8
+        } else {
+            return None;
+        }
+    };
+    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
     }
     let addr = ptr as usize;
+    if crate::buffer::is_any_array_buffer(addr) {
+        return Some((ptr, crate::gc::GC_TYPE_BUFFER));
+    }
+    if crate::buffer::is_uint8array_buffer(addr) {
+        return Some((ptr, crate::gc::GC_TYPE_BUFFER));
+    }
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        return Some((ptr, crate::gc::GC_TYPE_TYPED_ARRAY));
+    }
+    if !is_valid_obj_ptr(ptr as *const u8) {
+        return None;
+    }
     if crate::set::is_registered_set(addr)
         || crate::map::is_registered_map(addr)
         || crate::regex::is_regex_pointer(ptr as *const u8)
@@ -554,7 +569,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     }
 
     let target_jsval = JSValue::from_bits(target.to_bits());
-    if !target_jsval.is_pointer() {
+    if !target_jsval.is_pointer() && gc_pointer_and_type_from_value(target).is_none() {
         return false;
     }
 
@@ -616,12 +631,14 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
         // Previously only closures/errors were allowed, so
         // `Array.prototype.isPrototypeOf([1, 2])` and
         // `Object.prototype.isPrototypeOf([])` wrongly returned `false`.
-        // (ArrayBuffer's BufferHeader representation isn't resolved by the
-        // generic pointer walk yet — tracked separately.)
+        // #4554: ArrayBuffer / SharedArrayBuffer use BufferHeader storage
+        // without a GcHeader for small buffers, but they still have a modeled
+        // prototype chain via `js_object_get_prototype_of`.
         if target_gc_type != crate::gc::GC_TYPE_CLOSURE
             && target_gc_type != crate::gc::GC_TYPE_ERROR
             && target_gc_type != crate::gc::GC_TYPE_ARRAY
             && target_gc_type != crate::gc::GC_TYPE_TYPED_ARRAY
+            && target_gc_type != crate::gc::GC_TYPE_BUFFER
         {
             return false;
         }
@@ -3992,11 +4009,18 @@ pub unsafe extern "C" fn js_native_call_method(
                     // pointer, so non-callable field values (numbers,
                     // strings, booleans) safely return undefined.
                     let field_val = js_object_get_field(obj as *mut _, i as u32);
-                    return crate::closure::js_native_call_value(
-                        f64::from_bits(field_val.bits()),
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        field_val.bits(),
+                        f64::from_bits(jsval.bits()),
+                    );
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                    let result = crate::closure::js_native_call_value(
+                        f64::from_bits(bound),
                         args_ptr,
                         args_len,
                     );
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
                 }
             }
         }
