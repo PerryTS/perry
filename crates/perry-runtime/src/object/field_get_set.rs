@@ -1359,7 +1359,12 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                let arr = stripped as *const crate::array::ArrayHeader;
+                // Issue #233: a grown array installs a forwarding pointer at the
+                // old location; a binding written before the grow still holds it.
+                // Resolve the chain so we read the live header (without this,
+                // `Object.keys(a)` after `a.length = N` saw a forwarding header
+                // and returned []).
+                let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {
                     return crate::array::js_array_alloc(0);
@@ -1506,6 +1511,40 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
             )
         };
     }
+    // Arrays: emit each present (non-hole) element value, then enumerable named
+    // properties. `js_object_values` has no `ArrayHeader` layout, so the generic
+    // object path below would read an array's body as object fields and crash;
+    // handle arrays explicitly (mirrors the `js_object_keys` array branch).
+    if !stripped.is_null() && (stripped as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        unsafe {
+            let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
+                let length = (*arr).length;
+                if length > 100_000 {
+                    return crate::array::js_array_alloc(0);
+                }
+                let elements = (arr as *const u8)
+                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                    as *const u64;
+                let result = crate::array::js_array_alloc(length);
+                for i in 0..length {
+                    if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
+                        continue;
+                    }
+                    let v = crate::array::js_array_get(arr, i);
+                    crate::array::js_array_push_f64(result, f64::from_bits(v.bits()));
+                }
+                for name in crate::array::array_named_property_names(arr, true) {
+                    if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
+                        crate::array::js_array_push_f64(result, v);
+                    }
+                }
+                return result;
+            }
+        }
+    }
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         // Issue #893: defensive sibling of `js_object_entries` —
         // see that function's comment for the rationale.
@@ -1570,6 +1609,57 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
                 stripped as *const crate::typedarray::TypedArrayHeader,
             )
         };
+    }
+    // Arrays: emit [index, value] pairs for present elements, then named props.
+    // `js_object_entries` has no `ArrayHeader` layout, so the generic object
+    // path below would read an array's body as object fields and crash; handle
+    // arrays explicitly (mirrors the `js_object_keys` / `js_object_values`
+    // array branches).
+    if !stripped.is_null() && (stripped as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        unsafe {
+            let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
+                let length = (*arr).length;
+                if length > 100_000 {
+                    return crate::array::js_array_alloc(0);
+                }
+                let elements = (arr as *const u8)
+                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                    as *const u64;
+                let result = crate::array::js_array_alloc(length);
+                for i in 0..length {
+                    if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
+                        continue;
+                    }
+                    let pair = crate::array::js_array_alloc(2);
+                    let s = i.to_string();
+                    let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
+                    crate::array::js_array_push_f64(pair, key_box);
+                    let v = crate::array::js_array_get(arr, i);
+                    crate::array::js_array_push_f64(pair, f64::from_bits(v.bits()));
+                    crate::array::js_array_push_f64(
+                        result,
+                        crate::value::js_nanbox_pointer(pair as i64),
+                    );
+                }
+                for name in crate::array::array_named_property_names(arr, true) {
+                    if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
+                        let pair = crate::array::js_array_alloc(2);
+                        let key =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        crate::array::js_array_push(pair, JSValue::string_ptr(key));
+                        crate::array::js_array_push_f64(pair, v);
+                        crate::array::js_array_push_f64(
+                            result,
+                            crate::value::js_nanbox_pointer(pair as i64),
+                        );
+                    }
+                }
+                return result;
+            }
+        }
     }
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         // Issue #893 lineage: chalk's `Object.entries(ansiStyles)` passed a
@@ -1832,7 +1922,9 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             let gc_header =
                 (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                let arr = obj_ptr as *const crate::array::ArrayHeader;
+                // Issue #233: resolve a grow forwarding pointer so `index in arr`
+                // / `arr.hasOwnProperty(i)` stay correct after `arr.length = N`.
+                let arr = crate::array::clean_arr_ptr(obj_ptr as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {
                     return nanbox_false;
