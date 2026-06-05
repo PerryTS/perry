@@ -1091,6 +1091,9 @@ pub unsafe extern "C" fn js_native_call_method(
         // falling through to the generic `"[object Object]"`.
         let raw_addr = crate::value::js_nanbox_get_pointer(object) as usize;
         if raw_addr >= 0x100000 && crate::closure::is_closure_ptr(raw_addr) {
+            if let Some(result) = crate::value::function_to_string_method_result(object) {
+                return result;
+            }
             let func_ptr = (*(raw_addr as *const crate::closure::ClosureHeader)).func_ptr as usize;
             let s = crate::builtins::function_source_for_func_ptr(func_ptr);
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);

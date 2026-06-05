@@ -80,6 +80,57 @@ unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
     }
 }
 
+/// Function objects are closure headers, not `ObjectHeader`s, so the ordinary
+/// object helper cannot see the default `%Function.prototype%` chain. Resolve
+/// the function `toString` method explicitly so monkeypatching
+/// `Function.prototype.toString` affects `String(fn)` and template coercion.
+unsafe fn function_to_string_via_prototype(value: f64) -> Option<*mut crate::string::StringHeader> {
+    let primitive = function_to_string_method_result(value)?;
+    if is_primitive_value(primitive) {
+        Some(js_jsvalue_to_string(primitive))
+    } else {
+        None
+    }
+}
+
+/// Same lookup as `function_to_string_via_prototype`, but returns the raw
+/// method-call result for explicit `fn.toString()` dispatch.
+pub(crate) unsafe fn function_to_string_method_result(value: f64) -> Option<f64> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let raw = jsval.as_pointer::<u8>() as usize;
+    if raw == 0 || !crate::closure::is_closure_ptr(raw) {
+        return None;
+    }
+
+    let depth = TO_PRIMITIVE_DEPTH.with(|c| c.get());
+    if depth >= 200 {
+        return None;
+    }
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth + 1));
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let result = match call_function_method(&scope, &value_handle, b"toString") {
+        FunctionMethodOutcome::Value(result) => Some(result),
+        FunctionMethodOutcome::NonCallable | FunctionMethodOutcome::Absent => None,
+    };
+
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth));
+    result
+}
+
+enum FunctionMethodOutcome {
+    /// Method was callable and returned a value.
+    Value(f64),
+    /// A property was found, but it was not callable.
+    NonCallable,
+    /// No own/inherited method with that name was found.
+    Absent,
+}
+
 enum MethodOutcome {
     /// Method was callable and returned a primitive.
     Primitive(f64),
@@ -290,6 +341,84 @@ unsafe fn call_method_for_primitive(
     }
 }
 
+unsafe fn call_function_method(
+    scope: &crate::gc::RuntimeHandleScope,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+    method_name: &[u8],
+) -> FunctionMethodOutcome {
+    let recv = value_handle.get_nanbox_f64();
+    let recv_jsv = JSValue::from_bits(recv.to_bits());
+    if !recv_jsv.is_pointer() {
+        return FunctionMethodOutcome::Absent;
+    }
+    let closure_ptr = recv_jsv.as_pointer::<u8>() as usize;
+    if closure_ptr == 0 || !crate::closure::is_closure_ptr(closure_ptr) {
+        return FunctionMethodOutcome::Absent;
+    }
+
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let key_handle = scope.root_string_ptr(key);
+    let key_ptr = key_handle.get_raw_const_ptr::<crate::string::StringHeader>();
+    let method = function_method_value(closure_ptr, key_ptr, method_name);
+    let method_bits = method.to_bits();
+    if (method_bits & TAG_MASK) != POINTER_TAG {
+        return if JSValue::from_bits(method_bits).is_undefined()
+            || JSValue::from_bits(method_bits).is_null()
+        {
+            FunctionMethodOutcome::Absent
+        } else {
+            FunctionMethodOutcome::NonCallable
+        };
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return FunctionMethodOutcome::NonCallable;
+    }
+
+    let method_handle = scope.root_nanbox_f64(method);
+    let bound = crate::closure::clone_closure_rebind_this(method_handle.get_nanbox_u64(), recv);
+    let prev_this = crate::object::js_implicit_this_set(recv);
+    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+
+    FunctionMethodOutcome::Value(ret)
+}
+
+unsafe fn function_method_value(
+    closure_ptr: usize,
+    key_ptr: *const crate::string::StringHeader,
+    method_name: &[u8],
+) -> f64 {
+    let Ok(name) = std::str::from_utf8(method_name) else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+
+    if crate::closure::closure_has_own_dynamic_prop(closure_ptr, name) {
+        return crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+    }
+
+    let explicit_proto_value = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+    let explicit_proto_jsv = JSValue::from_bits(explicit_proto_value.to_bits());
+    if !explicit_proto_jsv.is_undefined() && !explicit_proto_jsv.is_null() {
+        return explicit_proto_value;
+    }
+    if crate::closure::closure_static_prototype(closure_ptr).is_some() {
+        return explicit_proto_value;
+    }
+
+    let function_proto = crate::object::builtin_prototype_value("Function");
+    let proto_jsv = JSValue::from_bits(function_proto.to_bits());
+    if !proto_jsv.is_pointer() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let proto_ptr = proto_jsv.as_pointer::<crate::object::ObjectHeader>();
+    if proto_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let value = crate::object::js_object_get_field_by_name(proto_ptr, key_ptr);
+    f64::from_bits(value.bits())
+}
+
 /// Read an object's own/inherited property by name and coerce it to an owned
 /// `String`, or `None` when the property is absent (undefined/null). Used by
 /// the Error-subclass `toString` path (#2135).
@@ -370,10 +499,12 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 };
             }
             // #4101: a function/closure stringifies to its source text via
-            // Function.prototype.toString — covers `String(fn)`, `` `${fn}` ``,
-            // and the codegen `fn.toString()` fast-path (which routes through
-            // `js_jsvalue_to_string_method`) rather than "[object Object]".
+            // Function.prototype.toString — covers `String(fn)` and
+            // `` `${fn}` `` rather than "[object Object]".
             if crate::closure::is_closure_ptr(ptr as usize) {
+                if let Some(result) = unsafe { function_to_string_via_prototype(value) } {
+                    return result;
+                }
                 let func_ptr =
                     unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr as usize };
                 let s = crate::builtins::function_source_for_func_ptr(func_ptr);
