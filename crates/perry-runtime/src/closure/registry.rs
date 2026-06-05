@@ -399,6 +399,9 @@ pub fn closure_arity(closure: *const ClosureHeader) -> Option<u32> {
 /// at the first default parameter, while the dispatch arity must remain the
 /// full declared parameter count for ABI-safe padding.
 pub fn closure_length(closure: *const ClosureHeader) -> Option<u32> {
+    if let Some(length) = crate::object::builtin_closure_length(closure as usize) {
+        return Some(length);
+    }
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return None;

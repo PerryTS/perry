@@ -88,10 +88,16 @@ pub(super) fn install_typed_array_proto_methods(proto_obj: *mut ObjectHeader) {
         let func_ptr = thunk_for(name);
         ipm(proto_obj, name, func_ptr, arity);
         // `install_proto_method` uses the visible spec `.length` as the call
-        // arity. These thunks have a wider native signature so optional trailing
-        // arguments can be padded with `undefined` instead of reading an unset
-        // register slot.
-        if matches!(name, "copyWithin" | "fill") {
+        // arity. Most of these thunks have a uniform 3-argument native
+        // signature; register that ABI width so omitted trailing arguments are
+        // padded with `undefined` instead of reading unset register slots.
+        //
+        // `lastIndexOf` and the reducers need to distinguish omitted optional
+        // arguments from an explicitly supplied `undefined`, so they use the
+        // rest-dispatch path with one fixed argument.
+        if matches!(name, "lastIndexOf" | "reduce" | "reduceRight") {
+            crate::closure::js_register_closure_rest(func_ptr, 1);
+        } else {
             crate::closure::js_register_closure_arity(func_ptr, 3);
         }
     }
@@ -291,6 +297,215 @@ unsafe fn uint8_copy_to_new(source_addr: usize) -> *mut crate::buffer::BufferHea
     out
 }
 
+#[inline]
+fn bool_value(value: bool) -> f64 {
+    f64::from_bits(crate::value::JSValue::bool(value).bits())
+}
+
+#[inline]
+fn string_value(value: *mut crate::string::StringHeader) -> f64 {
+    f64::from_bits(crate::value::JSValue::string_ptr(value).bits())
+}
+
+unsafe fn uint8_materialize_array(addr: usize) -> *mut crate::array::ArrayHeader {
+    crate::buffer::buffer_to_array(addr as *const crate::buffer::BufferHeader)
+}
+
+unsafe fn uint8_iterator(addr: usize, method: &str) -> f64 {
+    let arr = uint8_materialize_array(addr);
+    let iter = match method {
+        "keys" => crate::array::js_array_keys_iter_obj(arr as *const crate::array::ArrayHeader),
+        "entries" => {
+            crate::array::js_array_entries_iter_obj(arr as *const crate::array::ArrayHeader)
+        }
+        _ => crate::array::js_array_values_iter_obj(arr as *const crate::array::ArrayHeader),
+    };
+    pointer_value(iter as usize)
+}
+
+fn uint8_at_index(args: &[f64], len: usize) -> Option<usize> {
+    let index = to_integer_or_infinity(arg_or_undefined(args, 0));
+    if !index.is_finite() {
+        return None;
+    }
+    let index = if index < 0.0 {
+        len as i64 + index as i64
+    } else {
+        index as i64
+    };
+    (0..len as i64).contains(&index).then_some(index as usize)
+}
+
+fn uint8_search_needle(value: f64) -> Option<u8> {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if !js_value.is_number() && !js_value.is_int32() {
+        return None;
+    }
+    let number = js_value.to_number();
+    if number == 0.0 {
+        return Some(0);
+    }
+    if !number.is_finite() || number.fract() != 0.0 || !(0.0..=255.0).contains(&number) {
+        return None;
+    }
+    Some(number as u8)
+}
+
+fn uint8_from_index(args: &[f64], len: usize) -> usize {
+    let Some(value) = args.get(1).copied() else {
+        return 0;
+    };
+    if is_undefined_arg(value) {
+        return 0;
+    }
+    let n = to_integer_or_infinity(value);
+    if n == f64::INFINITY {
+        return len;
+    }
+    if n == f64::NEG_INFINITY {
+        return 0;
+    }
+    let n = n as i64;
+    if n < 0 {
+        (len as i64 + n).max(0) as usize
+    } else {
+        (n as usize).min(len)
+    }
+}
+
+fn uint8_last_from_index(args: &[f64], len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let Some(value) = args.get(1).copied() else {
+        return Some(len - 1);
+    };
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if is_undefined_arg(value) || (js_value.is_number() && js_value.to_number().is_nan()) {
+        return Some(len - 1);
+    }
+    let n = to_integer_or_infinity(value);
+    if n == f64::NEG_INFINITY {
+        return None;
+    }
+    if n == f64::INFINITY {
+        return Some(len - 1);
+    }
+    let n = n as i64;
+    let index = if n < 0 {
+        len as i64 + n
+    } else {
+        n.min(len as i64 - 1)
+    };
+    (index >= 0).then_some(index as usize)
+}
+
+unsafe fn uint8_index_of(addr: usize, args: &[f64]) -> f64 {
+    let len = uint8_len(addr);
+    let needle = match args.first().copied().and_then(uint8_search_needle) {
+        Some(needle) => needle,
+        None => return -1.0,
+    };
+    for i in uint8_from_index(args, len)..len {
+        if uint8_get(addr, i) == needle {
+            return i as f64;
+        }
+    }
+    -1.0
+}
+
+unsafe fn uint8_last_index_of(addr: usize, args: &[f64]) -> f64 {
+    let needle = match args.first().copied().and_then(uint8_search_needle) {
+        Some(needle) => needle,
+        None => return -1.0,
+    };
+    let Some(start) = uint8_last_from_index(args, uint8_len(addr)) else {
+        return -1.0;
+    };
+    for i in (0..=start).rev() {
+        if uint8_get(addr, i) == needle {
+            return i as f64;
+        }
+    }
+    -1.0
+}
+
+unsafe fn uint8_includes(addr: usize, args: &[f64]) -> f64 {
+    let len = uint8_len(addr);
+    let needle = match args.first().copied().and_then(uint8_search_needle) {
+        Some(needle) => needle,
+        None => return bool_value(false),
+    };
+    for i in uint8_from_index(args, len)..len {
+        if uint8_get(addr, i) == needle {
+            return bool_value(true);
+        }
+    }
+    bool_value(false)
+}
+
+unsafe fn uint8_join(addr: usize, separator_value: f64) -> f64 {
+    let separator = if is_undefined_arg(separator_value) {
+        ",".to_string()
+    } else {
+        let separator = crate::value::js_jsvalue_to_string(separator_value);
+        crate::string::string_as_str(separator as *const crate::string::StringHeader).to_string()
+    };
+    let len = uint8_len(addr);
+    let mut result = String::new();
+    for i in 0..len {
+        if i > 0 {
+            result.push_str(&separator);
+        }
+        result.push_str(&uint8_get(addr, i).to_string());
+    }
+    let out = crate::string::js_string_from_bytes(result.as_ptr(), result.len() as u32);
+    std::hint::black_box(&result);
+    string_value(out)
+}
+
+unsafe fn uint8_with(addr: usize, args: &[f64]) -> f64 {
+    let len = uint8_len(addr);
+    let Some(index) = uint8_at_index(args, len) else {
+        crate::typedarray::throw_range_error(b"Invalid typed array index");
+    };
+    let value = to_uint8(arg_or_undefined(args, 1));
+    let out = crate::buffer::js_uint8array_alloc(len as i32);
+    for i in 0..len {
+        let stored = if i == index {
+            value
+        } else {
+            uint8_get(addr, i)
+        };
+        uint8_set(out as usize, i, stored);
+    }
+    pointer_value(out as usize)
+}
+
+unsafe fn rest_values(rest_value: f64) -> Vec<f64> {
+    let rest = crate::value::JSValue::from_bits(rest_value.to_bits());
+    if !rest.is_pointer() {
+        return Vec::new();
+    }
+    let arr = rest.as_pointer::<crate::array::ArrayHeader>();
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = crate::array::js_array_length(arr) as usize;
+    let mut values = Vec::with_capacity(len);
+    for i in 0..len {
+        values.push(crate::array::js_array_get_f64(arr, i as u32));
+    }
+    values
+}
+
+unsafe fn first_arg_with_rest(first: f64, rest: f64) -> Vec<f64> {
+    let mut args = Vec::with_capacity(2);
+    args.push(first);
+    args.extend(rest_values(rest));
+    args
+}
+
 fn validate_callback(args: &[f64]) -> *const crate::closure::ClosureHeader {
     crate::array::js_validate_array_callback(arg_or_undefined(args, 0))
         as *const crate::closure::ClosureHeader
@@ -314,6 +529,11 @@ unsafe fn dispatch_uint8_buffer_method(addr: usize, method: &str, args: &[f64]) 
 
     let result = match method {
         "set" => super::dispatch_buffer_method(addr, method, args_ptr, args.len()),
+        "at" => match uint8_at_index(args, len) {
+            Some(index) => uint8_get(addr, index) as f64,
+            None => undefined(),
+        },
+        "entries" | "keys" | "values" => uint8_iterator(addr, method),
         "slice" | "subarray" => {
             let start = uint8_relative_index_arg(args, 0, len, 0);
             let end = uint8_relative_index_arg(args, 1, len, len);
@@ -375,6 +595,39 @@ unsafe fn dispatch_uint8_buffer_method(addr: usize, method: &str, args: &[f64]) 
             }
             pointer_value(out as usize)
         }
+        "every" => {
+            let cb = validate_callback(args);
+            for i in 0..len {
+                let value = uint8_get(addr, i) as f64;
+                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                if crate::value::js_is_truthy(keep) == 0 {
+                    return Some(bool_value(false));
+                }
+            }
+            bool_value(true)
+        }
+        "some" => {
+            let cb = validate_callback(args);
+            for i in 0..len {
+                let value = uint8_get(addr, i) as f64;
+                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                if crate::value::js_is_truthy(keep) != 0 {
+                    return Some(bool_value(true));
+                }
+            }
+            bool_value(false)
+        }
+        "find" => {
+            let cb = validate_callback(args);
+            for i in 0..len {
+                let value = uint8_get(addr, i) as f64;
+                let keep = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+                if crate::value::js_is_truthy(keep) != 0 {
+                    return Some(value);
+                }
+            }
+            undefined()
+        }
         "findIndex" | "findLastIndex" => {
             let cb = validate_callback(args);
             let indexes: Box<dyn Iterator<Item = usize>> = if method == "findIndex" {
@@ -390,6 +643,48 @@ unsafe fn dispatch_uint8_buffer_method(addr: usize, method: &str, args: &[f64]) 
                 }
             }
             -1.0
+        }
+        "forEach" => {
+            let cb = validate_callback(args);
+            for i in 0..len {
+                let value = uint8_get(addr, i) as f64;
+                let _ = crate::closure::js_closure_call3(cb, value, i as f64, receiver);
+            }
+            undefined()
+        }
+        "includes" => uint8_includes(addr, args),
+        "indexOf" => uint8_index_of(addr, args),
+        "lastIndexOf" => uint8_last_index_of(addr, args),
+        "join" => uint8_join(addr, arg_or_undefined(args, 0)),
+        "toLocaleString" => uint8_join(addr, undefined()),
+        "reduce" | "reduceRight" => {
+            let cb = validate_callback(args);
+            if len == 0 && args.len() < 2 {
+                crate::array::throw_reduce_of_empty();
+            }
+            let reverse = method == "reduceRight";
+            let (mut accumulator, indexes): (f64, Box<dyn Iterator<Item = usize>>) =
+                if args.len() >= 2 {
+                    let iter: Box<dyn Iterator<Item = usize>> = if reverse {
+                        Box::new((0..len).rev())
+                    } else {
+                        Box::new(0..len)
+                    };
+                    (args[1], iter)
+                } else if reverse {
+                    (
+                        uint8_get(addr, len - 1) as f64,
+                        Box::new((0..len - 1).rev()),
+                    )
+                } else {
+                    (uint8_get(addr, 0) as f64, Box::new(1..len))
+                };
+            for i in indexes {
+                let value = uint8_get(addr, i) as f64;
+                accumulator =
+                    crate::closure::js_closure_call4(cb, accumulator, value, i as f64, receiver);
+            }
+            accumulator
         }
         "reverse" => {
             if len > 1 {
@@ -444,6 +739,7 @@ unsafe fn dispatch_uint8_buffer_method(addr: usize, method: &str, args: &[f64]) 
             }
             pointer_value(out as usize)
         }
+        "with" => uint8_with(addr, args),
         _ => return None,
     };
     Some(result)
@@ -524,10 +820,7 @@ ta_thunk!(ta_includes_thunk, "includes", 2);
 ta_thunk!(ta_index_of_thunk, "indexOf", 2);
 ta_thunk!(ta_join_thunk, "join", 1);
 ta_thunk!(ta_keys_thunk, "keys", 0);
-ta_thunk!(ta_last_index_of_thunk, "lastIndexOf", 2);
 ta_thunk!(ta_map_thunk, "map", 1);
-ta_thunk!(ta_reduce_thunk, "reduce", 2);
-ta_thunk!(ta_reduce_right_thunk, "reduceRight", 2);
 ta_thunk!(ta_reverse_thunk, "reverse", 0);
 ta_thunk!(ta_set_thunk, "set", 2);
 ta_thunk!(ta_slice_thunk, "slice", 2);
@@ -539,6 +832,39 @@ ta_thunk!(ta_to_reversed_thunk, "toReversed", 0);
 ta_thunk!(ta_to_sorted_thunk, "toSorted", 1);
 ta_thunk!(ta_values_thunk, "values", 0);
 ta_thunk!(ta_with_thunk, "with", 2);
+
+pub(super) extern "C" fn ta_last_index_of_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    search_element: f64,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        let args = first_arg_with_rest(search_element, rest);
+        brand_then_dispatch("lastIndexOf", &args)
+    }
+}
+
+pub(super) extern "C" fn ta_reduce_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        let args = first_arg_with_rest(callback, rest);
+        brand_then_dispatch("reduce", &args)
+    }
+}
+
+pub(super) extern "C" fn ta_reduce_right_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        let args = first_arg_with_rest(callback, rest);
+        brand_then_dispatch("reduceRight", &args)
+    }
+}
 
 /// Fallback thunk for any method name not given a dedicated thunk above.
 /// Recovers the method name from the closure's recorded `.name`, brand-checks,
