@@ -125,6 +125,19 @@ fn is_util_mime_params_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool
     }
 }
 
+fn is_fs_dir_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Ident(ident) = unwrap_transparent_expr(expr) else {
+        return false;
+    };
+    ctx.lookup_local_type(ident.sym.as_ref())
+        .is_some_and(|ty| matches!(ty, Type::Named(name) if name == "Dir" || name == "fs.Dir"))
+        || ctx
+            .lookup_native_instance(ident.sym.as_ref())
+            .is_some_and(|(module, class_name)| {
+                module.strip_prefix("node:").unwrap_or(module) == "fs" && class_name == "Dir"
+            })
+}
+
 /// Does this expression's method chain originate from a node:stream
 /// source — `Readable.from(...)` / `Readable.of(...)`, `new Transform()`,
 /// or a chain of lazy iterator helpers (`map`/`filter`/`flatMap`/`take`/
@@ -570,7 +583,11 @@ pub(super) fn try_array_only_methods(
                     // `for (const [valueIndex, value] of values.entries())`
                     // where `values` arrives via destructuring of an
                     // any-typed function param.
-                    "entries" if args.is_empty() && !recv_is_class => {
+                    "entries"
+                        if args.is_empty()
+                            && !recv_is_class
+                            && !is_fs_dir_receiver(ctx, &member.obj) =>
+                    {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayEntries(Box::new(array_expr))));
                     }

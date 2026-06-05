@@ -127,6 +127,10 @@ pub struct LoweringContext {
     pub(crate) interface_object_types: std::collections::HashMap<String, perry_types::ObjectType>,
     /// Imported functions: local_name -> original_name (the exported name in the source module)
     pub(crate) imported_functions: Vec<(String, String)>,
+    /// Built-in named imports: local_name -> (module_name, exported_name).
+    /// Kept separate from `imported_functions`, whose identity mapping is part
+    /// of cross-module codegen symbol disambiguation.
+    pub(crate) builtin_named_imports: Vec<(String, String, String)>,
     /// Native module imports: local_name -> (module_name, method_name)
     /// For namespace imports (import * as x), method_name is None
     /// For named imports (import { v4 as uuid }), method_name is Some("v4")

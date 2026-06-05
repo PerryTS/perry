@@ -122,6 +122,34 @@ fn is_filehandle_readlines_for_await_target(ctx: &LoweringContext, expr: &ast::E
     )
 }
 
+fn is_fs_dir_type(ty: Type) -> bool {
+    matches!(ty, Type::Named(name) if name == "Dir" || name == "fs.Dir")
+}
+
+fn is_fs_dir_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let expr = strip_for_of_expr_wrappers(expr);
+    if is_fs_dir_type(crate::lower_types::infer_type_from_expr(expr, ctx)) {
+        return true;
+    }
+
+    let ast::Expr::Call(call) = expr else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = strip_for_of_expr_wrappers(callee.as_ref()) else {
+        return false;
+    };
+    if !matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "entries") {
+        return false;
+    }
+    is_fs_dir_type(crate::lower_types::infer_type_from_expr(
+        strip_for_of_expr_wrappers(&member.obj),
+        ctx,
+    ))
+}
+
 fn is_fs_promises_glob_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     let ast::Expr::Call(call) = strip_for_of_expr_wrappers(expr) else {
         return false;
@@ -350,6 +378,8 @@ pub(crate) fn lower_stmt_for_of(
         for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
     let is_filehandle_readlines_for_await =
         for_of_stmt.is_await && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
+    let is_fs_dir_for_await =
+        for_of_stmt.is_await && is_fs_dir_for_await_target(ctx, &for_of_stmt.right);
     let is_fs_promises_glob_for_await =
         for_of_stmt.is_await && is_fs_promises_glob_for_await_target(ctx, &for_of_stmt.right);
     let is_readline_interface_for_await =
@@ -360,6 +390,7 @@ pub(crate) fn lower_stmt_for_of(
         || is_timer_promises_interval_call
         || is_node_readable_for_await
         || is_filehandle_readlines_for_await
+        || is_fs_dir_for_await
         || is_fs_promises_glob_for_await
         || is_readline_interface_for_await
     {
@@ -380,7 +411,7 @@ pub(crate) fn lower_stmt_for_of(
                 args: vec![iter_expr],
                 type_args: vec![],
             }
-        } else if is_filehandle_readlines_for_await {
+        } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
             async_iterator_method_call(iter_expr)
         } else if is_node_readable_for_await {
             Expr::Call {
@@ -489,6 +520,7 @@ pub(crate) fn lower_stmt_for_of(
         let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
         if is_node_readable_for_await
             || is_filehandle_readlines_for_await
+            || is_fs_dir_for_await
             || is_readline_interface_for_await
         {
             insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);

@@ -348,6 +348,7 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
+    gc_register_mutable_root_scanner(crate::fs::scan_fs_handle_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_stream_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_watcher_roots_mut);
     #[cfg(feature = "full")]

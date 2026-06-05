@@ -20,6 +20,10 @@ fn filehandle_type() -> Type {
     Type::Named("FileHandle".to_string())
 }
 
+fn dir_type() -> Type {
+    Type::Named("Dir".to_string())
+}
+
 fn typed_array_name_for_name(name: &str) -> Option<&'static str> {
     match name {
         "Int8Array" => Some("Int8Array"),
@@ -899,6 +903,24 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
             ) {
                 return Type::Promise(Box::new(filehandle_type()));
             }
+            if matches!(
+                ctx.lookup_native_module(name),
+                Some((module, Some("opendir"))) if is_fs_promises_module(module)
+            ) {
+                return Type::Promise(Box::new(dir_type()));
+            }
+            if matches!(
+                ctx.lookup_builtin_named_import(name),
+                Some((module, "open")) if is_fs_promises_module(module)
+            ) {
+                return Type::Promise(Box::new(filehandle_type()));
+            }
+            if matches!(
+                ctx.lookup_builtin_named_import(name),
+                Some((module, "opendir")) if is_fs_promises_module(module)
+            ) {
+                return Type::Promise(Box::new(dir_type()));
+            }
             // Check user-defined function return types
             if let Some(ty) = ctx.lookup_func_return_type(name) {
                 return ty.clone();
@@ -927,6 +949,19 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             .is_some_and(is_fs_promises_module);
                         if namespace_is_fs_promises {
                             return Type::Promise(Box::new(filehandle_type()));
+                        }
+                    }
+                }
+                if method_name == "opendir" {
+                    if let ast::Expr::Ident(obj) = member.obj.as_ref() {
+                        let namespace_is_fs_promises = matches!(
+                            ctx.lookup_native_module(obj.sym.as_ref()),
+                            Some((module, None)) if is_fs_promises_module(module)
+                        ) || ctx
+                            .lookup_builtin_module_alias(obj.sym.as_ref())
+                            .is_some_and(is_fs_promises_module);
+                        if namespace_is_fs_promises {
+                            return Type::Promise(Box::new(dir_type()));
                         }
                     }
                 }

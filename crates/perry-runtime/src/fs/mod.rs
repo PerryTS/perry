@@ -59,6 +59,30 @@ thread_local! {
 
 static NEXT_FD: AtomicI32 = AtomicI32::new(100);
 
+pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    scan_filehandle_object_fd_metadata_roots_mut(visitor);
+    scan_filehandle_roots_mut(visitor);
+    scan_fs_dir_roots_mut(visitor);
+}
+
+fn scan_filehandle_object_fd_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    FILEHANDLE_OBJECT_FDS.with(|fds| {
+        let mut fds = fds.borrow_mut();
+        let mut moved = Vec::new();
+        for (&owner, _) in fds.iter() {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved.push((owner, new_owner));
+            }
+        }
+        for (old_owner, new_owner) in moved {
+            if let Some(fd) = fds.remove(&old_owner) {
+                fds.insert(new_owner, fd);
+            }
+        }
+    });
+}
+
 pub(crate) fn allocate_synthetic_fd() -> i32 {
     NEXT_FD.fetch_add(1, Ordering::Relaxed)
 }

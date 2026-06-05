@@ -707,6 +707,16 @@ pub(crate) fn alloc_dir_state(entries: Vec<f64>) -> usize {
     id
 }
 
+pub(crate) fn scan_fs_dir_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    DIR_REGISTRY.with(|r| {
+        for state in r.borrow_mut().values_mut() {
+            for entry in &mut state.entries {
+                visitor.visit_nanbox_f64_slot(entry);
+            }
+        }
+    });
+}
+
 pub(crate) fn dir_id_of(closure: *const ClosureHeader) -> usize {
     crate::closure::js_closure_get_capture_ptr(closure, 0) as usize
 }
@@ -733,6 +743,7 @@ pub(crate) fn dir_mark_closed(id: usize) {
         if let Some(state) = r.borrow_mut().get_mut(&id) {
             state.closed = true;
             state.operation_pending = false;
+            state.entries.clear();
         }
     });
 }
@@ -747,6 +758,7 @@ pub(crate) fn dir_close_result(id: usize) -> Result<(), f64> {
             return Err(dir_closed_error_value());
         }
         state.closed = true;
+        state.entries.clear();
         Ok(())
     })
 }
@@ -764,6 +776,7 @@ fn dir_close_sync_result(id: usize) -> Result<(), f64> {
             return Err(dir_concurrent_operation_error_value());
         }
         state.closed = true;
+        state.entries.clear();
         Ok(())
     })
 }

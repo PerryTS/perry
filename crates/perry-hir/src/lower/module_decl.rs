@@ -276,6 +276,13 @@ pub(crate) fn lower_module_decl(
                                 }
                             }
                         } else {
+                            if is_node_builtin_module(&source) {
+                                ctx.register_builtin_named_import(
+                                    local.clone(),
+                                    source.clone(),
+                                    imported.clone(),
+                                );
+                            }
                             // Register as imported function. Issue #35 (#321):
                             // use the LOCAL name as the original-name marker
                             // (identity registration) — mirroring the Default

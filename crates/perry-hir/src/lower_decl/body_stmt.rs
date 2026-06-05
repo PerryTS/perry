@@ -159,6 +159,34 @@ fn is_readline_interface_for_await_target(ctx: &LoweringContext, expr: &ast::Exp
     )
 }
 
+fn is_fs_dir_type(ty: Type) -> bool {
+    matches!(ty, Type::Named(name) if name == "Dir" || name == "fs.Dir")
+}
+
+fn is_fs_dir_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let expr = strip_for_of_expr_wrappers(expr);
+    if is_fs_dir_type(crate::lower_types::infer_type_from_expr(expr, ctx)) {
+        return true;
+    }
+
+    let ast::Expr::Call(call) = expr else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = strip_for_of_expr_wrappers(callee.as_ref()) else {
+        return false;
+    };
+    if !matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "entries") {
+        return false;
+    }
+    is_fs_dir_type(crate::lower_types::infer_type_from_expr(
+        strip_for_of_expr_wrappers(&member.obj),
+        ctx,
+    ))
+}
+
 fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     let call = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -1005,6 +1033,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
             let is_filehandle_readlines_for_await = for_of_stmt.is_await
                 && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
+            let is_fs_dir_for_await =
+                for_of_stmt.is_await && is_fs_dir_for_await_target(ctx, &for_of_stmt.right);
             let is_readline_interface_for_await = for_of_stmt.is_await
                 && is_readline_interface_for_await_target(ctx, &for_of_stmt.right);
 
@@ -1013,6 +1043,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 || is_timer_promises_interval_call
                 || is_node_readable_for_await
                 || is_filehandle_readlines_for_await
+                || is_fs_dir_for_await
                 || is_readline_interface_for_await
             {
                 let scope_mark = ctx.push_block_scope();
@@ -1023,7 +1054,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         args: vec![iter_expr_raw],
                         type_args: vec![],
                     }
-                } else if is_filehandle_readlines_for_await {
+                } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
                     async_iterator_method_call(iter_expr_raw)
                 } else if is_node_readable_for_await {
                     Expr::Call {
@@ -1109,6 +1140,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
                 if is_node_readable_for_await
                     || is_filehandle_readlines_for_await
+                    || is_fs_dir_for_await
                     || is_readline_interface_for_await
                 {
                     insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);

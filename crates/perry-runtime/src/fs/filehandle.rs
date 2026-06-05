@@ -62,6 +62,24 @@ struct FileHandleWriterState {
     closed: bool,
 }
 
+pub(crate) fn scan_filehandle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    READ_LINES_REGISTRY.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.handle);
+        }
+    });
+    STREAM_ITER_REGISTRY.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.handle);
+        }
+    });
+    WRITER_REGISTRY.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.handle);
+        }
+    });
+}
+
 pub(crate) unsafe fn build_file_io_result(
     count_name: &str,
     count: f64,

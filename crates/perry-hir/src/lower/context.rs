@@ -65,6 +65,7 @@ impl LoweringContext {
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
             imported_functions: Vec::new(),
+            builtin_named_imports: Vec::new(),
             native_modules: Vec::new(),
             builtin_module_aliases: Vec::new(),
             subns_path_aliases: HashMap::new(),
@@ -938,6 +939,23 @@ impl LoweringContext {
         self.imported_functions_index
             .insert(local_name.clone(), idx);
         self.imported_functions.push((local_name, original_name));
+    }
+
+    pub(crate) fn register_builtin_named_import(
+        &mut self,
+        local_name: String,
+        module_name: String,
+        exported_name: String,
+    ) {
+        self.builtin_named_imports
+            .push((local_name, module_name, exported_name));
+    }
+
+    pub(crate) fn lookup_builtin_named_import(&self, name: &str) -> Option<(&str, &str)> {
+        self.builtin_named_imports
+            .iter()
+            .find(|(local, _, _)| local == name)
+            .map(|(_, module, exported)| (module.as_str(), exported.as_str()))
     }
 
     pub(crate) fn register_extern_func_types(
