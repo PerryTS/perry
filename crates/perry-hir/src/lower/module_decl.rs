@@ -1880,6 +1880,14 @@ pub(crate) fn lower_namespace_as_class(
 
     let mut static_methods = Vec::new();
     let mut static_method_names = Vec::new();
+    // Namespace `export const` members surfaced as static fields so `Ns.member`
+    // resolves CROSS-MODULE (the per-module `namespace_vars` local is invisible
+    // to importers; only namespace FUNCTIONS — lowered as static methods —
+    // crossed the boundary). The field's VALUE is copied from the const's local
+    // by a `StaticFieldSet` appended to `module.init` right after the const's
+    // own `Let`, so it is evaluated exactly once and in the right order. zod's
+    // `util` namespace (`util.objectKeys`, …) is imported this way.
+    let mut ns_static_fields: Vec<crate::ir::ClassField> = Vec::new();
 
     // First pass: collect exported function names, pre-register all functions and variables
     // (so namespace members can reference each other regardless of declaration order)
@@ -2046,9 +2054,32 @@ pub(crate) fn lower_namespace_as_class(
                                     mutable,
                                     init: Some(expr),
                                 });
-                                // Track as namespace variable for Ns.member access resolution
+                                // Track as namespace variable for `Ns.member`
+                                // access AND intra-namespace bare references.
                                 ctx.namespace_vars
                                     .push((ns_name.to_string(), name.clone(), id));
+                                // Surface as a static field of the namespace class
+                                // and copy the const's value into it (after the Let
+                                // above), so `Ns.member` resolves cross-module via
+                                // the static-field global. The field carries no
+                                // initializer of its own — the value is set once,
+                                // here, from the already-evaluated local.
+                                if is_exported {
+                                    ns_static_fields.push(crate::ir::ClassField {
+                                        name: name.clone(),
+                                        key_expr: None,
+                                        ty: Type::Any,
+                                        init: None,
+                                        is_private: false,
+                                        is_readonly: !mutable,
+                                        decorators: Vec::new(),
+                                    });
+                                    module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+                                        class_name: ns_name.to_string(),
+                                        field_name: name.clone(),
+                                        value: Box::new(Expr::LocalGet(id)),
+                                    }));
+                                }
                                 // Export the variable for cross-module access
                                 if is_exported {
                                     module.exported_objects.push(name.clone());
@@ -2087,7 +2118,7 @@ pub(crate) fn lower_namespace_as_class(
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
-        static_fields: Vec::new(),
+        static_fields: ns_static_fields,
         static_methods,
         computed_members: Vec::new(),
         decorators: Vec::new(),
