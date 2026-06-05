@@ -166,23 +166,37 @@ extern "C" fn ns_chain3(closure: *const ClosureHeader, _a: f64, _b: f64, _c: f64
 }
 
 fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHeader) {
-    let handle = raw_ptr_from_value(old_stream) as i64;
-    if handle == 0 {
+    if listener.is_null() {
         return;
     }
-    let Some(probe) = crate::object::event_emitter_handle_probe() else {
-        return;
-    };
-    if unsafe { !probe(handle) } {
-        return;
-    }
-    let Some(on) = crate::object::event_emitter_on() else {
-        return;
-    };
     let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
-    let event_bits = crate::value::js_nanbox_string(event as i64).to_bits() as i64;
-    let listener_value = crate::value::js_nanbox_pointer(listener as i64);
-    unsafe { on(handle, event_bits, listener_value.to_bits() as i64) };
+    let handle = raw_ptr_from_value(old_stream) as i64;
+    if handle != 0 {
+        if let (Some(probe), Some(on)) = (
+            crate::object::event_emitter_handle_probe(),
+            crate::object::event_emitter_on(),
+        ) {
+            if unsafe { probe(handle) } {
+                let event_bits = crate::value::js_nanbox_string(event as i64).to_bits() as i64;
+                let listener_value = crate::value::js_nanbox_pointer(listener as i64);
+                unsafe { on(handle, event_bits, listener_value.to_bits() as i64) };
+                return;
+            }
+        }
+    }
+    let event_value = f64::from_bits(JSValue::string_ptr(event).bits());
+    let listener_value = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
+    let args = [event_value, listener_value];
+    let method = b"on";
+    unsafe {
+        let _ = crate::object::js_native_call_method(
+            old_stream,
+            method.as_ptr() as *const i8,
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+        );
+    }
 }
 
 extern "C" fn ns_wrap_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
@@ -223,6 +237,10 @@ extern "C" fn ns_wrap_close(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn ns_wrap1(closure: *const ClosureHeader, old_stream: f64) -> f64 {
     let stream = this_value(closure);
+    crate::closure::js_register_closure_arity(ns_wrap_data as *const u8, 1);
+    crate::closure::js_register_closure_arity(ns_wrap_end as *const u8, 0);
+    crate::closure::js_register_closure_arity(ns_wrap_error as *const u8, 1);
+    crate::closure::js_register_closure_arity(ns_wrap_close as *const u8, 0);
     let data = js_closure_alloc(ns_wrap_data as *const u8, 1);
     let end = js_closure_alloc(ns_wrap_end as *const u8, 1);
     let error = js_closure_alloc(ns_wrap_error as *const u8, 1);

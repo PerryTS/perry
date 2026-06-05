@@ -447,10 +447,10 @@ fn small_handle_from_value(value: f64) -> Option<i64> {
     let top = bits >> 48;
     if top == (POINTER_TAG >> 48) {
         let raw = (bits & POINTER_MASK) as i64;
-        if raw > 0 && raw < 0x10000 {
+        if raw > 0 && (raw as u64) < PROXY_TAG_BASE {
             return Some(raw);
         }
-    } else if top == 0 && bits > 0 && bits < 0x10000 {
+    } else if top == 0 && bits > 0 && bits < 0x100000 {
         return Some(bits as i64);
     }
     None
