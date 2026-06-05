@@ -32,6 +32,7 @@ use crate::type_analysis::{
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
+use super::arrays_finds::lower_buffer_index_get_i32;
 #[allow(unused_imports)]
 use super::{
     buffer_access_materialization_reason, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
@@ -71,7 +72,7 @@ fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool
 fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
         receiver_class_name(ctx, object).as_deref(),
-        Some("Uint8Array")
+        Some("Buffer" | "Uint8Array")
     )
 }
 
@@ -530,6 +531,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_typed_array_index_get_dynamic",
                     &[(I64, &arr_i64), (DOUBLE, &key_box)],
                 ));
+            }
+            if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {
+                let value = lower_buffer_index_get_i32(ctx, object, index)?;
+                let reason = buffer_access_materialization_reason(ctx, object);
+                return Ok(materialize_js_value(ctx, value, reason));
             }
             // Scalar-replaced array literal: `arr[k]` where arr was bound to
             // `[...]` and never escaped, and k is a compile-time index in
