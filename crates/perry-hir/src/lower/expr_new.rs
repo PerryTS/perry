@@ -1182,7 +1182,22 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     "Boolean" => crate::BoxedPrimitiveKind::Boolean,
                     _ => unreachable!(),
                 };
-                let arg = args.drain(..).next().unwrap_or(Expr::Undefined);
+                // A *present* argument is coerced per spec: `new Number(x)` →
+                // ToNumber(x), `new String(x)` → ToString(x). This matters for
+                // an explicit `undefined`: `new Number(undefined)` is NaN and
+                // `new String(undefined)` is "undefined" — distinct from the
+                // *no-arg* forms `new Number()`/`new String()` which box +0/""
+                // (handled by the undefined sentinel in `js_boxed_*_new`).
+                // Without this, both collapse to `Expr::Undefined` and the
+                // runtime can't tell them apart.
+                let arg = match args.drain(..).next() {
+                    Some(inner) => match kind {
+                        crate::BoxedPrimitiveKind::Number => Expr::NumberCoerce(Box::new(inner)),
+                        crate::BoxedPrimitiveKind::String => Expr::StringCoerce(Box::new(inner)),
+                        crate::BoxedPrimitiveKind::Boolean => Expr::BooleanCoerce(Box::new(inner)),
+                    },
+                    None => Expr::Undefined,
+                };
                 return Ok(Expr::BoxedPrimitiveNew {
                     kind,
                     arg: Box::new(arg),
