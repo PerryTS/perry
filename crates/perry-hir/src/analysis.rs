@@ -611,6 +611,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(index, assigned);
             collect_assigned_locals_expr(value, assigned);
         }
+        Expr::ArrayReverseValue { receiver } => {
+            if let Expr::LocalGet(id) = receiver.as_ref() {
+                assigned.push(*id);
+            }
+            collect_assigned_locals_expr(receiver, assigned);
+        }
         Expr::ArrayCopyWithin {
             array_id,
             target,

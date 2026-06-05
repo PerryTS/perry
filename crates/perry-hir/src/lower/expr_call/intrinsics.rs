@@ -1297,8 +1297,8 @@ pub(super) fn try_builtin_prototype_method_apply_call(
         call.args.iter().skip(1).cloned().collect()
     };
 
-    // `Array.prototype.<m>.call(arrayLike, ...)` — when `<m>` is a known
-    // read-only Array method, this is an explicit, unambiguous request to run
+    // `Array.prototype.<m>.call(arrayLike, ...)` — when `<m>` is a supported
+    // generic Array method, this is an explicit, unambiguous request to run
     // the Array algorithm on a *generic array-like* receiver (a plain object
     // with `length` + indexed keys; ECMA-262 §23.1.3). The default synthesized
     // `(thisArg).<m>(...)` member call below only routes to the Array runtime
@@ -1308,10 +1308,10 @@ pub(super) fn try_builtin_prototype_method_apply_call(
     // `Expr::Array*` variant directly so the receiver flows to `js_array_*`
     // regardless of its static type — the runtime materializes the array-like
     // (see `normalize_array_receiver`). Most handled methods are
-    // read-only/returning; `fill` has a dedicated generic mutator helper because
-    // it must write back to the original receiver rather than a materialized
-    // clone. Unsupported mutators fall through to the member call below
-    // (unchanged behavior).
+    // read-only/returning; the mutators `fill` / `copyWithin` / `reverse` use
+    // dedicated generic helpers because they must write back to the original
+    // receiver rather than a materialized clone. Unsupported mutators fall
+    // through to the member call below (unchanged behavior).
     if let Some(folded) =
         try_arraylike_receiver_method(ctx, method_prop.sym.as_ref(), &this_arg.expr, &rest_args)?
     {
@@ -1339,10 +1339,10 @@ pub(super) fn try_builtin_prototype_method_apply_call(
 /// expanded from the `.apply` array if applicable).
 ///
 /// Returns `Some(expr)` for a supported read-only/returning method, plus
-/// dedicated generic `fill` / `copyWithin` mutator paths, or `None` for other
-/// mutators / unsupported methods (caller falls back to the synthesized member
-/// call). The read-only set mirrors the runtime methods that route through
-/// `normalize_array_receiver`.
+/// dedicated generic `fill` / `copyWithin` / `reverse` mutator paths, or `None`
+/// for other mutators / unsupported methods (caller falls back to the
+/// synthesized member call). The read-only set mirrors the runtime methods that
+/// route through `normalize_array_receiver`.
 fn try_arraylike_receiver_method(
     ctx: &mut LoweringContext,
     method: &str,
@@ -1394,6 +1394,16 @@ fn try_arraylike_receiver_method(
             target,
             start,
             end,
+        }));
+    }
+    // `reverse` mutates in place and returns the same receiver; route to the
+    // dedicated `js_array_reverse_value` helper (no positional args allowed).
+    if method == "reverse" {
+        if !rest_args.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(Expr::ArrayReverseValue {
+            receiver: Box::new(lower_expr(ctx, receiver)?),
         }));
     }
     // The read-only/returning methods the runtime generic engine implements

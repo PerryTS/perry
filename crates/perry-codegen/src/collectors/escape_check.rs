@@ -820,6 +820,7 @@ pub fn check_escapes_in_expr(
             }
         }
         Expr::ArrayToReversed { array }
+        | Expr::ArrayReverseValue { receiver: array }
         | Expr::ArrayFlat { array }
         | Expr::ArrayEntries(array)
         | Expr::ArrayKeys(array)

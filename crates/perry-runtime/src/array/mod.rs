@@ -29,7 +29,7 @@ pub use self::alloc::{
 };
 pub use self::concat_reverse::{
     js_array_concat, js_array_concat_new, js_array_fill, js_array_fill_generic,
-    js_array_fill_range, js_array_reverse,
+    js_array_fill_range, js_array_reverse, js_array_reverse_value,
 };
 pub use self::flat_clone::{
     js_array_clone, js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys,

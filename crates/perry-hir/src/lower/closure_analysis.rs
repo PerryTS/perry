@@ -299,7 +299,7 @@ fn widen_mutable_captures_expr(
                 widen_mutable_captures_expr(init, scope_mutable);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             widen_mutable_captures_expr(array, scope_mutable);
         }
         Expr::ArrayToSorted { array, comparator } => {
@@ -607,7 +607,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_assigned_expr(init, out);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             collect_closure_assigned_expr(array, out);
         }
         Expr::ArrayToSorted { array, comparator } => {
@@ -889,7 +889,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_captures_expr(init, out);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             collect_closure_captures_expr(array, out);
         }
         Expr::ArrayToSorted { array, comparator } => {
@@ -1332,7 +1332,7 @@ fn collect_closure_assigned_in_body_expr(
                 collect_closure_assigned_in_body_expr(init, out);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             collect_closure_assigned_in_body_expr(array, out);
         }
         Expr::ArrayToSorted { array, comparator } => {

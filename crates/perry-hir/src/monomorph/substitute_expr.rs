@@ -643,6 +643,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
         },
+        Expr::ArrayReverseValue { receiver } => Expr::ArrayReverseValue {
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+        },
         Expr::ArrayCopyWithin {
             array_id,
             target,

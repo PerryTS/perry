@@ -1492,6 +1492,9 @@ pub enum Expr {
         index: Box<Expr>,
         value: Box<Expr>,
     }, // arr.with(index, value) -> new array
+    ArrayReverseValue {
+        receiver: Box<Expr>,
+    }, // Array.prototype.reverse.call(receiver) -> same receiver
     ArrayCopyWithin {
         array_id: LocalId,
         target: Box<Expr>,

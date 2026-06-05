@@ -271,6 +271,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
+        Expr::ArrayReverseValue { receiver } => {
+            let receiver_d = lower_expr(ctx, receiver)?;
+            let blk = ctx.block();
+            let result = blk.call(DOUBLE, "js_array_reverse_value", &[(DOUBLE, &receiver_d)]);
+            Ok(result)
+        }
         Expr::ArrayCopyWithin {
             array_id,
             target,

@@ -225,6 +225,108 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     }
 }
 
+/// `Array.prototype.reverse.call(value)` for generic array-like receivers.
+#[no_mangle]
+pub extern "C" fn js_array_reverse_value(receiver: f64) -> f64 {
+    let receiver_js = crate::value::JSValue::from_bits(receiver.to_bits());
+    if receiver_js.is_null() || receiver_js.is_undefined() {
+        reverse_throw_type_error(b"Cannot convert undefined or null to object");
+    }
+
+    let object = crate::object::js_object_coerce(receiver);
+    let len = reverse_length_of_array_like(object);
+    if reverse_is_boxed_string(object) && len > 1 {
+        reverse_throw_type_error(b"Cannot assign to read only property");
+    }
+    if len <= 1 {
+        return object;
+    }
+
+    let handle = object.to_bits() as i64;
+    let object_ptr =
+        crate::value::js_nanbox_get_pointer(object) as *mut crate::object::ObjectHeader;
+    let mut lower = 0u64;
+    let mut upper = len - 1;
+    while lower < upper {
+        let lower_exists = reverse_has_own_index(object, lower);
+        let upper_exists = reverse_has_own_index(object, upper);
+        let lower_value = if lower_exists {
+            crate::object::js_object_get_index_polymorphic(handle, lower as f64)
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        let upper_value = if upper_exists {
+            crate::object::js_object_get_index_polymorphic(handle, upper as f64)
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+
+        match (lower_exists, upper_exists) {
+            (true, true) => {
+                crate::object::js_object_set_index_polymorphic(handle, lower as f64, upper_value);
+                crate::object::js_object_set_index_polymorphic(handle, upper as f64, lower_value);
+            }
+            (false, true) => {
+                crate::object::js_object_set_index_polymorphic(handle, lower as f64, upper_value);
+                reverse_delete_index(object_ptr, upper);
+            }
+            (true, false) => {
+                reverse_delete_index(object_ptr, lower);
+                crate::object::js_object_set_index_polymorphic(handle, upper as f64, lower_value);
+            }
+            (false, false) => {}
+        }
+
+        lower += 1;
+        upper -= 1;
+    }
+    object
+}
+
+fn reverse_length_of_array_like(object: f64) -> u64 {
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let object_ptr =
+        crate::value::js_nanbox_get_pointer(object) as *const crate::object::ObjectHeader;
+    if object_ptr.is_null() {
+        return 0;
+    }
+    reverse_to_length(crate::object::js_object_get_field_by_name_f64(
+        object_ptr, key,
+    ))
+}
+
+fn reverse_to_length(value: f64) -> u64 {
+    let n = crate::builtins::js_number_coerce(value);
+    if n.is_nan() || n <= 0.0 {
+        0
+    } else if n.is_infinite() || n >= (1u64 << 53) as f64 {
+        (1u64 << 53) - 1
+    } else {
+        n.trunc() as u64
+    }
+}
+
+fn reverse_is_boxed_string(object: f64) -> bool {
+    crate::builtins::boxed_primitive_to_string_tag(object) == Some("String")
+}
+
+fn reverse_has_own_index(object: f64, index: u64) -> bool {
+    let present = crate::object::js_object_has_own(object, index as f64);
+    crate::value::js_is_truthy(present) != 0
+}
+
+fn reverse_delete_index(obj: *mut crate::object::ObjectHeader, index: u64) {
+    if crate::object::js_object_delete_dynamic(obj, index as f64) == 0 {
+        reverse_throw_type_error(b"Cannot delete property");
+    }
+}
+
+fn reverse_throw_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// `Array.prototype.fill(value)` — fills every element (0..length) with
 /// `value`. Returns the same array pointer.
 #[no_mangle]

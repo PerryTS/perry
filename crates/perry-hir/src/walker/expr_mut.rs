@@ -1608,6 +1608,9 @@ where
             f(index);
             f(value);
         }
+        Expr::ArrayReverseValue { receiver } => {
+            f(receiver);
+        }
         Expr::ArrayCopyWithin {
             array_id: _,
             target,

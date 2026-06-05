@@ -795,7 +795,8 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::ArrayKeys(array)
         | Expr::ArrayValues(array)
         | Expr::ArrayFlat { array }
-        | Expr::ArrayToReversed { array } => {
+        | Expr::ArrayToReversed { array }
+        | Expr::ArrayReverseValue { receiver: array } => {
             walk(array, out);
         }
         Expr::ArrayUnshift { array_id, value } => {
