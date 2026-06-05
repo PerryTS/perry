@@ -381,8 +381,12 @@ pub(super) fn try_module_static_methods(
                                     Box::new(text),
                                     Box::new(reviver),
                                 )));
-                            } else if !args.is_empty() {
-                                let text = args.into_iter().next().unwrap();
+                            } else {
+                                // 0 or 1 args. `JSON.parse()` with no argument is
+                                // `JSON.parse(undefined)` → ToString(undefined) =
+                                // "undefined" → SyntaxError (NOT a TypeError from
+                                // the generic fall-through dispatch).
+                                let text = args.into_iter().next().unwrap_or(Expr::Undefined);
                                 // Issue #179 typed-parse plan: if the call site
                                 // provides a TypeScript type argument (e.g.
                                 // `JSON.parse<Item[]>(blob)`), carry it into HIR

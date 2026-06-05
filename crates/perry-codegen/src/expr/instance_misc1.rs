@@ -1367,14 +1367,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::JsonParse(text) => {
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            // Materialize the operand to a real heap `*StringHeader`. A bare
-            // `unbox_to_i64` passes an SSO short-string's INLINE bytes as the
-            // pointer, and `js_json_parse` then dereferences them as a
-            // StringHeader → SIGSEGV (e.g. `JSON.parse('e' + 'n')`, or any
-            // short runtime/`.slice`-derived string). `js_get_string_pointer_
-            // unified` returns the heap pointer for heap strings and
-            // materializes SSO / number receivers to the heap. Refs #214.
-            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
+            // ECMA-262 JSON.parse step 1: jsonText = ? ToString(text). So
+            // `JSON.parse(null)` → "null" → null, `JSON.parse(123)` → "123" →
+            // 123, and a Symbol arg throws TypeError. `js_json_text_to_string`
+            // is ToString (throwing on symbols) and returns a real heap
+            // `*StringHeader` (identity for heap strings, materializes SSO to
+            // the heap), so it also fixes the #214 SIGSEGV that a bare
+            // `unbox_to_i64` of an SSO short-string caused.
+            let s_handle = blk.call(I64, "js_json_text_to_string", &[(DOUBLE, &s_box)]);
             let result_i64 = blk.call(I64, "js_json_parse", &[(I64, &s_handle)]);
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }

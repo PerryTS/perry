@@ -1215,6 +1215,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // JSON.parse returns JSValue (u64) via integer register on ARM64,
     // not f64. Use I64 return + bitcast to avoid ABI mismatch crash.
     module.declare_function("js_json_parse", I64, &[I64]);
+    // #4578: ToString(text) for JSON.parse — heap *StringHeader, throws on Symbol.
+    module.declare_function("js_json_text_to_string", I64, &[DOUBLE]);
     // #2900: JSON.rawJSON(text) / JSON.isRawJSON(value). Both take and return
     // a NaN-boxed f64 (the wrapper object pointer / a boolean).
     module.declare_function("js_json_raw_json", DOUBLE, &[DOUBLE]);

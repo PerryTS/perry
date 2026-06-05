@@ -7,6 +7,24 @@
 use super::*;
 use crate::{js_string_from_bytes, JSValue, StringHeader};
 
+/// ECMA-262 JSON.parse step 1: `JText = ? ToString(text)`. Coerces the
+/// argument to a heap string with full ToString semantics (so `null` → "null",
+/// `123` → "123", `true` → "true", etc.), but — unlike `String(x)` — throws a
+/// TypeError for a Symbol argument, matching `ToString(symbol)`. Used by the
+/// `JSON.parse` codegen arm. (#4578)
+#[no_mangle]
+pub extern "C" fn js_json_text_to_string(value: f64) -> *mut StringHeader {
+    if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+    }
+    crate::builtins::js_string_coerce(value)
+}
+
+// Anchor so the auto-optimize bitcode rebuild doesn't dead-strip this
+// codegen-only `#[no_mangle]` (see KEEP_RAW_JSON in json/raw_json.rs).
+#[used]
+static KEEP_JSON_TEXT_TO_STRING: extern "C" fn(f64) -> *mut StringHeader = js_json_text_to_string;
+
 // ─── JSON.parse ───────────────────────────────────────────────────────────────
 
 /// JSON.parse(text) shim that returns `null` for a null input instead
