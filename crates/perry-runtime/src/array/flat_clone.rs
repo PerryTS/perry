@@ -60,6 +60,11 @@ unsafe fn js_array_flat_into(
     for i in 0..len {
         let element = *elements.add(i);
         let bits = element.to_bits();
+        // Per ECMAScript FlattenIntoArray, holes are absent (HasProperty is
+        // false) and are skipped, not copied as `null`/`undefined`.
+        if bits == crate::value::TAG_HOLE {
+            continue;
+        }
         let top16 = (bits >> 48) as u16;
         let maybe_arr_ptr = if top16 >= 0x7FF8 {
             if top16 == 0x7FFD {
@@ -124,6 +129,10 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
         for i in 0..len {
             let element = *elements.add(i);
             let bits = element.to_bits();
+            // Per ECMAScript FlattenIntoArray, holes are absent and skipped.
+            if bits == crate::value::TAG_HOLE {
+                continue;
+            }
             let top16 = (bits >> 48) as u16;
 
             // Check if the element is an array pointer (NaN-boxed or raw)
@@ -148,30 +157,40 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
                 None
             };
 
-            if let Some(sub_arr) = maybe_arr_ptr {
-                // Check if it's a registered set — if so, it's not an array
-                if crate::set::is_registered_set(sub_arr as usize)
-                    || crate::map::is_registered_map(sub_arr as usize)
-                {
-                    // Not an array — push as-is
-                    result = js_array_push_f64(result, element);
-                } else {
-                    // Try to read as array
-                    let sub_len = (*sub_arr).length as usize;
-                    // Sanity check: if length is unreasonably large, treat as non-array
-                    if sub_len <= 1_000_000 {
-                        let sub_elements = (sub_arr as *const u8)
-                            .add(std::mem::size_of::<ArrayHeader>())
-                            as *const f64;
-                        for j in 0..sub_len {
-                            result = js_array_push_f64(result, *sub_elements.add(j));
+            // Only flatten when the pointer is genuinely an array. A plain
+            // object / Set / Map / string etc. is a non-array element and must
+            // be pushed as-is — `flat` only spreads arrays. Pre-fix this read
+            // an arbitrary heap object's bytes as an `ArrayHeader.length` and
+            // iterated garbage (segfault on `[{…}].flat()`). Mirrors the
+            // `GC_TYPE_ARRAY` gate in the recursive `js_array_flat_into`.
+            let is_array = match maybe_arr_ptr {
+                Some(sub_arr) if (sub_arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 => {
+                    let hdr = (sub_arr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                        as *const crate::gc::GcHeader;
+                    (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+                }
+                _ => false,
+            };
+            if let (true, Some(sub_arr)) = (is_array, maybe_arr_ptr) {
+                let sub_len = (*sub_arr).length as usize;
+                // Sanity check: if length is unreasonably large, treat as non-array.
+                if sub_len <= 1_000_000 {
+                    let sub_elements = (sub_arr as *const u8)
+                        .add(std::mem::size_of::<ArrayHeader>())
+                        as *const f64;
+                    for j in 0..sub_len {
+                        let sub = *sub_elements.add(j);
+                        // Skip holes in the flattened sub-array too.
+                        if sub.to_bits() == crate::value::TAG_HOLE {
+                            continue;
                         }
-                    } else {
-                        result = js_array_push_f64(result, element);
+                        result = js_array_push_f64(result, sub);
                     }
+                } else {
+                    result = js_array_push_f64(result, element);
                 }
             } else {
-                // Not a pointer - push element directly
+                // Not an array (non-pointer, or a non-array object) — push as-is.
                 result = js_array_push_f64(result, element);
             }
         }
