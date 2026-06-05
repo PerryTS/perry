@@ -1489,6 +1489,15 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
 
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
+    // A Proxy is a small registered id (its band overlaps the small-handle
+    // band); dereferencing it as a heap object to read a symbol-keyed property
+    // is an EXC_BAD_ACCESS. Route a SYMBOL-keyed read through the proxy `get`
+    // trap (which forwards to the target). drizzle's aliased-column proxies are
+    // read with symbol keys (`col[entityKind]`, `col[Table.Symbol.*]`) while
+    // building a relational query.
+    if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
+        return crate::proxy::js_proxy_get(obj_f64, sym_f64);
+    }
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();
