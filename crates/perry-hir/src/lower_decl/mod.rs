@@ -40,7 +40,7 @@ pub(crate) use class_members::{
     lower_setter_method_with_name,
 };
 pub(crate) use class_validation::validate_legacy_decorator_surface;
-pub(crate) use enum_decl::lower_enum_decl;
+pub(crate) use enum_decl::{compute_enum_members, lower_enum_decl};
 pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
     append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,

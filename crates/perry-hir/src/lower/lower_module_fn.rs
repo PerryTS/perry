@@ -359,6 +359,11 @@ pub fn lower_module_full(
     // synthesize a real concrete class extending `SomeClass`.
     pre_scan_mixin_functions(ast_module, &mut ctx);
 
+    // #4510: register module-level enums up front so a function body (or any
+    // statement) that references an enum declared later in the file resolves
+    // the member instead of silently lowering to 0.
+    pre_register_module_enums(ast_module, &mut ctx);
+
     // JSX expressions lower directly to the built-in `jsx`/`jsxs` externs in
     // `jsx.rs`. Do not synthesize a `react/jsx-runtime` import here: codegen
     // routes those extern names to Perry's runtime adapter, and making the

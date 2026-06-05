@@ -19,8 +19,38 @@ pub fn lower_enum_decl(
     is_exported: bool,
 ) -> Result<Enum> {
     let name = enum_decl.id.sym.to_string();
-    let enum_id = ctx.fresh_enum();
+    let members = compute_enum_members(enum_decl);
 
+    // #4510: an enum referenced before its textual declaration is
+    // pre-registered (see `pre_register_module_enums`) so forward references
+    // resolve. If a registration already exists, reuse its id instead of
+    // minting a fresh one — that avoids a duplicate `ctx.enums` entry and
+    // keeps the EnumMember lookups pointing at the same id.
+    let enum_id = if let Some((existing_id, _)) = ctx.lookup_enum(&name) {
+        existing_id
+    } else {
+        let id = ctx.fresh_enum();
+        let member_values: Vec<(String, EnumValue)> = members
+            .iter()
+            .map(|m| (m.name.clone(), m.value.clone()))
+            .collect();
+        ctx.define_enum(name.clone(), id, member_values);
+        id
+    };
+
+    Ok(Enum {
+        id: enum_id,
+        name,
+        members,
+        is_exported,
+    })
+}
+
+/// Compute an enum's members (names + values) without touching the lowering
+/// context. Pure so it can run in the forward-reference pre-scan
+/// (`pre_register_module_enums`) and again at the real declaration site and
+/// produce identical results.
+pub(crate) fn compute_enum_members(enum_decl: &ast::TsEnumDecl) -> Vec<EnumMember> {
     let mut members = Vec::new();
     let mut next_value: i64 = 0;
 
@@ -75,17 +105,5 @@ pub fn lower_enum_decl(
         });
     }
 
-    // Register the enum in the context for later lookups
-    let member_values: Vec<(String, EnumValue)> = members
-        .iter()
-        .map(|m| (m.name.clone(), m.value.clone()))
-        .collect();
-    ctx.define_enum(name.clone(), enum_id, member_values);
-
-    Ok(Enum {
-        id: enum_id,
-        name,
-        members,
-        is_exported,
-    })
+    members
 }
