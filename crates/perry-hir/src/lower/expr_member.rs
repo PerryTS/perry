@@ -1827,10 +1827,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                     | "values"
                             )
                         );
-                    // #4437: value reads such as `JSON.stringify` /
-                    // `Reflect.apply` / `BigInt.asIntN` / `Symbol.for` need the
-                    // reified namespace/constructor receiver. Direct calls still
-                    // take the intrinsic path this reroute-undo protects.
+                    // #4437/#4596: value reads such as `JSON.stringify` /
+                    // `Reflect.apply` / `BigInt.asIntN` / `Symbol.for` /
+                    // `Date.now` need the reified namespace/constructor receiver.
+                    // Direct calls still take the intrinsic path this
+                    // reroute-undo protects.
                     let outer_static_member = match &member.prop {
                         ast::MemberProp::Ident(p) => Some(p.sym.as_ref()),
                         ast::MemberProp::Computed(c) => match c.expr.as_ref() {
@@ -1840,7 +1841,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::PrivateName(_) => None,
                     };
                     let outer_is_reified_builtin_static_value = !member_is_call_callee
-                        && matches!(property.as_str(), "JSON" | "Reflect" | "BigInt" | "Symbol")
+                        && matches!(
+                            property.as_str(),
+                            "JSON" | "Reflect" | "BigInt" | "Symbol" | "Date"
+                        )
                         && outer_static_member
                             .map(|member| {
                                 crate::analysis::is_builtin_static_function_member(property, member)

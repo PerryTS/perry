@@ -3430,7 +3430,7 @@ pub(super) fn install_constructor_static(
     install_constructor_static_with_call_arity(ctor, name, func_ptr, arity, arity, has_rest);
 }
 
-fn install_constructor_static_with_call_arity(
+pub(super) fn install_constructor_static_with_call_arity(
     ctor: *mut crate::closure::ClosureHeader,
     name: &str,
     func_ptr: *const u8,
