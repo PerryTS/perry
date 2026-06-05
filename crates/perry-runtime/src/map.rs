@@ -1400,6 +1400,11 @@ static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_
 /// when omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg: f64) {
+    // ECMA-262 Map.prototype.forEach step 4: a non-callable callback throws a
+    // TypeError *before* iterating (and before any null-map early return).
+    // Without this, a non-function callback either silently no-ops or — for a
+    // numeric value — is dereferenced as a function pointer and segfaults.
+    crate::array::js_validate_array_callback(callback);
     let map = clean_map_ptr(map);
     if map.is_null() {
         return;

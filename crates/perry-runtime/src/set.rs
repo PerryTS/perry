@@ -901,6 +901,9 @@ pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
 /// omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg: f64) {
+    // ECMA-262 Set.prototype.forEach step 4: a non-callable callback throws a
+    // TypeError before iterating (and before any null-set early return).
+    crate::array::js_validate_array_callback(callback);
     let set = clean_set_ptr(set);
     if set.is_null() {
         return;
