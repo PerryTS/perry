@@ -637,6 +637,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
+        Expr::ArrayFromArrayLikeHoley(iter) => {
+            let iter_box = lower_expr(ctx, iter)?;
+            let blk = ctx.block();
+            let result = blk.call(
+                I64,
+                "js_array_from_arraylike_holey_value",
+                &[(DOUBLE, &iter_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
         // `Iterator.from(x)` (#2874) — wrap any iterable/iterator in a TC39
         // iterator-helper object so the lazy helper methods (map/filter/take/
         // drop/flatMap/reduce/toArray/...) dispatch at runtime against

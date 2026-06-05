@@ -124,6 +124,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // number/boolean/symbol -> [], otherwise materializes via js_array_clone.
     // Takes the raw NaN-boxed value so the tag bits survive.
     module.declare_function("js_array_from_value", I64, &[DOUBLE]);
+    // Array.prototype generic receiver materialization — like LengthOfArrayLike,
+    // but absent indexed keys remain holes rather than present undefined slots.
+    module.declare_function("js_array_from_arraylike_holey_value", I64, &[DOUBLE]);
     // #2874: Iterator.from(x) — wrap any iterable in a lazy iterator-helper
     // object. Returns an already NaN-boxed pointer (DOUBLE).
     module.declare_function("js_iterator_from", DOUBLE, &[DOUBLE]);

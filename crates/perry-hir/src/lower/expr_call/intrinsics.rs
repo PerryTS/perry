@@ -1306,19 +1306,13 @@ fn try_arraylike_receiver_method(
     if !supported {
         return Ok(None);
     }
-    // Materialize the array-like receiver into a REAL array up front via
-    // `Expr::ArrayFrom` (→ `js_array_from_value` → `js_array_clone`, which has
-    // the array-like `{length, 0:…}` detection). This makes EVERY downstream
-    // method see a genuine `ArrayHeader` — crucial for the methods whose codegen
-    // is INLINED (e.g. `forEach` reads `(*arr).length` + `arr[i]` directly
-    // rather than calling `js_array_forEach`), which the runtime-side
-    // `normalize_array_receiver` can't reach. For a real-array receiver this
-    // clones (correct; the read-only methods don't mutate the receiver), and
-    // for null/undefined `js_array_from_value` throws a TypeError to match Node.
-    // The receiver (`thisArg`) lowers before the positional args, matching
-    // source order.
+    // Materialize the array-like receiver into a REAL array up front, but keep
+    // absent indexed keys as holes. These Array.prototype algorithms use
+    // HasProperty/Get on the receiver; `Array.from({ length: 2 })` would create
+    // present undefined slots, making `indexOf(undefined)` and callback methods
+    // visit holes incorrectly.
     let array_src = lower_expr(ctx, receiver)?;
-    let array = Box::new(Expr::ArrayFrom(Box::new(array_src)));
+    let array = Box::new(Expr::ArrayFromArrayLikeHoley(Box::new(array_src)));
     // Lower a positional argument by index, if present.
     let mut arg = |ctx: &mut LoweringContext, i: usize| -> Result<Option<Box<Expr>>> {
         match rest_args.get(i) {

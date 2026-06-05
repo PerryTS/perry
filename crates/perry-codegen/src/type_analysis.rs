@@ -85,6 +85,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::ArrayFlat { .. }
         | Expr::ArrayFlatMap { .. }
         | Expr::ArrayFrom(_)
+        | Expr::ArrayFromArrayLikeHoley(_)
         | Expr::ArrayFromMapped { .. }
         | Expr::ArraySort { .. }
         | Expr::ArrayToReversed { .. }
@@ -1887,6 +1888,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         | Expr::ArrayFlatMap { .. }
         | Expr::ArrayFromMapped { .. }
         | Expr::ArrayFrom(_)
+        | Expr::ArrayFromArrayLikeHoley(_)
         | Expr::ArrayEntries(_)
         | Expr::ArrayKeys(_)
         | Expr::ArrayValues(_)

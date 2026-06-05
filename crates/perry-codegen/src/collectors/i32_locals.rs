@@ -1108,6 +1108,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::IteratorToArray(operand)

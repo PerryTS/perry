@@ -2045,6 +2045,8 @@ pub enum Expr {
     /// Array.from(iterable) -> Array
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
+    /// Array.prototype generic receiver materialization preserving absent keys as holes.
+    ArrayFromArrayLikeHoley(Box<Expr>),
 
     /// `Iterator.from(iterable)` (#2874) — wrap any iterable/iterator in a lazy
     /// iterator-helper object exposing `.map`/`.filter`/`.take`/`.drop`/

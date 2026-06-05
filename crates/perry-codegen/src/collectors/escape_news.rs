@@ -245,6 +245,7 @@ fn collect_used_new_fields_in_expr(
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)

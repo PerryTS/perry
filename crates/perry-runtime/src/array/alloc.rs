@@ -163,6 +163,19 @@ pub extern "C" fn js_array_from_f64(elements: *const f64, count: u32) -> *mut Ar
 pub(crate) unsafe fn js_array_from_arraylike(
     obj: *const crate::object::ObjectHeader,
 ) -> *mut ArrayHeader {
+    js_array_from_arraylike_with_missing(obj, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+pub(crate) unsafe fn js_array_from_arraylike_holey(
+    obj: *const crate::object::ObjectHeader,
+) -> *mut ArrayHeader {
+    js_array_from_arraylike_with_missing(obj, f64::from_bits(crate::value::TAG_HOLE))
+}
+
+unsafe fn js_array_from_arraylike_with_missing(
+    obj: *const crate::object::ObjectHeader,
+    missing_value: f64,
+) -> *mut ArrayHeader {
     if obj.is_null() {
         return js_array_alloc(0);
     }
@@ -183,22 +196,58 @@ pub(crate) unsafe fn js_array_from_arraylike(
     (*arr).length = len;
     clear_array_numeric_layout(arr);
     let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    let undefined = f64::from_bits(TAG_UNDEFINED);
     for i in 0..len {
-        // Pre-init to undefined in case the key lookup returns the
-        // wrong type / produces a sentinel we want to coerce.
-        // GC_STORE_AUDIT(POINTER_FREE): undefined prefill is a non-pointer sentinel.
-        *elements.add(i as usize) = undefined;
         let key_str = i.to_string();
         let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);
-        let v = crate::object::js_object_get_field_by_name_f64(obj, key);
+        let key_value = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
+        let obj_value = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+        let has_property =
+            crate::value::js_is_truthy(crate::object::js_object_has_property(obj_value, key_value))
+                != 0;
+        let v = if has_property {
+            crate::object::js_object_get_field_by_name_f64(obj, key)
+        } else {
+            missing_value
+        };
         // GC_STORE_AUDIT(BARRIERED): arraylike element write is immediately recorded via note_array_slot.
         *elements.add(i as usize) = v;
         note_array_slot(arr, i as usize, v.to_bits());
     }
     refresh_array_numeric_layout(arr);
     arr
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_from_arraylike_holey_value(boxed: f64) -> *mut ArrayHeader {
+    let bits = boxed.to_bits();
+    let jv = crate::value::JSValue::from_bits(bits);
+    if jv.is_undefined() || jv.is_null() {
+        crate::object::has_own_helpers::throw_to_object_nullish_type_error();
+    }
+    if !jv.is_pointer() {
+        return crate::array::js_array_from_value(boxed);
+    }
+    let raw_addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    unsafe {
+        if let Some(arr) =
+            crate::object::arguments_object_to_array(raw_addr as *const crate::object::ObjectHeader)
+        {
+            return arr;
+        }
+        if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            if (*hdr).obj_type == crate::gc::GC_TYPE_OBJECT
+                && crate::typedarray::lookup_typed_array_kind(raw_addr).is_none()
+                && !crate::buffer::is_registered_buffer(raw_addr)
+            {
+                return js_array_from_arraylike_holey(
+                    raw_addr as *const crate::object::ObjectHeader,
+                );
+            }
+        }
+    }
+    crate::array::js_array_from_value(boxed)
 }
 
 /// `Array.from(string)` — split the source string into Unicode codepoints

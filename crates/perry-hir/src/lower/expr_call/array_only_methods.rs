@@ -661,7 +661,8 @@ pub(super) fn try_array_only_methods(
                             &array_expr,
                             Expr::ArrayMap { .. } | Expr::ArrayFilter { .. } | Expr::ArraySort { .. } |
                                     Expr::ArraySlice { .. } | Expr::Array(_) | Expr::ArraySpread(_) |
-                                    Expr::ArrayFrom(_) | Expr::ArrayFromMapped { .. } |
+                                    Expr::ArrayFrom(_) | Expr::ArrayFromArrayLikeHoley(_) |
+                                    Expr::ArrayFromMapped { .. } |
                                     Expr::ArrayFlat { .. } | Expr::StringSplit(_, _) |
                                     Expr::ArrayToReversed { .. } | Expr::ArrayToSorted { .. } |
                                     Expr::ArrayToSpliced { .. } | Expr::ArrayWith { .. } |
@@ -708,6 +709,7 @@ pub(super) fn try_array_only_methods(
                                 | Expr::ArraySlice { .. }
                                 | Expr::ArraySpread(_)
                                 | Expr::ArrayFrom(_)
+                                | Expr::ArrayFromArrayLikeHoley(_)
                                 | Expr::ArrayFromMapped { .. }
                                 | Expr::ArrayFlat { .. }
                                 | Expr::StringSplit(_, _)
@@ -768,6 +770,7 @@ pub(super) fn try_array_only_methods(
                                         | Expr::ArraySlice { .. }
                                         | Expr::Array(_)
                                         | Expr::ArrayFrom(_)
+                                        | Expr::ArrayFromArrayLikeHoley(_)
                                         | Expr::StringSplit(_, _)
                                         | Expr::ObjectKeys(_)
                                         | Expr::ObjectValues(_)
@@ -807,6 +810,7 @@ pub(super) fn try_array_only_methods(
                                         | Expr::ArraySlice { .. }
                                         | Expr::Array(_)
                                         | Expr::ArrayFrom(_)
+                                        | Expr::ArrayFromArrayLikeHoley(_)
                                         | Expr::StringSplit(_, _)
                                         | Expr::ObjectKeys(_)
                                         | Expr::ObjectValues(_)

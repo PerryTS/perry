@@ -1506,6 +1506,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::Delete(..)
         | Expr::Sequence(..)
         | Expr::ArrayFrom(..)
+        | Expr::ArrayFromArrayLikeHoley(..)
         | Expr::IteratorFrom(..)
         | Expr::TaggedTemplateStrings { .. }
         | Expr::TemplateRaw(..)

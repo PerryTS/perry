@@ -1121,7 +1121,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(items, assigned);
             collect_assigned_locals_expr(key_fn, assigned);
         }
-        Expr::ArrayIsArray(value) | Expr::ArrayFrom(value) => {
+        Expr::ArrayIsArray(value)
+        | Expr::ArrayFrom(value)
+        | Expr::ArrayFromArrayLikeHoley(value) => {
             collect_assigned_locals_expr(value, assigned);
         }
         Expr::ArrayFromMapped {

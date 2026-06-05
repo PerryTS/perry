@@ -890,6 +890,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             Expr::ArrayIsArray(Box::new(substitute_expr(value, substitutions)))
         }
         Expr::ArrayFrom(value) => Expr::ArrayFrom(Box::new(substitute_expr(value, substitutions))),
+        Expr::ArrayFromArrayLikeHoley(value) => {
+            Expr::ArrayFromArrayLikeHoley(Box::new(substitute_expr(value, substitutions)))
+        }
         Expr::ArrayFromMapped {
             iterable,
             map_fn,
