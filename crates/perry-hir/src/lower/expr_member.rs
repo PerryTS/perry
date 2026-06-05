@@ -1839,8 +1839,22 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         },
                         ast::MemberProp::PrivateName(_) => None,
                     };
+                    // #4596 follow-up: `Array.isArray` / `Array.from` /
+                    // `Array.of` read as VALUES need the reified Array
+                    // constructor receiver so they resolve to the real native
+                    // function objects (correct `.name` / `.length`). They are
+                    // installed with metadata via `install_constructor_static`
+                    // (global_this.rs), but the reroute-undo otherwise collapses
+                    // them to `GlobalGet(0).<name>`, whose intrinsic path drops
+                    // the metadata (`typeof` is "function" but `.name` was
+                    // undefined). `Array.fromAsync` is unreified and stays
+                    // undefined either way. Direct calls keep the intrinsic
+                    // fast path via the `!member_is_call_callee` gate.
                     let outer_is_reified_builtin_static_value = !member_is_call_callee
-                        && matches!(property.as_str(), "JSON" | "Reflect" | "BigInt" | "Symbol")
+                        && matches!(
+                            property.as_str(),
+                            "JSON" | "Reflect" | "BigInt" | "Symbol" | "Array"
+                        )
                         && outer_static_member
                             .map(|member| {
                                 crate::analysis::is_builtin_static_function_member(property, member)
