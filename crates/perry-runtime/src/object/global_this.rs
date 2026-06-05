@@ -3245,6 +3245,19 @@ extern "C" fn string_from_code_point_static(
     crate::value::js_nanbox_string(s as i64)
 }
 
+// #4627: reified `String.raw(callSite, ...substitutions)` tag function. One
+// fixed param (the template/cooked object) then a rest of substitutions, which
+// `js_string_raw` reads by numeric index — so `rest` (the collected array) is
+// passed straight through as the substitutions array-like.
+extern "C" fn string_raw_static(
+    _closure: *const crate::closure::ClosureHeader,
+    call_site: f64,
+    rest: f64,
+) -> f64 {
+    let s = crate::string::js_string_raw(call_site, rest);
+    crate::value::js_nanbox_string(s as i64)
+}
+
 extern "C" fn number_parse_float_thunk(
     closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -3670,6 +3683,16 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 string_from_code_point_static as *const u8,
                 1,
                 0,
+                true,
+            );
+            // #4627: `String.raw` (tag function) — 1 fixed param (template
+            // object) + rest substitutions; spec `.length` 1.
+            install_constructor_static_with_call_arity(
+                ctor,
+                "raw",
+                string_raw_static as *const u8,
+                1,
+                1,
                 true,
             );
         }
