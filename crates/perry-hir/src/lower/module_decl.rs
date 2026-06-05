@@ -1389,9 +1389,7 @@ pub(crate) fn lower_module_decl(
                         // not a bare `perry_fn_<mod>__z` function symbol. This is
                         // exactly how zod re-exports `z`, so without this every
                         // `z.object` / `z.coerce` in consumer code is undefined.
-                        if let Some(ns_source) =
-                            ctx.namespace_import_sources.get(&local).cloned()
-                        {
+                        if let Some(ns_source) = ctx.namespace_import_sources.get(&local).cloned() {
                             module.exports.push(Export::NamespaceReExport {
                                 source: ns_source,
                                 name: exported.clone(),
