@@ -182,12 +182,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     || (is_string_expr(ctx, right)
                         && !is_numeric_expr(ctx, left)
                         && !is_bool_expr(ctx, left)));
-            if one_side_string
-                && matches!(
-                    op,
-                    CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
-                )
-            {
+            // Only STRICT eq/ne use this string-pointer fast path. Loose `==`/`!=`
+            // must fall through to `js_loose_eq` below: when one side is a boxed
+            // String/primitive *wrapper* (a POINTER_TAG object, not a STRING_TAG
+            // value), `js_get_string_pointer_unified` returns the raw ObjectHeader
+            // pointer and `js_string_equals` reads it as a bogus string → wrong
+            // result (`new String("x") == "x"` was `false`). `js_loose_eq` unboxes
+            // the wrapper first. Strict `=== "lit"` is unaffected (both sides are
+            // real strings at runtime). #boxed-loose-eq.
+            if one_side_string && matches!(op, CompareOp::Eq | CompareOp::Ne) {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
                 let blk = ctx.block();
