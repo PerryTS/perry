@@ -19,10 +19,14 @@ classify them, so `2**32-1` and non-integer keys never reached
 
 **Fix.**
 - **Codegen** (`expr/index_get.rs`, `expr/index_set.rs`): `numeric_index_needs_runtime_key`
-  now routes any literal that is not a clean array index in `0..=i32::MAX` — negatives,
+  now routes any **literal** that is not a clean array index in `0..=i32::MAX` — negatives,
   out-of-range integers (`a[2**32-1]`), non-integer floats (`a[1.5]`), and non-finite
   values (`a[NaN]`/`a[Infinity]`) — through `js_array_get/set_index_or_string` instead
-  of the truncating i32 path.
+  of the truncating i32 path. Computed/dynamic numeric indices (`a[i % n]`) are
+  deliberately left on the typed-feedback numeric-array guard path (which has its own
+  out-of-range fallback); rerouting them would drop the index guard and regress the
+  native-region proof. Boundary-valued *variables* (`const k = 2**32-1; a[k]`) remain a
+  known follow-up.
 - **Runtime sparse storage** (`array/indexing.rs`, `array/header.rs`): far writes beyond
   `MAX_DENSE_ARRAY_GROW_LENGTH` (1M) and writes at/above the dense capacity store into
   the array's `ARRAY_NAMED_PROPS` side table while `length` is tracked separately, so
