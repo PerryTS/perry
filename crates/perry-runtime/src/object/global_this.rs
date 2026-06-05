@@ -4406,7 +4406,24 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             }
         }
         "Promise" => {
-            install_noop_proto_methods(proto_obj, &[("catch", 1), ("finally", 1), ("then", 2)]);
+            install_proto_method(
+                proto_obj,
+                "catch",
+                crate::promise::promise_prototype_catch_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "finally",
+                crate::promise::promise_prototype_finally_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "then",
+                crate::promise::promise_prototype_then_thunk as *const u8,
+                2,
+            );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "TextEncoder" => {

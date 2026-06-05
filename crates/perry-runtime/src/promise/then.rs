@@ -728,6 +728,91 @@ fn box_promise_ptr(p: *mut Promise) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(p as *const u8).bits())
 }
 
+fn throw_promise_prototype_incompatible_receiver(method: &str, receiver: f64) -> ! {
+    let jsval = crate::value::JSValue::from_bits(receiver.to_bits());
+    let label = if jsval.is_undefined() {
+        "undefined".to_string()
+    } else if jsval.is_null() {
+        "null".to_string()
+    } else if jsval.is_pointer() {
+        "#<Object>".to_string()
+    } else {
+        crate::string::string_as_str(crate::value::js_jsvalue_to_string(receiver)).to_string()
+    };
+    let msg = format!("Method Promise.prototype.{method} called on incompatible receiver {label}");
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
+fn promise_prototype_receiver(method: &str) -> *mut Promise {
+    let receiver = crate::object::js_implicit_this_get();
+    if js_value_is_promise(receiver) != 0 {
+        return crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
+    }
+    throw_promise_prototype_incompatible_receiver(method, receiver)
+}
+
+fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
+    unsafe {
+        crate::object::js_native_call_method(
+            receiver,
+            b"then".as_ptr() as *const i8,
+            b"then".len(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
+}
+
+fn throw_promise_finally_non_object() -> ! {
+    let msg = b"Promise.prototype.finally called on non-object";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
+pub(crate) extern "C" fn promise_prototype_then_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    on_fulfilled: f64,
+    on_rejected: f64,
+) -> f64 {
+    let promise = promise_prototype_receiver("then");
+    box_promise_ptr(js_promise_then(
+        promise,
+        arg_to_closure(on_fulfilled),
+        arg_to_closure(on_rejected),
+    ))
+}
+
+pub(crate) extern "C" fn promise_prototype_catch_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    on_rejected: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    let args = [f64::from_bits(crate::value::TAG_UNDEFINED), on_rejected];
+    call_receiver_then(receiver, &args)
+}
+
+pub(crate) extern "C" fn promise_prototype_finally_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    on_finally: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    if js_value_is_promise(receiver) != 0 {
+        let promise = crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
+        return box_promise_ptr(js_promise_finally(promise, arg_to_closure(on_finally)));
+    }
+    let jsval = crate::value::JSValue::from_bits(receiver.to_bits());
+    if !jsval.is_pointer() {
+        throw_promise_finally_non_object();
+    }
+    let args = [on_finally, on_finally];
+    call_receiver_then(receiver, &args)
+}
+
 extern "C" fn promise_then_bound(
     closure: *const crate::closure::ClosureHeader,
     on_fulfilled: f64,

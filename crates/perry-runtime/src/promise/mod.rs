@@ -54,7 +54,10 @@ pub use native_async::{
 };
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
 pub(crate) use scanners::{new_promise_root_scan_state, scan_promise_roots_mut_step};
-pub(crate) use then::{js_promise_attach_handlers, js_promise_attach_settle_listener};
+pub(crate) use then::{
+    js_promise_attach_handlers, js_promise_attach_settle_listener, promise_prototype_catch_thunk,
+    promise_prototype_finally_thunk, promise_prototype_then_thunk,
+};
 pub use then::{
     js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free, js_promise_new,
     js_promise_reason, js_promise_reject, js_promise_resolve, js_promise_resolve_with_promise,
