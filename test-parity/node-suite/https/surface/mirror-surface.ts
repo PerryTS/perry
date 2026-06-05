@@ -80,6 +80,17 @@ console.log(
   typeof agent.getName,
   typeof agent.destroy,
 );
+const keepSocketAliveValue = agent.keepSocketAlive;
+const reuseSocketValue = agent.reuseSocket;
+const getNameValue = agent.getName;
+const destroyValue = agent.destroy;
+console.log(
+  "https agent method values:",
+  typeof keepSocketAliveValue,
+  typeof reuseSocketValue,
+  typeof getNameValue,
+  typeof destroyValue,
+);
 const replacement = () => undefined;
 agent.createConnection = replacement;
 console.log("https agent override:", agent.createConnection === replacement);

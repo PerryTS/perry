@@ -1043,6 +1043,20 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             ) {
                                 return Ok(Expr::String("function".to_string()));
                             }
+                            // `http.Agent` and `https.Agent` share the same
+                            // native class tag in Perry. These are prototype
+                            // methods; `typeof agent.getName` should observe a
+                            // function value instead of falling through to a
+                            // missing generic field lookup.
+                            if matches!(
+                                ctx.lookup_native_instance(obj_name),
+                                Some(("http", "Agent")) | Some(("https", "Agent"))
+                            ) && matches!(
+                                prop_name,
+                                "keepSocketAlive" | "reuseSocket" | "getName" | "destroy" | "close"
+                            ) {
+                                return Ok(Expr::String("function".to_string()));
+                            }
                             // #1320: `typeof obs.observe` on a PerformanceObserver
                             // instance. A bare member read on a native-class
                             // instance lowers to a 0-arg NativeMethodCall (getter
