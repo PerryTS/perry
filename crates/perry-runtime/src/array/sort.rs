@@ -180,6 +180,110 @@ pub extern "C" fn js_array_sort_with_comparator(
             }
         }
 
+        // ECMAScript SortIndexedProperties + CompareArrayElements: array
+        // holes are excluded from the sort and trail every element, and
+        // `undefined` elements sort to the very end (after all defined
+        // values) WITHOUT the comparator ever being called for them. The
+        // in-place TimSort below would instead feed holes / undefined
+        // straight to the user comparator and mis-order them (e.g.
+        // `[3, 1, undefined, 2].sort((a, b) => (a ?? 0) - (b ?? 0))` put
+        // `undefined` first). Detect their presence up front; a dense,
+        // all-defined array skips this and keeps the fast in-place path.
+        let mut has_special = false;
+        for i in 0..length {
+            let bits = (*elements_ptr.add(i)).to_bits();
+            if bits == crate::value::TAG_HOLE
+                || crate::value::JSValue::from_bits(bits).is_undefined()
+            {
+                has_special = true;
+                break;
+            }
+        }
+        if has_special {
+            // Gather defined (non-hole, non-undefined) elements; tally the
+            // undefined and hole counts to re-emit as a trailing suffix.
+            let mut defined: Vec<f64> = Vec::with_capacity(length);
+            let mut undef_count = 0usize;
+            let mut hole_count = 0usize;
+            for i in 0..length {
+                let v = *elements_ptr.add(i);
+                let bits = v.to_bits();
+                if bits == crate::value::TAG_HOLE {
+                    hole_count += 1;
+                } else if crate::value::JSValue::from_bits(bits).is_undefined() {
+                    undef_count += 1;
+                } else {
+                    defined.push(v);
+                }
+            }
+            // Stable bottom-up merge sort of the defined elements with the
+            // user comparator (same stable contract as the in-place path,
+            // and tolerant of an inconsistent comparator without panicking).
+            let n = defined.len();
+            if n > 1 {
+                let mut buf: Vec<f64> = vec![0.0; n];
+                let mut width = 1usize;
+                let mut src = defined.as_mut_ptr();
+                let mut dst = buf.as_mut_ptr();
+                while width < n {
+                    let mut i = 0;
+                    while i < n {
+                        let left = i;
+                        let mid = (i + width).min(n);
+                        let right = (i + 2 * width).min(n);
+                        let mut l = left;
+                        let mut r = mid;
+                        let mut k = left;
+                        while l < mid && r < right {
+                            let cmp = cmp_with(comparator, direct_call, *src.add(l), *src.add(r));
+                            if cmp <= 0.0 {
+                                *dst.add(k) = *src.add(l);
+                                l += 1;
+                            } else {
+                                *dst.add(k) = *src.add(r);
+                                r += 1;
+                            }
+                            k += 1;
+                        }
+                        while l < mid {
+                            *dst.add(k) = *src.add(l);
+                            l += 1;
+                            k += 1;
+                        }
+                        while r < right {
+                            *dst.add(k) = *src.add(r);
+                            r += 1;
+                            k += 1;
+                        }
+                        i += 2 * width;
+                    }
+                    std::mem::swap(&mut src, &mut dst);
+                    width *= 2;
+                }
+                // Make sure the sorted run lives back in `defined`.
+                if src != defined.as_mut_ptr() {
+                    ptr::copy_nonoverlapping(src, defined.as_mut_ptr(), n);
+                }
+            }
+            // Write back: sorted defined values, then `undefined` ×N, then
+            // holes ×N — restoring the array's exotic sparseness.
+            let mut idx = 0usize;
+            for &v in &defined {
+                *elements_ptr.add(idx) = v;
+                idx += 1;
+            }
+            for _ in 0..undef_count {
+                *elements_ptr.add(idx) = f64::from_bits(crate::value::TAG_UNDEFINED);
+                idx += 1;
+            }
+            for _ in 0..hole_count {
+                *elements_ptr.add(idx) = f64::from_bits(crate::value::TAG_HOLE);
+                idx += 1;
+            }
+            rebuild_array_layout(arr);
+            return arr;
+        }
+
         // TimSort-style hybrid: insertion sort for small runs, merge sort for large arrays.
         // Stable, O(n log n) worst case. Insertion sort is used for runs <= 32 elements
         // because it has lower overhead for small inputs.
