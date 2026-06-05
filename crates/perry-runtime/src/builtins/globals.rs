@@ -45,9 +45,9 @@ const URI_RESERVED: &[u8] = b";/?:@&=+$,#";
 const URI_COMPONENT_UNESCAPED: &[u8] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()";
 
-fn percent_encode(input: &str, safe_chars: &[u8]) -> String {
+fn percent_encode(input: &[u8], safe_chars: &[u8]) -> String {
     let mut result = String::with_capacity(input.len() * 3);
-    for byte in input.as_bytes() {
+    for byte in input {
         if safe_chars.contains(byte) {
             result.push(*byte as char);
         } else {
@@ -117,14 +117,44 @@ fn extract_str_from_nanbox(value: f64) -> String {
     }
 }
 
+struct ExtractedStringBytes {
+    bytes: Vec<u8>,
+    flags: u32,
+}
+
+fn extract_string_bytes_from_nanbox(value: f64) -> ExtractedStringBytes {
+    let str_ptr = crate::value::js_get_string_pointer_unified(value);
+    if (str_ptr as usize) < 0x1000 {
+        return ExtractedStringBytes {
+            bytes: Vec::new(),
+            flags: 0,
+        };
+    }
+    unsafe {
+        let header = str_ptr as *const StringHeader;
+        let len = (*header).byte_len as usize;
+        let flags = (*header).flags;
+        let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len).to_vec();
+        ExtractedStringBytes { bytes, flags }
+    }
+}
+
+fn throw_if_lone_surrogate(input: &ExtractedStringBytes) {
+    if input.flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+        throw_uri_malformed();
+    }
+}
+
 /// encodeURI(string) -> string
 #[no_mangle]
 pub extern "C" fn js_encode_uri(value: f64) -> i64 {
-    let input = extract_str_from_nanbox(value);
+    let input = extract_string_bytes_from_nanbox(value);
+    throw_if_lone_surrogate(&input);
     let mut safe = Vec::with_capacity(URI_UNESCAPED.len() + URI_RESERVED.len());
     safe.extend_from_slice(URI_UNESCAPED);
     safe.extend_from_slice(URI_RESERVED);
-    let encoded = percent_encode(&input, &safe);
+    let encoded = percent_encode(&input.bytes, &safe);
     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
     ptr as i64
 }
@@ -141,8 +171,9 @@ pub extern "C" fn js_decode_uri(value: f64) -> i64 {
 /// encodeURIComponent(string) -> string
 #[no_mangle]
 pub extern "C" fn js_encode_uri_component(value: f64) -> i64 {
-    let input = extract_str_from_nanbox(value);
-    let encoded = percent_encode(&input, URI_COMPONENT_UNESCAPED);
+    let input = extract_string_bytes_from_nanbox(value);
+    throw_if_lone_surrogate(&input);
+    let encoded = percent_encode(&input.bytes, URI_COMPONENT_UNESCAPED);
     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
     ptr as i64
 }

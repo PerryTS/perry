@@ -1,0 +1,17 @@
+high-start encodeURI throw URIError URI malformed true
+high-start encodeURIComponent throw URIError URI malformed true
+high-end encodeURI throw URIError URI malformed true
+high-end encodeURIComponent throw URIError URI malformed true
+low-start encodeURI throw URIError URI malformed true
+low-start encodeURIComponent throw URIError URI malformed true
+low-end encodeURI throw URIError URI malformed true
+low-end encodeURIComponent throw URIError URI malformed true
+mixed-high encodeURI throw URIError URI malformed true
+mixed-high encodeURIComponent throw URIError URI malformed true
+mixed-low encodeURI throw URIError URI malformed true
+mixed-low encodeURIComponent throw URIError URI malformed true
+pair uri %F0%9F%98%80
+pair component %F0%9F%98%80
+reserved uri ;/?:@&=+$,#%20alpha
+reserved component %3B%2F%3F%3A%40%26%3D%2B%24%2C%23%20alpha
+bmp caf%C3%A9 caf%C3%A9
