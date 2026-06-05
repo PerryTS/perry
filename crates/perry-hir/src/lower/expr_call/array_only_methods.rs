@@ -931,15 +931,10 @@ pub(super) fn try_array_only_methods(
                         };
                         if !is_user_class_receiver {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            if call.args.first().is_some_and(|arg| arg.spread.is_some()) {
-                                return Ok(Ok(Expr::NativeMethodCall {
-                                    module: "array".to_string(),
-                                    method: "push_spread".to_string(),
-                                    class_name: None,
-                                    object: Some(Box::new(array_expr)),
-                                    args,
-                                }));
-                            } else {
+                            let any_spread = call.args.iter().any(|a| a.spread.is_some());
+                            if !any_spread {
+                                // No spreads — `push_single` loops over every
+                                // arg, so a single native call handles N values.
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: "array".to_string(),
                                     method: "push_single".to_string(),
@@ -948,6 +943,47 @@ pub(super) fn try_array_only_methods(
                                     args,
                                 }));
                             }
+                            if args.len() == 1 {
+                                // Exactly one spread arg — the `push_spread`
+                                // native arm packs the source as `args[0]`.
+                                return Ok(Ok(Expr::NativeMethodCall {
+                                    module: "array".to_string(),
+                                    method: "push_spread".to_string(),
+                                    class_name: None,
+                                    object: Some(Box::new(array_expr)),
+                                    args,
+                                }));
+                            }
+                            // Mixed/multiple args with at least one spread
+                            // (e.g. `arr.push(...a, ...b)` or `arr.push(...a, x)`
+                            // inside a method/getter body). The single-arg
+                            // `push_spread`/`push_single` native arms each
+                            // expect exactly one arg; the previous code passed
+                            // all of them to one `push_spread`, which bailed at
+                            // codegen ("expects exactly 1 arg"). Decompose into a
+                            // `Sequence` of single-arg native calls, choosing the
+                            // helper per-arg from the original AST spread flag.
+                            // Each native arm re-reads the receiver and writes
+                            // back the (possibly realloc'd) handle, so chaining
+                            // threads the array correctly; JS `push` returns the
+                            // final length, which is exactly what the last
+                            // element of the `Sequence` yields. (#4508)
+                            let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
+                            for (ast_arg, arg) in call.args.iter().zip(args.into_iter()) {
+                                let method = if ast_arg.spread.is_some() {
+                                    "push_spread"
+                                } else {
+                                    "push_single"
+                                };
+                                stmts.push(Expr::NativeMethodCall {
+                                    module: "array".to_string(),
+                                    method: method.to_string(),
+                                    class_name: None,
+                                    object: Some(Box::new(array_expr.clone())),
+                                    args: vec![arg],
+                                });
+                            }
+                            return Ok(Ok(Expr::Sequence(stmts)));
                         }
                     }
                     _ => {} // Fall through - ambiguous methods on non-array expressions use generic dispatch
