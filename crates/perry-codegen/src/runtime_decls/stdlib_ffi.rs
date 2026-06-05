@@ -1349,6 +1349,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_event_emitter_remove_all_listeners", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_remove_listener", I64, &[I64, I64, I64]);
     module.declare_function("js_event_emitter_set_max_listeners", I64, &[I64, DOUBLE]);
+    module.declare_function("js_event_emitter_set_max_listeners_raw", I64, &[I64, I64]);
     module.declare_function("js_event_emitter_get_max_listeners", DOUBLE, &[I64]);
     module.declare_function("js_event_emitter_event_names", I64, &[I64]);
     module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
@@ -1377,9 +1378,13 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);
     module.declare_function("js_events_add_abort_listener", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_events_get_event_listeners", I64, &[DOUBLE, I64]);
+    module.declare_function("js_events_get_event_listeners_raw", I64, &[I64, I64]);
     module.declare_function("js_events_listener_count", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_listener_count_raw", DOUBLE, &[I64, I64]);
     module.declare_function("js_events_get_max_listeners", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_events_get_max_listeners_raw", DOUBLE, &[I64]);
     module.declare_function("js_events_set_max_listeners", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_events_set_max_listeners_raw", DOUBLE, &[I64, I64]);
     module.declare_function("js_events_init", DOUBLE, &[]);
 
     // ========== Domain ==========

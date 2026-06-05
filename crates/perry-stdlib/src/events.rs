@@ -1259,14 +1259,26 @@ pub unsafe extern "C" fn js_event_emitter_listener_count(
     0.0
 }
 
-/// EventEmitter.setMaxListeners(n).
-#[no_mangle]
-pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f64) -> Handle {
-    let n = validate_max_listeners(n);
+unsafe fn set_event_emitter_max_listeners_value(handle: Handle, value: f64) -> Handle {
+    let n = validate_max_listeners(value);
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         emitter.max_listeners = n;
     }
     handle
+}
+
+/// EventEmitter.setMaxListeners(n).
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f64) -> Handle {
+    set_event_emitter_max_listeners_value(handle, n)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_set_max_listeners_raw(
+    handle: Handle,
+    n_bits: i64,
+) -> Handle {
+    set_event_emitter_max_listeners_value(handle, value_from_bits(n_bits))
 }
 
 /// EventEmitter.getMaxListeners().
@@ -1850,8 +1862,7 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64
 
 /// `events.getEventListeners(emitter, eventName)` — alias for
 /// `emitter.listeners(eventName)`.
-#[no_mangle]
-pub unsafe extern "C" fn js_events_get_event_listeners(
+unsafe fn events_get_event_listeners_value(
     target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> *mut ArrayHeader {
@@ -1875,10 +1886,25 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_events_get_event_listeners(
+    target_value: f64,
+    event_name_ptr: *const StringHeader,
+) -> *mut ArrayHeader {
+    events_get_event_listeners_value(target_value, event_name_ptr)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_events_get_event_listeners_raw(
+    target_bits: i64,
+    event_name_ptr: *const StringHeader,
+) -> *mut ArrayHeader {
+    events_get_event_listeners_value(value_from_bits(target_bits), event_name_ptr)
+}
+
 /// `events.listenerCount(emitter, eventName)` — alias for
 /// `emitter.listenerCount(eventName)`.
-#[no_mangle]
-pub unsafe extern "C" fn js_events_listener_count(
+unsafe fn events_listener_count_value(
     target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> f64 {
@@ -1902,9 +1928,24 @@ pub unsafe extern "C" fn js_events_listener_count(
     }
 }
 
-/// `events.getMaxListeners(emitter)` — alias.
 #[no_mangle]
-pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
+pub unsafe extern "C" fn js_events_listener_count(
+    target_value: f64,
+    event_name_ptr: *const StringHeader,
+) -> f64 {
+    events_listener_count_value(target_value, event_name_ptr)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_events_listener_count_raw(
+    target_bits: i64,
+    event_name_ptr: *const StringHeader,
+) -> f64 {
+    events_listener_count_value(value_from_bits(target_bits), event_name_ptr)
+}
+
+/// `events.getMaxListeners(emitter)` — alias.
+unsafe fn events_get_max_listeners_value(target_value: f64) -> f64 {
     match event_helper_target(target_value).unwrap_or_else(|| {
         throw_invalid_arg_type(&invalid_instance_arg_message(
             "emitter",
@@ -1922,15 +1963,21 @@ pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
+    events_get_max_listeners_value(target_value)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_events_get_max_listeners_raw(target_bits: i64) -> f64 {
+    events_get_max_listeners_value(value_from_bits(target_bits))
+}
+
 /// `events.setMaxListeners(n, ...targets)` — codegen passes the varargs
 /// target list as a Perry array of EventEmitter handles and EventTarget
 /// object pointers.
-#[no_mangle]
-pub unsafe extern "C" fn js_events_set_max_listeners(
-    n: f64,
-    handles_ptr: *const ArrayHeader,
-) -> f64 {
-    let n = validate_max_listeners(n);
+unsafe fn events_set_max_listeners_value(n_value: f64, handles_ptr: *const ArrayHeader) -> f64 {
+    let n = validate_max_listeners(n_value);
     if !handles_ptr.is_null() {
         let len = js_array_length(handles_ptr);
         for i in 0..len {
@@ -1960,6 +2007,90 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
         }
     }
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_events_set_max_listeners(
+    n: f64,
+    handles_ptr: *const ArrayHeader,
+) -> f64 {
+    events_set_max_listeners_value(n, handles_ptr)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_events_set_max_listeners_raw(
+    n_bits: i64,
+    handles_ptr: *const ArrayHeader,
+) -> f64 {
+    events_set_max_listeners_value(value_from_bits(n_bits), handles_ptr)
+}
+
+unsafe fn events_dispatch_arg(args_ptr: *const f64, args_len: usize, index: usize) -> f64 {
+    if index < args_len && !args_ptr.is_null() {
+        *args_ptr.add(index)
+    } else {
+        undefined_value()
+    }
+}
+
+fn nanbox_array_ptr(arr: *mut ArrayHeader) -> f64 {
+    js_nanbox_pointer(arr as i64)
+}
+
+unsafe fn event_name_ptr_from_value(value: f64) -> *const StringHeader {
+    perry_runtime::js_value_to_str_ptr_for_ffi(value) as *const StringHeader
+}
+
+unsafe fn pack_native_dispatch_rest(
+    args_ptr: *const f64,
+    args_len: usize,
+    start: usize,
+) -> *mut ArrayHeader {
+    let mut arr = js_array_alloc(0);
+    for index in start..args_len {
+        if !args_ptr.is_null() {
+            arr = js_array_push_f64(arr, *args_ptr.add(index));
+        }
+    }
+    arr
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_events_native_dispatch(
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let method = if method_ptr.is_null() {
+        ""
+    } else {
+        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
+    };
+    let arg = |index| events_dispatch_arg(args_ptr, args_len, index);
+    match method {
+        "init" => undefined_value(),
+        "getEventListeners" => nanbox_array_ptr(js_events_get_event_listeners(
+            arg(0),
+            event_name_ptr_from_value(arg(1)),
+        )),
+        "listenerCount" => js_events_listener_count(arg(0), event_name_ptr_from_value(arg(1))),
+        "getMaxListeners" => js_events_get_max_listeners(arg(0)),
+        "setMaxListeners" => {
+            js_events_set_max_listeners(arg(0), pack_native_dispatch_rest(args_ptr, args_len, 1))
+        }
+        "addAbortListener" => js_nanbox_pointer(js_events_add_abort_listener(arg(0), arg(1))),
+        "once" => {
+            js_nanbox_pointer(
+                js_events_once(arg(0), event_name_ptr_from_value(arg(1)), arg(2)) as i64,
+            )
+        }
+        "on" => js_nanbox_pointer(
+            js_events_on(arg(0), event_name_ptr_from_value(arg(1)), arg(2)) as i64,
+        ),
+        "EventEmitterAsyncResource" => js_event_emitter_async_resource_call(arg(0)),
+        _ => undefined_value(),
+    }
 }
 
 /// Legacy `events.init()` no-op export retained for Node surface parity.

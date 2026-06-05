@@ -97,7 +97,7 @@ unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64])
         ),
         "eventNames" => nanbox_array(crate::events::js_event_emitter_event_names(handle)),
         "setMaxListeners" if !args.is_empty() => {
-            crate::events::js_event_emitter_set_max_listeners(handle, args[0]);
+            crate::events::js_event_emitter_set_max_listeners_raw(handle, args[0].to_bits() as i64);
             nanbox_handle_value(handle)
         }
         "getMaxListeners" => crate::events::js_event_emitter_get_max_listeners(handle),
@@ -2735,6 +2735,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_event_emitter_async_resource_handle_probe(event_emitter_async_resource_probe);
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_on(crate::events::js_event_emitter_on);
+    #[cfg(feature = "bundled-events")]
+    perry_runtime::js_set_native_events_dispatch(crate::events::js_events_native_dispatch);
     super::net_socket_bridge::register_net_socket_handle_probe();
     js_register_worker_threads_namespace_getters(
         crate::worker_threads::js_worker_threads_get_worker_data,

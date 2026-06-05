@@ -84,6 +84,11 @@ pub extern "C" fn js_set_native_domain_dispatch(func: JsNativeDomainDispatchFn) 
     JS_NATIVE_DOMAIN_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+#[no_mangle]
+pub extern "C" fn js_set_native_events_dispatch(func: JsNativeEventsDispatchFn) {
+    JS_NATIVE_EVENTS_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the node:tls module-method dispatcher. Registered by perry-stdlib at
 /// startup so captured helpers like `tls.checkServerIdentity` and property
 /// reads like `tls.rootCertificates` reach the rustls-backed TLS helper module.
