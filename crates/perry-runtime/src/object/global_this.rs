@@ -3276,6 +3276,92 @@ extern "C" fn typed_array_of_thunk(
     crate::value::js_nanbox_pointer(ta as i64)
 }
 
+fn require_promise_constructor_this() {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let promise_ctor = js_get_global_this_builtin_value(b"Promise".as_ptr(), 7);
+    if this_value.to_bits() != promise_ctor.to_bits() {
+        super::object_ops::throw_object_type_error(
+            b"Promise static method requires a Promise constructor receiver",
+        );
+    }
+}
+
+extern "C" fn promise_resolve_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    crate::value::js_nanbox_pointer(crate::promise::js_promise_resolved(value) as i64)
+}
+
+extern "C" fn promise_reject_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    crate::value::js_nanbox_pointer(crate::promise::js_promise_rejected(reason) as i64)
+}
+
+extern "C" fn promise_all_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    crate::value::js_nanbox_pointer(
+        crate::promise::combinators::js_promise_all_iterable(iterable) as i64,
+    )
+}
+
+extern "C" fn promise_race_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    crate::value::js_nanbox_pointer(
+        crate::promise::combinators::js_promise_race_iterable(iterable) as i64,
+    )
+}
+
+extern "C" fn promise_all_settled_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    crate::value::js_nanbox_pointer(
+        crate::promise::combinators::js_promise_all_settled_iterable(iterable) as i64,
+    )
+}
+
+extern "C" fn promise_any_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    crate::value::js_nanbox_pointer(
+        crate::promise::combinators::js_promise_any_iterable(iterable) as i64,
+    )
+}
+
+extern "C" fn promise_with_resolvers_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    require_promise_constructor_this();
+    crate::value::js_nanbox_pointer(crate::promise::js_promise_with_resolvers() as i64)
+}
+
+extern "C" fn promise_try_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let rest_value = crate::value::JSValue::from_bits(rest.to_bits());
+    let rest_ptr = if rest_value.is_pointer() {
+        rest_value.as_pointer::<crate::array::ArrayHeader>()
+    } else {
+        std::ptr::null()
+    };
+    crate::value::js_nanbox_pointer(crate::promise::js_promise_try(callback, rest_ptr) as i64)
+}
+
 extern "C" fn url_can_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
     input: f64,
@@ -3565,6 +3651,34 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "Promise" => {
+            install_constructor_static(
+                ctor,
+                "resolve",
+                promise_resolve_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "reject", promise_reject_thunk as *const u8, 1, false);
+            install_constructor_static(ctor, "all", promise_all_thunk as *const u8, 1, false);
+            install_constructor_static(ctor, "race", promise_race_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "allSettled",
+                promise_all_settled_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(ctor, "any", promise_any_thunk as *const u8, 1, false);
+            install_constructor_static(
+                ctor,
+                "withResolvers",
+                promise_with_resolvers_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(ctor, "try", promise_try_thunk as *const u8, 1, true);
         }
         "Date" => {
             // `Date.now` / `Date.parse` / `Date.UTC` as real own data props

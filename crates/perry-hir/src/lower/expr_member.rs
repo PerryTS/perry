@@ -217,6 +217,41 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // Promise statics are receiver-sensitive. Value reads such as
+    // `Promise.resolve.call(...)` must preserve the `Promise` constructor
+    // receiver instead of collapsing to the legacy property-only
+    // `GlobalGet(0).resolve` intrinsic shape.
+    if !member_is_call_callee {
+        if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+            if obj_ident.sym.as_ref() == "Promise"
+                && ctx.lookup_local("Promise").is_none()
+                && ctx.lookup_func("Promise").is_none()
+                && ctx.lookup_imported_func("Promise").is_none()
+            {
+                let static_member = match &member.prop {
+                    ast::MemberProp::Ident(prop_ident) => Some(prop_ident.sym.as_ref()),
+                    ast::MemberProp::Computed(computed) => match computed.expr.as_ref() {
+                        ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
+                        _ => None,
+                    },
+                    ast::MemberProp::PrivateName(_) => None,
+                };
+                if let Some(static_member) = static_member {
+                    if crate::analysis::is_builtin_static_function_member("Promise", static_member)
+                    {
+                        return Ok(Expr::PropertyGet {
+                            object: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::GlobalGet(0)),
+                                property: "Promise".to_string(),
+                            }),
+                            property: static_member.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // process.std{in,out,err}.{isTTY,columns,rows} — direct extern-call
     // shapes recognized BEFORE the regular process.X arm below, since the
     // double-Member shape (Member(Member(process, stream), prop)) doesn't
@@ -1828,9 +1863,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             )
                         );
                     // #4437: value reads such as `JSON.stringify` /
-                    // `Reflect.apply` / `BigInt.asIntN` / `Symbol.for` need the
-                    // reified namespace/constructor receiver. Direct calls still
-                    // take the intrinsic path this reroute-undo protects.
+                    // `Reflect.apply` / `BigInt.asIntN` / `Symbol.for` /
+                    // `Promise.resolve` need the reified namespace/constructor
+                    // receiver. Direct calls still take the intrinsic path this
+                    // reroute-undo protects.
                     let outer_static_member = match &member.prop {
                         ast::MemberProp::Ident(p) => Some(p.sym.as_ref()),
                         ast::MemberProp::Computed(c) => match c.expr.as_ref() {
@@ -1840,7 +1876,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         ast::MemberProp::PrivateName(_) => None,
                     };
                     let outer_is_reified_builtin_static_value = !member_is_call_callee
-                        && matches!(property.as_str(), "JSON" | "Reflect" | "BigInt" | "Symbol")
+                        && matches!(
+                            property.as_str(),
+                            "JSON" | "Reflect" | "BigInt" | "Symbol" | "Promise"
+                        )
                         && outer_static_member
                             .map(|member| {
                                 crate::analysis::is_builtin_static_function_member(property, member)
