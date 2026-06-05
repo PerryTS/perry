@@ -222,6 +222,43 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             .flatten(),
     )?;
 
+    // #4586: logical assignments (`&&=`, `||=`, `??=`) to a PROPERTY target
+    // must not store unconditionally. Desugaring to `a.b = (a.b OP rhs)` (the
+    // generic compound-assign shape below) always runs PutValue, which fires
+    // setters spuriously and throws `TypeError: Cannot assign to read only
+    // property` on non-writable `Object.defineProperty` data props — e.g.
+    // Zod v4's `inst._zod ??= {}` where `_zod` is already non-nullish and
+    // read-only, breaking every check/refinement-based schema under
+    // `perry.compilePackages`.
+    //
+    // Per ECMAScript LogicalAssignment, the store (PutValue) must be skipped
+    // entirely when the short-circuit holds. We desugar to
+    // `read(a.b) OP (a.b = rhs)` so the assignment lives on the RHS of the
+    // logical operator and is therefore only evaluated on the branch that
+    // actually needs to write. `rhs` is consumed exactly once.
+    //
+    // Scoped to `Member` targets: plain `Ident` locals/globals have no
+    // setters and no read-only data descriptors, so an unconditional
+    // `LocalSet` there is observationally identical to the spec — leaving
+    // that path untouched keeps the blast radius minimal.
+    if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) = &assign.left {
+        if let Some(logical_op) = match assign.op {
+            ast::AssignOp::AndAssign => Some(LogicalOp::And),
+            ast::AssignOp::OrAssign => Some(LogicalOp::Or),
+            ast::AssignOp::NullishAssign => Some(LogicalOp::Coalesce),
+            _ => None,
+        } {
+            let read_left = lower_assign_target_to_expr(ctx, &assign.left)?;
+            let target_expr = ast::Expr::Member(member.clone());
+            let store = lower_expr_assignment(ctx, &target_expr, Box::new(rhs))?;
+            return Ok(Expr::Logical {
+                op: logical_op,
+                left: Box::new(read_left),
+                right: Box::new(store),
+            });
+        }
+    }
+
     // Handle compound assignment operators (+=, -=, *=, /=, etc.)
     let value = match assign.op {
         ast::AssignOp::Assign => Box::new(rhs),

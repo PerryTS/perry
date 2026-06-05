@@ -1,5 +1,5 @@
 use perry_diagnostics::SourceCache;
-use perry_hir::{lower_module, ArrayElement, BinaryOp, Expr, Function, Stmt};
+use perry_hir::{lower_module, ArrayElement, BinaryOp, Expr, Function, LogicalOp, Stmt};
 use perry_parser::parse_typescript_with_cache;
 
 fn lower_src(src: &str) -> perry_hir::Module {
@@ -483,4 +483,49 @@ fn sloppy_js_yield_identifier_arrow_parameters_lower() {
     assert!(matches!(top_level_init(&module, "f"), Expr::Closure { .. }));
     assert!(matches!(top_level_init(&module, "g"), Expr::Closure { .. }));
     assert!(matches!(top_level_init(&module, "h"), Expr::Closure { .. }));
+}
+
+#[test]
+fn logical_property_assignment_short_circuits_the_store_4586() {
+    // #4586: `obj.prop ??= v` / `||=` / `&&=` must not store unconditionally.
+    // The pre-fix desugaring `obj.prop = (obj.prop OP v)` always ran PutValue,
+    // which fired setters spuriously and threw `TypeError: Cannot assign to
+    // read only property` on non-writable `Object.defineProperty` data props
+    // (e.g. Zod v4's `inst._zod ??= {}`). The fix desugars to
+    // `read(obj.prop) OP (obj.prop = v)` so the store lives on the
+    // short-circuit RHS and only runs on the branch that actually writes.
+    for (src, expected_op) in [
+        ("const o = { x: 1 }; o.x ??= 2;", LogicalOp::Coalesce),
+        ("const o = { x: 1 }; o.x ||= 2;", LogicalOp::Or),
+        ("const o = { x: 1 }; o.x &&= 2;", LogicalOp::And),
+    ] {
+        let module = lower_src(src);
+        let logical = module
+            .init
+            .iter()
+            .rev()
+            .find_map(|stmt| match stmt {
+                Stmt::Expr(expr @ Expr::Logical { .. }) => Some(expr),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!("expected a short-circuiting Logical for `{src}`, got {:?}", module.init)
+            });
+
+        let Expr::Logical { op, left, right } = logical else {
+            unreachable!();
+        };
+        assert_eq!(*op, expected_op, "operator mismatch for `{src}`");
+        // LHS is the property READ (GetValue), not a store.
+        assert!(
+            matches!(left.as_ref(), Expr::PropertyGet { property, .. } if property == "x"),
+            "expected a property read on the LHS for `{src}`, got {left:?}"
+        );
+        // The single store lives on the RHS, so it is only evaluated when the
+        // short-circuit does NOT hold.
+        assert!(
+            matches!(right.as_ref(), Expr::PutValueSet { .. }),
+            "expected the store to live on the short-circuit RHS for `{src}`, got {right:?}"
+        );
+    }
 }
