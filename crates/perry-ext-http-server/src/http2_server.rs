@@ -29,7 +29,8 @@ use hyper_util::server::conn::auto::Builder as AutoBuilder;
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_buffer, alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of,
-    register_handle, JsClosure, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
+    iter_handles_of_mut, register_handle, JsClosure, JsValue, ObjectHeader, RawClosureHeader,
+    StringHeader,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -103,6 +104,8 @@ pub struct Http2SecureServer {
 }
 
 pub struct Http2SessionHandle {
+    pub server_handle: i64,
+    pub session_event_emitted: bool,
     pub session_type: i32,
     pub connected: bool,
     pub encrypted: bool,
@@ -197,7 +200,7 @@ fn push_h2_event(event: Http2PendingEvent) {
     perry_ffi::notify_main_thread();
 }
 
-fn pairs_to_js_object(pairs: &[(String, String)]) -> f64 {
+pub(crate) fn pairs_to_js_object(pairs: &[(String, String)]) -> f64 {
     let mut map = HashMap::new();
     for (key, value) in pairs {
         map.insert(key.clone(), value.clone());
@@ -231,12 +234,12 @@ fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
     f64::from_bits(JsValue::from_object_ptr(obj as *mut u8).bits())
 }
 
-fn empty_object_value() -> f64 {
+pub(crate) fn empty_object_value() -> f64 {
     let text = alloc_string("{}");
     unsafe { f64::from_bits(js_json_parse(text.as_raw())) }
 }
 
-fn bool_value(value: bool) -> f64 {
+pub(crate) fn bool_value(value: bool) -> f64 {
     f64::from_bits(JsValue::from_bool(value).bits())
 }
 
@@ -274,7 +277,7 @@ fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
     }
 }
 
-fn bind_handle_method(handle: i64, name: &'static [u8]) -> f64 {
+pub(crate) fn bind_handle_method(handle: i64, name: &'static [u8]) -> f64 {
     unsafe { js_class_method_bind(handle_to_pointer_f64(handle), name.as_ptr(), name.len()) }
 }
 
@@ -345,6 +348,8 @@ fn call3(callback: i64, arg0: f64, arg1: f64, arg2: f64) {
 
 fn register_server_session(server_handle: i64) -> i64 {
     let session_handle = register_handle(Http2SessionHandle {
+        server_handle,
+        session_event_emitted: false,
         session_type: 0,
         connected: true,
         encrypted: false,
@@ -374,6 +379,98 @@ fn register_server_session(server_handle: i64) -> i64 {
         });
     }
     session_handle
+}
+
+fn mark_session_closed(session_handle: i64) {
+    if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+        session.closed = true;
+        session.destroyed = true;
+        if let Ok(mut slot) = session.sender.lock() {
+            *slot = None;
+        }
+    }
+}
+
+fn mark_server_sessions_closed(server_handle: i64) {
+    iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
+        if session.server_handle == server_handle {
+            session.closed = true;
+            session.destroyed = true;
+            if let Ok(mut slot) = session.sender.lock() {
+                *slot = None;
+            }
+        }
+    });
+}
+
+fn h2_listening_server_for_authority(authority: &str) -> Option<i64> {
+    let (_, port, _) = parse_authority(authority);
+    let mut matched = None;
+    iter_handle_ids_of::<Http2SecureServer, _>(|server_id| {
+        if matched.is_some() {
+            return;
+        }
+        if get_handle::<Http2SecureServer>(server_id)
+            .map(|server| server.base.listening && server.base.bound_port == port)
+            .unwrap_or(false)
+        {
+            matched = Some(server_id);
+        }
+    });
+    matched
+}
+
+fn local_server_handle_for_client(session_handle: i64) -> Option<i64> {
+    let session = get_handle::<Http2SessionHandle>(session_handle)?;
+    if session.session_type != 1 {
+        return None;
+    }
+    if session.server_handle != 0 {
+        return Some(session.server_handle);
+    }
+    h2_listening_server_for_authority(&session.authority)
+}
+
+fn has_active_server_session(server_handle: i64) -> bool {
+    let mut active = false;
+    iter_handles_of::<Http2SessionHandle, _>(|session| {
+        if session.server_handle == server_handle && !session.closed && !session.destroyed {
+            active = true;
+        }
+    });
+    active
+}
+
+fn server_has_session_listener(server_handle: i64) -> bool {
+    get_handle::<Http2SecureServer>(server_handle)
+        .and_then(|server| server.base.listeners.get("session"))
+        .map(|listeners| !listeners.is_empty())
+        .unwrap_or(false)
+}
+
+fn has_emitted_server_session(server_handle: i64) -> bool {
+    let mut emitted = false;
+    iter_handles_of::<Http2SessionHandle, _>(|session| {
+        if session.server_handle == server_handle
+            && session.session_event_emitted
+            && !session.closed
+            && !session.destroyed
+        {
+            emitted = true;
+        }
+    });
+    emitted
+}
+
+fn local_client_connect_ready(session_handle: i64) -> bool {
+    let Some(server_handle) = local_server_handle_for_client(session_handle) else {
+        return true;
+    };
+    if server_has_session_listener(server_handle) {
+        has_emitted_server_session(server_handle)
+    } else {
+        has_active_server_session(server_handle)
+    }
 }
 
 /// `http2.createSecureServer(opts, handler)` — opts carries `{ key, cert }`
@@ -545,6 +642,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
                                                 Ok(s) => s,
                                                 Err(e) => {
                                                     eprintln!("[node:http2] tls handshake: {}", e);
+                                                    mark_session_closed(session_handle);
                                                     return;
                                                 }
                                             };
@@ -578,6 +676,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
                                             }
                                         }
                                     }
+                                    mark_session_closed(session_handle);
                                 });
                             }
                             Err(e) => eprintln!("[node:http2] accept error: {}", e),
@@ -864,6 +963,9 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     .and_then(|s| s.base.listeners.get("session").cloned())
                     .unwrap_or_default();
                 let arg = handle_to_pointer_f64(session_handle);
+                if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
+                    session.session_event_emitted = true;
+                }
                 for cb in listeners {
                     call1(cb, arg);
                     unsafe {
@@ -872,6 +974,10 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 }
             }
             Http2PendingEvent::ClientConnect { session_handle } => {
+                if !local_client_connect_ready(session_handle) {
+                    push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
+                    continue;
+                }
                 let listeners = get_handle::<Http2SessionHandle>(session_handle)
                     .and_then(|s| s.listeners.get("connect").cloned())
                     .unwrap_or_default();
@@ -1061,6 +1167,7 @@ pub unsafe extern "C" fn js_node_http2_connect(
         closure_arg(Some(options_f64))
     };
     let (host, port, host_port) = parse_authority(&authority);
+    let local_server_handle = h2_listening_server_for_authority(&host_port).unwrap_or(0);
     let sender_slot = Arc::new(Mutex::new(None));
     let mut listeners = HashMap::new();
     if callback != 0 {
@@ -1070,6 +1177,8 @@ pub unsafe extern "C" fn js_node_http2_connect(
             .push(callback);
     }
     let session_handle = register_handle(Http2SessionHandle {
+        server_handle: local_server_handle,
+        session_event_emitted: false,
         session_type: 1,
         connected: false,
         encrypted: false,
@@ -1136,13 +1245,7 @@ pub unsafe extern "C" fn js_node_http2_connect(
             }
             push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
             let _ = connection.await;
-            if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-                session.closed = true;
-                session.destroyed = true;
-                if let Ok(mut slot) = session.sender.lock() {
-                    *slot = None;
-                }
-            }
+            mark_session_closed(session_handle);
         });
     });
 
@@ -1421,11 +1524,21 @@ fn queue_session_settings(handle: i64, args: &[f64]) -> f64 {
         .map(|session| session.session_type)
         .unwrap_or(1);
     let peer_type = if caller_type == 1 { 0 } else { 1 };
+    let local_server_handle = if caller_type == 1 {
+        local_server_handle_for_client(handle)
+    } else {
+        None
+    };
     let mut peer_ids = Vec::new();
     iter_handle_ids_of::<Http2SessionHandle, _>(|peer_id| {
         if get_handle::<Http2SessionHandle>(peer_id)
             .map(|session| {
-                session.session_type == peer_type && !session.closed && !session.destroyed
+                session.session_type == peer_type
+                    && !session.closed
+                    && !session.destroyed
+                    && local_server_handle
+                        .map(|server_handle| session.server_handle == server_handle)
+                        .unwrap_or(true)
             })
             .unwrap_or(false)
         {
@@ -1469,11 +1582,21 @@ fn queue_session_goaway(handle: i64, args: &[f64]) -> f64 {
         .map(|session| session.session_type)
         .unwrap_or(1);
     let peer_type = if caller_type == 1 { 0 } else { 1 };
+    let local_server_handle = if caller_type == 1 {
+        local_server_handle_for_client(handle)
+    } else {
+        None
+    };
     let mut peer_ids = Vec::new();
     iter_handle_ids_of::<Http2SessionHandle, _>(|peer_id| {
         if get_handle::<Http2SessionHandle>(peer_id)
             .map(|session| {
-                session.session_type == peer_type && !session.closed && !session.destroyed
+                session.session_type == peer_type
+                    && !session.closed
+                    && !session.destroyed
+                    && local_server_handle
+                        .map(|server_handle| session.server_handle == server_handle)
+                        .unwrap_or(true)
             })
             .unwrap_or(false)
         {
@@ -1781,73 +1904,6 @@ pub unsafe extern "C" fn js_ext_http2_stream_dispatch_method(
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_http2_stream_dispatch_property(
-    handle: i64,
-    property_ptr: *const u8,
-    property_len: usize,
-) -> f64 {
-    let undef = f64::from_bits(TAG_UNDEFINED);
-    let property = String::from_utf8_lossy(std::slice::from_raw_parts(property_ptr, property_len))
-        .into_owned();
-    match property.as_str() {
-        "on" => bind_handle_method(handle, b"on"),
-        "addListener" => bind_handle_method(handle, b"addListener"),
-        "setEncoding" => bind_handle_method(handle, b"setEncoding"),
-        "respond" => bind_handle_method(handle, b"respond"),
-        "end" => bind_handle_method(handle, b"end"),
-        "close" => bind_handle_method(handle, b"close"),
-        "setTimeout" => bind_handle_method(handle, b"setTimeout"),
-        "priority" => bind_handle_method(handle, b"priority"),
-        "additionalHeaders" => bind_handle_method(handle, b"additionalHeaders"),
-        "pushStream" => bind_handle_method(handle, b"pushStream"),
-        "respondWithFD" => bind_handle_method(handle, b"respondWithFD"),
-        "respondWithFile" => bind_handle_method(handle, b"respondWithFile"),
-        "sendTrailers" => bind_handle_method(handle, b"sendTrailers"),
-        "id" => get_handle::<Http2StreamHandle>(handle)
-            .map(|s| s.id as f64)
-            .unwrap_or(0.0),
-        "pending" => bool_value(
-            get_handle::<Http2StreamHandle>(handle)
-                .map(|s| s.pending)
-                .unwrap_or(false),
-        ),
-        "closed" => bool_value(
-            get_handle::<Http2StreamHandle>(handle)
-                .map(|s| s.closed)
-                .unwrap_or(false),
-        ),
-        "destroyed" => bool_value(
-            get_handle::<Http2StreamHandle>(handle)
-                .map(|s| s.destroyed)
-                .unwrap_or(false),
-        ),
-        "aborted" => bool_value(
-            get_handle::<Http2StreamHandle>(handle)
-                .map(|s| s.aborted)
-                .unwrap_or(false),
-        ),
-        "rstCode" => get_handle::<Http2StreamHandle>(handle)
-            .map(|s| s.rst_code as f64)
-            .unwrap_or(0.0),
-        "headersSent" => bool_value(
-            get_handle::<Http2StreamHandle>(handle)
-                .map(|s| s.headers_sent)
-                .unwrap_or(false),
-        ),
-        "sentHeaders" => get_handle::<Http2StreamHandle>(handle)
-            .map(|s| pairs_to_js_object(&s.sent_headers))
-            .unwrap_or(undef),
-        "session" => get_handle::<Http2StreamHandle>(handle)
-            .map(|s| handle_to_pointer_f64(s.session_handle))
-            .unwrap_or(undef),
-        "state" => empty_object_value(),
-        "bufferSize" => 0.0,
-        "endAfterHeaders" => bool_value(false),
-        _ => undef,
-    }
-}
-
 fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
     if let Some(stream) = get_handle_mut::<Http2StreamHandle>(handle) {
         stream.closed = true;
@@ -1909,6 +1965,7 @@ pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) 
     } else {
         close_listeners = Vec::new();
     }
+    mark_server_sessions_closed(handle);
     emit_no_arg_to_listeners(&close_listeners);
     if callback != 0 {
         let raw = callback as *const RawClosureHeader;

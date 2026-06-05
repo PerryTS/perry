@@ -56,6 +56,7 @@ mod handle_dispatch;
 mod http2_server;
 mod http2_session_settings;
 mod http2_settings;
+mod http2_stream_props;
 mod https_server;
 mod request;
 mod response;
