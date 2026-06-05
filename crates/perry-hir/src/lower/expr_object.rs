@@ -551,6 +551,25 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         (Expr::LocalGet(local_id), ty)
                     } else if let Some(func_id) = ctx.lookup_func(&name) {
                         (Expr::FuncRef(func_id), Type::Any)
+                    } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
+                        // An imported binding (`import { db } from "./client.js"`)
+                        // used as a shorthand property (`{ db }`). Resolve it to
+                        // the same `ExternFuncRef` the explicit form `{ db: db }`
+                        // produces — otherwise the property was silently dropped
+                        // (`{ db }` lowered to an EMPTY object), so e.g.
+                        // `getContext()` returned a context with `db === undefined`.
+                        let (param_types, return_type) = ctx
+                            .lookup_extern_func_types(orig_name)
+                            .map(|(p, r)| (p.clone(), r.clone()))
+                            .unwrap_or_else(|| (Vec::new(), Type::Any));
+                        (
+                            Expr::ExternFuncRef {
+                                name: orig_name.to_string(),
+                                param_types,
+                                return_type,
+                            },
+                            Type::Any,
+                        )
                     } else if ctx.lookup_class(&name).is_some() {
                         (Expr::ClassRef(name.clone()), Type::Any)
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
@@ -731,6 +750,20 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             Expr::LocalGet(local_id)
                         } else if let Some(func_id) = ctx.lookup_func(&name) {
                             Expr::FuncRef(func_id)
+                        } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
+                            // Imported binding used as shorthand in a spread/method
+                            // object literal (`{ db, ...rest }` — getContext's exact
+                            // shape). Resolve to the `ExternFuncRef` value rather
+                            // than dropping the property (which left `db` undefined).
+                            let (param_types, return_type) = ctx
+                                .lookup_extern_func_types(orig_name)
+                                .map(|(p, r)| (p.clone(), r.clone()))
+                                .unwrap_or_else(|| (Vec::new(), Type::Any));
+                            Expr::ExternFuncRef {
+                                name: orig_name.to_string(),
+                                param_types,
+                                return_type,
+                            }
                         } else if ctx.lookup_class(&name).is_some() {
                             Expr::ClassRef(name.clone())
                         } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
@@ -1007,6 +1040,18 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         Expr::FuncRef(func_id)
                     } else if let Some(local_id) = ctx.lookup_local(&name) {
                         Expr::LocalGet(local_id)
+                    } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
+                        // Imported binding used as a shorthand property — resolve
+                        // to its `ExternFuncRef` value instead of dropping it.
+                        let (param_types, return_type) = ctx
+                            .lookup_extern_func_types(orig_name)
+                            .map(|(p, r)| (p.clone(), r.clone()))
+                            .unwrap_or_else(|| (Vec::new(), Type::Any));
+                        Expr::ExternFuncRef {
+                            name: orig_name.to_string(),
+                            param_types,
+                            return_type,
+                        }
                     } else if ctx.lookup_class(&name).is_some() {
                         Expr::ClassRef(name.clone())
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
