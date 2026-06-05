@@ -1218,7 +1218,7 @@ pub unsafe extern "C" fn js_new_function_construct(
         if jv.is_undefined()
             || jv.is_null()
             || jv.is_bool()
-            || jv.is_int32()
+            || (jv.is_int32() && constructor_class_ref_id(func_value).is_none())
             || jv.is_any_string()
             || jv.is_bigint()
         {
@@ -1757,34 +1757,12 @@ pub unsafe extern "C" fn js_new_function_construct(
         }
     }
 
-    // #321 (effect Layer/Scope): `new C(args)` where `C` is a *class
-    // reference held as a first-class value* — the INT32-tagged form a bare
-    // `class` identifier lowers to (`Expr::ClassRef` → `INT32_TAG |
-    // class_id`). This reaches the dynamic-new helper via the
-    // `Expr::LocalGet` callee route in `new_dynamic.rs` whenever a class is
-    // aliased through a variable / field / cross-module argument
-    // (`const C = Svc; new C()`, or effect's `flatMap(self, …)` storing a
-    // `Context.Tag` subclass into `effect_instruction_i0`). Pre-fix this
-    // value was neither a heap class-object (the `is_class_object_value`
-    // arm above) nor a pointer-shaped closure (so
-    // `synthetic_class_id_for_function` returned 0 — it requires
-    // `is_pointer()`), leaving the instance stamped with class_id 0: every
-    // inherited prototype method then threw `<m> is not a function`.
-    // Stamp the registered class id so method dispatch walks the parent
-    // chain. Mirrors the #1789 heap-class-object arm above: the constructor
-    // body / field initializers are emitted on the static `new ClassName()`
-    // codegen path (there is no constructor-by-class_id runtime entry), so a
-    // dynamically-constructed instance starts with no own props — fields
-    // written afterward and prototype methods work.
-    {
-        let bits = func_value.to_bits();
-        if (bits >> 48) == 0x7FFE {
-            let class_cid = (bits & 0xFFFF_FFFF) as u32;
-            if class_cid != 0 && is_class_id_registered(class_cid) {
-                let inst = js_object_alloc(class_cid, 0);
-                return crate::value::js_nanbox_pointer(inst as i64);
-            }
-        }
+    // #321/#4530: `new C(args)` where `C` is a first-class ClassRef, including
+    // proxy-forwarded construction. Allocate an instance stamped with the
+    // registered class id and replay the standalone constructor so field
+    // initializers and `this.foo = ...` writes match static `new ClassName()`.
+    if let Some(class_cid) = constructor_class_ref_id(func_value) {
+        return construct_registered_class_ref(class_cid, class_cid, args_ptr, args_len);
     }
     if is_arrow_function_value(func_value) {
         crate::fs::validate::throw_type_error_with_code(
@@ -1836,6 +1814,47 @@ pub unsafe extern "C" fn js_new_function_construct(
     nan_boxed
 }
 
+fn constructor_class_ref_id(value: f64) -> Option<u32> {
+    if super::class_prototype_ref_id(value).is_some() {
+        return None;
+    }
+    super::class_ref_id(value)
+}
+
+fn class_object_class_id(value: f64) -> Option<u32> {
+    if !is_class_object_value(value) {
+        return None;
+    }
+    let obj = crate::value::JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
+    let class_id = js_object_get_class_id(obj);
+    if class_id != 0 && is_class_id_registered(class_id) {
+        Some(class_id)
+    } else {
+        None
+    }
+}
+
+fn new_target_class_id(new_target: f64) -> Option<u32> {
+    constructor_class_ref_id(new_target).or_else(|| class_object_class_id(new_target))
+}
+
+unsafe fn construct_registered_class_ref(
+    target_cid: u32,
+    instance_cid: u32,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let inst = if let Some((keys_array, field_count)) = registered_class_keys_array(instance_cid) {
+        js_object_alloc_class_inline_keys(instance_cid, 0, field_count, keys_array)
+    } else {
+        js_object_alloc(instance_cid, 0)
+    };
+    super::class_constructors::replay_registered_class_constructor(
+        target_cid, inst, args_ptr, args_len,
+    );
+    crate::value::js_nanbox_pointer(inst as i64)
+}
+
 fn constructor_prototype_bits(new_target: f64) -> Option<u64> {
     let bits = new_target.to_bits();
     if (bits >> 48) != 0x7FFD {
@@ -1879,6 +1898,10 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
         return crate::proxy::js_proxy_construct(func_value, arr_box, nt);
+    }
+    if let Some(target_cid) = constructor_class_ref_id(func_value) {
+        let instance_cid = new_target_class_id(nt).unwrap_or(target_cid);
+        return construct_registered_class_ref(target_cid, instance_cid, args_ptr, args_len);
     }
     if !is_callable_function_value(func_value) {
         return js_new_function_construct(func_value, args_ptr, args_len);

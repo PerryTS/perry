@@ -524,7 +524,7 @@ fn target_set(target: f64, key: f64, value: f64) {
         }
         return;
     }
-    let key_ptr = extract_pointer(property_key.to_bits()) as *const crate::StringHeader;
+    let key_ptr = crate::builtins::js_string_coerce(property_key) as *const crate::StringHeader;
     if crate::object::class_ref_id(target).is_some() {
         // Preserve the INT32-tagged class-ref bits so class dynamic props
         // land in CLASS_DYNAMIC_PROPS instead of being pointer-extracted to 0.

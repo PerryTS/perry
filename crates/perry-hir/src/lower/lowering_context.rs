@@ -354,10 +354,6 @@ pub struct LoweringContext {
     /// timestamp and print `1970-01-01T00:00:00.000Z`).
     pub(crate) plain_object_locals: HashSet<String>,
     pub(crate) proxy_revoke_locals: HashMap<String, String>,
-    /// For `const p = new Proxy(ClassName, handler)`, record the class name
-    /// so `new p(args)` can fold to `new ClassName(args)` (pragmatic — lets
-    /// the test's construct trap see the expected value).
-    pub(crate) proxy_target_classes: HashMap<String, String>,
     /// Alias map for class expressions: `const MyClass = class { ... }`
     /// binds the local `MyClass` to the synthetic class name created
     /// by `lower_class_from_ast`. The `new MyClass(...)` lowering looks

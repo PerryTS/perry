@@ -1199,28 +1199,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                // If the proxy's construction wrapped a known class,
-                // call the construct trap (for side effects) then
-                // instantiate the real class. This matches the
-                // test's expected behaviour.
-                if let Some(target_class) = ctx.proxy_target_classes.get(&class_name).cloned() {
-                    if ctx.lookup_class(&target_class).is_some() {
-                        if let Some(id) = ctx.lookup_local(&class_name) {
-                            let trap_call = Expr::ProxyConstruct {
-                                proxy: Box::new(Expr::LocalGet(id)),
-                                args: args.clone(),
-                            };
-                            return Ok(Expr::Sequence(vec![
-                                trap_call,
-                                Expr::New {
-                                    class_name: target_class,
-                                    args,
-                                    type_args: vec![],
-                                },
-                            ]));
-                        }
-                    }
-                }
                 if let Some(id) = ctx.lookup_local(&class_name) {
                     return Ok(Expr::ProxyConstruct {
                         proxy: Box::new(Expr::LocalGet(id)),

@@ -130,3 +130,37 @@ pub(crate) unsafe fn replay_class_object_constructor(
         false,
     );
 }
+
+/// Replay a registered class declaration constructor for an INT32-tagged
+/// ClassRef callee. Unlike class-expression values, class declarations do not
+/// carry per-evaluation capture slots on a heap class object, so only the
+/// user-provided `new` arguments are forwarded.
+pub(crate) unsafe fn replay_registered_class_constructor(
+    class_cid: u32,
+    inst: *mut ObjectHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+) {
+    let Some((ctor_ptr, total_params)) = lookup_class_constructor(class_cid) else {
+        return;
+    };
+
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
+    for i in 0..total_params as usize {
+        if !args_ptr.is_null() && i < args_len {
+            final_args.push(*args_ptr.add(i));
+        } else {
+            final_args.push(undef);
+        }
+    }
+    let _ = call_vtable_method(
+        ctor_ptr,
+        inst as i64,
+        final_args.as_ptr(),
+        final_args.len(),
+        total_params,
+        false,
+        false,
+    );
+}

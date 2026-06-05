@@ -7,6 +7,32 @@
 
 use super::*;
 
+static CLASS_KEYS_BY_ID: std::sync::RwLock<Option<std::collections::HashMap<u32, (usize, u32)>>> =
+    std::sync::RwLock::new(None);
+
+fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut ArrayHeader) {
+    if class_id == 0 || keys_array.is_null() {
+        return;
+    }
+    let mut guard = CLASS_KEYS_BY_ID.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(std::collections::HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .insert(class_id, (keys_array as usize, field_count));
+}
+
+pub(crate) fn registered_class_keys_array(class_id: u32) -> Option<(*mut ArrayHeader, u32)> {
+    let guard = CLASS_KEYS_BY_ID.read().ok()?;
+    let (addr, field_count) = guard.as_ref()?.get(&class_id).copied()?;
+    if addr == 0 {
+        return None;
+    }
+    Some((addr as *mut ArrayHeader, field_count))
+}
+
 /// Allocate a new object with the given class ID and field count
 /// Returns a pointer to the object header
 #[no_mangle]
@@ -237,11 +263,13 @@ pub extern "C" fn js_build_class_keys_array(
         .wrapping_add(1000000);
     let cached = shape_cache_get(shape_id);
     if !cached.is_null() {
+        remember_class_keys_array(class_id, field_count, cached);
         return cached;
     }
     if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
         let arr = crate::array::js_array_alloc_with_length_longlived(0);
         shape_cache_insert(shape_id, arr);
+        remember_class_keys_array(class_id, field_count, arr);
         return arr;
     }
     let keys_bytes = unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
@@ -273,6 +301,7 @@ pub extern "C" fn js_build_class_keys_array(
         }
     }
     shape_cache_insert(shape_id, arr);
+    remember_class_keys_array(class_id, field_count, arr);
     arr
 }
 
@@ -357,6 +386,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     unsafe {
         set_object_keys_array(ptr, keys_arr);
     }
+    remember_class_keys_array(class_id, field_count, keys_arr);
     ptr
 }
 

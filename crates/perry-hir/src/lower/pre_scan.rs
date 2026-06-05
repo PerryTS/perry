@@ -65,16 +65,7 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                         ctx.weakset_locals.insert(name);
                     }
                     Some("Proxy") => {
-                        ctx.proxy_locals.insert(name.clone());
-                        // Track proxy target class for `new p(args)` fold.
-                        if let Some(args) = new_expr.args.as_ref() {
-                            if let Some(first) = args.first() {
-                                if let ast::Expr::Ident(cls_ident) = first.expr.as_ref() {
-                                    let cls_name = cls_ident.sym.to_string();
-                                    ctx.proxy_target_classes.insert(name, cls_name);
-                                }
-                            }
-                        }
+                        ctx.proxy_locals.insert(name);
                     }
                     _ => {}
                 }

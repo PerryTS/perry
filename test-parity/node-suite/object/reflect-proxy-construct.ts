@@ -84,3 +84,45 @@ show("proxy chain honors newTarget prototype", () => {
     Object.getPrototypeOf(bar) === (Bar as any).prototype,
   ];
 });
+
+class Thing {
+  value: string;
+  constructor(value: string) {
+    this.value = value;
+  }
+  method() {
+    return `m:${this.value}`;
+  }
+}
+
+show("proxy class empty handler", () => {
+  const Wrapped: any = new Proxy(Thing, {});
+  const instance: any = new Wrapped("x");
+  return [instance instanceof Thing, instance.method()];
+});
+
+const classConstructHandler = {
+  construct(target: any, args: any[], newTarget: any) {
+    const instance: any = Reflect.construct(target, args, newTarget);
+    instance.value = `${instance.value}:proxy`;
+    return instance;
+  },
+};
+const WrappedThingWithTrap: any = new Proxy(Thing, classConstructHandler);
+
+show("proxy class construct trap delegates", () => {
+  const instance: any = new WrappedThingWithTrap("x");
+  return [instance instanceof Thing, instance.value, instance.method()];
+});
+
+class Child extends Thing {
+  child() {
+    return `child:${this.value}`;
+  }
+}
+
+show("proxy class empty handler newTarget", () => {
+  const Wrapped: any = new Proxy(Thing, {});
+  const instance: any = Reflect.construct(Wrapped, ["y"], Child);
+  return [instance instanceof Child, instance instanceof Thing, instance.child()];
+});

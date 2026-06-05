@@ -122,7 +122,6 @@ impl LoweringContext {
             wasm_instance_locals: HashSet::new(),
             plain_object_locals: HashSet::new(),
             proxy_revoke_locals: HashMap::new(),
-            proxy_target_classes: HashMap::new(),
             class_expr_aliases: HashMap::new(),
             in_constructor_class: None,
             current_class_super_ident: None,
