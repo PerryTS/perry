@@ -162,6 +162,31 @@ fn test_array_exotic_named_indices_and_boundary_props() {
 }
 
 #[test]
+fn test_array_sparse_max_valid_index_boundary() {
+    let mut arr = js_array_alloc(3);
+    arr = js_array_push_f64(arr, 0.0);
+    arr = js_array_push_f64(arr, 1.0);
+    arr = js_array_push_f64(arr, 2.0);
+
+    let max_index = u32::MAX - 1;
+    arr = js_array_set_f64_extend(arr, max_index, 77.0);
+
+    assert_eq!(js_array_length(arr), u32::MAX);
+    assert_eq!(js_array_get_f64(arr, max_index), 77.0);
+    assert_eq!(
+        js_array_get_index_or_string(arr, max_index as f64).to_bits(),
+        77.0f64.to_bits()
+    );
+
+    let key = string_key(b"4294967294");
+    assert_eq!(
+        crate::object::js_object_has_own(boxed_pointer(arr as *mut u8), string_value(key))
+            .to_bits(),
+        crate::value::TAG_TRUE
+    );
+}
+
+#[test]
 fn test_array_exotic_descriptors_and_global_prototype_identity() {
     let arr = js_array_alloc(0);
     let arr_box = boxed_pointer(arr as *mut u8);

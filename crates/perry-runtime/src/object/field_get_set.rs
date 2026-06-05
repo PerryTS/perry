@@ -1411,7 +1411,35 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {
-                    return crate::array::js_array_alloc(0);
+                    let names = crate::array::array_named_property_names(arr, true);
+                    let dense_limit = if length > (*arr).capacity && (*arr).capacity <= 1_000_000 {
+                        (*arr).capacity
+                    } else {
+                        0
+                    };
+                    let result = crate::array::js_array_alloc(
+                        dense_limit.saturating_add(names.len() as u32),
+                    );
+                    if dense_limit > 0 {
+                        let elements = (arr as *const u8)
+                            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                            as *const u64;
+                        for i in 0..dense_limit {
+                            if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
+                                continue;
+                            }
+                            let s = i.to_string();
+                            let key_box =
+                                crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
+                            crate::array::js_array_push_f64(result, key_box);
+                        }
+                    }
+                    for name in names {
+                        let key =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        crate::array::js_array_push(result, JSValue::string_ptr(key));
+                    }
+                    return result;
                 }
                 let elements = (arr as *const u8)
                     .add(std::mem::size_of::<crate::array::ArrayHeader>())
@@ -1970,9 +1998,6 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 // / `arr.hasOwnProperty(i)` stay correct after `arr.length = N`.
                 let arr = crate::array::clean_arr_ptr(obj_ptr as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
-                if length > 100_000 {
-                    return nanbox_false;
-                }
                 // Numeric key: extract the index. Accept both NaN-boxed i32
                 // and plain f64 (e.g. literal `1`) provided it's a
                 // non-negative integer in range.
@@ -1997,6 +2022,13 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     if idx >= length {
                         return nanbox_false;
                     }
+                    let sparse_key = idx.to_string();
+                    if crate::array::array_named_property_get_by_name(arr, &sparse_key).is_some() {
+                        return nanbox_true;
+                    }
+                    if idx >= (*arr).capacity {
+                        return nanbox_false;
+                    }
                     let elements = (arr as *const u8)
                         .add(std::mem::size_of::<crate::array::ArrayHeader>())
                         as *const u64;
@@ -2012,24 +2044,11 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                         if let Some(key_name) =
                             super::has_own_helpers::str_from_string_header(key_str)
                         {
-                            if key_name == "length" {
+                            if super::has_own_helpers::array_own_key_present(arr, key_str) {
                                 return nanbox_true;
                             }
-                            if let Some(index) = super::canonical_array_index(key_name) {
-                                if index < length {
-                                    let elements = (arr as *const u8)
-                                        .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                                        as *const u64;
-                                    if std::ptr::read(elements.add(index as usize))
-                                        != crate::value::TAG_HOLE
-                                    {
-                                        return nanbox_true;
-                                    }
-                                }
+                            if super::canonical_array_index(key_name).is_some() {
                                 return nanbox_false;
-                            }
-                            if crate::array::array_named_property_has(arr, key_str) {
-                                return nanbox_true;
                             }
                             if array_prototype_property_value(key_name, obj_ptr as usize).is_some()
                             {

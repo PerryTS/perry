@@ -2,6 +2,33 @@
 use super::*;
 use std::ptr;
 
+const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
+
+unsafe fn array_sparse_index_property_get(arr: *const ArrayHeader, index: u32) -> Option<f64> {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() || index < (*arr).capacity {
+        return None;
+    }
+    let key = index.to_string();
+    array_named_property_get_by_name(arr, &key)
+}
+
+unsafe fn array_sparse_index_property_set(arr: *mut ArrayHeader, index: u32, value: f64) {
+    let key = index.to_string();
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    array_named_property_set(arr, key_ptr, value);
+    let new_length = index + 1;
+    if (*arr).length < new_length {
+        (*arr).length = new_length;
+    }
+}
+
+fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringHeader) -> f64 {
+    let value =
+        crate::object::js_object_get_field_by_name(arr as *const crate::object::ObjectHeader, key);
+    f64::from_bits(value.bits())
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     let arr = {
@@ -98,7 +125,10 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
         if index >= length {
             return TAG_UNDEFINED_F64;
         }
-        if length > 100_000_000 {
+        if let Some(value) = array_sparse_index_property_get(arr, index) {
+            return value;
+        }
+        if index >= (*arr).capacity {
             return TAG_UNDEFINED_F64;
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -213,8 +243,10 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         if index >= length {
             return TAG_UNDEFINED_F64;
         }
-        // Guard: corrupted arrays with unreasonably large length
-        if length > 100_000_000 {
+        if let Some(value) = array_sparse_index_property_get(arr, index) {
+            return value;
+        }
+        if index >= (*arr).capacity {
             return TAG_UNDEFINED_F64;
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -243,6 +275,10 @@ pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, 
     unsafe {
         let length = (*arr).length;
         if index >= length {
+            return;
+        }
+        if index >= (*arr).capacity {
+            array_sparse_index_property_set(arr, index, value);
             return;
         }
         let value = canonicalize_array_numeric_store_value(arr, value);
@@ -305,6 +341,10 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
         if index >= length {
             return;
         }
+        if index >= (*arr).capacity {
+            array_sparse_index_property_set(arr, index, value);
+            return;
+        }
         let value = canonicalize_array_numeric_store_value(arr, value);
         let value_bits = value.to_bits();
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
@@ -364,6 +404,11 @@ pub extern "C" fn js_array_set_f64_extend(
             if is_frozen {
                 return arr;
             }
+            if index >= (*arr).capacity {
+                let value = value_handle.get_nanbox_f64();
+                array_sparse_index_property_set(arr, index, value);
+                return arr;
+            }
             let value = canonicalize_array_numeric_store_value(arr, value);
             let value_bits = value.to_bits();
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
@@ -379,6 +424,11 @@ pub extern "C" fn js_array_set_f64_extend(
 
         // Need to extend the array
         let new_length = index + 1;
+        if new_length > (*arr).capacity && new_length > MAX_DENSE_ARRAY_GROW_LENGTH {
+            let value = value_handle.get_nanbox_f64();
+            array_sparse_index_property_set(arr, index, value);
+            return arr;
+        }
         let arr = if new_length > (*arr).capacity {
             js_array_grow(arr, new_length)
         } else {
@@ -504,6 +554,57 @@ pub extern "C" fn js_array_set_string_key(
     arr
 }
 
+/// `arr[idx]` where `idx` may be a number or property-key value. This mirrors
+/// `js_array_set_index_or_string` for read paths that cannot safely narrow the
+/// key through i32 codegen.
+#[no_mangle]
+pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64) -> f64 {
+    if arr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let bits = idx.to_bits();
+    let top16 = bits >> 48;
+    if top16 == 0x7FFF {
+        let key = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+        return array_get_property_by_key(arr, key);
+    }
+    if top16 == 0x7FF9 {
+        let key = crate::value::js_get_string_pointer_unified(idx) as *const crate::StringHeader;
+        return array_get_property_by_key(arr, key);
+    }
+
+    let numeric = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+        Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
+    } else if top16 < 0x7FF8 || top16 > 0x7FFF {
+        Some(idx)
+    } else {
+        None
+    };
+    if let Some(n) = numeric {
+        if n.is_finite() && n.trunc() == n && n >= 0.0 && n < u32::MAX as f64 {
+            return js_array_get_f64(arr, n as u32);
+        }
+        if n.is_finite() && n.trunc() == n {
+            let key = if n == 0.0 {
+                "0".to_string()
+            } else {
+                format!("{:.0}", n)
+            };
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            return array_get_property_by_key(arr, key_ptr);
+        }
+    }
+
+    if unsafe { crate::symbol::js_is_symbol(idx) } != 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::value::js_jsvalue_to_string(idx);
+    if key.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    array_get_property_by_key(arr, key as *const crate::StringHeader)
+}
+
 /// `arr[idx] = value` where idx may be a NaN-boxed string (numeric-string
 /// key) OR a number. Dispatches at runtime: string tags → parse and route
 /// to `js_array_set_string_key`; otherwise treat as numeric and route to
@@ -554,14 +655,16 @@ pub extern "C" fn js_array_set_index_or_string(
         if n.is_finite() && n.trunc() == n && n >= 0.0 && n < u32::MAX as f64 {
             return js_array_set_f64_extend(arr, n as u32, value);
         }
-        if n.is_finite() && n.trunc() == n {
-            let s = if n == 0.0 {
-                "0".to_string()
-            } else {
-                format!("{:.0}", n)
-            };
-            let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            return js_array_set_string_key(arr, key, value);
+        // Any other finite/non-finite number that is NOT a canonical array
+        // index (2^32-1 and above, negatives, and non-integer floats such as
+        // `a[1.5]`) becomes an ordinary string property. Route through
+        // `js_jsvalue_to_string` so the key is the spec ToString of the
+        // number ("4294967295", "-1", "1.5", "NaN") rather than a truncated
+        // integer — `js_array_set_string_key` then stores it on the expando
+        // map without touching `length` or any element slot. (Issue #4543.)
+        let key = crate::value::js_jsvalue_to_string(idx);
+        if !key.is_null() {
+            return js_array_set_string_key(arr, key as *const crate::StringHeader, value);
         }
     }
     // Fallback for a NON-numeric key: a primitive (`a[null]`, `a[undefined]`,
@@ -569,10 +672,8 @@ pub extern "C" fn js_array_set_index_or_string(
     // ToPropertyKey these become string property keys (or, for `10n`, the
     // canonical index "10"); `js_array_set_string_key` routes accordingly.
     // Arrays previously DROPPED these writes (plain objects handled them).
-    // Restricted to `numeric.is_none()`: a non-integer FLOAT key (`a[1.5]`) is
-    // left untouched here because `js_array_set_string_key("1.5")` currently
-    // mis-parses it as index 1 (corrupting `a[1]`) — that's a separate bug,
-    // tracked. Symbols stay symbol-keyed (handled elsewhere).
+    // Restricted to `numeric.is_none()`: numeric keys (including non-integer
+    // finite floats) are handled above. Symbols stay symbol-keyed.
     if numeric.is_none() && unsafe { crate::symbol::js_is_symbol(idx) } == 0 {
         let key = crate::value::js_jsvalue_to_string(idx);
         if !key.is_null() {

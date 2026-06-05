@@ -40,6 +40,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Refs #488: bulk push for `arr.push(...src)` spread call.
     module.declare_function("js_array_push_spread_f64", I64, &[I64, I64]);
     module.declare_function("js_array_get_f64", DOUBLE, &[I64, I32]);
+    module.declare_function("js_array_get_index_or_string", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_array_numeric_get_f64_unboxed", DOUBLE, &[I64, I32]);
     module.declare_function("js_array_set_f64", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_array_numeric_set_f64_unboxed", I32, &[I64, I32, DOUBLE]);
