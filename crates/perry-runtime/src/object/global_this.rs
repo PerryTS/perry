@@ -339,6 +339,46 @@ pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
 }
 
+// #4569: Map/Set/WeakMap/WeakSet/WeakRef are constructors — calling them
+// without `new` is a TypeError (ECMA-262: an undefined newTarget throws). The
+// bare-call form previously fell through to `global_this_builtin_noop_thunk`
+// and silently returned `undefined`. (`new Map()` uses the separate
+// construct-expression path and is unaffected.)
+pub(crate) extern "C" fn map_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor Map requires 'new'")
+}
+
+pub(crate) extern "C" fn set_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor Set requires 'new'")
+}
+
+pub(crate) extern "C" fn weak_map_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor WeakMap requires 'new'")
+}
+
+pub(crate) extern "C" fn weak_set_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor WeakSet requires 'new'")
+}
+
+pub(crate) extern "C" fn weak_ref_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor WeakRef requires 'new'")
+}
+
 extern "C" fn global_this_url_pattern_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     input: f64,
@@ -2353,6 +2393,12 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
             | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
             | "BigInt64Array" | "BigUint64Array" => typed_array_constructor_call_thunk as *const u8,
+            // #4569: collection constructors throw when called without `new`.
+            "Map" => map_constructor_call_thunk as *const u8,
+            "Set" => set_constructor_call_thunk as *const u8,
+            "WeakMap" => weak_map_constructor_call_thunk as *const u8,
+            "WeakSet" => weak_set_constructor_call_thunk as *const u8,
+            "WeakRef" => weak_ref_constructor_call_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
