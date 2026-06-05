@@ -1,0 +1,20 @@
+types: function function function
+names: then catch finally
+lengths: 2 1 1
+then object:throw:TypeError
+then undefined:throw:TypeError
+then null:throw:TypeError
+then number:throw:TypeError
+then apply object:throw:TypeError
+then detached bare:throw:TypeError
+catch object:throw:TypeError
+catch undefined:throw:TypeError
+catch detached bare:throw:TypeError
+finally object:throw:TypeError
+finally undefined:throw:TypeError
+finally detached bare:throw:TypeError
+then valid:ok
+then apply valid:apply
+catch valid:TypeError
+finally callback
+finally valid:done

@@ -56,6 +56,7 @@ mod object_ops;
 mod object_ops_frozen;
 mod polymorphic_index;
 mod primitive_proto_thunks;
+mod promise_proto_thunks;
 mod property_key;
 pub(crate) mod prototype_chain;
 mod prototype_helpers;

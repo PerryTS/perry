@@ -4406,7 +4406,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             }
         }
         "Promise" => {
-            install_noop_proto_methods(proto_obj, &[("catch", 1), ("finally", 1), ("then", 2)]);
+            super::promise_proto_thunks::install_promise_proto_methods(proto_obj);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "TextEncoder" => {
