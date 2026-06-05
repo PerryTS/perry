@@ -28,3 +28,11 @@ let myColor = Color.Green;
 if (myColor === Color.Green) {
     console.log(100); // Should print 100 (means test passed)
 }
+
+// Reverse mapping (#4509): numeric enums map value -> name.
+const cIdx: Color = Color.Blue;
+console.log(Color[cIdx]); // Should print Blue (dynamic index)
+console.log(Color[0]);    // Should print Red
+console.log(Color[1]);    // Should print Green
+console.log(Color[2]);    // Should print Blue
+console.log(Status[5]);   // Should print Active

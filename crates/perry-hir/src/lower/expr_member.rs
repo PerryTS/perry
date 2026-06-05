@@ -834,6 +834,58 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // Computed access on an enum identifier: `Color[expr]` (#4509).
+    // TypeScript numeric enums carry a reverse mapping in addition to the
+    // forward one — `Color.Blue === 2` *and* `Color[2] === "Blue"`. The
+    // `.Member` form above folds to a compile-time constant, but the
+    // computed form can index with a runtime value, so materialize the
+    // enum's runtime object — the forward members plus a reverse entry for
+    // every numeric member — and index into it. String-valued members get
+    // no reverse entry, matching tsc (string enums are one-directional).
+    // Unwrap TS-only casts/parens so `(Color as any)[c]` is recognised too.
+    {
+        fn unwrap_enum_receiver(mut e: &ast::Expr) -> &ast::Expr {
+            loop {
+                match e {
+                    ast::Expr::TsAs(x) => e = &x.expr,
+                    ast::Expr::TsNonNull(x) => e = &x.expr,
+                    ast::Expr::TsConstAssertion(x) => e = &x.expr,
+                    ast::Expr::TsTypeAssertion(x) => e = &x.expr,
+                    ast::Expr::TsSatisfies(x) => e = &x.expr,
+                    ast::Expr::Paren(x) => e = &x.expr,
+                    _ => break,
+                }
+            }
+            e
+        }
+        if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Computed(computed)) =
+            (unwrap_enum_receiver(member.obj.as_ref()), &member.prop)
+        {
+            let members: Option<Vec<(String, crate::ir::EnumValue)>> = ctx
+                .lookup_enum(obj_ident.sym.as_ref())
+                .map(|(_, m)| m.to_vec());
+            if let Some(members) = members {
+                let index = lower_expr(ctx, &computed.expr)?;
+                let mut fields: Vec<(String, Expr)> = Vec::new();
+                for (name, value) in &members {
+                    match value {
+                        crate::ir::EnumValue::Number(n) => {
+                            fields.push((name.clone(), Expr::Number(*n as f64)));
+                            fields.push((n.to_string(), Expr::String(name.clone())));
+                        }
+                        crate::ir::EnumValue::String(s) => {
+                            fields.push((name.clone(), Expr::String(s.clone())));
+                        }
+                    }
+                }
+                return Ok(Expr::IndexGet {
+                    object: Box::new(Expr::Object(fields)),
+                    index: Box::new(index),
+                });
+            }
+        }
+    }
+
     // Check if this is a static field access (e.g., Counter.count)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
