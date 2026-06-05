@@ -235,6 +235,11 @@ crates/perry-hir/src/analysis.rs
 # Crossed the 2000-line gate after the stream/web adapter additions. Splitting
 # classic constructors from the web adapters is tracked under #1435.
 crates/perry-runtime/src/node_stream_constructors.rs
+# Codegen property-get / method-dispatch lowering tower (one arm per builtin
+# accessor + collection/string/regex method). Crossed the 2000-line gate (2004
+# LOC) on main after recent dispatch-arm additions. Splitting per receiver-type
+# family is tracked under #1435.
+crates/perry-codegen/src/expr/property_get.rs
 EOF
 )
 
