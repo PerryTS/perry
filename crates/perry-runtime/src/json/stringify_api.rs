@@ -205,8 +205,7 @@ pub unsafe extern "C" fn js_json_stringify_number(value: f64) -> *mut StringHead
         let s = itoa_buf.format(value as i64);
         return js_string_from_bytes(s.as_ptr(), s.len() as u32);
     }
-    let mut ryu_buf = ryu::Buffer::new();
-    let s = ryu_buf.format(value);
+    let s = crate::string::js_format_f64(value);
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
