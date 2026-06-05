@@ -169,7 +169,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_bits = blk.bitcast_double_to_i64(&recv_box);
             let recv_handle = blk.and(I64, &recv_bits, POINTER_MASK_I64);
             let len_i32 = blk.safe_load_i32_from_ptr(&recv_handle);
-            Ok(blk.sitofp(I32, &len_i32, DOUBLE))
+            Ok(blk.uitofp(I32, &len_i32, DOUBLE))
         }
 
         // Phase H err: `agg.errors` — AggregateError.errors field.
@@ -256,7 +256,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and
         // StringHeader start with `length: u32` (`crates/perry-runtime/src
         // /array.rs` and `string.rs`). Same pattern: unbox pointer, load
-        // u32 from offset 0, sitofp to double.
+        // u32 from offset 0, uitofp to double.
         // `.length` — INLINE for array, string, and interface-typed
         // receivers. Named types (interfaces, class instances) often
         // wrap strings or arrays at runtime, where length is at offset 0.
@@ -381,7 +381,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             ctx.current_block = fast_idx;
             let fast_len_i32 = ctx.block().safe_load_i32_from_ptr(&recv_handle);
-            let fast_len = ctx.block().sitofp(I32, &fast_len_i32, DOUBLE);
+            let fast_len = ctx.block().uitofp(I32, &fast_len_i32, DOUBLE);
             let fast_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
 

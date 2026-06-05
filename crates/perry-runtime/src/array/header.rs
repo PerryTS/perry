@@ -556,14 +556,13 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             }
         }
     }
-    // Length/capacity sanity: a real ArrayHeader has length <= capacity,
-    // and length below 100M (800 MB of element payload — well above
-    // legitimate large result sets, far below the 775M / 926M patterns
-    // we observed when a reused arena slot landed ASCII text at offsets
-    // 0/4). Buffers can be much larger than arrays, so only gate the
-    // polymorphic entry on the tighter array-sized bound and let
-    // buffer-specific runtime paths dispatch themselves when they
-    // recognize a registered buffer pointer.
+    // Length/capacity sanity: dense arrays have length <= capacity and
+    // length below 100M (800 MB of element payload — well above legitimate
+    // large result sets, far below the 775M / 926M patterns we observed
+    // when a reused arena slot landed ASCII text at offsets 0/4). Sparse
+    // arrays created by far-index writes are the one legal exception:
+    // logical length can be huge while dense capacity stays small and the
+    // far slots live in ARRAY_NAMED_PROPS.
     unsafe {
         let hdr = &*cleaned;
         if hdr.length > hdr.capacity || hdr.length > 100_000_000 {
@@ -573,11 +572,24 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             // wave them through; everything else at this size is
             // almost certainly corrupted.
             let addr = cleaned as usize;
-            if !crate::buffer::is_registered_buffer(addr)
-                && crate::typedarray::lookup_typed_array_kind(addr).is_none()
-            {
-                return std::ptr::null();
+            let sparse_array_shape = if addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+                let gc_header = (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                    as *const crate::gc::GcHeader;
+                (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+                    && hdr.length > hdr.capacity
+                    && hdr.capacity <= 1_000_000
+            } else {
+                false
+            };
+            if sparse_array_shape {
+                return cleaned;
             }
+            if crate::buffer::is_registered_buffer(addr)
+                || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            {
+                return cleaned;
+            }
+            return std::ptr::null();
         }
     }
     cleaned

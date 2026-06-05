@@ -76,6 +76,28 @@ fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     )
 }
 
+fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+    match index {
+        Expr::Integer(i) => *i < 0 || *i > i32::MAX as i64,
+        Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && (*n < 0.0 || *n > i32::MAX as f64),
+        Expr::LocalGet(id) if is_numeric_expr(ctx, index) => {
+            !ctx.i32_counter_slots.contains_key(id)
+        }
+        _ if is_numeric_expr(ctx, index) => !can_lower_expr_as_i32(
+            index,
+            &ctx.i32_counter_slots,
+            ctx.flat_const_arrays,
+            &ctx.array_row_aliases,
+            ctx.integer_locals,
+            ctx.clamp3_functions,
+            ctx.clamp_u8_functions,
+            ctx.integer_returning_functions,
+            ctx.i32_identity_functions,
+        ),
+        _ => false,
+    }
+}
+
 fn is_async_dispose_symbol_index(index: &Expr) -> bool {
     let Expr::SymbolFor(symbol_name) = index else {
         return false;
@@ -658,6 +680,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         DOUBLE,
                         "js_object_get_symbol_property",
                         &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
+                    ));
+                }
+                if !is_numeric_expr(ctx, index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_double = lower_expr(ctx, index)?;
+                    let arr_handle = {
+                        let blk = ctx.block();
+                        unbox_to_i64(blk, &arr_box)
+                    };
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_array_get_index_or_string",
+                        &[(I64, &arr_handle), (DOUBLE, &idx_double)],
+                    ));
+                }
+                if numeric_index_needs_runtime_key(ctx, index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_double = lower_expr(ctx, index)?;
+                    let arr_handle = {
+                        let blk = ctx.block();
+                        unbox_to_i64(blk, &arr_box)
+                    };
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_array_get_index_or_string",
+                        &[(I64, &arr_handle), (DOUBLE, &idx_double)],
                     ));
                 }
                 let require_numeric_layout =
