@@ -137,8 +137,9 @@ unsafe fn dispatch_pointer_with_replacer(
         crate::gc::GC_TYPE_OBJECT => {
             if is_object_pointer(ptr) {
                 stringify_object_with_replacer_pretty(ptr, replacer, buf, indent, depth);
-            } else if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
-                // Genuinely-empty object (#1704): emit "{}" not "null".
+            } else if super::stringify::object_has_no_own_keys(ptr) {
+                // Empty object (#1704) incl. a class instance with no own fields
+                // (only prototype methods/getters): emit "{}" not "null".
                 buf.push_str("{}");
             } else {
                 buf.push_str("null");
@@ -535,6 +536,25 @@ pub(crate) unsafe fn stringify_value_pretty(
             gc_obj_type(ptr),
             crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_ERROR
         ) {
+            buf.push_str("{}");
+            return;
+        }
+        // An empty object (incl. a class instance with no own fields — only
+        // prototype methods/getters) fails `is_object_pointer` and would be
+        // misdetected as an array by the `else` fallback below. Emit "{}" after
+        // a `toJSON` probe (a `class { toJSON() {…} }` instance carries no own
+        // field but must still honour the prototype method).
+        if gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT
+            && super::stringify::object_has_no_own_keys(ptr)
+        {
+            if (*(ptr as *const crate::ObjectHeader)).class_id != 0 {
+                if let Some(to_json_val) = object_get_to_json(ptr) {
+                    arm_to_json_result_guard(to_json_val);
+                    stringify_value_pretty(to_json_val, TYPE_UNKNOWN, buf, indent, depth);
+                    SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+                    return;
+                }
+            }
             buf.push_str("{}");
             return;
         }

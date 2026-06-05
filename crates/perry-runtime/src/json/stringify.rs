@@ -177,6 +177,24 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     }
 }
 
+/// True when `ptr` is a valid object with NO own (enumerable) keys: either a
+/// null `keys_array` (`{}`, `Object.fromEntries([])`) or a valid-but-empty one
+/// — the shape of a `class C {}` instance or a class whose only members are
+/// prototype methods/getters (those are not own properties). Such objects
+/// serialize as `{}`, never `null` or an array. Used by the value dispatchers
+/// to disambiguate an empty object from a corrupted pointer after the
+/// `keys_len > 0` `is_object_pointer` probe fails.
+pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
+    let keys = (*(ptr as *const crate::ObjectHeader)).keys_array;
+    if keys.is_null() {
+        return true;
+    }
+    let kp = keys as u64;
+    let top_16 = kp >> 48;
+    let looks_valid = (top_16 == 0 || top_16 == 1) && kp > 0x10000 && (kp & 0x7) == 0;
+    looks_valid && (*keys).length == 0
+}
+
 #[inline]
 pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
@@ -580,12 +598,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
                             return;
                         }
                     }
-                    if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
-                        // #1704: a genuinely empty object (null keys_array, e.g.
-                        // `Object.fromEntries([])` / a never-mutated `{}`) fails
-                        // `is_object_pointer`'s `keys_len > 0` guard but is valid —
-                        // emit "{}" not "null". A non-empty object that fails the
-                        // check is treated as corrupted and still emits "null".
+                    if object_has_no_own_keys(ptr) {
+                        // A valid object with no own keys (null keys_array like
+                        // `Object.fromEntries([])` / `{}`, OR a valid-but-empty
+                        // keys_array like a `class C {}` instance or a class with
+                        // only prototype methods/getters) fails `is_object_pointer`'s
+                        // `keys_len > 0` guard but is still `{}`, not `null`. A
+                        // non-empty object that fails the check is corrupted → "null".
                         buf.push_str("{}");
                     } else {
                         buf.push_str("null");
