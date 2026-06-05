@@ -240,6 +240,10 @@ crates/perry-runtime/src/node_stream_constructors.rs
 # LOC) on main after recent dispatch-arm additions. Splitting per receiver-type
 # family is tracked under #1435.
 crates/perry-codegen/src/expr/property_get.rs
+# Regex engine wrapper (compile/exec/replace + named-group + lookahead handling).
+# Crossed the 2000-line gate (2026 LOC) after the replace-lookahead additions.
+# Splitting the matcher from the replace machinery is tracked under #1435.
+crates/perry-runtime/src/regex.rs
 EOF
 )
 
