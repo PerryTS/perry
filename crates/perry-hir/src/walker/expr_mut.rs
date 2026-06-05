@@ -1681,6 +1681,10 @@ where
             f(target);
             f(key);
         }
+        Expr::ReflectGetOwnPropertyDescriptor { target, key } => {
+            f(target);
+            f(key);
+        }
         Expr::ReflectSet { target, key, value } => {
             f(target);
             f(key);

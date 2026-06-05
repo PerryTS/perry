@@ -272,6 +272,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_reflect_get_own_property_descriptor",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_reflect_get_prototype_of", DOUBLE, &[DOUBLE]);
     module.declare_function("js_reflect_set_prototype_of", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_is_extensible", DOUBLE, &[DOUBLE]);

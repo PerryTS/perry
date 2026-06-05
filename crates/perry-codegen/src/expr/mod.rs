@@ -1900,6 +1900,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ReflectApply { .. }
         | Expr::ReflectConstruct { .. }
         | Expr::ReflectDefineProperty { .. }
+        | Expr::ReflectGetOwnPropertyDescriptor { .. }
         | Expr::ReflectGetPrototypeOf(..)
         | Expr::ReflectSetPrototypeOf { .. }
         | Expr::ReflectIsExtensible(..)
