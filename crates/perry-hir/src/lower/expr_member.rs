@@ -1899,6 +1899,34 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 matches!(member, "fromCharCode" | "fromCodePoint" | "raw")
                             })
                             .unwrap_or(false);
+                    // #4521: `Promise.resolve` / `reject` / `all` / `race` /
+                    // `allSettled` / `any` / `withResolvers` / `try` read as
+                    // VALUES need the reified Promise constructor receiver so
+                    // they resolve to the real native function objects (correct
+                    // `.name` / `.length`, callable via reference / `.call`).
+                    // They are installed with metadata via
+                    // `install_constructor_static` (global_this.rs); the
+                    // reroute-undo otherwise collapses them to
+                    // `GlobalGet(0).<name>` (undefined). Direct calls
+                    // (`Promise.all([...])`) take the codegen fast path via the
+                    // `!member_is_call_callee` gate.
+                    let outer_is_reified_promise_static_value = !member_is_call_callee
+                        && property == "Promise"
+                        && outer_static_member
+                            .map(|member| {
+                                matches!(
+                                    member,
+                                    "resolve"
+                                        | "reject"
+                                        | "all"
+                                        | "race"
+                                        | "allSettled"
+                                        | "any"
+                                        | "withResolvers"
+                                        | "try"
+                                )
+                            })
+                            .unwrap_or(false);
                     if !outer_is_prototype_or_proto
                         && !receiver_is_namespace_value
                         && !outer_is_websocket_static
@@ -1906,6 +1934,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         && !outer_is_reified_builtin_static_value
                         && !outer_is_reified_date_static_value
                         && !outer_is_reified_string_static_value
+                        && !outer_is_reified_promise_static_value
                         && !receiver_is_detached_console_read
                     {
                         object_expr = Expr::GlobalGet(0);
