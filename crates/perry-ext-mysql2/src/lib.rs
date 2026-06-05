@@ -670,17 +670,26 @@ pub unsafe extern "C" fn js_mysql2_create_pool(config_f: f64) -> Handle {
     let mysql_config = parse_mysql_config(config);
     let url = mysql_config.to_url();
 
-    // Build the pool inside spawn_blocking so we have a Tokio
-    // context. Block on completion since createPool returns a
-    // synchronous Handle in mysql2's API.
+    // mysql2's `createPool` is SYNCHRONOUS and does NOT open a connection —
+    // it returns a pool that connects lazily on first query. Mirror that with
+    // sqlx `connect_lazy`: no eager connect (which returned handle 0 when the
+    // DB was unreachable, so the JS pool value was null and every
+    // `pool.constructor` / drizzle `isConfig(pool)` read crashed). `connect_lazy`
+    // still spawns the pool's background reaper, which needs an entered Tokio
+    // context — run it inside `spawn_blocking` (where the global runtime handle
+    // is current) rather than at the bare module-init call site (which panicked
+    // "no reactor running").
     let (tx, rx) = std::sync::mpsc::channel();
     spawn_blocking(move || {
+        // `connect_lazy` is synchronous but still spawns the pool's reaper task,
+        // which needs the runtime context. Run it inside `block_on` (same as the
+        // old eager path) so the spawn has a live reactor; the body returns
+        // immediately because no connection is opened.
         let pool_result = tokio::runtime::Handle::current().block_on(async {
             MySqlPoolOptions::new()
                 .max_connections(10)
                 .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
-                .connect(&url)
-                .await
+                .connect_lazy(&url)
         });
         let _ = tx.send(pool_result);
     });
