@@ -2084,7 +2084,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     _ => false,
                 };
                 if is_global_builtin {
-                    if let Some(len) = crate::analysis::builtin_constructor_length(name) {
+                    if let Some(len) = crate::analysis::builtin_constructor_length(name)
+                        .or_else(|| crate::analysis::builtin_global_function_length(name))
+                    {
                         return Ok(Expr::Number(len as f64));
                     }
                 }

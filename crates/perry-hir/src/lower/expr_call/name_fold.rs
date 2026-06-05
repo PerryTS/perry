@@ -13,7 +13,8 @@
 use swc_ecma_ast as ast;
 
 use crate::analysis::{
-    builtin_static_function_length, is_builtin_global_value_name, is_builtin_static_function_member,
+    builtin_global_function_length, builtin_static_function_length, is_builtin_global_value_name,
+    is_builtin_static_function_member,
 };
 use crate::ir::Expr;
 
@@ -58,6 +59,7 @@ pub(super) fn builtin_fn_name_for_arg(arg: &ast::Expr) -> Option<String> {
 /// return its spec `.length`.
 pub(super) fn builtin_fn_length_for_arg(arg: &ast::Expr) -> Option<u32> {
     match arg {
+        ast::Expr::Ident(id) => builtin_global_function_length(id.sym.as_ref()),
         ast::Expr::Member(m) => {
             if let (ast::Expr::Ident(ns_ident), ast::MemberProp::Ident(method_ident)) =
                 (m.obj.as_ref(), &m.prop)

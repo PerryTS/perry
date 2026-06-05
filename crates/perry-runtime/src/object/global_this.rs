@@ -3007,6 +3007,11 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let value = crate::value::js_nanbox_pointer(singleton as i64);
         js_object_set_field_by_name(singleton, key, value);
+        super::set_builtin_property_attrs(
+            singleton as usize,
+            "global".to_string(),
+            super::PropertyAttrs::new(true, true, true),
+        );
     }
     // #2145: pre-allocate the shared `%TypedArray%` intrinsic so per-kind
     // typed-array constructors can link their `__proto__` to it as they're
@@ -3320,43 +3325,67 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
-        let (func_ptr, arity, has_rest) = match name {
-            "eval" => (global_this_eval_thunk as *const u8, 1, false),
+        let (func_ptr, arity, has_rest, enumerable) = match name {
+            "eval" => (global_this_eval_thunk as *const u8, 1, false, false),
             "fetch" => (
                 super::global_fetch::global_this_fetch_thunk as *const u8,
                 1,
                 true,
+                true,
             ),
-            "structuredClone" => (global_this_structured_clone_thunk as *const u8, 2, false),
-            "atob" => (global_this_atob_thunk as *const u8, 1, false),
-            "btoa" => (global_this_btoa_thunk as *const u8, 1, false),
-            "setTimeout" => (global_this_set_timeout_thunk as *const u8, 2, true),
-            "clearTimeout" => (global_this_clear_timeout_thunk as *const u8, 1, false),
-            "setInterval" => (global_this_set_interval_thunk as *const u8, 2, true),
-            "clearInterval" => (global_this_clear_interval_thunk as *const u8, 1, false),
-            "setImmediate" => (global_this_set_immediate_thunk as *const u8, 1, true),
-            "clearImmediate" => (global_this_clear_immediate_thunk as *const u8, 1, false),
-            "queueMicrotask" => (global_this_queue_microtask_thunk as *const u8, 1, false),
+            "structuredClone" => (
+                global_this_structured_clone_thunk as *const u8,
+                2,
+                false,
+                true,
+            ),
+            "atob" => (global_this_atob_thunk as *const u8, 1, false, true),
+            "btoa" => (global_this_btoa_thunk as *const u8, 1, false, true),
+            "setTimeout" => (global_this_set_timeout_thunk as *const u8, 2, true, true),
+            "clearTimeout" => (global_this_clear_timeout_thunk as *const u8, 1, false, true),
+            "setInterval" => (global_this_set_interval_thunk as *const u8, 2, true, true),
+            "clearInterval" => (
+                global_this_clear_interval_thunk as *const u8,
+                1,
+                false,
+                true,
+            ),
+            "setImmediate" => (global_this_set_immediate_thunk as *const u8, 1, true, true),
+            "clearImmediate" => (
+                global_this_clear_immediate_thunk as *const u8,
+                1,
+                false,
+                true,
+            ),
+            "queueMicrotask" => (
+                global_this_queue_microtask_thunk as *const u8,
+                1,
+                false,
+                true,
+            ),
             // #2905: standard global helper functions.
-            "parseInt" => (global_this_parse_int_thunk as *const u8, 2, false),
-            "parseFloat" => (global_this_parse_float_thunk as *const u8, 1, false),
-            "isNaN" => (global_this_is_nan_thunk as *const u8, 1, false),
-            "isFinite" => (global_this_is_finite_thunk as *const u8, 1, false),
-            "encodeURI" => (global_this_encode_uri_thunk as *const u8, 1, false),
-            "decodeURI" => (global_this_decode_uri_thunk as *const u8, 1, false),
+            "parseInt" => (global_this_parse_int_thunk as *const u8, 2, false, false),
+            "parseFloat" => (global_this_parse_float_thunk as *const u8, 1, false, false),
+            "isNaN" => (global_this_is_nan_thunk as *const u8, 1, false, false),
+            "isFinite" => (global_this_is_finite_thunk as *const u8, 1, false, false),
+            "encodeURI" => (global_this_encode_uri_thunk as *const u8, 1, false, false),
+            "decodeURI" => (global_this_decode_uri_thunk as *const u8, 1, false, false),
             "encodeURIComponent" => (
                 global_this_encode_uri_component_thunk as *const u8,
                 1,
+                false,
                 false,
             ),
             "decodeURIComponent" => (
                 global_this_decode_uri_component_thunk as *const u8,
                 1,
                 false,
+                false,
             ),
             // #4511: legacy escape/unescape (ES Annex B).
-            "escape" => (global_this_escape_thunk as *const u8, 1, false),
-            "unescape" => (global_this_unescape_thunk as *const u8, 1, false),
+            // #4511: legacy escape/unescape (ES Annex B).
+            "escape" => (global_this_escape_thunk as *const u8, 1, false, false),
+            "unescape" => (global_this_unescape_thunk as *const u8, 1, false, false),
             _ => continue,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -3371,11 +3400,17 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         unsafe {
             crate::builtins::js_register_function_name(func_ptr, name.as_ptr(), name.len() as u32);
         }
+        super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         js_object_set_field_by_name(singleton, name_key, fn_value);
+        super::set_builtin_property_attrs(
+            singleton as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, enumerable, true),
+        );
     }
     // ECMA-262 21.1.2.12 / 21.1.2.13: `Number.parseFloat` and `Number.parseInt`
     // are the SAME function objects as the global `parseFloat` / `parseInt`

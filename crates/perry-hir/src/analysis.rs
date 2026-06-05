@@ -10,8 +10,8 @@ use crate::walker::{walk_expr_children, walk_expr_children_mut};
 
 mod builtins;
 pub(crate) use builtins::{
-    builtin_constructor_length, builtin_static_function_length, is_builtin_function,
-    is_builtin_global_value_name, is_builtin_static_function_member,
+    builtin_constructor_length, builtin_global_function_length, builtin_static_function_length,
+    is_builtin_function, is_builtin_global_value_name, is_builtin_static_function_member,
 };
 
 mod uses_this;
