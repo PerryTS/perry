@@ -339,6 +339,38 @@ pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
 }
 
+fn throw_collection_constructor_requires_new(name: &[u8]) -> f64 {
+    let mut message = Vec::with_capacity("Constructor  requires 'new'".len() + name.len());
+    message.extend_from_slice(b"Constructor ");
+    message.extend_from_slice(name);
+    message.extend_from_slice(b" requires 'new'");
+    super::object_ops::throw_object_type_error(&message)
+}
+
+pub(crate) extern "C" fn map_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    throw_collection_constructor_requires_new(b"Map")
+}
+
+pub(crate) extern "C" fn set_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    throw_collection_constructor_requires_new(b"Set")
+}
+
+pub(crate) extern "C" fn weakmap_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    throw_collection_constructor_requires_new(b"WeakMap")
+}
+
+pub(crate) extern "C" fn weakset_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    throw_collection_constructor_requires_new(b"WeakSet")
+}
+
 extern "C" fn global_this_url_pattern_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     input: f64,
@@ -2325,6 +2357,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // global value coerce like the bare-call lowering does.
             "Number" => global_this_number_thunk as *const u8,
             "Boolean" => global_this_boolean_thunk as *const u8,
+            "Map" => map_constructor_call_thunk as *const u8,
+            "Set" => set_constructor_call_thunk as *const u8,
+            "WeakMap" => weakmap_constructor_call_thunk as *const u8,
+            "WeakSet" => weakset_constructor_call_thunk as *const u8,
             "Error" => error_constructor_call_thunk as *const u8,
             "TypeError" => type_error_constructor_call_thunk as *const u8,
             "RangeError" => range_error_constructor_call_thunk as *const u8,

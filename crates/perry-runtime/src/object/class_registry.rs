@@ -753,6 +753,10 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             || func_ptr == global_this_string_thunk as *const u8 as usize
             || func_ptr == global_this_number_thunk as *const u8 as usize
             || func_ptr == global_this_boolean_thunk as *const u8 as usize
+            || func_ptr == map_constructor_call_thunk as *const u8 as usize
+            || func_ptr == set_constructor_call_thunk as *const u8 as usize
+            || func_ptr == weakmap_constructor_call_thunk as *const u8 as usize
+            || func_ptr == weakset_constructor_call_thunk as *const u8 as usize
             || func_ptr == error_constructor_call_thunk as *const u8 as usize
             || func_ptr == type_error_constructor_call_thunk as *const u8 as usize
             || func_ptr == range_error_constructor_call_thunk as *const u8 as usize
@@ -1523,6 +1527,38 @@ pub unsafe extern "C" fn js_new_function_construct(
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_response_thunk(std::ptr::null(), body, init);
+            }
+            "Map" => {
+                let map = if let Some(iterable) = args.first().copied() {
+                    crate::map::js_map_from_iterable(iterable)
+                } else {
+                    crate::map::js_map_alloc(4)
+                };
+                return crate::value::js_nanbox_pointer(map as i64);
+            }
+            "Set" => {
+                let set = if let Some(iterable) = args.first().copied() {
+                    crate::set::js_set_from_iterable(iterable)
+                } else {
+                    crate::set::js_set_alloc(4)
+                };
+                return crate::value::js_nanbox_pointer(set as i64);
+            }
+            "WeakMap" => {
+                let map = crate::weakref::js_weakmap_new();
+                let map_value = crate::value::js_nanbox_pointer(map as i64);
+                if let Some(iterable) = args.first().copied() {
+                    return crate::weakref::js_weakmap_init_iterable(map_value, iterable);
+                }
+                return map_value;
+            }
+            "WeakSet" => {
+                let set = crate::weakref::js_weakset_new();
+                let set_value = crate::value::js_nanbox_pointer(set as i64);
+                if let Some(iterable) = args.first().copied() {
+                    return crate::weakref::js_weakset_init_iterable(set_value, iterable);
+                }
+                return set_value;
             }
             "Event" => {
                 let event_type = args
