@@ -245,8 +245,16 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             nanbox_string_f64(fallback_ptr)
         };
 
-        // Get the field value, resolve toJSON, then apply the replacer.
-        let field_val = *fields_ptr.add(f as usize);
+        // Get the field value (invoking an own getter, as spec [[Get]] does),
+        // resolve toJSON, then apply the replacer.
+        let mut field_val = *fields_ptr.add(f as usize);
+        if filter_non_enum && f < keys_len {
+            if let Some(gv) =
+                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
+            {
+                field_val = gv;
+            }
+        }
         let field_after_to_json = apply_to_json_keyed(field_val, key_f64_for_replacer);
         let replaced = call_replacer(replacer, key_f64_for_replacer, field_after_to_json);
         let replaced_bits = replaced.to_bits();
@@ -604,17 +612,25 @@ pub(crate) unsafe fn stringify_object_pretty(
     // Collect non-undefined, non-closure fields
     let mut entries: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
-        let field_val = *fields_ptr.add(f as usize);
-        let field_bits = field_val.to_bits();
-        if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
-            continue;
-        }
         // Skip non-enumerable own keys (`Object.defineProperty(o, k,
-        // { enumerable: false })`).
+        // { enumerable: false })`) before touching the value.
         if filter_non_enum
             && f < keys_len
             && super::stringify::json_key_non_enumerable(obj, *keys_elements.add(f as usize))
         {
+            continue;
+        }
+        let mut field_val = *fields_ptr.add(f as usize);
+        // Own accessor properties: serialize the getter's return value.
+        if filter_non_enum && f < keys_len {
+            if let Some(gv) =
+                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
+            {
+                field_val = gv;
+            }
+        }
+        let field_bits = field_val.to_bits();
+        if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
             continue;
         }
         let key_name = if f < keys_len {

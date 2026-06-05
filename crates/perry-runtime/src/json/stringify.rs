@@ -1033,9 +1033,25 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     for j in 0..actual_fields {
         let f = pos(j);
-        let field_bits = read_field_bits(f);
+        // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
+        // { enumerable: false })`) before touching the value.
+        if filter_non_enum && json_key_non_enumerable(obj, *keys_elements.add(f as usize)) {
+            continue;
+        }
+        let mut field_bits = read_field_bits(f);
+        // Own accessor properties: serialize the getter's return value (Node
+        // invokes the getter), not the raw slot — which holds the getter
+        // closure (object-literal `get x() {}`) or an empty placeholder
+        // (`Object.defineProperty(o, k, { get })`). Gated on the descriptor flag.
+        if filter_non_enum {
+            if let Some(gv) =
+                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
+            {
+                field_bits = gv.to_bits();
+            }
+        }
         let field_val = f64::from_bits(field_bits);
-        // Skip undefined per JSON spec
+        // Skip undefined per JSON spec (incl. a getter that returned undefined).
         if field_bits == TAG_UNDEFINED {
             continue;
         }
@@ -1043,11 +1059,6 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         // Guarded by has_closure_field: if no field is a closure, the in-loop
         // check is skipped entirely for every field.
         if has_closure_field && is_closure_value(field_bits) {
-            continue;
-        }
-        // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
-        // { enumerable: false })`).
-        if filter_non_enum && json_key_non_enumerable(obj, *keys_elements.add(f as usize)) {
             continue;
         }
 
