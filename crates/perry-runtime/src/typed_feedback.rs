@@ -1279,11 +1279,31 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
-                if !index.is_finite() || index < 0.0 {
-                    f64::from_bits(TAG_UNDEFINED)
-                } else {
-                    crate::array::js_array_get_f64(raw_addr as *const ArrayHeader, index as u32)
+                // Fast path: a plain non-negative integer double indexes
+                // element storage directly.
+                if is_plain_number_bits(index.to_bits())
+                    && index >= 0.0
+                    && index.fract() == 0.0
+                    && index < u32::MAX as f64
+                {
+                    return crate::array::js_array_get_f64(
+                        raw_addr as *const ArrayHeader,
+                        index as u32,
+                    );
                 }
+                // Everything else — a string key ("1" canonical index, or a
+                // "foo" / "-1" expando), or a negative / fractional / non-finite
+                // number — coerces to a property key and dispatches through the
+                // full array getter, which routes canonical indices to element
+                // storage and otherwise consults named props, `length`, and the
+                // Array prototype. Previously every such key returned
+                // `undefined`, so `a["1"]` / `a[k]` (k a numeric string) and the
+                // `a[-1]` expando read silently missed.
+                let key_ptr = index_value_to_property_key(index);
+                crate::object::js_object_get_field_by_name_f64(
+                    raw_addr as *const ObjectHeader,
+                    key_ptr,
+                )
             }
             crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
                 let key_ptr = index_value_to_property_key(index);
