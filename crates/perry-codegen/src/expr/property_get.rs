@@ -691,6 +691,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // arrives. Other property shapes still fall through to
             // `0.0`.
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
+                // `process.env` read as a VALUE (not `process.env.X`) must
+                // materialize the live env object, not the `undefined` sentinel.
+                // Member reads `process.env.X` are special-cased elsewhere to
+                // `EnvGet`, but passing `process.env` whole (e.g.
+                // `EnvSchema.safeParse(process.env)` — the canonical config
+                // pattern) reached the GlobalGet fall-through and lowered to
+                // `undefined`, so the consumer iterated `undefined`. Only the
+                // `process` global exposes a meaningful `.env`, so routing by the
+                // property string alone is safe here.
+                if property == "env" {
+                    return Ok(ctx.block().call(DOUBLE, "js_process_env", &[]));
+                }
                 // #2904: V8/Node static Error members read as values
                 // (`typeof Error.isError`, `Error.stackTraceLimit`, …). The
                 // HIR collapses every builtin global receiver to
