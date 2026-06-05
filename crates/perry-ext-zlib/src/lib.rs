@@ -6,10 +6,10 @@
 //! aren't valid UTF-8, so the wrapper can't go through the standard
 //! `read_string` / `alloc_string` path.
 
-use flate2::read::{GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
+use flate2::read::{GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use perry_ffi::{alloc_buffer, BufferHeader};
-use std::io::Read;
+use perry_ffi::{alloc_buffer, BufferHeader, ErrorKind};
+use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read};
 
 // #1843 — Transform-stream objects (`createGzip`/`createDeflate`/… with
 // `.write`/`.end`/`.on`/`.pipe`) and Brotli one-shots. Split into its own
@@ -31,10 +31,17 @@ fn gzip_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8>> 
 }
 
 fn gunzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut decoder = GzDecoder::new(data);
+    let mut decoder = MultiGzDecoder::new(data);
     let mut decompressed = Vec::new();
     decoder.read_to_end(&mut decompressed)?;
     Ok(decompressed)
+}
+
+fn throw_deflate_decode_error(err: IoError) -> ! {
+    if err.kind() == IoErrorKind::UnexpectedEof {
+        perry_ffi::throw_with_code("unexpected end of file", "Z_BUF_ERROR", ErrorKind::Error);
+    }
+    perry_ffi::throw_with_code("incorrect header check", "Z_DATA_ERROR", ErrorKind::Error)
 }
 
 // Node's `zlib.deflateSync`/`inflateSync` use the zlib format (RFC 1950 —
@@ -93,6 +100,7 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut BufferHeade
     stream::js_zlib_validate_buffer_arg(data_bits); // #3662
     match stream::read_input_from_bits(data_bits).map(|d| gunzip_bytes(&d)) {
         Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(err)) => throw_deflate_decode_error(err),
         _ => std::ptr::null_mut(),
     }
 }
@@ -125,6 +133,7 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut BufferHead
     stream::js_zlib_validate_buffer_arg(data_bits); // #3662
     match stream::read_input_from_bits(data_bits).map(|d| inflate_bytes(&d)) {
         Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(err)) => throw_deflate_decode_error(err),
         _ => std::ptr::null_mut(),
     }
 }
@@ -186,11 +195,39 @@ mod tests {
     }
 
     #[test]
+    fn gunzip_reads_all_gzip_members() {
+        let a = gzip_bytes(b"first ").unwrap();
+        let b = gzip_bytes(b"second ").unwrap();
+        let c = gzip_bytes(b"third").unwrap();
+        let mut concatenated = Vec::new();
+        concatenated.extend_from_slice(&a);
+        concatenated.extend_from_slice(&b);
+        concatenated.extend_from_slice(&c);
+        assert_eq!(gunzip_bytes(&concatenated).unwrap(), b"first second third");
+    }
+
+    #[test]
+    fn gunzip_rejects_invalid_data() {
+        assert!(gunzip_bytes(b"not a gzip stream").is_err());
+    }
+
+    #[test]
     fn deflate_then_inflate_round_trips() {
         let input = b"deflate test deflate test deflate test deflate test";
         let compressed = deflate_bytes(input).unwrap();
         let decompressed = inflate_bytes(&compressed).unwrap();
         assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn inflate_rejects_raw_deflate_payload() {
+        use flate2::read::DeflateEncoder;
+
+        let mut raw = Vec::new();
+        DeflateEncoder::new(&b"hello"[..], Compression::default())
+            .read_to_end(&mut raw)
+            .unwrap();
+        assert!(inflate_bytes(&raw).is_err());
     }
 
     // End-to-end TS smoke tests cover the FFI Buffer allocation path.

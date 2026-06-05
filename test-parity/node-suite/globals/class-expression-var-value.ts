@@ -20,6 +20,7 @@ const C = class {
 };
 
 const D = B;
+const E = D;
 
 console.log("typeof B:", typeof B);
 console.log("B.parse:", B.parse(1));
@@ -31,3 +32,6 @@ console.log("new C:", new C().parse(4));
 console.log("typeof D:", typeof D);
 console.log("D.parse:", D.parse(5));
 console.log("new D:", new D().parse(6));
+console.log("typeof E:", typeof E);
+console.log("E.parse:", E.parse(7));
+console.log("new E:", new E().parse(8));

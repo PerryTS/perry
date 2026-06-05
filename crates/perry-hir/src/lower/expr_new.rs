@@ -1570,7 +1570,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // allocation that matches the pre-fix baseline. Real
             // classes still win — the `lookup_class` check above
             // returns `Expr::New { class_name }` before reaching here.
-            if ctx.lookup_class(&class_name).is_none() {
+            if ctx.lookup_class(&class_name).is_none()
+                && ctx.resolve_class_alias(&class_name).is_none()
+            {
                 if let Some(local_id) = ctx.lookup_local(&class_name) {
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::LocalGet(local_id)),

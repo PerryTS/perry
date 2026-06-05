@@ -1,16 +1,10 @@
-# nestjs-hello — current compilation walls
+# nestjs-hello - current compilation wall
 
-This fixture is the maintainer's PR #754 ask for an end-to-end smoke test
-that boots a real `@nestjs/common` + `@nestjs/core` app through Perry's
-legacy decorator metadata path. It is **wired but not yet passing** —
-`fixture.sh` reports SKIP and points back here so the release sweep records
-the gap without going red.
-
-The fixture's TypeScript surface (`entry.ts`) is intentionally minimal:
-one `@Injectable` service, one `@Controller` with a `@Get` route, one
-`@Module`, and `NestFactory.create(AppModule)` + `app.listen(port)`. If
-this fixture compiles cleanly and the curl assertions pass, the PR
-delivers what was pitched. The walls below are what stand in the way.
+This fixture is an end-to-end NestJS smoke test that boots a real
+`@nestjs/common` + `@nestjs/core` + `@nestjs/platform-express` app through
+Perry's legacy decorator metadata path. It remains wired but skipped:
+`fixture.sh` reports SKIP while this file is present so the release sweep
+records the current gap without going red.
 
 Run order to reproduce:
 
@@ -20,88 +14,50 @@ npm install
 ../../../../target/release/perry entry.ts -o ./out
 ```
 
-## Resolved by PR #754 (this PR)
+## Resolved by the current package-compat cut
 
-- **`util.types` missing from the API manifest.** Caused `\`util.types\`
-  is not implemented in Perry` early in the compile. Fixed by declaring
-  `property("util", "types")` in
-  `crates/perry-api-manifest/src/entries.rs` and shipping a real `types`
-  surface (isPromise / isAsyncFunction / isMap / isSet / isUint8Array /
-  isProxy → defaults to `false` for the unknown shapes) in the `node:util`
-  stub at `crates/perry-jsruntime/src/modules.rs`.
-- **`super.<prop>` not implemented.** Caused `Direct super property
-  access not yet supported, use super.method()` for rxjs's
-  OperatorSubscriber pattern (`this._next = onNext ? wrapper :
-  super._next`). Lowered to `this.<prop>` (and `this[expr]` for computed
-  access) — correct when the subclass does not override the property,
-  which covers the rxjs / NestJS pattern. See the inline comment in
-  `crates/perry-hir/src/lower/expr_misc.rs`. Strict-super semantics with
-  parent-vtable lookup is still a TODO for a follow-up.
-- **`async_hooks.AsyncResource` missing.** Caused
-  `\`async_hooks.AsyncResource\` is not implemented in Perry` from
-  `@nestjs/core`'s context-bind path. Fixed by adding
-  `AsyncResource` + `AsyncLocalStorage` classes (plus
-  `executionAsyncId` / `createHook` helpers) to a real `async_hooks`
-  stub in `crates/perry-jsruntime/src/modules.rs`. The bind/runInAsyncScope
-  shape is enough for the NestJS code path; no real async-context
-  tracking yet.
+- `npm install` now resolves normally with NestJS 11-compatible dependency
+  versions.
+- The fixture trust metadata covers the current NestJS, Express, readable-stream,
+  RxJS, and small transitive helper package graph that Perry must compile
+  ahead-of-time.
+- `depd` and `function-bind` no longer stop compilation with dynamic
+  `Function(...)` wrappers; their package-specific CommonJS rewrites compile
+  arity-erased closures instead.
+- `safer-buffer` no longer probes private `process.binding('buffer')` for
+  `kStringMaxLength`.
+- `safe-buffer` no longer routes its fallback through deprecated
+  `buffer.SlowBuffer`.
+- Legacy CommonJS inheritance patterns that call `Stream.call(this)` or
+  `EventEmitter.call(this)` now lower to the same receiver initialization shape
+  this fixture needs from Express/readable-stream.
 
 ## Open
 
-### Wall 4 — cross-module method symbol mangling for re-exported classes
+### Wall 1 - default-wrapper symbols for re-exported modules
 
-After the three resolved walls, the compile and codegen succeed but
-linking fails:
+After the resolved walls above, the fixture reaches native linking and then
+fails with undefined default-wrapper symbols. Current representative symbols:
 
+```text
+undefined reference to `__perry_wrap_perry_fn_node_modules_rxjs_src_index_ts__default'
+undefined reference to `perry_fn_node_modules_rxjs_src_index_ts__default'
+undefined reference to `perry_fn_node_modules_rxjs_src_operators_index_ts__default'
+undefined reference to `perry_fn_node_modules_uid_dist_index_mjs__default'
+undefined reference to `__perry_wrap_perry_fn_node_modules__nestjs_core_router_interfaces_routes_interface_js__default'
+undefined reference to `__perry_wrap_perry_fn_node_modules__nestjs_platform_express_interfaces_nest_express_application_interface_js__default'
 ```
-Undefined symbols for architecture arm64:
-  "_perry_method_node_modules_rxjs_src_index_ts__Observable__subscribe", …
-  "_perry_method_node_modules_rxjs_src_index_ts__Subject__error", …
-  "_perry_method_node_modules_rxjs_src_index_ts__Subscriber__next", …
-  "_perry_method_node_modules_rxjs_src_index_ts__Subscription__unsubscribe", …
-```
 
-The class definitions live in
-`node_modules/rxjs/src/internal/<Subscription|Subscriber|Observable|Subject>.ts`,
-so the **defining** module's prefix is
-`node_modules_rxjs_src_internal_Subscription_ts` (etc.) — that's the
-emitted symbol. But callers that import via `rxjs`'s barrel
-`src/index.ts` reference the symbol with the **importing** module's
-prefix (`node_modules_rxjs_src_index_ts__Subscription__unsubscribe`),
-which never gets emitted by anyone, so the linker fails.
-
-The same mangling site that emits the `extern` declaration at the call
-site needs to follow the re-export chain back to the defining module's
-prefix. The hono / fastify fixtures don't hit this because they import
-flat classes from a single file, not barrel-re-exported class
-hierarchies.
-
-This is a Perry codegen surgery (probably in
-`crates/perry-codegen/src/codegen.rs` around the
-`emit_string_pool` / class-vtable-registration loop or the cross-module
-method-call lowering). Out of scope for PR #754; a focused follow-up.
-
-### Probable walls after #4
-
-Even with the mangling fix in, the NestJS bootstrap likely surfaces a
-few more — these are educated guesses based on what NestJS does at
-container build time, ranked in order of likelihood:
-
-1. **Express adapter** — `@nestjs/platform-express` instantiates an
-   express app, attaches middleware, calls `.listen(port)`. The
-   compile already showed `_perry_method_node_modules__nestjs_platform_express_adapters_express_adapter_js__ExpressAdapter__initHttpServer` as missing, which is the same wall #4 hitting from a different angle.
-2. **`process` / `events` surfaces NestJS Logger reaches into.** The
-   `EventEmitter` stub already covers the dominant calls, but `setImmediate`
-   / `process.nextTick` may need a closer look.
-3. **`@nestjs/common` reflection helpers** — the container does a
-   prototype walk via `Object.getOwnPropertyNames` (already working
-   thanks to the PR's `js_object_get_own_property_names` extension on
-   class refs).
+These modules are import barrels or type/interface re-export surfaces rather
+than concrete default function definitions. Call sites still emit default-call
+and default-wrapper references for them, but no object file defines the matching
+symbols. The next focused fix should make default-import/default-call lowering
+follow re-exported module surfaces back to a concrete binding, or avoid emitting
+callable default references for type-only/interface barrels.
 
 ## When this fixture flips to PASS
 
-Once the open walls are gone and `fixture.sh` succeeds end-to-end,
-delete this `WALLS.md`. The fixture driver treats `WALLS.md`'s presence
-as the marker that turns compile / startup failures into SKIP; removing
-it converts those into hard FAILs so a regression past this baseline
-becomes impossible.
+Once the open linker wall is gone and `fixture.sh` succeeds end-to-end, delete
+this `WALLS.md`. The fixture driver treats `WALLS.md` as the marker that turns
+compile/startup failures into SKIP; removing it converts those into hard FAILs
+so regressions past this baseline are visible.

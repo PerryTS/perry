@@ -52,6 +52,35 @@ fn is_node_stream_class_name(name: &str) -> bool {
     )
 }
 
+fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
+    let Some(receiver) = args.first().cloned() else {
+        return Expr::Undefined;
+    };
+    if !matches!(receiver, Expr::This | Expr::LocalGet(_)) {
+        return Expr::Undefined;
+    }
+    let mut exprs = vec![
+        Expr::PropertySet {
+            object: Box::new(receiver.clone()),
+            property: "_events".to_string(),
+            value: Box::new(Expr::Object(Vec::new())),
+        },
+        Expr::PropertySet {
+            object: Box::new(receiver.clone()),
+            property: "_eventsCount".to_string(),
+            value: Box::new(Expr::Number(0.0)),
+        },
+        Expr::PropertySet {
+            object: Box::new(receiver),
+            property: "_maxListeners".to_string(),
+            value: Box::new(Expr::Undefined),
+        },
+    ];
+    exprs.extend(args.into_iter().skip(1));
+    exprs.push(Expr::Undefined);
+    Expr::Sequence(exprs)
+}
+
 pub(super) fn try_native_module_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -1404,6 +1433,20 @@ pub(super) fn try_native_module_methods(
                                 type_args: Vec::new(),
                             });
                             return Ok(Ok(Expr::Sequence(exprs)));
+                        }
+                        let normalized_module =
+                            module_name.strip_prefix("node:").unwrap_or(module_name);
+                        if method_name == "call" {
+                            if normalized_module == "stream"
+                                && matches!(imported_method, None | Some("Stream"))
+                            {
+                                return Ok(Ok(event_emitter_constructor_call(args)));
+                            }
+                            if normalized_module == "events"
+                                && matches!(imported_method, Some("EventEmitter"))
+                            {
+                                return Ok(Ok(event_emitter_constructor_call(args)));
+                            }
                         }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep
                         // `mod.method()` call form. Without this, perry/* and

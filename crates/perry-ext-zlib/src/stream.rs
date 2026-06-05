@@ -19,14 +19,14 @@
 
 use perry_ffi::{
     alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
-    BufferHeader, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
+    BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Mutex;
 
 use flate2::read::{
-    DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder,
+    DeflateDecoder, DeflateEncoder, GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
 };
 use flate2::Compression;
 
@@ -96,6 +96,14 @@ fn brotli_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     brotli::Decompressor::new(data, 4096).read_to_end(&mut out)?;
     Ok(out)
+}
+
+fn throw_brotli_decode_error() -> ! {
+    perry_ffi::throw_with_code(
+        "Decompression failed",
+        "ERR__ERROR_FORMAT_PADDING_2",
+        ErrorKind::Error,
+    )
 }
 
 /// Read the bytes of a one-shot input argument. Node's `gzipSync` / `gunzipSync`
@@ -169,6 +177,7 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut 
     js_zlib_validate_buffer_arg(data_bits);
     match read_input_from_bits(data_bits).map(|d| brotli_decompress_bytes(&d)) {
         Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(_)) => throw_brotli_decode_error(),
         _ => std::ptr::null_mut(),
     }
 }
@@ -217,7 +226,7 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
             GzEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
         }
         Codec::Gunzip => {
-            GzDecoder::new(input).read_to_end(&mut out)?;
+            MultiGzDecoder::new(input).read_to_end(&mut out)?;
         }
         Codec::Deflate => {
             ZlibEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
@@ -234,7 +243,7 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
         Codec::Unzip => {
             // Node's `createUnzip` auto-detects gzip vs zlib by header.
             if input.len() >= 2 && input[0] == 0x1f && input[1] == 0x8b {
-                GzDecoder::new(input).read_to_end(&mut out)?;
+                MultiGzDecoder::new(input).read_to_end(&mut out)?;
             } else {
                 ZlibDecoder::new(input).read_to_end(&mut out)?;
             }
@@ -1002,6 +1011,21 @@ mod stream_tests {
     }
 
     #[test]
+    fn gunzip_run_codec_reads_all_members() {
+        let a = stream_compress(Codec::Gzip, &[b"first "]);
+        let b = stream_compress(Codec::Gzip, &[b"second "]);
+        let c = stream_compress(Codec::Gzip, &[b"third"]);
+        let mut concatenated = Vec::new();
+        concatenated.extend_from_slice(&a);
+        concatenated.extend_from_slice(&b);
+        concatenated.extend_from_slice(&c);
+        assert_eq!(
+            run_codec(Codec::Gunzip, &concatenated).unwrap(),
+            b"first second third"
+        );
+    }
+
+    #[test]
     fn deflate_stream_is_zlib_format_and_roundtrips() {
         let c = stream_compress(Codec::Deflate, &[b"AAAA", b"BBBB"]);
         assert_eq!(c[0], 0x78); // zlib header (NOT raw deflate)
@@ -1021,5 +1045,10 @@ mod stream_tests {
             run_codec(Codec::BrotliDecompress, &c).unwrap(),
             b"brotli stream test"
         );
+    }
+
+    #[test]
+    fn brotli_decompress_rejects_invalid_data() {
+        assert!(brotli_decompress_bytes(b"not a brotli stream").is_err());
     }
 }
