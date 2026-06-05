@@ -1708,6 +1708,26 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 return Ok(Expr::Number(value));
             }
         }
+        // #4533/#4561: `Error.isPrototypeOf(x)`, `Number.bind(...)`, etc. read an
+        // inherited Function/Object prototype method off a builtin constructor.
+        // Those builtin idents otherwise collapse to bare `GlobalGet(0)`
+        // (globalThis) in the static-member path below, so the predicate ran
+        // against globalThis instead of the real constructor. Resolve the
+        // builtin to its globalThis property so the receiver is the constructor.
+        if matches!(
+            prop_ident.sym.as_ref(),
+            "bind" | "call" | "apply" | "isPrototypeOf"
+        ) {
+            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                let obj_name = obj_ident.sym.as_ref();
+                if crate::analysis::is_builtin_global_value_name(obj_name) {
+                    object_expr = Expr::PropertyGet {
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: obj_name.to_string(),
+                    };
+                }
+            }
+        }
     }
     let member_object_is_global_this = matches!(
         unwrap_transparent(member.obj.as_ref()),
@@ -1927,6 +1947,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 )
                             })
                             .unwrap_or(false);
+                    // #4533/#4561: inherited Object/Function prototype methods
+                    // (`Error.isPrototypeOf`, `Number.valueOf`, `Object.bind`)
+                    // must keep the real constructor receiver, not collapse to
+                    // bare `GlobalGet(0)` — otherwise the predicate/dispatch runs
+                    // against globalThis. The reroute above already resolved the
+                    // receiver to `globalThis.<ctor>`; don't undo it here.
+                    let outer_is_inherited_object_proto_method = matches!(
+                        outer_static_member,
+                        Some(
+                            "hasOwnProperty"
+                                | "isPrototypeOf"
+                                | "propertyIsEnumerable"
+                                | "toLocaleString"
+                                | "valueOf"
+                        )
+                    );
+                    let outer_is_inherited_function_proto_method =
+                        matches!(outer_static_member, Some("bind" | "call" | "apply"));
                     if !outer_is_prototype_or_proto
                         && !receiver_is_namespace_value
                         && !outer_is_websocket_static
@@ -1935,6 +1973,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         && !outer_is_reified_date_static_value
                         && !outer_is_reified_string_static_value
                         && !outer_is_reified_promise_static_value
+                        && !outer_is_inherited_object_proto_method
+                        && !outer_is_inherited_function_proto_method
                         && !receiver_is_detached_console_read
                     {
                         object_expr = Expr::GlobalGet(0);
