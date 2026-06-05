@@ -1212,8 +1212,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Without this, the codegen uses the address of the
             // ClosureHeader global (wrong memory) instead of the
             // object stored in the module's export global.
+            //
+            // Gate strictly on `imported_vars`: only exported const/let
+            // bindings have a `perry_fn_<src>__<name>` *getter* whose call
+            // returns the value. For an imported *function*, that same symbol
+            // IS the function body — calling it here invoked the function with
+            // zero args (reading garbage params) and read the property off its
+            // return value. Stripe hit this on `StripeResource.method` /
+            // `.extend` (an `export { StripeResource }` function with static
+            // props); every static read invoked the constructor instead. The
+            // function/class case falls through to the generic path below,
+            // which materializes the closure value and reads its dynamic prop.
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
-                if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
+                if ctx.imported_vars.contains(name) {
+                    if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
                     // Issue #678: re-export renames mean the suffix in the
                     // origin module differs from the consumer-visible name.
                     let origin_suffix =
@@ -1236,6 +1248,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_get_field_by_name_f64",
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     ));
+                    }
                 }
             }
             // Getter dispatch: if the receiver is a known class and

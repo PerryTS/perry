@@ -1022,6 +1022,29 @@ extern "C" fn function_prototype_call_thunk(
     result
 }
 
+/// `Function.prototype.bind` as a real callable thunk. Reads the target
+/// function from `IMPLICIT_THIS` (set by `.call`/`.apply`/`Reflect.apply`),
+/// flattens `(thisArg, ...boundArgs)` into one argument list, and delegates to
+/// `js_function_bind` (which builds the BOUND_FUNCTION closure).
+///
+/// Previously `bind` was installed as a *no-op* proto method, so calling it as
+/// a value — `Reflect.apply(Function.prototype.bind, fn, [thisArg])` or
+/// `Function.prototype.bind.apply(fn, …)` — returned `undefined` instead of a
+/// bound function. The `Function.prototype.call.bind(method)` uncurry idiom in
+/// `call-bind-apply-helpers` (used by call-bound → side-channel → qs → Stripe)
+/// hit exactly this: `Reflect.apply(bind, call, [fn])` yielded `undefined`.
+extern "C" fn function_prototype_bind_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this_arg: f64,
+    rest: f64,
+) -> f64 {
+    let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let mut args: Vec<f64> = Vec::with_capacity(1);
+    args.push(this_arg);
+    args.extend(global_this_rest_array_values(rest));
+    unsafe { crate::closure::js_function_bind(target, args.as_ptr(), args.len()) }
+}
+
 extern "C" fn global_this_set_timeout_thunk(
     _closure: *const crate::closure::ClosureHeader,
     callback: f64,
@@ -4121,7 +4144,12 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 function_prototype_apply_thunk as *const u8,
                 2,
             );
-            install_noop_proto_methods(proto_obj, &[("bind", 1)]);
+            install_proto_method_rest(
+                proto_obj,
+                "bind",
+                function_prototype_bind_thunk as *const u8,
+                1,
+            );
             // #4101: dedicated toString thunk (source reconstruction + brand
             // check) instead of the shared no-op.
             install_proto_method(

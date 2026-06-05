@@ -794,6 +794,33 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         return target_f64;
     }
 
+    // A function/closure source is NOT an `ObjectHeader`: reading `keys_array`
+    // off it dereferences a bogus field, yielding a garbage `key_count` and a
+    // runaway copy loop. Enumerate the closure's own *enumerable* dynamic props
+    // instead — the built-in `length`/`name`/`prototype` slots are
+    // non-enumerable and excluded, matching `Object.keys`/`getOwnPropertyNames`.
+    // (Stripe's `protoExtend` does `Object.assign(Constructor, Super)` to copy a
+    // resource class's enumerable statics like `.extend`/`.method`; without this
+    // the call hung at `import 'stripe'`.)
+    if crate::closure::is_closure_ptr(src_raw) {
+        for (name, value) in crate::closure::closure_dynamic_props_snapshot(src_raw) {
+            if matches!(name.as_str(), "length" | "name" | "prototype") {
+                continue;
+            }
+            if crate::closure::closure_is_key_deleted(src_raw, &name) {
+                continue;
+            }
+            if let Some(attrs) = get_property_attrs(src_raw, &name) {
+                if !attrs.enumerable() {
+                    continue;
+                }
+            }
+            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            object_assign_set_string_key(target, target_is_array, key_ptr, value);
+        }
+        return target_f64;
+    }
+
     let src = src_raw as *const ObjectHeader;
 
     // 1) Copy own string-keyed enumerable properties from source to target,
