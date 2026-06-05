@@ -203,6 +203,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "decodeURI",
     "encodeURIComponent",
     "decodeURIComponent",
+    // #4511: legacy escape/unescape (ES Annex B), used by `qs`.
+    "escape",
+    "unescape",
 ];
 
 pub(crate) fn is_web_fetch_constructor(name: &str) -> bool {

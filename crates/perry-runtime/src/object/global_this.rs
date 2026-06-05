@@ -866,6 +866,23 @@ extern "C" fn global_this_decode_uri_component_thunk(
     crate::value::js_nanbox_string(crate::builtins::js_decode_uri_component(value))
 }
 
+// #4511: legacy `escape()` / `unescape()` (ES Annex B). Used in the wild by
+// `qs` for `%uXXXX` decoding, so any app pulling in `qs` (e.g. via `stripe`)
+// needs them as real callable globalThis function values.
+extern "C" fn global_this_escape_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::value::js_nanbox_string(crate::builtins::js_escape(value))
+}
+
+extern "C" fn global_this_unescape_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    crate::value::js_nanbox_string(crate::builtins::js_unescape(value))
+}
+
 // #2889: call-form thunks for `Number`/`Boolean` global constructor values.
 // `Object`/`String` already have dedicated thunks above; these mirror the
 // bare-call HIR lowering (`Expr::NumberCoerce` / `Expr::BooleanCoerce`) so
@@ -2266,6 +2283,16 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let value = crate::value::js_nanbox_pointer(singleton as i64);
         js_object_set_field_by_name(singleton, key, value);
     }
+    {
+        // #4511: Node exposes the global object as `global` too
+        // (`global === globalThis`). Install the same self-reference so bare
+        // `global` / `(global as any).x` reads resolve to the real singleton
+        // instead of the unknown-identifier sentinel.
+        let name = b"global";
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = crate::value::js_nanbox_pointer(singleton as i64);
+        js_object_set_field_by_name(singleton, key, value);
+    }
     // #2145: pre-allocate the shared `%TypedArray%` intrinsic so per-kind
     // typed-array constructors can link their `__proto__` to it as they're
     // built below, and the per-kind `.prototype` objects can be flagged with
@@ -2593,6 +2620,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 1,
                 false,
             ),
+            // #4511: legacy escape/unescape (ES Annex B).
+            "escape" => (global_this_escape_thunk as *const u8, 1, false),
+            "unescape" => (global_this_unescape_thunk as *const u8, 1, false),
             _ => continue,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);

@@ -144,6 +144,15 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "decodeURI"
             | "encodeURIComponent"
             | "decodeURIComponent"
+            // #4511: legacy escape/unescape (ES Annex B). Bare calls and value
+            // reads both resolve through `globalThis.<name>` → the runtime
+            // thunk (no dedicated HIR variant). Used by `qs` (→ `stripe`).
+            | "escape"
+            | "unescape"
+            // #4511: Node's `global` alias for the global object. Resolves to
+            // `globalThis.global`, a self-reference installed in
+            // `populate_global_this_builtins`.
+            | "global"
     )
 }
 
