@@ -634,7 +634,15 @@ fn array_buffer_to_index(value: f64) -> i32 {
     if jv.is_undefined() {
         return 0;
     }
-    let n = jv.to_number();
+    // ToIndex(length) → ToNumber: a BigInt throws TypeError; `js_number_coerce`
+    // is the full ToNumber — it runs an object's `valueOf`/`toString` (so a
+    // throwing one propagates) and throws TypeError on a Symbol. The bare
+    // `JSValue::to_number()` previously produced NaN→0 for objects/symbols, so
+    // `new ArrayBuffer({valueOf(){return 42}})` silently became length 0.
+    if jv.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    let n = crate::builtins::js_number_coerce(value);
     if n.is_nan() {
         return 0;
     }

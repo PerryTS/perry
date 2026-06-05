@@ -564,5 +564,20 @@ pub extern "C" fn js_array_set_index_or_string(
             return js_array_set_string_key(arr, key, value);
         }
     }
+    // Fallback for a NON-numeric key: a primitive (`a[null]`, `a[undefined]`,
+    // `a[true]`, `a[10n]`) or a boxed object (`a[new Number(1)]`). Per
+    // ToPropertyKey these become string property keys (or, for `10n`, the
+    // canonical index "10"); `js_array_set_string_key` routes accordingly.
+    // Arrays previously DROPPED these writes (plain objects handled them).
+    // Restricted to `numeric.is_none()`: a non-integer FLOAT key (`a[1.5]`) is
+    // left untouched here because `js_array_set_string_key("1.5")` currently
+    // mis-parses it as index 1 (corrupting `a[1]`) — that's a separate bug,
+    // tracked. Symbols stay symbol-keyed (handled elsewhere).
+    if numeric.is_none() && unsafe { crate::symbol::js_is_symbol(idx) } == 0 {
+        let key = crate::value::js_jsvalue_to_string(idx);
+        if !key.is_null() {
+            return js_array_set_string_key(arr, key as *const crate::StringHeader, value);
+        }
+    }
     arr
 }

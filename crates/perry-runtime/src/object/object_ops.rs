@@ -1440,6 +1440,15 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     }
     // Make the key discoverable by `own_key_present` / `getOwnPropertyNames`.
     ensure_key_in_keys_array(proto, key_str);
+    // Spec: an accessor getter's `.name` is `"get " + key` (e.g.
+    // `Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,"byteLength").get.name
+    // === "get byteLength"`). Register it against the getter closure's func_ptr;
+    // without this the `.name` read returned `""`.
+    let getter_ptr = (getter_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if getter_ptr >= 0x1000 && crate::closure::is_closure_ptr(getter_ptr) {
+        let func_ptr = (*(getter_ptr as *const crate::closure::ClosureHeader)).func_ptr as usize;
+        crate::builtins::register_function_name_if_absent(func_ptr, &format!("get {key}"));
+    }
     set_builtin_accessor_descriptor(
         proto as usize,
         key.to_string(),
