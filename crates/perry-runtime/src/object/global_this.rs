@@ -4105,6 +4105,155 @@ extern "C" fn typed_array_of_thunk(
     crate::value::js_nanbox_pointer(ta as i64)
 }
 
+fn require_promise_constructor_this() {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let promise_ctor = js_get_global_this_builtin_value(b"Promise".as_ptr(), 7);
+    if this_value.to_bits() != promise_ctor.to_bits() {
+        super::object_ops::throw_object_type_error(
+            b"Promise static method requires a Promise constructor receiver",
+        );
+    }
+}
+
+extern "C" fn promise_resolve_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let promise = crate::promise::js_promise_resolved(value);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+extern "C" fn promise_reject_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let promise = crate::promise::js_promise_rejected(reason);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+extern "C" fn promise_all_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let promise = crate::promise::combinators::js_promise_all_iterable(iterable);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+extern "C" fn promise_race_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let promise = crate::promise::combinators::js_promise_race_iterable(iterable);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+extern "C" fn promise_all_settled_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let promise = crate::promise::combinators::js_promise_all_settled_iterable(iterable);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+extern "C" fn promise_any_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    iterable: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let promise = crate::promise::combinators::js_promise_any_iterable(iterable);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+extern "C" fn promise_with_resolvers_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    require_promise_constructor_this();
+    let result = crate::promise::js_promise_with_resolvers();
+    crate::value::js_nanbox_pointer(result as i64)
+}
+
+extern "C" fn promise_try_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    require_promise_constructor_this();
+    let rest_value = JSValue::from_bits(rest.to_bits());
+    let rest_ptr = if rest_value.is_pointer() {
+        rest_value.as_pointer::<crate::array::ArrayHeader>()
+    } else {
+        std::ptr::null()
+    };
+    let promise = crate::promise::js_promise_try(callback, rest_ptr);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+fn promise_static_function_spec(name: &str) -> Option<(*const u8, u32, u32, bool)> {
+    match name {
+        "resolve" => Some((promise_resolve_thunk as *const u8, 1, 1, false)),
+        "reject" => Some((promise_reject_thunk as *const u8, 1, 1, false)),
+        "all" => Some((promise_all_thunk as *const u8, 1, 1, false)),
+        "race" => Some((promise_race_thunk as *const u8, 1, 1, false)),
+        "allSettled" => Some((promise_all_settled_thunk as *const u8, 1, 1, false)),
+        "any" => Some((promise_any_thunk as *const u8, 1, 1, false)),
+        "withResolvers" => Some((promise_with_resolvers_thunk as *const u8, 0, 0, false)),
+        "try" => Some((promise_try_thunk as *const u8, 1, 1, true)),
+        _ => None,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len: usize) -> f64 {
+    if name_ptr.is_null() || name_len == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let name_bytes = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    let Ok(name) = std::str::from_utf8(name_bytes) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let Some((func_ptr, spec_length, call_arity, has_rest)) = promise_static_function_spec(name)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+
+    let ctor_value = js_get_global_this_builtin_value(b"Promise".as_ptr(), 7);
+    let ctor_ptr =
+        crate::value::js_nanbox_get_pointer(ctor_value) as *mut crate::closure::ClosureHeader;
+    if !ctor_ptr.is_null() {
+        let existing = crate::closure::closure_get_dynamic_prop(ctor_ptr as usize, name);
+        if existing.to_bits() != crate::value::TAG_UNDEFINED {
+            return existing;
+        }
+    }
+
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if has_rest {
+        crate::closure::js_register_closure_rest(func_ptr, call_arity);
+    } else {
+        crate::closure::js_register_closure_arity(func_ptr, call_arity);
+    }
+    super::native_module::set_bound_native_closure_name(closure, name);
+    super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
+
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    if !ctor_ptr.is_null() {
+        crate::closure::closure_set_dynamic_prop(ctor_ptr as usize, name, value);
+        super::set_builtin_property_attrs(
+            ctor_ptr as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
+    value
+}
+
 extern "C" fn url_can_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
     input: f64,
@@ -4394,6 +4543,31 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
             );
             install_constructor_static(ctor, "from", array_from_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "of", array_of_thunk as *const u8, 0, true);
+        }
+        "Promise" => {
+            for static_name in [
+                "resolve",
+                "reject",
+                "all",
+                "race",
+                "allSettled",
+                "any",
+                "withResolvers",
+                "try",
+            ] {
+                if let Some((func_ptr, spec_length, call_arity, has_rest)) =
+                    promise_static_function_spec(static_name)
+                {
+                    install_constructor_static_with_call_arity(
+                        ctor,
+                        static_name,
+                        func_ptr,
+                        spec_length,
+                        call_arity,
+                        has_rest,
+                    );
+                }
+            }
         }
         "Date" => {
             // `Date.now` / `Date.parse` / `Date.UTC` as real own data props

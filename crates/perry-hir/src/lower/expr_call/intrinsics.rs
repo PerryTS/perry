@@ -1556,12 +1556,17 @@ fn is_builtin_prototype_receiver(ctx: &LoweringContext, recv: &ast::Expr) -> boo
 /// "value is not a function" at the outer call.
 ///
 /// Rewrite at the AST level for the shapes whose intent is unambiguous and
-/// where the `thisArg` is irrelevant (namespace statics don't read `this`):
+/// where the `thisArg` is irrelevant (most namespace statics don't read `this`):
 ///
 ///   `<NS>.<static>.call(thisArg, a, b, …)`     → `<NS>.<static>(a, b, …)`
 ///   `<NS>.<static>.apply(thisArg)`             → `<NS>.<static>()`
 ///   `<NS>.<static>.apply(thisArg, [a, b, …])`  → `<NS>.<static>(a, b, …)`
 ///   `<NS>.<static>.bind(thisArg, …pre)(…rest)` → `<NS>.<static>(…pre, …rest)`
+///
+/// Promise statics are handled only when the borrowed-call receiver is the real
+/// global `Promise` constructor. ECMA-262 reads their `this` value as the
+/// constructor receiver, so `Promise.resolve.call({}, x)` must not become
+/// `Promise.resolve(x)`.
 ///
 /// The deferred-bind shape (`const f = Promise.resolve.bind(Promise);
 /// f(x);`) cannot be rewritten purely at the AST level — that needs a
@@ -1587,6 +1592,13 @@ pub(super) fn try_namespace_static_method_apply_call_bind(
                 _ => None,
             };
             if let Some(is_apply) = mode {
+                if let Some(inner) = match_promise_static_member(ctx, outer.obj.as_ref()) {
+                    if call.args.first().is_some_and(|arg| {
+                        expr_is_global_promise_constructor(ctx, arg.expr.as_ref())
+                    }) {
+                        return rewrite_dropping_this(ctx, call, &inner, is_apply);
+                    }
+                }
                 if let Some(inner) = match_namespace_static_member(ctx, outer.obj.as_ref()) {
                     return rewrite_dropping_this(ctx, call, &inner, is_apply);
                 }
@@ -1605,6 +1617,26 @@ pub(super) fn try_namespace_static_method_apply_call_bind(
                         // understand; require at least `thisArg`.
                         let bind_spread = bind_call.args.iter().any(|a| a.spread.is_some());
                         if !bind_spread && !bind_call.args.is_empty() {
+                            if let Some(inner_member) =
+                                match_promise_static_member(ctx, bind_member.obj.as_ref())
+                            {
+                                if expr_is_global_promise_constructor(
+                                    ctx,
+                                    bind_call.args[0].expr.as_ref(),
+                                ) {
+                                    // Build: <inner_member>(…preBound, …rest)
+                                    let pre_bound: Vec<ast::ExprOrSpread> =
+                                        bind_call.args.iter().skip(1).cloned().collect();
+                                    let mut synth = call.clone();
+                                    synth.callee = ast::Callee::Expr(Box::new(ast::Expr::Member(
+                                        inner_member,
+                                    )));
+                                    let mut combined = pre_bound;
+                                    combined.extend(call.args.iter().cloned());
+                                    synth.args = combined;
+                                    return Ok(Some(super::lower_call(ctx, &synth)?));
+                                }
+                            }
                             if let Some(inner_member) =
                                 match_namespace_static_member(ctx, bind_member.obj.as_ref())
                             {
@@ -1629,8 +1661,54 @@ pub(super) fn try_namespace_static_method_apply_call_bind(
     Ok(None)
 }
 
+fn match_promise_static_member(ctx: &LoweringContext, expr: &ast::Expr) -> Option<ast::MemberExpr> {
+    let ast::Expr::Member(m) = expr else {
+        return None;
+    };
+    let ast::MemberProp::Ident(prop) = &m.prop else {
+        return None;
+    };
+    let ast::Expr::Ident(base) = m.obj.as_ref() else {
+        return None;
+    };
+    let ns = base.sym.as_ref();
+    let name = prop.sym.as_ref();
+    if ns != "Promise" {
+        return None;
+    }
+    if ctx.lookup_local(ns).is_some()
+        || ctx.lookup_func(ns).is_some()
+        || ctx.lookup_imported_func(ns).is_some()
+    {
+        return None;
+    }
+    if !is_known_namespace_static_function(ns, name) {
+        return None;
+    }
+    Some(m.clone())
+}
+
+fn expr_is_global_promise_constructor(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let mut expr = expr;
+    loop {
+        expr = match expr {
+            ast::Expr::TsAs(x) => x.expr.as_ref(),
+            ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+            ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+            ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+            ast::Expr::Paren(x) => x.expr.as_ref(),
+            _ => break,
+        };
+    }
+    matches!(expr, ast::Expr::Ident(ident) if ident.sym.as_ref() == "Promise")
+        && ctx.lookup_local("Promise").is_none()
+        && ctx.lookup_func("Promise").is_none()
+        && ctx.lookup_imported_func("Promise").is_none()
+}
+
 /// If `expr` is `<NS>.<static>` where `<NS>` is a known namespace-static
-/// holder (Promise/Math/JSON/Number/String/Object/Array) not shadowed by a
+/// holder (Math/JSON/Number/String/Object/Array) not shadowed by a
 /// local, and `<static>` is a known method on it, return a clone of that
 /// MemberExpr so it can be reused as the rewritten callee.
 fn match_namespace_static_member(
@@ -1648,6 +1726,9 @@ fn match_namespace_static_member(
     };
     let ns = base.sym.as_ref();
     let name = prop.sym.as_ref();
+    if ns == "Promise" {
+        return None;
+    }
     if ctx.lookup_local(ns).is_some() || ctx.lookup_func(ns).is_some() {
         return None;
     }

@@ -140,6 +140,64 @@ fn builtin_prototype_method_read<'a>(
         .then_some((builtin_name.as_str(), property))
 }
 
+fn is_global_builtin_value_expr(expr: &Expr, name: &str) -> bool {
+    matches!(
+        expr,
+        Expr::PropertyGet { object, property }
+            if property == name && matches!(object.as_ref(), Expr::GlobalGet(_))
+    )
+}
+
+fn promise_static_function_length_expr(expr: &Expr) -> Option<u32> {
+    let Expr::PropertyGet { object, property } = expr else {
+        return None;
+    };
+    let is_promise_receiver = matches!(object.as_ref(), Expr::GlobalGet(_))
+        || is_global_builtin_value_expr(object, "Promise");
+    if !is_promise_receiver {
+        return None;
+    }
+    match property.as_str() {
+        "withResolvers" => Some(0),
+        "resolve" | "reject" | "all" | "race" | "allSettled" | "any" | "try" => Some(1),
+        _ => None,
+    }
+}
+
+fn lower_global_builtin_static_value(ctx: &mut FnCtx<'_>, builtin: &str, property: &str) -> String {
+    if builtin == "Promise" {
+        let key_idx = ctx.strings.intern(property);
+        let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
+        let key_len = property.len().to_string();
+        return ctx.block().call(
+            DOUBLE,
+            "js_promise_static_function_value",
+            &[(PTR, &key_bytes_global), (I64, &key_len)],
+        );
+    }
+
+    let builtin_idx = ctx.strings.intern(builtin);
+    let builtin_bytes_global = format!("@{}", ctx.strings.entry(builtin_idx).bytes_global);
+    let builtin_len = builtin.len().to_string();
+    let builtin_value = ctx.block().call(
+        DOUBLE,
+        "js_get_global_this_builtin_value",
+        &[(PTR, &builtin_bytes_global), (I64, &builtin_len)],
+    );
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let builtin_handle = unbox_to_i64(blk, &builtin_value);
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    blk.call(
+        DOUBLE,
+        "js_object_get_field_by_name_f64",
+        &[(I64, &builtin_handle), (I64, &key_raw)],
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertyGet { object, property }
@@ -183,6 +241,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let arr_handle = blk.call(I64, "js_error_get_errors", &[(I64, &recv_handle)]);
             Ok(nanbox_pointer_inline(blk, &arr_handle))
+        }
+
+        Expr::PropertyGet { object, property }
+            if is_global_builtin_value_expr(object, "Promise")
+                && matches!(
+                    property.as_str(),
+                    "resolve"
+                        | "reject"
+                        | "all"
+                        | "race"
+                        | "allSettled"
+                        | "any"
+                        | "withResolvers"
+                        | "try"
+                ) =>
+        {
+            Ok(lower_global_builtin_static_value(ctx, "Promise", property))
+        }
+
+        Expr::PropertyGet { object, property }
+            if property == "length" && promise_static_function_length_expr(object).is_some() =>
+        {
+            let len = promise_static_function_length_expr(object).unwrap();
+            Ok(double_literal(len as f64))
         }
 
         // TypedArray `.length` can be shadowed by an own property, so use
@@ -709,6 +791,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // property string alone is safe here.
                 if property == "env" {
                     return Ok(ctx.block().call(DOUBLE, "js_process_env", &[]));
+                }
+                if matches!(
+                    property.as_str(),
+                    "resolve"
+                        | "reject"
+                        | "all"
+                        | "race"
+                        | "allSettled"
+                        | "any"
+                        | "withResolvers"
+                        | "try"
+                ) {
+                    return Ok(lower_global_builtin_static_value(ctx, "Promise", property));
                 }
                 // #2904: V8/Node static Error members read as values
                 // (`typeof Error.isError`, `Error.stackTraceLimit`, …). The
