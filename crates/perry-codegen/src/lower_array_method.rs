@@ -53,14 +53,16 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "some" | "every" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.{} expects 1 arg, got {}",
-                    property,
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // `arr.some()` / `arr.every()` with no callback must throw a
+            // runtime TypeError ("undefined is not a function"), not fail to
+            // compile — pad a missing callback with `undefined` and let
+            // `js_validate_array_callback` raise it. (A trailing `thisArg`
+            // is accepted but not yet applied.)
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -228,13 +230,12 @@ pub(crate) fn lower_array_method(
             }
         }
         "flatMap" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.flatMap expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -250,13 +251,12 @@ pub(crate) fn lower_array_method(
         // as HIR variants but may reach here as generic MethodCall when
         // the HIR lowering doesn't recognize the pattern.
         "find" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.find expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -268,13 +268,12 @@ pub(crate) fn lower_array_method(
             ))
         }
         "findIndex" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.findIndex expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -287,13 +286,12 @@ pub(crate) fn lower_array_method(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "findLast" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.findLast expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -305,13 +303,12 @@ pub(crate) fn lower_array_method(
             ))
         }
         "findLastIndex" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.findLastIndex expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -384,10 +381,12 @@ pub(crate) fn lower_array_method(
             ))
         }
         "map" => {
-            if args.len() != 1 {
-                bail!("perry-codegen: Array.map expects 1 arg, got {}", args.len());
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -406,13 +405,12 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "filter" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.filter expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -425,13 +423,12 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "forEach" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.forEach expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -552,10 +549,13 @@ pub(crate) fn lower_array_method(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "at" => {
-            if args.len() != 1 {
-                bail!("perry-codegen: Array.at expects 1 arg, got {}", args.len());
-            }
-            let idx_box = lower_expr(ctx, &args[0])?;
+            // `arr.at()` with no index → `at(undefined)` → index 0, not a
+            // compile error.
+            let idx_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             Ok(blk.call(
@@ -613,8 +613,14 @@ pub(crate) fn lower_array_method(
             // `[start, end)`. The 1-arg form keeps the existing
             // whole-array fast path.
             match args.len() {
-                1 => {
-                    let val_box = lower_expr(ctx, &args[0])?;
+                // `arr.fill()` with no value fills the whole array with
+                // `undefined` (ECMA-262 step: value defaults to undefined).
+                0 | 1 => {
+                    let val_box = if let Some(arg) = args.first() {
+                        lower_expr(ctx, arg)?
+                    } else {
+                        crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+                    };
                     let blk = ctx.block();
                     let recv_handle = unbox_to_i64(blk, &recv_box);
                     let result = blk.call(
