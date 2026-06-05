@@ -111,6 +111,16 @@ fn lower_optional_args(
     .map(|args| args.unwrap_or_default())
 }
 
+fn append_class_capture_args(ctx: &LoweringContext, class_name: &str, args: &mut Vec<Expr>) {
+    let class_captures: Vec<LocalId> = ctx
+        .lookup_class_captures(class_name)
+        .map(|c| c.to_vec())
+        .unwrap_or_default();
+    for cid in class_captures {
+        args.push(Expr::LocalGet(cid));
+    }
+}
+
 fn lower_url_encoding_constructor(
     ctx: &mut LoweringContext,
     class_name: &str,
@@ -1535,6 +1545,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
+                    if ctx.lookup_class(&resolved).is_some() {
+                        append_class_capture_args(ctx, &resolved, &mut args);
+                        return Ok(Expr::New {
+                            class_name: resolved,
+                            args,
+                            type_args,
+                        });
+                    }
                     if matches!(
                         resolved.as_str(),
                         "Blob"
@@ -1615,13 +1633,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let lookup_name = ctx
                 .resolve_class_alias(&class_name)
                 .unwrap_or_else(|| class_name.clone());
-            let class_captures: Vec<LocalId> = ctx
-                .lookup_class_captures(&lookup_name)
-                .map(|c| c.to_vec())
-                .unwrap_or_default();
-            for cid in class_captures {
-                args.push(Expr::LocalGet(cid));
-            }
+            append_class_capture_args(ctx, &lookup_name, &mut args);
             Ok(Expr::New {
                 class_name,
                 args,
