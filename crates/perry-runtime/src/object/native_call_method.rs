@@ -444,6 +444,64 @@ unsafe fn prototype_identity_ptr_from_value(value: f64) -> Option<*const u8> {
     }
 }
 
+#[inline]
+fn registered_buffer_addr_from_value(value: f64) -> Option<usize> {
+    let valid_addr = |addr: usize| {
+        (addr > 0x10000 && addr <= crate::value::POINTER_MASK as usize)
+            .then_some(addr)
+            .filter(|addr| crate::buffer::is_registered_buffer(*addr))
+    };
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_pointer() {
+        return valid_addr(jsval.as_pointer::<u8>() as usize);
+    }
+    let bits = value.to_bits();
+    if (bits >> 48) == 0 {
+        return valid_addr(bits as usize);
+    }
+    if value.is_finite() && value.fract() == 0.0 && value > 0.0 {
+        return valid_addr(value as usize);
+    }
+    None
+}
+
+#[inline]
+fn builtin_prototype_or_none(name: &str) -> Option<f64> {
+    let proto = crate::object::builtin_prototype_value(name);
+    if JSValue::from_bits(proto.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(proto)
+    }
+}
+
+#[inline]
+unsafe fn non_gc_object_prototype_for_is_prototype_of(value: f64) -> Option<f64> {
+    if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+            return builtin_prototype_or_none(crate::typedarray::name_for_kind(kind));
+        }
+        if crate::buffer::is_uint8array_buffer(addr) {
+            return builtin_prototype_or_none("Uint8Array");
+        }
+    }
+
+    let addr = registered_buffer_addr_from_value(value)?;
+    if crate::buffer::is_array_buffer(addr) {
+        return builtin_prototype_or_none("ArrayBuffer");
+    }
+    if crate::buffer::is_shared_array_buffer(addr) {
+        return builtin_prototype_or_none("SharedArrayBuffer");
+    }
+    if crate::buffer::is_data_view(addr) {
+        return builtin_prototype_or_none("DataView");
+    }
+    if crate::buffer::is_uint8array_buffer(addr) {
+        return builtin_prototype_or_none("Uint8Array");
+    }
+    None
+}
+
 unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
     let gc_header =
         (object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -563,11 +621,6 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
         return false;
     }
 
-    let target_jsval = JSValue::from_bits(target.to_bits());
-    if !target_jsval.is_pointer() {
-        return false;
-    }
-
     if let Some(target_ptr) = object_ptr_from_value(target) {
         let has_instance_prototype =
             crate::object::prototype_chain::object_static_prototype(target_ptr as usize).is_some();
@@ -618,24 +671,22 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             }
         }
     } else {
-        let (_, target_gc_type) = match gc_pointer_and_type_from_value(target) {
-            Some(info) => info,
-            None => return false,
-        };
-        // #4549: arrays and typed arrays are objects whose `[[Prototype]]`
-        // chain is modeled (`Array.prototype` → `Object.prototype`,
-        // `Uint8Array.prototype` → `%TypedArray%.prototype` →
-        // `Object.prototype`), so they must reach the generic walk below.
-        // Previously only closures/errors were allowed, so
-        // `Array.prototype.isPrototypeOf([1, 2])` and
-        // `Object.prototype.isPrototypeOf([])` wrongly returned `false`.
-        // (ArrayBuffer's BufferHeader representation isn't resolved by the
-        // generic pointer walk yet — tracked separately.)
-        if target_gc_type != crate::gc::GC_TYPE_CLOSURE
-            && target_gc_type != crate::gc::GC_TYPE_ERROR
-            && target_gc_type != crate::gc::GC_TYPE_ARRAY
-            && target_gc_type != crate::gc::GC_TYPE_TYPED_ARRAY
-        {
+        // #4549/#4554/#4555: arrays, typed arrays, and buffer-backed objects
+        // all have modeled prototype chains. GC-backed values can use the
+        // generic walk directly; BufferHeader-backed values need a safe first
+        // prototype hop because they do not carry a GC header.
+        let walkable_non_gc = non_gc_object_prototype_for_is_prototype_of(target).is_some();
+        let walkable_gc = matches!(
+            gc_pointer_and_type_from_value(target),
+            Some((
+                _,
+                crate::gc::GC_TYPE_CLOSURE
+                    | crate::gc::GC_TYPE_ERROR
+                    | crate::gc::GC_TYPE_ARRAY
+                    | crate::gc::GC_TYPE_TYPED_ARRAY
+            ))
+        );
+        if !walkable_non_gc && !walkable_gc {
             return false;
         }
     }
@@ -643,7 +694,10 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     let mut current = target;
     for _ in 0..32 {
         let current_ptr = prototype_identity_ptr_from_value(current);
-        let proto = crate::object::js_object_get_prototype_of(current);
+        let proto = match non_gc_object_prototype_for_is_prototype_of(current) {
+            Some(proto) => proto,
+            None => crate::object::js_object_get_prototype_of(current),
+        };
         let proto_jsval = JSValue::from_bits(proto.to_bits());
         if proto_jsval.is_null() || proto_jsval.is_undefined() {
             break;

@@ -13,3 +13,18 @@ for (const [name, proto, instance] of wrapperCases) {
 console.log("Function typeof", typeof Function.prototype.isPrototypeOf);
 console.log("Function direct", Function.prototype.isPrototypeOf(Number));
 console.log("Function borrowed", Object.prototype.isPrototypeOf.call(Function.prototype, Number));
+
+const typedArray = new Uint8Array(2);
+console.log("Uint8Array direct", Uint8Array.prototype.isPrototypeOf(typedArray));
+console.log(
+  "Uint8Array borrowed",
+  Object.prototype.isPrototypeOf.call(Uint8Array.prototype, typedArray),
+);
+
+const arrayBuffer = new ArrayBuffer(4);
+console.log("ArrayBuffer object", Object.prototype.isPrototypeOf(arrayBuffer));
+console.log("ArrayBuffer direct", ArrayBuffer.prototype.isPrototypeOf(arrayBuffer));
+console.log(
+  "ArrayBuffer borrowed",
+  Object.prototype.isPrototypeOf.call(ArrayBuffer.prototype, arrayBuffer),
+);
