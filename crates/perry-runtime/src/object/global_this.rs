@@ -339,6 +339,30 @@ pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
 }
 
+pub(crate) extern "C" fn map_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor Map requires 'new'")
+}
+
+pub(crate) extern "C" fn set_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor Set requires 'new'")
+}
+
+pub(crate) extern "C" fn weak_map_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor WeakMap requires 'new'")
+}
+
+pub(crate) extern "C" fn weak_set_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::object_ops::throw_object_type_error(b"Constructor WeakSet requires 'new'")
+}
+
 extern "C" fn global_this_url_pattern_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     input: f64,
@@ -2332,6 +2356,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "SyntaxError" => syntax_error_constructor_call_thunk as *const u8,
             "EvalError" => eval_error_constructor_call_thunk as *const u8,
             "URIError" => uri_error_constructor_call_thunk as *const u8,
+            "Map" => map_constructor_call_thunk as *const u8,
+            "Set" => set_constructor_call_thunk as *const u8,
+            "WeakMap" => weak_map_constructor_call_thunk as *const u8,
+            "WeakSet" => weak_set_constructor_call_thunk as *const u8,
             "MessageChannel" => {
                 crate::messaging::js_message_channel_constructor_call_error as *const u8
             }
@@ -2383,6 +2411,9 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
             "MessageChannel" | "MessagePort" | "Storage" => {
+                crate::closure::js_register_closure_arity(func_ptr, 0);
+            }
+            "Map" | "Set" | "WeakMap" | "WeakSet" => {
                 crate::closure::js_register_closure_arity(func_ptr, 0);
             }
             "URLPattern" => {
