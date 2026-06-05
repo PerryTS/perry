@@ -159,6 +159,13 @@ pub(super) fn create_webassembly_namespace() -> f64 {
         1,
         true,
     );
+    install_webassembly_static_fn(
+        ns_obj,
+        "promising",
+        webassembly_unsupported_static_thunk as *const u8,
+        1,
+        true,
+    );
 
     crate::value::js_nanbox_pointer(ns_obj as i64)
 }

@@ -23,6 +23,7 @@ for (const name of [
   "instantiate",
   "compileStreaming",
   "instantiateStreaming",
+  "promising",
 ]) {
   const fn = WA[name];
   console.log(`${name}:`, typeof fn, fn?.name, fn?.length);

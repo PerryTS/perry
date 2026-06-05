@@ -352,6 +352,7 @@ PERRY_BIN="$TARGET_DIR/release/perry"
 echo "Building compiler (release)..."
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib)
 BUILD_FEATURES=()
+needs_wasm_host=0
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
         ""|http|http/*|https|https/*|http2|http2/*)
@@ -361,6 +362,14 @@ if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
             # FFI registry, so build those wrappers too (#4373).
             BUILD_PACKAGES+=(-p perry-ext-http -p perry-ext-net -p perry-ext-ws)
             BUILD_FEATURES+=(--features perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump)
+            ;;
+    esac
+    case "$MODULE_FILTER:$TEST_FILTER" in
+        :|:webassembly*|:*webassembly*|globals:|globals:webassembly*|globals:*webassembly*|globals/*:|globals/*:webassembly*|globals/*:*webassembly*)
+            # WebAssembly metadata fixtures lower to wasm-host runtime calls. In
+            # no-auto mode, build the feature-enabled runtime and host archive
+            # up front so compile/link matches the auto-detected path.
+            needs_wasm_host=1
             ;;
     esac
 fi
@@ -378,6 +387,13 @@ fi
 if ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURES[@]}" 2>/dev/null; then
     echo -e "${RED}Failed to build compiler/runtime archives${NC}"
     exit 1
+fi
+if [[ "$needs_wasm_host" -eq 1 ]]; then
+    echo "Building WebAssembly host runtime (release)..."
+    if ! cargo build --release --quiet -p perry-runtime -p perry-wasm-host --features perry-runtime/wasm-host 2>/dev/null; then
+        echo -e "${RED}Failed to build WebAssembly host runtime archives${NC}"
+        exit 1
+    fi
 fi
 if [[ "$needs_ext_net" -eq 1 ]]; then
     echo "Building net extension (release)..."
@@ -588,6 +604,10 @@ for test_file in "${TEST_FILES[@]}"; do
     if [[ "$test_name" == test_parity_* || "$test_id" == node-suite/* ]]; then
         compile_env="PERRY_ALLOW_UNIMPLEMENTED=1"
     fi
+    compile_flags=()
+    if [[ "$needs_wasm_host" -eq 1 && "$test_id" == *webassembly* ]]; then
+        compile_flags+=(--enable-wasm-runtime)
+    fi
     # #499: some parity tests transitively pull in `.js` fixtures
     # (jsruntime/* tests by design, plus a long-tail of others: V8
     # fallback fixtures, js_interop callbacks, nest_js_common decorators,
@@ -597,10 +617,10 @@ for test_file in "${TEST_FILES[@]}"; do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" $BACKEND_FLAG "${compile_flags[@]}" "$test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" $BACKEND_FLAG --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" $BACKEND_FLAG "${compile_flags[@]}" --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 
