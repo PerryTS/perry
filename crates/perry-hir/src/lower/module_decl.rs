@@ -415,6 +415,11 @@ pub(crate) fn lower_module_decl(
                             // not lower to StaticMethodCall — see the heuristic
                             // in expr_call::static_and_instance.
                             ctx.namespace_import_locals.insert(local.clone());
+                            // Remember the source so a later bare `export { local }`
+                            // re-exports the namespace itself rather than a bare
+                            // function symbol (see the local-export branch below).
+                            ctx.namespace_import_sources
+                                .insert(local.clone(), source.clone());
                         }
                         specifiers.push(ImportSpecifier::Namespace { local });
                     }
@@ -1374,6 +1379,26 @@ pub(crate) fn lower_module_decl(
                                 }
                             })
                             .unwrap_or_else(|| local.clone());
+
+                        // When the re-exported local is a namespace import
+                        // (`import * as z from "src"; export { z }`), it is NOT a
+                        // plain binding — it is the module namespace of `src`.
+                        // Emit it as a NamespaceReExport (the same lowering as
+                        // `export * as z from "src"`, #310) so the importer
+                        // receives the namespace object with all its members,
+                        // not a bare `perry_fn_<mod>__z` function symbol. This is
+                        // exactly how zod re-exports `z`, so without this every
+                        // `z.object` / `z.coerce` in consumer code is undefined.
+                        if let Some(ns_source) =
+                            ctx.namespace_import_sources.get(&local).cloned()
+                        {
+                            module.exports.push(Export::NamespaceReExport {
+                                source: ns_source,
+                                name: exported.clone(),
+                            });
+                            continue;
+                        }
+
                         module.exports.push(Export::Named {
                             local: local.clone(),
                             exported: exported.clone(),

@@ -321,6 +321,13 @@ pub struct LoweringContext {
     /// default imports of actual classes (`import { MongoClient }`) are NOT in
     /// this set and keep the static-method path.
     pub(crate) namespace_import_locals: HashSet<String>,
+    /// Maps a namespace-import local (`import * as z from "src"`) to its source
+    /// module. Used so a later bare `export { z }` re-export of that local routes
+    /// to `Export::NamespaceReExport` (equivalent to `export * as z from "src"`)
+    /// rather than `Export::Named`, which would resolve `z` to a bare function
+    /// symbol in the importer and drop every namespace member. Closes the zod
+    /// `import { z }` breakage (zod's index does `import * as z; export { z }`).
+    pub(crate) namespace_import_sources: std::collections::HashMap<String, String>,
     /// Names of functions declared with `function*` — used to detect generator
     /// calls in `for...of` so the iterator protocol loop is emitted instead of
     /// the array-index loop.
