@@ -116,6 +116,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_forEach", VOID, &[I64, I64]);
     module.declare_function("js_array_fill", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_fill_range", I64, &[I64, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_array_fill_generic",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, DOUBLE, I32, DOUBLE],
+    );
     module.declare_function("js_array_delete", I32, &[I64, I32]);
     // Closes #304: `arr.length = N` truncate / extend.
     module.declare_function("js_array_set_length", VOID, &[I64, DOUBLE]);

@@ -1,6 +1,71 @@
 //! concat / reverse / fill.
 use super::*;
+use crate::JSValue;
 use std::ptr;
+
+fn fill_to_number(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+        if ptr.is_null() || (ptr as usize) < 0x1000 {
+            return f64::NAN;
+        }
+        let s = crate::string::string_as_str(ptr).trim();
+        if s.is_empty() {
+            0.0
+        } else {
+            s.parse::<f64>().unwrap_or(f64::NAN)
+        }
+    } else {
+        jsval.to_number()
+    }
+}
+
+fn fill_to_length(value: f64) -> u32 {
+    let number = fill_to_number(value);
+    if number.is_nan() || number <= 0.0 {
+        0
+    } else if !number.is_finite() || number > u32::MAX as f64 {
+        u32::MAX
+    } else {
+        number as u32
+    }
+}
+
+fn fill_relative_index(value: f64, len: i64, default_value: i64) -> i64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() {
+        return default_value;
+    }
+    let number = fill_to_number(value);
+    if number.is_nan() {
+        return 0;
+    }
+    let mut index = if number.is_infinite() {
+        if number > 0.0 {
+            len
+        } else {
+            -len
+        }
+    } else {
+        number as i64
+    };
+    if index < 0 {
+        index += len;
+        if index < 0 {
+            return 0;
+        }
+    }
+    if index > len {
+        len
+    } else {
+        index
+    }
+}
+
+fn throw_fill_nullish_receiver() -> ! {
+    crate::collection_iter::throw_type_error("Cannot convert undefined or null to object")
+}
 
 /// Append all elements from source array to destination array
 /// Returns the (possibly reallocated) destination array pointer
@@ -263,4 +328,75 @@ pub extern "C" fn js_array_fill_range(
         rebuild_array_layout(arr);
         arr
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_fill_generic(
+    receiver: f64,
+    value: f64,
+    has_start: i32,
+    start: f64,
+    has_end: i32,
+    end: f64,
+) -> f64 {
+    let receiver_value = JSValue::from_bits(receiver.to_bits());
+    if receiver_value.is_null() || receiver_value.is_undefined() {
+        throw_fill_nullish_receiver();
+    }
+
+    if receiver_value.is_pointer() {
+        let raw = (receiver.to_bits() & crate::value::POINTER_MASK) as usize;
+        if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let obj_type = unsafe {
+                let hdr =
+                    (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                (*hdr).obj_type
+            };
+            if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                let arr = raw as *mut ArrayHeader;
+                let result = if has_start != 0 || has_end != 0 {
+                    let start_value = if has_start != 0 { start } else { 0.0 };
+                    let end_value =
+                        if has_end != 0 && !JSValue::from_bits(end.to_bits()).is_undefined() {
+                            end
+                        } else {
+                            f64::INFINITY
+                        };
+                    js_array_fill_range(arr, value, start_value, end_value)
+                } else {
+                    js_array_fill(arr, value)
+                };
+                return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
+            }
+            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+                let obj = raw as *mut crate::object::ObjectHeader;
+                let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                let len_value = crate::object::js_object_get_field_by_name_f64(obj, length_key);
+                let len = fill_to_length(len_value) as i64;
+                if len == 0 {
+                    return receiver;
+                }
+                let start_index = if has_start != 0 {
+                    fill_relative_index(start, len, 0)
+                } else {
+                    0
+                };
+                let end_index = if has_end != 0 {
+                    fill_relative_index(end, len, len)
+                } else {
+                    len
+                };
+                if start_index >= end_index {
+                    return receiver;
+                }
+                for index in start_index..end_index {
+                    crate::object::js_object_set_index_polymorphic(raw as i64, index as f64, value);
+                }
+                return receiver;
+            }
+        }
+    }
+
+    let object = crate::object::js_object_coerce(receiver);
+    js_array_fill_generic(object, value, has_start, start, has_end, end)
 }

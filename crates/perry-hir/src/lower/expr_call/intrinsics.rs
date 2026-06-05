@@ -1307,9 +1307,11 @@ pub(super) fn try_builtin_prototype_method_apply_call(
     // field and throws "value is not a function". Build the dedicated
     // `Expr::Array*` variant directly so the receiver flows to `js_array_*`
     // regardless of its static type — the runtime materializes the array-like
-    // (see `normalize_array_receiver`). Only the read-only/returning methods are
-    // handled here; mutators and unsupported shapes fall through to the member
-    // call below (unchanged behavior).
+    // (see `normalize_array_receiver`). Most handled methods are
+    // read-only/returning; `fill` has a dedicated generic mutator helper because
+    // it must write back to the original receiver rather than a materialized
+    // clone. Unsupported mutators fall through to the member call below
+    // (unchanged behavior).
     if let Some(folded) =
         try_arraylike_receiver_method(ctx, method_prop.sym.as_ref(), &this_arg.expr, &rest_args)?
     {
@@ -1336,9 +1338,10 @@ pub(super) fn try_builtin_prototype_method_apply_call(
 /// `thisArg`; `rest_args` are the post-`thisArg` positional arguments (already
 /// expanded from the `.apply` array if applicable).
 ///
-/// Returns `Some(expr)` for a supported read-only/returning method, or `None`
-/// for mutators / unsupported methods (caller falls back to the synthesized
-/// member call). The chosen set mirrors the runtime methods that route through
+/// Returns `Some(expr)` for a supported read-only/returning method, plus
+/// dedicated generic `fill` / `copyWithin` mutator paths, or `None` for other
+/// mutators / unsupported methods (caller falls back to the synthesized member
+/// call). The read-only set mirrors the runtime methods that route through
 /// `normalize_array_receiver`.
 fn try_arraylike_receiver_method(
     ctx: &mut LoweringContext,
@@ -1349,6 +1352,23 @@ fn try_arraylike_receiver_method(
     // Any spread in the positional args defeats static argument expansion.
     if rest_args.iter().any(|a| a.spread.is_some()) {
         return Ok(None);
+    }
+    // `fill` mutates in place but is generic over an array-like receiver; route
+    // to the dedicated generic mutator helper (`js_array_fill_generic`), which
+    // writes back to the original receiver rather than a materialized clone.
+    if method == "fill" {
+        let object = Box::new(lower_expr(ctx, receiver)?);
+        let mut args = Vec::with_capacity(rest_args.len());
+        for a in rest_args {
+            args.push(lower_expr(ctx, &a.expr)?);
+        }
+        return Ok(Some(Expr::NativeMethodCall {
+            module: "array".to_string(),
+            class_name: None,
+            object: Some(object),
+            method: "fill_generic".to_string(),
+            args,
+        }));
     }
     // `copyWithin` mutates in place but is generic over an array-like receiver;
     // keep the dedicated value-receiver lowering.
