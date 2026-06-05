@@ -163,6 +163,7 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     TYPED_ARRAY_SHARED_BACKING.with(|r| {
         r.borrow_mut().remove(&owner);
     });
+    crate::typedarray_view::clear_view_meta(owner);
     crate::typedarray_props::typed_array_clear_own_props(owner);
 }
 
@@ -207,6 +208,8 @@ fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
     unsafe {
         if crate::native_arena::is_native_typed_view(ta) {
             crate::native_arena::native_view_data_ptr(ta)
+        } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
+            p as *const u8
         } else {
             (ta as *const u8).add(std::mem::size_of::<TypedArrayHeader>())
         }
@@ -218,6 +221,8 @@ pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
     unsafe {
         if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
             crate::native_arena::native_view_data_ptr_mut(ta)
+        } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
+            p
         } else {
             (ta as *mut u8).add(std::mem::size_of::<TypedArrayHeader>())
         }

@@ -1744,7 +1744,27 @@ pub unsafe extern "C" fn js_new_function_construct(
                 } else {
                     args[0]
                 };
-                let ta = crate::typedarray::js_typed_array_new(kind, arg0);
+                // `new TA(buffer, byteOffset, length?)` via a *dynamic* constructor
+                // value (e.g. test262's `testWithTypedArrayConstructors`, where
+                // `TA` is a variable) must honor the offset/length arguments. The
+                // single-arg `js_typed_array_new` path dropped them, so every
+                // view built this way reported `byteOffset === 0`. Route the
+                // multi-arg form through the view constructor, which records the
+                // backing/offset so `.byteOffset` / `.buffer` are correct and the
+                // result aliases the buffer (mirrors the literal-name codegen
+                // path in `lower_call::builtin`). A non-ArrayBuffer `arg0` falls
+                // back to `js_typed_array_new` inside `js_typed_array_view`.
+                let ta = if args.len() >= 2 {
+                    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                    crate::typedarray_view::js_typed_array_view(
+                        kind,
+                        arg0,
+                        args[1],
+                        args.get(2).copied().unwrap_or(undefined),
+                    )
+                } else {
+                    crate::typedarray::js_typed_array_new(kind, arg0)
+                };
                 return crate::value::js_nanbox_pointer(ta as i64);
             }
             "TextEncoderStream" => {

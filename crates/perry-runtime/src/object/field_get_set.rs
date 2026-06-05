@@ -2203,7 +2203,7 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::number((len as usize * elem_size) as f64);
                         }
                         b"buffer" => {
-                            let buf = crate::typedarray::typed_array_to_array_buffer(ta);
+                            let buf = crate::typedarray_view::js_typed_array_backing_buffer(ta);
                             if buf.is_null() {
                                 return JSValue::undefined();
                             }
@@ -2211,7 +2211,11 @@ pub extern "C" fn js_object_get_field_by_name(
                                 crate::value::js_nanbox_pointer(buf as i64).to_bits(),
                             );
                         }
-                        b"byteOffset" => return JSValue::number(0.0),
+                        b"byteOffset" => {
+                            return JSValue::number(
+                                crate::typedarray_view::js_typed_array_byte_offset(ta) as f64,
+                            )
+                        }
                         b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
                         _ => {}
                     }
@@ -3088,7 +3092,7 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::number((len as usize * elem_size) as f64);
                     }
                     b"buffer" => {
-                        let buf = crate::typedarray::typed_array_to_array_buffer(ta);
+                        let buf = crate::typedarray_view::js_typed_array_backing_buffer(ta);
                         if buf.is_null() {
                             return JSValue::undefined();
                         }
@@ -3096,7 +3100,11 @@ pub extern "C" fn js_object_get_field_by_name(
                             crate::value::js_nanbox_pointer(buf as i64).to_bits(),
                         );
                     }
-                    b"byteOffset" => return JSValue::number(0.0),
+                    b"byteOffset" => {
+                        return JSValue::number(crate::typedarray_view::js_typed_array_byte_offset(
+                            ta,
+                        ) as f64)
+                    }
                     b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
                     _ => {}
                 }

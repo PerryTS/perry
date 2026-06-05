@@ -1,17 +1,19 @@
-//! `new TA(buffer, byteOffset, length?)` view-constructor validation (#4103).
+//! `new TA(buffer, byteOffset, length?)` ArrayBuffer-view support (#4103).
 //!
 //! Split out of `typedarray.rs` to keep that file under the 2000-line gate.
-//! Perry does not yet model real offset-honoring views (the `byteOffset`
-//! getter still reports 0 and the view copies rather than aliases the backing
-//! store — the broader gap #4103 calls out); this module adds the spec
-//! `RangeError` bounds/alignment validation and copies the correct bytes at
-//! the requested offset so the multi-arg form matches Node.
+//! Holds the spec `RangeError` bounds/alignment validation for the multi-arg
+//! constructor form, plus the view-metadata side table (`TYPED_ARRAY_VIEW_META`)
+//! that lets a typed array alias an `ArrayBuffer`: `data_ptr` (in
+//! `typedarray::mod`) resolves a recorded view into the backing store so reads
+//! and writes are shared with the buffer and every sibling view, and the
+//! `byteOffset` / `buffer` getters report the real backing.
 
+use std::cell::RefCell;
 use std::ptr;
 
 use crate::typedarray::{
-    data_ptr_mut, elem_size_for_kind, js_typed_array_new, name_for_kind, throw_range_error,
-    typed_array_alloc, TypedArrayHeader,
+    clean_ta_ptr, data_ptr_mut, elem_size_for_kind, js_typed_array_new, name_for_kind,
+    throw_range_error, typed_array_alloc, typed_array_to_array_buffer, TypedArrayHeader,
 };
 
 /// `ToIndex(value)` for a typed-array view's `byteOffset` / `length`
@@ -105,13 +107,15 @@ pub extern "C" fn js_typed_array_view(
         requested
     };
 
-    // The native byte layout matches between BufferHeader and TypedArrayHeader,
-    // so copy the backing bytes at `offset` directly to preserve element values.
     let count = elem_count.max(0) as u32;
     let ta = typed_array_alloc(kind, count);
     if crate::buffer::is_shared_array_buffer(addr) {
         crate::typedarray::mark_typed_array_shared_backing(ta);
     }
+    // Seed the header's inline region with the current bytes at `offset` so the
+    // codegen fast path (which reads inline storage directly under optimized
+    // builds) observes correct initial element values. `data_ptr_mut` resolves
+    // to the inline region here because the view-meta below is not yet recorded.
     if count > 0 {
         unsafe {
             let src_data = crate::buffer::buffer_data(src).add(offset as usize);
@@ -119,5 +123,116 @@ pub extern "C" fn js_typed_array_view(
             ptr::copy_nonoverlapping(src_data, dst, (count as i64 * bpe) as usize);
         }
     }
+    // Record the view so the runtime element-access path aliases the backing
+    // `ArrayBuffer` and `.byteOffset` / `.buffer` report the real backing:
+    // mutations are then visible through the buffer and every sibling view,
+    // matching Node (#4103).
+    register_view_meta(ta, addr, offset as u32);
     ta
+}
+
+thread_local! {
+    /// `typed_array_ptr -> (backing ArrayBuffer addr, byteOffset)` for typed
+    /// arrays that alias an `ArrayBuffer`. Two populations land here:
+    ///   * offset views built by `new T(buffer, byteOffset, length?)`, recorded
+    ///     at construction so `.byteOffset` / `.buffer` report the real backing
+    ///     and element reads/writes route through `data_ptr` into the shared
+    ///     store (true aliasing), and
+    ///   * plain typed arrays the first time `.buffer` is observed — we
+    ///     lazily materialize a backing `ArrayBuffer`, copy the current bytes
+    ///     in, and record it here so the buffer identity is stable on repeated
+    ///     reads and further mutation aliases the buffer (mirrors V8: every
+    ///     typed array is backed by an ArrayBuffer).
+    /// The backing `BufferHeader` lives for the thread's lifetime (Perry never
+    /// `dealloc`s individual buffers — see `buffer::view`), so the raw addr is
+    /// stable and aliasing through it is free of use-after-free.
+    static TYPED_ARRAY_VIEW_META: RefCell<crate::fast_hash::PtrHashMap<usize, ViewMeta>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+/// Backing-store record for an ArrayBuffer-aliasing typed array. See
+/// `TYPED_ARRAY_VIEW_META`.
+#[derive(Copy, Clone)]
+pub(crate) struct ViewMeta {
+    /// Address of the backing `BufferHeader` (an `ArrayBuffer`).
+    pub backing: usize,
+    /// Byte offset of element 0 within `backing`.
+    pub byte_offset: u32,
+}
+
+/// Record `ta` as aliasing `backing` at `byte_offset`. After this call
+/// `data_ptr(ta)` resolves into the backing store rather than `ta`'s inline
+/// region, so reads/writes are shared with the buffer and every other view.
+pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, byte_offset: u32) {
+    TYPED_ARRAY_VIEW_META.with(|r| {
+        r.borrow_mut().insert(
+            ta as usize,
+            ViewMeta {
+                backing,
+                byte_offset,
+            },
+        );
+    });
+}
+
+#[inline]
+pub(crate) fn view_meta_of(addr: usize) -> Option<ViewMeta> {
+    TYPED_ARRAY_VIEW_META.with(|r| r.borrow().get(&addr).copied())
+}
+
+/// Data pointer for element 0 of the typed array at `addr` when it aliases an
+/// `ArrayBuffer` (resolves into the backing store at the recorded byteOffset);
+/// `None` when the typed array uses its own inline storage. `data_ptr` /
+/// `data_ptr_mut` in `typedarray::mod` consult this before falling back inline.
+#[inline]
+pub(crate) fn view_backing_data_ptr(addr: usize) -> Option<*mut u8> {
+    view_meta_of(addr).map(|m| unsafe {
+        crate::buffer::buffer_data_mut(m.backing as *mut crate::buffer::BufferHeader)
+            .add(m.byte_offset as usize)
+    })
+}
+
+/// Drop any recorded view metadata for `addr` (called from
+/// `unregister_typed_array` when the typed array is collected).
+pub(crate) fn clear_view_meta(addr: usize) {
+    TYPED_ARRAY_VIEW_META.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+}
+
+/// `%TypedArray%.prototype.byteOffset` for a registered typed array: the byte
+/// offset of element 0 within its backing `ArrayBuffer`. Offset views recorded
+/// in `TYPED_ARRAY_VIEW_META` report their real offset; everything else is 0.
+pub fn js_typed_array_byte_offset(ta: *const TypedArrayHeader) -> u32 {
+    let addr = clean_ta_ptr(ta) as usize;
+    view_meta_of(addr).map(|m| m.byte_offset).unwrap_or(0)
+}
+
+/// `%TypedArray%.prototype.buffer` for a registered typed array: the backing
+/// `ArrayBuffer`, with stable identity. If the typed array already aliases a
+/// buffer (an offset view, or a previously-observed plain array) the recorded
+/// backing is returned. Otherwise a backing `ArrayBuffer` is materialized once,
+/// the current element bytes are copied in, and the typed array is rebound to
+/// alias it so the identity stays stable and later mutation is shared — V8's
+/// model where every typed array is backed by an ArrayBuffer.
+pub fn js_typed_array_backing_buffer(
+    ta: *const TypedArrayHeader,
+) -> *mut crate::buffer::BufferHeader {
+    let clean = clean_ta_ptr(ta);
+    if clean.is_null() {
+        return std::ptr::null_mut();
+    }
+    let addr = clean as usize;
+    if let Some(meta) = view_meta_of(addr) {
+        return meta.backing as *mut crate::buffer::BufferHeader;
+    }
+    // Materialize a stable backing ArrayBuffer over the current bytes, then
+    // rebind the typed array to alias it (so `data_ptr` resolves into the
+    // buffer from now on and writes are shared in both directions).
+    let buf = typed_array_to_array_buffer(clean);
+    if buf.is_null() {
+        return std::ptr::null_mut();
+    }
+    register_view_meta(clean, buf as usize, 0);
+    buf
 }
