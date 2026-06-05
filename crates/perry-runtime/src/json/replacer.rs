@@ -208,9 +208,19 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let actual_fields = std::cmp::min(num_fields, keys_len);
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
+    // A function replacer only sees own ENUMERABLE keys (EnumerableOwnProperty
+    // Names); gated for the common no-descriptor case.
+    let filter_non_enum = crate::object::descriptors_in_use();
     buf.push('{');
     let mut first = true;
     for f in 0..actual_fields {
+        // Skip non-enumerable own keys before invoking the replacer.
+        if filter_non_enum
+            && f < keys_len
+            && super::stringify::json_key_non_enumerable(obj, *keys_elements.add(f as usize))
+        {
+            continue;
+        }
         // Get the key as a string
         let (key_str_ptr, key_str_opt) = if f < keys_len {
             let key_f64 = *keys_elements.add(f as usize);
@@ -588,6 +598,8 @@ pub(crate) unsafe fn stringify_object_pretty(
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     let actual_fields = std::cmp::min(num_fields, keys_len);
+    // Only own ENUMERABLE keys are serialized (gated for the common case).
+    let filter_non_enum = crate::object::descriptors_in_use();
 
     // Collect non-undefined, non-closure fields
     let mut entries: Vec<(String, f64)> = Vec::new();
@@ -595,6 +607,14 @@ pub(crate) unsafe fn stringify_object_pretty(
         let field_val = *fields_ptr.add(f as usize);
         let field_bits = field_val.to_bits();
         if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
+            continue;
+        }
+        // Skip non-enumerable own keys (`Object.defineProperty(o, k,
+        // { enumerable: false })`).
+        if filter_non_enum
+            && f < keys_len
+            && super::stringify::json_key_non_enumerable(obj, *keys_elements.add(f as usize))
+        {
             continue;
         }
         let key_name = if f < keys_len {
