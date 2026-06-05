@@ -1997,6 +1997,9 @@ pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 
     if obj_ptr == 0 {
         return obj;
     }
+    if is_async != 0 {
+        super::async_generator_queue::wrap_async_generator_instance(obj_ptr as *mut ObjectHeader);
+    }
     let gen_proto = generator_prototype_ptr(is_async != 0);
     if gen_proto.is_null() {
         return obj;

@@ -111,6 +111,7 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     });
 
     super::combinators::scan_promise_all_states_mut(visitor);
+    super::then::scan_promise_settle_listeners_mut(visitor);
 
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         for context in stack.borrow_mut().iter_mut() {
@@ -137,9 +138,10 @@ const PROMISE_SCAN_INLINE_TRAP: u8 = 5;
 const PROMISE_SCAN_ASYNC_STEP_GUARD: u8 = 6;
 const PROMISE_SCAN_CONTEXTS: u8 = 7;
 const PROMISE_SCAN_ALL_STATES: u8 = 8;
-const PROMISE_SCAN_PREV_CONTEXTS: u8 = 9;
-const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 10;
-const PROMISE_SCAN_DONE: u8 = 11;
+const PROMISE_SCAN_SETTLE_LISTENERS: u8 = 9;
+const PROMISE_SCAN_PREV_CONTEXTS: u8 = 10;
+const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 11;
+const PROMISE_SCAN_DONE: u8 = 12;
 
 #[derive(Default)]
 pub(crate) struct PromiseRootScanState {
@@ -197,6 +199,9 @@ pub(crate) fn scan_promise_roots_mut_step(
             PROMISE_SCAN_ASYNC_STEP_GUARD => scan_async_step_guard_step(visitor, remaining),
             PROMISE_SCAN_CONTEXTS => scan_promise_contexts_step(visitor, state, remaining),
             PROMISE_SCAN_ALL_STATES => scan_promise_all_states_step(visitor, state, remaining),
+            PROMISE_SCAN_SETTLE_LISTENERS => {
+                scan_promise_settle_listeners_step(visitor, state, remaining)
+            }
             PROMISE_SCAN_PREV_CONTEXTS => scan_prev_contexts_step(visitor, state, remaining),
             PROMISE_SCAN_SCHEDULED_RESOLVES => {
                 scan_scheduled_resolves_step(visitor, state, remaining)
@@ -563,6 +568,43 @@ fn scan_promise_all_states_step(
     })
 }
 
+fn scan_promise_settle_listeners_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut PromiseRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    super::then::PROMISE_SETTLE_LISTENERS.with(|listeners| {
+        let mut listeners = listeners.borrow_mut();
+        while state.index < listeners.len() {
+            while state.slot < 3 {
+                if !consume_root_work(remaining) {
+                    return false;
+                }
+                let (key, listener) = &mut listeners[state.index];
+                match state.slot {
+                    0 => visitor.visit_metadata_usize_slot(key),
+                    1 => visitor.visit_raw_const_ptr_slot(&mut listener.on_fulfilled),
+                    2 => visitor.visit_raw_const_ptr_slot(&mut listener.on_rejected),
+                    _ => false,
+                };
+                state.slot += 1;
+            }
+            if !crate::async_context::scan_snapshot_roots_mut_step(
+                &mut listeners[state.index].1.context,
+                visitor,
+                &mut state.context_entry,
+                &mut state.context_store,
+                remaining,
+            ) {
+                return false;
+            }
+            state.index += 1;
+            state.finish_context_item();
+        }
+        true
+    })
+}
+
 fn scan_prev_contexts_step(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
     state: &mut PromiseRootScanState,
@@ -822,6 +864,7 @@ pub(crate) fn test_clear_promise_scanner_roots() {
         })
     });
     super::combinators::SCHEDULED_RESOLVES.with(|q| q.borrow_mut().clear());
+    super::then::PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().clear());
 }
 
 #[cfg(test)]

@@ -29,6 +29,105 @@ unsafe fn store_promise_next_slot(
     crate::gc::runtime_store_gc_heap_word_slot(promise as usize, slot as usize, value as u64);
 }
 
+pub(super) struct PromiseSettleListener {
+    pub(super) on_fulfilled: ClosurePtr,
+    pub(super) on_rejected: ClosurePtr,
+    pub(super) context: AsyncContextSnapshot,
+}
+
+thread_local! {
+    pub(super) static PROMISE_SETTLE_LISTENERS: RefCell<Vec<(usize, PromiseSettleListener)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn js_promise_attach_settle_listener(
+    promise: *mut Promise,
+    on_fulfilled: ClosurePtr,
+    on_rejected: ClosurePtr,
+) {
+    if promise.is_null() {
+        return;
+    }
+
+    let context = capture_context();
+    unsafe {
+        match (*promise).state {
+            PromiseState::Pending => {
+                crate::gc::runtime_write_barrier_root_raw_ptr(promise);
+                crate::gc::runtime_write_barrier_root_raw_ptr(on_fulfilled);
+                crate::gc::runtime_write_barrier_root_raw_ptr(on_rejected);
+                PROMISE_SETTLE_LISTENERS.with(|listeners| {
+                    listeners.borrow_mut().push((
+                        promise as usize,
+                        PromiseSettleListener {
+                            on_fulfilled,
+                            on_rejected,
+                            context,
+                        },
+                    ));
+                });
+            }
+            PromiseState::Fulfilled => {
+                enqueue_settle_listener_task(on_fulfilled, (*promise).value, true, context);
+            }
+            PromiseState::Rejected => {
+                enqueue_settle_listener_task(on_rejected, (*promise).reason, false, context);
+            }
+        }
+    }
+}
+
+fn promise_take_settle_listeners(promise: *mut Promise) -> Vec<PromiseSettleListener> {
+    if promise.is_null() {
+        return Vec::new();
+    }
+    PROMISE_SETTLE_LISTENERS.with(|listeners| {
+        let mut listeners = listeners.borrow_mut();
+        let key = promise as usize;
+        let mut drained = Vec::new();
+        let mut i = 0;
+        while i < listeners.len() {
+            if listeners[i].0 == key {
+                drained.push(listeners.swap_remove(i).1);
+            } else {
+                i += 1;
+            }
+        }
+        drained
+    })
+}
+
+fn enqueue_settle_listener_task(
+    callback: ClosurePtr,
+    value: f64,
+    is_fulfilled: bool,
+    context: AsyncContextSnapshot,
+) {
+    if callback.is_null() {
+        return;
+    }
+    TASK_QUEUE.with(|q| {
+        q.borrow_mut().push_back(Task::Inline(
+            callback,
+            value,
+            ptr::null_mut(),
+            is_fulfilled,
+            context,
+        ));
+    });
+}
+
+pub(super) fn scan_promise_settle_listeners_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROMISE_SETTLE_LISTENERS.with(|listeners| {
+        for (key, listener) in listeners.borrow_mut().iter_mut() {
+            visitor.visit_metadata_usize_slot(key);
+            visitor.visit_raw_const_ptr_slot(&mut listener.on_fulfilled);
+            visitor.visit_raw_const_ptr_slot(&mut listener.on_rejected);
+            scan_snapshot_roots_mut(&mut listener.context, visitor);
+        }
+    });
+}
+
 /// Allocate a new Promise
 #[no_mangle]
 pub extern "C" fn js_promise_new() -> *mut Promise {
@@ -150,12 +249,25 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         // a NULL ClosurePtr sentinel — see expr.rs:GlobalGet→PropertyGet
         // value path) skipped the queue entirely; the chained promise then
         // never settled and `await chained` busy-waited forever.
+        let settle_listeners = promise_take_settle_listeners(promise);
+        let has_settle_listeners = !settle_listeners.is_empty();
         let promise_all_states = combinators::promise_all_take_all_handlers(promise);
         let has_normal_handler = !(*promise).on_fulfilled.is_null() || !(*promise).next.is_null();
-        if !promise_all_states.is_empty() || has_normal_handler {
+        if has_settle_listeners || !promise_all_states.is_empty() || has_normal_handler {
             let task_context = context_for_promise(promise);
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
+                for listener in settle_listeners {
+                    if !listener.on_fulfilled.is_null() {
+                        q.push_back(Task::Inline(
+                            listener.on_fulfilled,
+                            value,
+                            ptr::null_mut(),
+                            true,
+                            listener.context,
+                        ));
+                    }
+                }
                 for all_state in promise_all_states {
                     q.push_back(Task::PromiseAll(
                         all_state,
@@ -309,12 +421,25 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         // Schedule callbacks. Same propagation rule as `js_promise_resolve`
         // (#236): push to the queue whenever there's a callback to invoke
         // OR a chained `next` promise to forward to.
+        let settle_listeners = promise_take_settle_listeners(promise);
+        let has_settle_listeners = !settle_listeners.is_empty();
         let promise_all_states = combinators::promise_all_take_all_handlers(promise);
         let has_normal_handler = !(*promise).on_rejected.is_null() || !(*promise).next.is_null();
-        if !promise_all_states.is_empty() || has_normal_handler {
+        if has_settle_listeners || !promise_all_states.is_empty() || has_normal_handler {
             let task_context = context_for_promise(promise);
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
+                for listener in settle_listeners {
+                    if !listener.on_rejected.is_null() {
+                        q.push_back(Task::Inline(
+                            listener.on_rejected,
+                            reason,
+                            ptr::null_mut(),
+                            false,
+                            listener.context,
+                        ));
+                    }
+                }
                 for all_state in promise_all_states {
                     q.push_back(Task::PromiseAll(
                         all_state,

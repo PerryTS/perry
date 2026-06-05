@@ -21,6 +21,7 @@ mod alloc;
 mod arguments;
 mod array_object_ops;
 mod assert;
+mod async_generator_queue;
 mod bigint_dispatch;
 mod buffer_dispatch;
 mod class_constructors;
@@ -1414,6 +1415,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         Ordering::Acquire,
         Ordering::Release,
     );
+    async_generator_queue::scan_async_generator_queue_roots_mut(visitor);
     visitor.visit_atomic_i64_slot(&LOCAL_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
     visitor.visit_atomic_i64_slot(&SESSION_STORAGE_PTR, Ordering::Acquire, Ordering::Release);
     // Shared `%IteratorPrototype%`-style singletons for Array/Map/Set/String
