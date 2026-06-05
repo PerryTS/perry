@@ -97,6 +97,36 @@ fn diagnostics_channel_exposes_tracingChannel_export() {
     }
 }
 
+#[test]
+fn http_outgoing_message_export_is_callable() {
+    let value = unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"http".as_ptr(),
+            "http".len(),
+            b"OutgoingMessage".as_ptr(),
+            "OutgoingMessage".len(),
+        )
+    };
+    assert_ne!(value.to_bits(), crate::value::TAG_UNDEFINED);
+    assert_eq!(
+        unsafe { crate::object::bound_native_callable_value_arity(value) },
+        Some(1)
+    );
+
+    let namespace =
+        crate::object::js_create_native_module_namespace(b"http".as_ptr(), "http".len());
+    let keys = crate::object::js_object_keys_value(namespace);
+    let mut found = false;
+    for i in 0..crate::array::js_array_length(keys) {
+        let key = crate::array::js_array_get(keys, i);
+        if string_from_value(f64::from_bits(key.bits())).as_deref() == Some("OutgoingMessage") {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "http namespace keys should include OutgoingMessage");
+}
+
 fn boxed_ptr(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
 }

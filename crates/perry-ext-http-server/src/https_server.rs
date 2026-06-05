@@ -15,8 +15,8 @@ use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, RawClosureHeader,
-    StringHeader,
+    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
+    RawClosureHeader, StringHeader,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -523,6 +523,18 @@ https_server_setter!(
     js_node_https_server_set_max_requests_per_socket,
     max_requests_per_socket
 );
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_listening_value(handle: i64) -> f64 {
+    f64::from_bits(
+        JsValue::from_bool(
+            get_handle::<HttpsServer>(handle)
+                .map(|s| s.base.listening)
+                .unwrap_or(false),
+        )
+        .bits(),
+    )
+}
 
 #[no_mangle]
 pub extern "C" fn js_node_https_server_set_timeout_method(

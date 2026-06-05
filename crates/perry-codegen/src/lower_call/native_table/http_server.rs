@@ -109,6 +109,15 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_OBJ_FROM_JSON_STR,
     },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_listening",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_listening_value",
+        args: &[],
+        ret: NR_F64,
+    },
     // Issue #2210 — `server.<name>` timeout / socket-option accessors.
     // The HIR rewrites `server.headersTimeout` reads / writes to
     // `__get_headersTimeout` / `__set_headersTimeout` synthetic methods
@@ -250,6 +259,15 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         method: "headersTimeout",
         class_filter: Some("HttpServer"),
         runtime: "js_node_http_server_headers_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "listening",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_listening_value",
         args: &[],
         ret: NR_F64,
     },
@@ -924,6 +942,15 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "https",
         has_receiver: true,
+        method: "__get_listening",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_listening_value",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
         method: "closeAllConnections",
         class_filter: Some("HttpsServer"),
         runtime: "js_node_https_server_close_all_connections",
@@ -1071,6 +1098,15 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         method: "headersTimeout",
         class_filter: Some("HttpsServer"),
         runtime: "js_node_https_server_headers_timeout",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "listening",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_listening_value",
         args: &[],
         ret: NR_F64,
     },

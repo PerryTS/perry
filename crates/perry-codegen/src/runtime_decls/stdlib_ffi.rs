@@ -179,6 +179,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_server_close_idle_connections", VOID, &[I64]);
     module.declare_function("js_node_http_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http_server_listening", I32, &[I64]);
+    module.declare_function("js_node_http_server_listening_value", DOUBLE, &[I64]);
     module.declare_function("js_node_http_server_on", DOUBLE, &[I64, I64, I64]);
     // IncomingMessage:
     module.declare_function("js_node_http_im_method", I64, &[I64]);
@@ -257,6 +258,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_https_server_close_idle_connections", VOID, &[I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_node_https_server_listening_value", DOUBLE, &[I64]);
     module.declare_function("js_node_https_server_headers_timeout", DOUBLE, &[I64]);
     module.declare_function(
         "js_node_https_server_set_headers_timeout",

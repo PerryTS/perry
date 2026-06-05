@@ -1581,6 +1581,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             // perry-ext-http-server (Phase 1 returns the
                             // stored numeric default; Phase 2 will reflect
                             // the live hyper accept-loop state).
+                            | ("HttpServer", "listening")
                             | ("HttpServer", "headersTimeout")
                             | ("HttpServer", "keepAliveTimeout")
                             | ("HttpServer", "keepAliveTimeoutBuffer")
@@ -1588,6 +1589,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("HttpServer", "timeout")
                             | ("HttpServer", "maxHeadersCount")
                             | ("HttpServer", "maxRequestsPerSocket")
+                            | ("HttpsServer", "listening")
                             | ("HttpsServer", "headersTimeout")
                             | ("HttpsServer", "keepAliveTimeout")
                             | ("HttpsServer", "keepAliveTimeoutBuffer")

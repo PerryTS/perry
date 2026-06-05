@@ -29,7 +29,7 @@ use crate::https_server::HttpsServer;
 use crate::request::IncomingMessage;
 use crate::response::ServerResponse;
 use crate::server::HttpServer;
-use crate::types::{read_string_header, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
+use crate::types::{read_string_header, POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED};
 
 #[repr(C)]
 struct ErrorHeader {
@@ -396,7 +396,35 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_property(
     if let Some(name) = http_server_method_bytes(&property) {
         return bind_handle_method(handle, name);
     }
-    undef
+    let is_https = get_handle::<HttpsServer>(handle).is_some();
+    let is_h2 = get_handle::<Http2SecureServer>(handle).is_some();
+    match property.as_str() {
+        "listening" => bool_value(server_is_listening(handle, is_https, is_h2)),
+        "headersTimeout" => {
+            server_base_property(handle, is_https, is_h2, |s| s.headers_timeout).unwrap_or(undef)
+        }
+        "keepAliveTimeout" => {
+            server_base_property(handle, is_https, is_h2, |s| s.keep_alive_timeout).unwrap_or(undef)
+        }
+        "keepAliveTimeoutBuffer" => {
+            server_base_property(handle, is_https, is_h2, |s| s.keep_alive_timeout_buffer)
+                .unwrap_or(undef)
+        }
+        "requestTimeout" => {
+            server_base_property(handle, is_https, is_h2, |s| s.request_timeout).unwrap_or(undef)
+        }
+        "timeout" => {
+            server_base_property(handle, is_https, is_h2, |s| s.idle_timeout).unwrap_or(undef)
+        }
+        "maxHeadersCount" => {
+            server_base_property(handle, is_https, is_h2, |s| s.max_headers_count).unwrap_or(undef)
+        }
+        "maxRequestsPerSocket" => {
+            server_base_property(handle, is_https, is_h2, |s| s.max_requests_per_socket)
+                .unwrap_or(undef)
+        }
+        _ => undef,
+    }
 }
 
 /// Dispatch a method on a registered server-side `IncomingMessage` handle.
@@ -510,6 +538,12 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
     let args = args_slice(args_ptr, args_len);
     let self_ref = handle_to_pointer_f64(handle);
 
+    if server_response_method_bytes(&method).is_some()
+        && server_response_method_bytes_for_handle(handle, &method).is_none()
+    {
+        return undef;
+    }
+
     match method.as_str() {
         "setHeader" if args.len() >= 2 => {
             let name = string_value_arg(args[0]);
@@ -606,6 +640,8 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             js_node_http_res_write_processing(handle);
             undef
         }
+        "destroy" => self_ref,
+        "pipe" => undef,
         "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = string_arg(args[0]);
             if event_ptr.is_null() {
@@ -711,7 +747,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         return undef;
     }
 
-    if let Some(name) = server_response_method_bytes(&property) {
+    if let Some(name) = server_response_method_bytes_for_handle(handle, &property) {
         return bind_handle_method(handle, name);
     }
 
@@ -722,6 +758,13 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
         "writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
         "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        "writableCorked" => 0.0,
+        "writableHighWaterMark" => 65_536.0,
+        "writableLength" => get_handle::<ServerResponse>(handle)
+            .map(|sr| sr.buffered_body.len() as f64)
+            .unwrap_or(0.0),
+        "writableObjectMode" => bool_value(false),
+        "writableNeedDrain" => bool_value(false),
         "sendDate" => bool_value(js_node_http_res_send_date(handle) != 0),
         "strictContentLength" => bool_value(js_node_http_res_strict_content_length(handle) != 0),
         "req" => handle_value_or_undefined(js_node_http_res_req_handle(handle)),
@@ -804,7 +847,7 @@ fn handle_value_or_undefined(handle: i64) -> f64 {
 fn response_socket_value(handle: i64) -> f64 {
     let req_handle = unsafe { js_node_http_res_req_handle(handle) };
     if req_handle == 0 {
-        handle_to_pointer_f64(handle)
+        f64::from_bits(TAG_NULL)
     } else {
         handle_to_pointer_f64(req_handle)
     }
@@ -911,14 +954,30 @@ fn server_response_method_bytes(name: &str) -> Option<&'static [u8]> {
         "flushHeaders" => Some(b"flushHeaders"),
         "cork" => Some(b"cork"),
         "uncork" => Some(b"uncork"),
+        "destroy" => Some(b"destroy"),
         "setTimeout" => Some(b"setTimeout"),
         "writeEarlyHints" => Some(b"writeEarlyHints"),
         "writeContinue" => Some(b"writeContinue"),
         "writeProcessing" => Some(b"writeProcessing"),
+        "pipe" => Some(b"pipe"),
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
         _ => None,
     }
+}
+
+fn server_response_method_bytes_for_handle(handle: i64, name: &str) -> Option<&'static [u8]> {
+    if get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.outgoing_message_only)
+        .unwrap_or(false)
+        && matches!(
+            name,
+            "writeHead" | "writeEarlyHints" | "writeContinue" | "writeProcessing"
+        )
+    {
+        return None;
+    }
+    server_response_method_bytes(name)
 }
 
 /// Strip a NaN-boxed string arg to the raw `*const StringHeader` pointer the
@@ -959,6 +1018,19 @@ fn server_is_listening(handle: i64, is_https: bool, is_h2: bool) -> bool {
         get_handle::<HttpServer>(handle)
             .map(|server| server.listening)
             .unwrap_or(false)
+    }
+}
+
+fn server_base_property<F>(handle: i64, is_https: bool, is_h2: bool, f: F) -> Option<f64>
+where
+    F: Fn(&HttpServer) -> f64,
+{
+    if is_h2 {
+        get_handle::<Http2SecureServer>(handle).map(|server| f(&server.base))
+    } else if is_https {
+        get_handle::<HttpsServer>(handle).map(|server| f(&server.base))
+    } else {
+        get_handle::<HttpServer>(handle).map(|server| f(server))
     }
 }
 

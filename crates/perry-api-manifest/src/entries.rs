@@ -4617,6 +4617,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http", "WebSocket"),
     class("http", "ClientRequest"),
     class("http", "IncomingMessage"),
+    class("http", "OutgoingMessage"),
     class("http", "ServerResponse"),
     // #2129 — `new http.Agent(options?)`. Construction is unconditional;
     // method dispatch flows through ("http", "Agent") rows below.
@@ -5122,6 +5123,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // plus the canonical `server.setTimeout(ms, cb)` method. Each
     // accessor has two manifest entries (`__get_<name>` HIR-rewrite +
     // bare-name fallback for receivers that escape the rewrite).
+    method("http", "__get_listening", true, Some("HttpServer")),
+    method("http", "listening", true, Some("HttpServer")),
     method("http", "__get_headersTimeout", true, Some("HttpServer")),
     method("http", "__set_headersTimeout", true, Some("HttpServer")),
     method("http", "headersTimeout", true, Some("HttpServer")),
@@ -5270,6 +5273,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     class("http", "Server"),
     class("http", "IncomingMessage"),
+    class("http", "OutgoingMessage"),
     class("http", "ServerResponse"),
     // --- node:https server (issue #577 Phase 2) ---
     method("https", "createServer", false, None),
@@ -5280,6 +5284,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("https", "on", true, Some("HttpsServer")),
     method("https", "addListener", true, Some("HttpsServer")),
     method("https", "address", true, Some("HttpsServer")),
+    method("https", "__get_listening", true, Some("HttpsServer")),
+    method("https", "listening", true, Some("HttpsServer")),
     method("https", "__get_headersTimeout", true, Some("HttpsServer")),
     method("https", "__set_headersTimeout", true, Some("HttpsServer")),
     method("https", "headersTimeout", true, Some("HttpsServer")),

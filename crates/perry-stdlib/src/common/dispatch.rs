@@ -868,6 +868,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 | "flushHeaders"
                 | "cork"
                 | "uncork"
+                | "destroy"
+                | "pipe"
                 | "setTimeout"
                 | "writeEarlyHints"
                 | "writeContinue"
@@ -1880,6 +1882,14 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "addListener"
                 | "setTimeout"
                 | "@@__perry_wk_asyncDispose"
+                | "listening"
+                | "headersTimeout"
+                | "keepAliveTimeout"
+                | "keepAliveTimeoutBuffer"
+                | "requestTimeout"
+                | "timeout"
+                | "maxHeadersCount"
+                | "maxRequestsPerSocket"
         ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
         {
             return unsafe {
@@ -1938,6 +1948,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "writableEnded"
                 | "writableFinished"
                 | "finished"
+                | "writableCorked"
+                | "writableHighWaterMark"
+                | "writableLength"
+                | "writableObjectMode"
+                | "writableNeedDrain"
                 | "sendDate"
                 | "strictContentLength"
                 | "req"
@@ -1958,6 +1973,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "flushHeaders"
                 | "cork"
                 | "uncork"
+                | "destroy"
+                | "pipe"
                 | "setTimeout"
                 | "writeEarlyHints"
                 | "writeContinue"
@@ -2640,6 +2657,7 @@ unsafe extern "C" fn js_node_http_native_dispatch(
     use perry_runtime::JSValue;
     extern "C" {
         fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
+        fn js_node_http_outgoing_message_new() -> i64;
         fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
         fn js_node_http2_create_server(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
@@ -2663,6 +2681,14 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             undefined
         }
     };
+    if module == "http" && method == "OutgoingMessage" {
+        let handle = js_node_http_outgoing_message_new();
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
     // Disambiguate handler (function/closure) from options (object),
     // independent of argument order.
     let mut handler_ptr: i64 = 0;

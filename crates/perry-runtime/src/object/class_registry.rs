@@ -1586,6 +1586,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 _ => unreachable!(),
             };
         }
+        if module == "http" && method == "OutgoingMessage" {
+            let ptr =
+                crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: unsafe extern "C" fn(
+                    *const u8,
+                    usize,
+                    *const u8,
+                    usize,
+                    *const f64,
+                    usize,
+                ) -> f64 = std::mem::transmute(ptr);
+                return dispatch(
+                    b"http".as_ptr(),
+                    "http".len(),
+                    method.as_ptr(),
+                    method.len(),
+                    args_ptr,
+                    args_len,
+                );
+            }
+        }
         if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
             let ptr =
                 crate::value::JS_NATIVE_ZLIB_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);

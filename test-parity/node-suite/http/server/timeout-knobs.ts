@@ -14,6 +14,19 @@ import { createServer } from "node:http";
 
 const server = createServer((_req: any, res: any) => res.end("ok"));
 
+console.log(
+  "default keepAliveTimeoutBuffer:",
+  server.keepAliveTimeoutBuffer,
+  typeof server.keepAliveTimeoutBuffer,
+);
+console.log("default listening:", server.listening, typeof server.listening);
+console.log(
+  "default maxHeadersCount:",
+  String(server.maxHeadersCount),
+  typeof server.maxHeadersCount,
+  server.maxHeadersCount === null,
+);
+
 server.headersTimeout = 0;
 server.keepAliveTimeout = 0;
 server.keepAliveTimeoutBuffer = 250;

@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(s.keep_alive_timeout_buffer, 1_000.0);
         assert_eq!(s.request_timeout, 300_000.0);
         assert_eq!(s.idle_timeout, 0.0);
-        assert_eq!(s.max_headers_count, 2000.0);
+        assert_eq!(s.max_headers_count.to_bits(), crate::types::TAG_NULL);
         assert_eq!(s.max_requests_per_socket, 0.0);
         assert!(s.no_delay);
         assert!(!s.keep_alive);

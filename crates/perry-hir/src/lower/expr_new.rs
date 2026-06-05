@@ -492,6 +492,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            if is_http_module && prop_ident.sym.as_ref() == "OutgoingMessage" {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("http".to_string())),
+                        property: "OutgoingMessage".to_string(),
+                    }),
+                    args,
+                });
+            }
             let is_url_module =
                 obj_name == "url" || ctx.lookup_builtin_module_alias(obj_name) == Some("url");
             if is_url_module && prop_ident.sym.as_ref() == "Url" {
@@ -929,6 +939,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     callee: Box::new(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef(module_name)),
                         property: method_name,
+                    }),
+                    args,
+                });
+            }
+
+            if matches!(
+                ctx.lookup_native_module(&class_name),
+                Some(("http", Some("OutgoingMessage")))
+            ) {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("http".to_string())),
+                        property: "OutgoingMessage".to_string(),
                     }),
                     args,
                 });

@@ -19,7 +19,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, iter_handles_of, register_handle, JsClosure,
+    alloc_string, get_handle, get_handle_mut, iter_handles_of, register_handle, JsClosure, JsValue,
     RawClosureHeader, StringHeader,
 };
 
@@ -73,7 +73,7 @@ pub struct HttpServer {
     ///   - `keepAliveTimeoutBuffer`: 1_000 ms
     ///   - `requestTimeout`: 300_000 ms
     ///   - `timeout` (idle): 0 (disabled)
-    ///   - `maxHeadersCount`: 2000
+    ///   - `maxHeadersCount`: null
     ///   - `maxRequestsPerSocket`: 0 (no limit)
     ///   - `noDelay`: true (Node toggled the default in 21.0)
     ///   - `keepAlive`: false
@@ -110,7 +110,7 @@ impl HttpServer {
             keep_alive_timeout_buffer: 1_000.0,
             request_timeout: 300_000.0,
             idle_timeout: 0.0,
-            max_headers_count: 2000.0,
+            max_headers_count: f64::from_bits(TAG_NULL),
             max_requests_per_socket: 0.0,
             no_delay: true,
             keep_alive: false,
@@ -569,6 +569,19 @@ pub extern "C" fn js_node_http_server_listening(handle: i64) -> i32 {
     get_handle::<HttpServer>(handle)
         .map(|s| if s.listening { 1 } else { 0 })
         .unwrap_or(0)
+}
+
+/// `server.listening` getter as a JS boolean value.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_listening_value(handle: i64) -> f64 {
+    f64::from_bits(
+        JsValue::from_bool(
+            get_handle::<HttpServer>(handle)
+                .map(|s| s.listening)
+                .unwrap_or(false),
+        )
+        .bits(),
+    )
 }
 
 /// `server.on(event, cb)` — register a listener. Standard event names:

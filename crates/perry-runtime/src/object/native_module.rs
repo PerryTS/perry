@@ -2726,6 +2726,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"createServer",
             b"Server",
             b"IncomingMessage",
+            b"OutgoingMessage",
             b"ServerResponse",
             b"ClientRequest",
             b"Agent",
@@ -3655,6 +3656,7 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         // createServer(options,handler)=2.
         ("http2", "connect") => Some(3),
         ("http2", "createServer" | "createSecureServer") => Some(2),
+        ("http", "OutgoingMessage") => Some(1),
         // #3697: node:https module-level exports (Node `.length`).
         ("https", "request") => Some(0),
         ("https", "get") => Some(3),
@@ -5605,6 +5607,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // already lowers through the codegen NATIVE_MODULE_TABLE.
             | ("http", "createServer")
             | ("http", "Server")
+            | ("http", "OutgoingMessage")
             | ("https", "createServer")
             | ("https", "Server")
             // #3697: `https.request` / `https.get` / `https.Agent` value reads
@@ -7489,6 +7492,10 @@ pub(crate) unsafe fn get_native_module_constant(
         // pointer) and hand it back for every read.
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
+            "OutgoingMessage" => Some(bound_native_callable_export_value(
+                "http",
+                "OutgoingMessage",
+            )),
             // #3712: Node's `http.maxHeaderSize` default is 16 KiB (16384).
             "maxHeaderSize" => Some(16384.0),
             // #3712: `http.globalAgent` is an http.Agent with protocol "http:"

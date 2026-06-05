@@ -77,9 +77,12 @@ try {
 console.log("setGlobalProxyFromEnv typeof:", typeof (http as any).setGlobalProxyFromEnv);
 
 // ── Module Properties ──
-console.log("http.METHODS:", http.METHODS);
-console.log("http.STATUS_CODES:", http.STATUS_CODES);
-console.log("http.globalAgent:", http.globalAgent);
+console.log("http.METHODS length:", http.METHODS.length);
+console.log("http.METHODS has GET/POST:", http.METHODS.indexOf("GET") !== -1, http.METHODS.indexOf("POST") !== -1);
+console.log("http.METHODS first/last:", http.METHODS[0], http.METHODS[http.METHODS.length - 1]);
+console.log("http.STATUS_CODES 200/404/500:", http.STATUS_CODES[200], http.STATUS_CODES[404], http.STATUS_CODES[500]);
+console.log("http.STATUS_CODES count:", Object.keys(http.STATUS_CODES).length);
+console.log("http.globalAgent fields:", http.globalAgent?.protocol, http.globalAgent?.defaultPort, typeof http.globalAgent?.keepAlive);
 console.log("http.maxHeaderSize:", http.maxHeaderSize);
 
 // ── Classes ──

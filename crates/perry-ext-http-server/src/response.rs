@@ -83,6 +83,9 @@ pub struct ServerResponse {
     pub send_date: bool,
     pub strict_content_length: bool,
     pub req_handle: i64,
+    /// True for direct `new http.OutgoingMessage()` handles. They share the
+    /// outgoing header/writable surface but are not a live ServerResponse.
+    pub outgoing_message_only: bool,
     /// Body chunks accumulated by `.write(chunk)` calls. Assembled
     /// + flushed when `.end()` is called.
     pub buffered_body: Vec<u8>,
@@ -205,10 +208,19 @@ impl ServerResponse {
             send_date: true,
             strict_content_length: false,
             req_handle: 0,
+            outgoing_message_only: false,
             buffered_body: Vec::new(),
             response_tx: Some(response_tx),
             listeners: HashMap::new(),
         }
+    }
+
+    pub fn outgoing_message() -> Self {
+        let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
+        let mut response = Self::new(tx);
+        response.send_date = false;
+        response.outgoing_message_only = true;
+        response
     }
 
     pub fn with_request_handle(mut self, req_handle: i64) -> Self {
@@ -291,7 +303,13 @@ pub extern "C" fn js_node_http_res_set_status(handle: i64, code: f64) {
 #[no_mangle]
 pub extern "C" fn js_node_http_res_get_status(handle: i64) -> f64 {
     get_handle::<ServerResponse>(handle)
-        .map(|sr| sr.status_code as f64)
+        .map(|sr| {
+            if sr.outgoing_message_only {
+                f64::from_bits(TAG_UNDEFINED)
+            } else {
+                sr.status_code as f64
+            }
+        })
         .unwrap_or(200.0)
 }
 
@@ -902,6 +920,11 @@ pub unsafe extern "C" fn js_node_http_res_on(
 // ============================================================================
 // Allocation helper used by server.rs
 // ============================================================================
+
+#[no_mangle]
+pub extern "C" fn js_node_http_outgoing_message_new() -> i64 {
+    register_handle(ServerResponse::outgoing_message())
+}
 
 pub(crate) fn alloc_server_response_for_request(
     response_tx: oneshot::Sender<HyperResponseShape>,
