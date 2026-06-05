@@ -604,7 +604,7 @@ fn jsvalue_to_f64(v: f64) -> f64 {
 }
 
 /// Store a number into the typed array slot, performing the per-kind cast.
-unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
+pub(super) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
     let kind = (*ta).kind;
     let elem_size = (*ta).elem_size as usize;
     let base = data_ptr_mut(ta);
@@ -782,11 +782,17 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
                 raw_addr as *const TypedArrayHeader,
             );
         }
-        if crate::buffer::is_registered_buffer(raw_addr)
-            && crate::buffer::is_any_array_buffer(raw_addr)
-        {
-            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-            return crate::typedarray_view::js_typed_array_view(kind, val, undefined, undefined);
+        if crate::buffer::is_registered_buffer(raw_addr) {
+            if crate::buffer::is_any_array_buffer(raw_addr) {
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                return crate::typedarray_view::js_typed_array_view(
+                    kind, val, undefined, undefined,
+                );
+            }
+            return bigint::copy_from_uint8_buffer(
+                kind as u8,
+                raw_addr as *const crate::buffer::BufferHeader,
+            );
         }
         return js_typed_array_new_from_array(kind, arr);
     }
@@ -837,6 +843,7 @@ fn typed_array_copy_from_typed_array(
         return typed_array_alloc(dst_kind, 0);
     }
     unsafe {
+        bigint::validate_copy_kinds(dst_kind, (*src).kind);
         let len = (*src).length;
         let out = typed_array_alloc(dst_kind, len);
         for i in 0..len as usize {
@@ -1034,10 +1041,30 @@ unsafe fn collect_typed_array_set_source(source_value: f64, dst_kind: u8) -> Opt
     // Source is another typed array.
     if lookup_typed_array_kind(addr).is_some() {
         let src = addr as *const TypedArrayHeader;
+        bigint::validate_copy_kinds(dst_kind, (*src).kind);
         let len = (*src).length as usize;
         let mut out = Vec::with_capacity(len);
         for i in 0..len {
             out.push(load_at(src, i));
+        }
+        return Some(out);
+    }
+
+    // Perry's Uint8Array is Buffer-backed; treat it as a numeric typed-array
+    // source for inter-kind copy/coercion instead of reading its bytes as f64
+    // array slots.
+    if crate::buffer::is_registered_buffer(addr) {
+        if crate::buffer::is_any_array_buffer(addr) {
+            return Some(Vec::new());
+        }
+        if bigint::is_bigint_kind(dst_kind) {
+            bigint::throw_bigint_number_mix();
+        }
+        let src = addr as *const crate::buffer::BufferHeader;
+        let len = (*src).length as usize;
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            out.push(crate::buffer::js_buffer_get(src, i as i32) as f64);
         }
         return Some(out);
     }
@@ -1413,10 +1440,11 @@ pub extern "C" fn js_typed_array_with(
             throw_range_error(b"Invalid typed array index");
         }
         let idx = resolved as i64;
+        let replacement = bigint::coerce_for_kind(kind, value);
         let out = typed_array_alloc(kind, len as u32);
         for i in 0..len {
             if i as i64 == idx {
-                store_at(out, i, jsvalue_to_f64(value));
+                store_at(out, i, replacement);
             } else {
                 store_at(out, i, load_at(ta, i));
             }
@@ -1510,7 +1538,7 @@ pub extern "C" fn js_typed_array_map(
         for i in 0..len {
             let v = load_at(ta, i);
             let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
-            store_at(out, i, jsvalue_to_f64(r));
+            store_at(out, i, bigint::coerce_for_kind(kind, r));
         }
         out
     }
@@ -1882,7 +1910,7 @@ pub extern "C" fn js_typed_array_fill(
     }
     unsafe {
         let len = (*ta).length as isize;
-        let v = jsvalue_to_f64(value);
+        let v = bigint::coerce_for_kind((*ta).kind, value);
         let norm = |x: f64, default: isize| -> isize {
             let mut n = if x.is_nan() { default } else { x as isize };
             if n < 0 {

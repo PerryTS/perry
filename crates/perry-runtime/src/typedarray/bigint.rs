@@ -10,7 +10,47 @@
 //!   - `coerce_for_kind` — pick `ToBigInt` vs `ToNumber` by destination kind
 //!     for the construction / `set()` paths.
 
-use super::{jsvalue_to_f64, throw_type_error, KIND_BIGINT64, KIND_BIGUINT64};
+use super::{
+    jsvalue_to_f64, store_at, throw_type_error, typed_array_alloc, TypedArrayHeader, KIND_BIGINT64,
+    KIND_BIGUINT64,
+};
+
+pub(crate) fn is_bigint_kind(kind: u8) -> bool {
+    matches!(kind, KIND_BIGINT64 | KIND_BIGUINT64)
+}
+
+#[cold]
+pub(crate) fn throw_bigint_number_mix() -> ! {
+    throw_type_error(b"Cannot mix BigInt and other types, use explicit conversions")
+}
+
+#[inline]
+pub(super) fn validate_copy_kinds(dst_kind: u8, src_kind: u8) {
+    if is_bigint_kind(dst_kind) != is_bigint_kind(src_kind) {
+        throw_bigint_number_mix();
+    }
+}
+
+pub(super) fn copy_from_uint8_buffer(
+    dst_kind: u8,
+    src: *const crate::buffer::BufferHeader,
+) -> *mut TypedArrayHeader {
+    if is_bigint_kind(dst_kind) {
+        throw_bigint_number_mix();
+    }
+    if src.is_null() {
+        return typed_array_alloc(dst_kind, 0);
+    }
+    unsafe {
+        let len = (*src).length;
+        let out = typed_array_alloc(dst_kind, len);
+        for i in 0..len as usize {
+            let v = crate::buffer::js_buffer_get(src, i as i32) as f64;
+            store_at(out, i, v);
+        }
+        out
+    }
+}
 
 /// Extract the low 64 bits to write into a `BigInt64`/`BigUint64` slot. The
 /// element-set path hands us an already-`ToBigInt`-coerced, NaN-boxed BigInt
