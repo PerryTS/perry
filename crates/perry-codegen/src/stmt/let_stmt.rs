@@ -20,6 +20,29 @@ fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
         )
 }
 
+const STREAM_WEB_CTOR_NAMES: [&str; 9] = [
+    "ReadableStream",
+    "WritableStream",
+    "TransformStream",
+    "ByteLengthQueuingStrategy",
+    "CountQueuingStrategy",
+    "TextEncoderStream",
+    "TextDecoderStream",
+    "CompressionStream",
+    "DecompressionStream",
+];
+
+fn stream_web_constructor_name(name: &str) -> Option<&'static str> {
+    STREAM_WEB_CTOR_NAMES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == name)
+}
+
+fn is_stream_web_module_name(module: &str) -> bool {
+    matches!(module, "stream/web" | "node:stream/web")
+}
+
 pub(crate) fn lower_let(
     ctx: &mut FnCtx<'_>,
     id: u32,
@@ -124,6 +147,14 @@ pub(crate) fn lower_let(
                         | "File"
                         | "WebSocket"
                 )
+            {
+                ctx.local_class_aliases
+                    .insert(name.to_string(), property.clone());
+            }
+            if matches!(
+                object.as_ref(),
+                perry_hir::Expr::NativeModuleRef(module) if is_stream_web_module_name(module)
+            ) && stream_web_constructor_name(property).is_some()
             {
                 ctx.local_class_aliases
                     .insert(name.to_string(), property.clone());

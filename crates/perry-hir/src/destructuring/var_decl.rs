@@ -16,6 +16,84 @@ fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
 /// #3663: classic-stream constructor export names from `node:stream`.
 const STREAM_CTOR_NAMES: [&str; 5] = ["Readable", "Writable", "Duplex", "Transform", "PassThrough"];
 
+/// #1545: implemented constructor exports from `node:stream/web`.
+const STREAM_WEB_CTOR_NAMES: [&str; 9] = [
+    "ReadableStream",
+    "WritableStream",
+    "TransformStream",
+    "ByteLengthQueuingStrategy",
+    "CountQueuingStrategy",
+    "TextEncoderStream",
+    "TextDecoderStream",
+    "CompressionStream",
+    "DecompressionStream",
+];
+
+fn stream_web_constructor_name(name: &str) -> Option<&'static str> {
+    STREAM_WEB_CTOR_NAMES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == name)
+}
+
+fn is_stream_web_module_name(module: &str) -> bool {
+    matches!(module, "stream/web" | "node:stream/web")
+}
+
+fn stream_web_native_instance_module(class_name: &str) -> Option<&'static str> {
+    match class_name {
+        "ReadableStream" => Some("readable_stream"),
+        "WritableStream" => Some("writable_stream"),
+        "TransformStream" => Some("transform_stream"),
+        _ => None,
+    }
+}
+
+fn is_stream_web_namespace_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
+    match expr {
+        Expr::NativeModuleRef(module) => is_stream_web_module_name(module),
+        Expr::ExternFuncRef { name, .. } => ctx
+            .lookup_builtin_module_alias(name)
+            .is_some_and(is_stream_web_module_name),
+        _ => false,
+    }
+}
+
+fn unwrap_ast_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::TsAs(x) => cur = &x.expr,
+            ast::Expr::TsNonNull(x) => cur = &x.expr,
+            ast::Expr::TsSatisfies(x) => cur = &x.expr,
+            ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+            ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+            ast::Expr::Paren(x) => cur = &x.expr,
+            _ => return cur,
+        }
+    }
+}
+
+fn is_readable_stream_from_receiver_ast(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match unwrap_ast_ts_wrappers(expr) {
+        ast::Expr::Ident(ident) => ident.sym.as_ref() == "ReadableStream",
+        ast::Expr::Member(member) => {
+            if !matches!(
+                &member.prop,
+                ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "ReadableStream"
+            ) {
+                return false;
+            }
+            let ast::Expr::Ident(ns_ident) = unwrap_ast_ts_wrappers(member.obj.as_ref()) else {
+                return false;
+            };
+            ctx.lookup_builtin_module_alias(ns_ident.sym.as_ref())
+                .is_some_and(is_stream_web_module_name)
+        }
+        _ => false,
+    }
+}
+
 /// #3663: the string argument of a `require("<literal>")` call, if any. Unlike
 /// `is_require_builtin_module` (whose allowlist is just fs/path/crypto), this
 /// returns the specifier verbatim so the caller can match the module it cares
@@ -189,6 +267,11 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     if let ast::Expr::New(new_expr) = init_expr.as_ref() {
                         if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
                             let class_name = class_ident.sym.as_ref();
+                            let resolved_stream_web_class = ctx
+                                .resolve_class_alias(class_name)
+                                .and_then(|resolved| stream_web_constructor_name(&resolved));
+                            let class_name_for_inference =
+                                resolved_stream_web_class.unwrap_or(class_name);
                             if class_name == "Set" || class_name == "Map" {
                                 // Extract type arguments from new Set<T>() or new Map<K, V>()
                                 let type_args: Vec<Type> = new_expr
@@ -218,6 +301,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                             ) {
                                 ty = Type::Named(class_name.to_string());
+                            } else if stream_web_constructor_name(class_name_for_inference)
+                                .is_some()
+                            {
+                                ty = Type::Named(class_name_for_inference.to_string());
                             } else if class_name == "Uint8Array" || class_name == "Buffer" {
                                 ty = Type::Named("Uint8Array".to_string());
                             } else if matches!(
@@ -282,8 +369,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             _ => break,
                                         };
                                     }
-                                    if let ast::Expr::Ident(obj_id) = obj_inner {
-                                        let method = prop.sym.as_ref();
+                                    let method = prop.sym.as_ref();
+                                    if method == "from"
+                                        && is_readable_stream_from_receiver_ast(ctx, obj_inner)
+                                    {
+                                        ty = Type::Named("ReadableStream".to_string());
+                                    } else if let ast::Expr::Ident(obj_id) = obj_inner {
                                         let recv_class = ctx
                                             .lookup_native_instance(obj_id.sym.as_ref())
                                             .map(|(_, c)| c.to_string());
@@ -299,10 +390,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             ty = Type::Named(
                                                 "WritableStreamDefaultWriter".to_string(),
                                             );
-                                        } else if method == "from"
-                                            && obj_id.sym.as_ref() == "ReadableStream"
-                                        {
-                                            ty = Type::Named("ReadableStream".to_string());
                                         } else if method == "from"
                                             && obj_id.sym.as_ref() == "Readable"
                                         {
@@ -321,6 +408,21 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 if let ast::Expr::New(new_expr) = init_expr.as_ref() {
                     if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
                         let class_name = class_ident.sym.as_ref();
+                        if let Some(resolved_stream_class) = ctx
+                            .resolve_class_alias(class_name)
+                            .and_then(|resolved| stream_web_constructor_name(&resolved))
+                        {
+                            if let Some(module) =
+                                stream_web_native_instance_module(resolved_stream_class)
+                            {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    module.to_string(),
+                                    resolved_stream_class.to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
+                        }
                         // A user `class Big {...}` in scope shadows the
                         // hardcoded library-name fallback below. Without
                         // this gate `class Big { f0=0; ... } const b = new
@@ -460,10 +562,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             _ => break,
                                         };
                                     }
-                                    if matches!(
-                                        obj_inner,
-                                        ast::Expr::Ident(i) if i.sym.as_ref() == "ReadableStream"
-                                    ) {
+                                    if is_readable_stream_from_receiver_ast(ctx, obj_inner) {
                                         ctx.register_native_instance(
                                             name.clone(),
                                             "readable_stream".to_string(),
@@ -1844,6 +1943,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         ) {
                             ctx.uses_fetch = true;
                         }
+                    }
+                    Expr::PropertyGet { object, property }
+                        if is_stream_web_namespace_expr(ctx, object.as_ref())
+                            && stream_web_constructor_name(property).is_some() =>
+                    {
+                        ctx.register_let_class_alias(name.clone(), property.clone());
                     }
                     Expr::PropertyGet { object, property }
                         if matches!(object.as_ref(), Expr::NativeModuleRef(module)

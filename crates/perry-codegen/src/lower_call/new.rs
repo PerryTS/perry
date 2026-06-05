@@ -188,12 +188,24 @@ fn call_local_constructor_symbol(
 ///   enclosing function, not the constructor body)
 /// - No method dispatch or vtables — those land in Phase C.2/C.3
 pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) -> Result<String> {
+    let builtin_resolved_owned: String;
+    let builtin_class_name: &str = if !ctx.classes.contains_key(class_name) {
+        if let Some(resolved) = ctx.local_class_aliases.get(class_name).cloned() {
+            builtin_resolved_owned = resolved;
+            &builtin_resolved_owned
+        } else {
+            class_name
+        }
+    } else {
+        class_name
+    };
+
     // Built-in Web classes that the runtime provides constructors for.
     // These are checked BEFORE the ctx.classes lookup because the user
     // code may shadow the name — if they do, the class lookup below
     // wins.
-    if !ctx.classes.contains_key(class_name) {
-        if matches!(class_name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
+    if !ctx.classes.contains_key(builtin_class_name) {
+        if matches!(builtin_class_name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
@@ -201,8 +213,10 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 .block()
                 .call(DOUBLE, "js_webcrypto_illegal_constructor", &[]));
         }
-        if let Some((submod_key, exported_name)) =
-            ctx.import_function_node_submodule.get(class_name).cloned()
+        if let Some((submod_key, exported_name)) = ctx
+            .import_function_node_submodule
+            .get(builtin_class_name)
+            .cloned()
         {
             if submod_key == "readline_promises" && exported_name == "Readline" {
                 let output = if let Some(first) = args.first() {
@@ -230,7 +244,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 ));
             }
         }
-        if let Some(val) = lower_builtin_new(ctx, class_name, args)? {
+        if let Some(val) = lower_builtin_new(ctx, builtin_class_name, args)? {
             return Ok(val);
         }
     }

@@ -165,16 +165,31 @@ fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Opti
         ("url", Some("URLPattern")) => Some("URLPattern"),
         ("util", Some("TextEncoder")) => Some("TextEncoder"),
         ("util", Some("TextDecoder")) => Some("TextDecoder"),
-        ("stream/web", Some("TextEncoderStream"))
-        | ("node:stream/web", Some("TextEncoderStream")) => Some("TextEncoderStream"),
-        ("stream/web", Some("TextDecoderStream"))
-        | ("node:stream/web", Some("TextDecoderStream")) => Some("TextDecoderStream"),
-        ("stream/web", Some("CompressionStream"))
-        | ("node:stream/web", Some("CompressionStream")) => Some("CompressionStream"),
-        ("stream/web", Some("DecompressionStream"))
-        | ("node:stream/web", Some("DecompressionStream")) => Some("DecompressionStream"),
+        ("stream/web" | "node:stream/web", Some(name)) => stream_web_constructor_name(name),
         _ => None,
     }
+}
+
+fn stream_web_constructor_name(name: &str) -> Option<&'static str> {
+    match name {
+        "ReadableStream" => Some("ReadableStream"),
+        "WritableStream" => Some("WritableStream"),
+        "TransformStream" => Some("TransformStream"),
+        "ByteLengthQueuingStrategy" => Some("ByteLengthQueuingStrategy"),
+        "CountQueuingStrategy" => Some("CountQueuingStrategy"),
+        "TextEncoderStream" => Some("TextEncoderStream"),
+        "TextDecoderStream" => Some("TextDecoderStream"),
+        "CompressionStream" => Some("CompressionStream"),
+        "DecompressionStream" => Some("DecompressionStream"),
+        _ => None,
+    }
+}
+
+fn is_stream_web_handle_constructor(name: &str) -> bool {
+    matches!(
+        name,
+        "ReadableStream" | "WritableStream" | "TransformStream"
+    )
 }
 
 fn global_member_constructor_name(
@@ -330,6 +345,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
                 {
                     return Ok(expr);
+                }
+                if stream_web_constructor_name(class_name).is_some() {
+                    if is_stream_web_handle_constructor(class_name) {
+                        ctx.uses_fetch = true;
+                    }
+                    return Ok(Expr::New {
+                        class_name: class_name.to_string(),
+                        args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                        type_args: Vec::new(),
+                    });
                 }
             }
             if obj_name == "globalThis"
@@ -668,8 +693,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // calls on it silently no-op. Each field maps to (param_index,
     // module, class_name) — TransformStream's `transform(chunk,
     // controller)` controller is param 1, the rest are param 0.
-    if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-        let cls = ident.sym.as_ref();
+    if let ast::Expr::Ident(ident) = callee_expr {
+        let raw_cls = ident.sym.as_ref();
+        let resolved_cls = ctx.resolve_class_alias(raw_cls);
+        let cls = resolved_cls.as_deref().unwrap_or(raw_cls);
         let field_specs: &[(&'static str, usize, &'static str, &'static str)] = match cls {
             "ReadableStream" => &[
                 ("start", 0, "readable_stream", "ReadableStream"),
@@ -1535,7 +1562,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if ctx.lookup_class(&class_name).is_none() {
                 if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                    if matches!(
+                    let resolved_is_fetch_like = matches!(
                         resolved.as_str(),
                         "Blob"
                             | "File"
@@ -1544,8 +1571,12 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                             | "Request"
                             | "Response"
                             | "WebSocket"
-                    ) {
-                        if is_fetch_constructor_name(&resolved) {
+                    );
+                    let resolved_is_stream_web = stream_web_constructor_name(&resolved).is_some();
+                    if resolved_is_fetch_like || resolved_is_stream_web {
+                        if is_fetch_constructor_name(&resolved)
+                            || is_stream_web_handle_constructor(&resolved)
+                        {
                             ctx.uses_fetch = true;
                         }
                         return Ok(Expr::New {

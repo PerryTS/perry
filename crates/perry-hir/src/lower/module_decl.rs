@@ -78,6 +78,21 @@ fn node_submodule_default_export_key(module_name: &str) -> Option<&'static str> 
     }
 }
 
+fn stream_web_constructor_name(name: &str) -> Option<&'static str> {
+    match name {
+        "ReadableStream" => Some("ReadableStream"),
+        "WritableStream" => Some("WritableStream"),
+        "TransformStream" => Some("TransformStream"),
+        "ByteLengthQueuingStrategy" => Some("ByteLengthQueuingStrategy"),
+        "CountQueuingStrategy" => Some("CountQueuingStrategy"),
+        "TextEncoderStream" => Some("TextEncoderStream"),
+        "TextDecoderStream" => Some("TextDecoderStream"),
+        "CompressionStream" => Some("CompressionStream"),
+        "DecompressionStream" => Some("DecompressionStream"),
+        _ => None,
+    }
+}
+
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -307,6 +322,14 @@ pub(crate) fn lower_module_decl(
                             // `local == imported` (the common no-alias case)
                             // this is identical to the previous behavior.
                             ctx.register_imported_func(local.clone(), local.clone());
+                            if source == "stream/web" {
+                                if let Some(class_name) = stream_web_constructor_name(&imported) {
+                                    ctx.register_let_class_alias(
+                                        local.clone(),
+                                        class_name.to_string(),
+                                    );
+                                }
+                            }
                         }
                         specifiers.push(ImportSpecifier::Named { imported, local });
                     }
@@ -407,7 +430,7 @@ pub(crate) fn lower_module_decl(
                         } else {
                             // Namespace import from JS module - register so calls resolve to ExternFuncRef
                             ctx.register_imported_func(local.clone(), local.clone());
-                            if source == "fs/promises" {
+                            if source == "fs/promises" || source == "stream/web" {
                                 ctx.register_builtin_module_alias(local.clone(), source.clone());
                             }
                             // Record that `local` is a module namespace (not a

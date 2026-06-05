@@ -45,6 +45,27 @@ fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
+fn is_stream_web_module_name(module: &str) -> bool {
+    matches!(module, "stream/web" | "node:stream/web")
+}
+
+fn is_stream_web_readable_stream_member(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Member(class_member) = unwrap_ts_wrappers(expr) else {
+        return false;
+    };
+    if !matches!(
+        &class_member.prop,
+        ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "ReadableStream"
+    ) {
+        return false;
+    }
+    let ast::Expr::Ident(ns_ident) = unwrap_ts_wrappers(class_member.obj.as_ref()) else {
+        return false;
+    };
+    ctx.lookup_builtin_module_alias(ns_ident.sym.as_ref())
+        .is_some_and(is_stream_web_module_name)
+}
+
 fn is_node_stream_class_name(name: &str) -> bool {
     matches!(
         name,
@@ -60,6 +81,20 @@ pub(super) fn try_native_module_methods(
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // Check for native module method calls (e.g., mysql.createConnection())
     if let ast::Expr::Member(member) = expr {
+        if matches!(
+            &member.prop,
+            ast::MemberProp::Ident(method_ident) if method_ident.sym.as_ref() == "from"
+        ) && is_stream_web_readable_stream_member(ctx, member.obj.as_ref())
+        {
+            return Ok(Ok(Expr::NativeMethodCall {
+                module: "readable_stream".to_string(),
+                class_name: Some("ReadableStream".to_string()),
+                object: None,
+                method: "from".to_string(),
+                args,
+            }));
+        }
+
         // #1534/#1540/#1541: the stream acceptance tests deliberately cast
         // the class / namespace before a static call —
         // `(Readable as any).isErrored(r)`, `(Readable as any).toWeb(r)`,
