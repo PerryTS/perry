@@ -54,6 +54,20 @@ pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
     }
 }
 
+pub(super) fn array_from_async_expr(iterable: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "Array".to_string(),
+            }),
+            property: "fromAsync".to_string(),
+        }),
+        args: vec![iterable],
+        type_args: vec![],
+    }
+}
+
 /// Build `if (param === undefined) { param = default; }` stmts for every
 /// param with a default value. Prepended to function/constructor bodies so
 /// cross-module callers that pad missing args with `undefined` still observe

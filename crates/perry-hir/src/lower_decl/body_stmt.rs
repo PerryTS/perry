@@ -11,7 +11,9 @@ use crate::lower::{
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
-use super::helpers::{async_iterator_method_call, is_filehandle_readlines_for_await_target};
+use super::helpers::{
+    array_from_async_expr, async_iterator_method_call, is_filehandle_readlines_for_await_target,
+};
 use super::*;
 
 fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
@@ -1299,7 +1301,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             } else if is_iterable_typed_array {
                 Expr::ArrayFrom(Box::new(arr_expr))
             } else if needs_runtime_iterator {
-                Expr::ForOfToArray(Box::new(arr_expr))
+                if for_of_stmt.is_await {
+                    Expr::Await(Box::new(array_from_async_expr(arr_expr)))
+                } else {
+                    Expr::ForOfToArray(Box::new(arr_expr))
+                }
             } else {
                 arr_expr
             };

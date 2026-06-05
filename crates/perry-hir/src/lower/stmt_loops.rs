@@ -193,6 +193,20 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
     }
 }
 
+fn array_from_async_expr(iterable: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "Array".to_string(),
+            }),
+            property: "fromAsync".to_string(),
+        }),
+        args: vec![iterable],
+        type_args: vec![],
+    }
+}
+
 fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
     let call = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -925,7 +939,11 @@ pub(crate) fn lower_stmt_for_of(
     } else if is_iterable_typed_array {
         Expr::ArrayFrom(Box::new(arr_expr))
     } else if needs_runtime_iterator {
-        Expr::ForOfToArray(Box::new(arr_expr))
+        if for_of_stmt.is_await {
+            Expr::Await(Box::new(array_from_async_expr(arr_expr)))
+        } else {
+            Expr::ForOfToArray(Box::new(arr_expr))
+        }
     } else {
         arr_expr
     };
