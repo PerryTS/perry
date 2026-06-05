@@ -39,6 +39,7 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
     if obj.is_null() {
         return;
     }
+    register_wrapper_arities();
 
     let Some(next) = own_closure(obj, b"next") else {
         return;
@@ -111,6 +112,26 @@ fn own_closure(obj: *mut ObjectHeader, name: &[u8]) -> Option<*const ClosureHead
 fn set_method(obj: *mut ObjectHeader, name: &[u8], closure: *mut ClosureHeader) {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     js_object_set_field_by_name(obj, key, js_nanbox_pointer(closure as i64));
+}
+
+/// #4547: the queue wrappers each take a single `arg` (the value passed to
+/// `next`/`return`/`throw`). Without a registered arity, dispatch padding has
+/// no declared count, so a 0-arg `gen.return()` / `gen.throw()` read an
+/// uninitialized stack slot for `arg` instead of `undefined`. Record arity 1
+/// for all three func pointers so the call path pads the missing argument.
+fn register_wrapper_arities() {
+    thread_local! {
+        static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    REGISTERED.with(|done| {
+        if done.get() {
+            return;
+        }
+        done.set(true);
+        crate::closure::js_register_closure_arity(async_generator_next_wrapper as *const u8, 1);
+        crate::closure::js_register_closure_arity(async_generator_return_wrapper as *const u8, 1);
+        crate::closure::js_register_closure_arity(async_generator_throw_wrapper as *const u8, 1);
+    });
 }
 
 fn make_method_wrapper(

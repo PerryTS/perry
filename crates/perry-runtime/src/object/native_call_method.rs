@@ -512,6 +512,18 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     crate::object::js_object_to_string(receiver)
 }
 
+/// #4546: codegen entry point for `value.toLocaleString()` when the
+/// receiver's static type is unknown (plain object, string, boolean) — the
+/// `Expr::DateToLocaleString` LLVM arm used to mis-route every non-number
+/// receiver to `js_date_to_locale_string`, yielding a 1970-epoch
+/// "Invalid Date" string. Dispatches on the runtime tag (number → grouping,
+/// Date → date string, object → custom/`[object Object]`). Returns an
+/// already-NaN-boxed value.
+#[no_mangle]
+pub extern "C" fn js_value_to_locale_string(receiver: f64) -> f64 {
+    unsafe { js_object_default_to_locale_string(receiver) }
+}
+
 /// Shared implementation for `Object.prototype.isPrototypeOf`.
 pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64) -> bool {
     let receiver_ptr = match object_ptr_from_value(receiver) {
