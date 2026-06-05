@@ -1156,6 +1156,42 @@ pub unsafe extern "C" fn js_native_call_method(
         return f64::from_bits(0x7FF8_0000_0000_0001); // undefined
     }
 
+    // #4661 follow-up: a *fused* method call `proxy.method(args)` on a Proxy
+    // receiver. The decomposed form `const f = proxy.method; f(args)` already
+    // works because the property read routes through `js_proxy_get`. The fused
+    // form, however, reaches this generic dispatcher with the proxy id intact.
+    // Proxy ids encode to small pointer-tagged values (band 0xF0000..0x100000),
+    // so without this guard the receiver is misclassified as a native-module
+    // *integer handle* by the `raw_ptr < 0x100000` small-handle dispatch below
+    // (when an app links a native handle dispatcher, e.g. mysql2 / Fastify),
+    // which returns null for an unknown id — silently dropping the call.
+    //
+    // Mirror the spec: `Get(proxy, "method")` (honors the get trap / forwards
+    // through the target's prototype chain) then `Call(method, proxy, args)`
+    // with `this` bound to the proxy itself.
+    if crate::proxy::js_proxy_is_proxy(object) == 1 {
+        let key = crate::string::js_string_from_bytes(
+            method_name_ptr as *const u8,
+            method_name_len as u32,
+        );
+        let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
+        let key_handle = root_scope.root_nanbox_f64(key_box);
+        let method_value =
+            crate::proxy::js_proxy_get(object_handle.get_nanbox_f64(), key_handle.get_nanbox_f64());
+        let method_handle = root_scope.root_nanbox_f64(method_value);
+        let args = refreshed_args();
+        // Bind `this` to the proxy for the duration of the call, matching the
+        // receiver semantics of a normal `obj.method(args)` invocation.
+        let prev_this = IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+        let result = crate::closure::js_native_call_value(
+            method_handle.get_nanbox_f64(),
+            args.as_ptr(),
+            args.len(),
+        );
+        IMPLICIT_THIS.with(|c| c.set(prev_this));
+        return result;
+    }
+
     if (object.to_bits() >> 48) == 0x7FFE {
         let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
         if crate::object::class_prototype_ref_id(object).is_some() {
