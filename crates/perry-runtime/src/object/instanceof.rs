@@ -9,6 +9,7 @@ use super::*;
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
 const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
+const CLASS_ID_NET_SOCKET: u32 = 0xFFFF00B4;
 const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
 const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
 const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
@@ -503,6 +504,20 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     if class_id == CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE {
         return if is_event_emitter_async_resource_instance_value(value) {
             true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_NET_SOCKET {
+        return if let (Some(handle), Some(probe)) = (
+            small_native_handle_id(value),
+            crate::object::net_socket_handle_probe(),
+        ) {
+            if unsafe { probe(handle) } {
+                true_val
+            } else {
+                false_val
+            }
         } else {
             false_val
         };

@@ -284,6 +284,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .get(ty)
                 .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
                 .unwrap_or(false);
+            let imported_from_net = ctx
+                .imported_class_sources
+                .get(ty)
+                .map(|source| source.strip_prefix("node:").unwrap_or(source) == "net")
+                .unwrap_or(false);
             let cid = match ty.as_str() {
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
@@ -387,6 +392,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Stats" if imported_from_fs => 0xFFFF008Au32,
                 "fs.Utf8Stream" => 0xFFFF008Bu32,
                 "Utf8Stream" if imported_from_fs => 0xFFFF008Bu32,
+                // node:net `Stream` is an alias for `Socket`. Both are native
+                // small-handle values, so runtime probes the net socket map.
+                "net.Socket" | "net.Stream" => 0xFFFF00B4u32,
+                "Socket" | "Stream" if imported_from_net => 0xFFFF00B4u32,
                 "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,

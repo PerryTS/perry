@@ -11,11 +11,11 @@
 //!
 //! # Differences from the perry-stdlib version
 //!
-//! - Uses `perry_ffi::spawn_blocking` + `tokio::runtime::Handle::current().block_on`
-//!   instead of `crate::common::async_bridge::spawn` (cooperative async over
-//!   the shared runtime). Each socket reader task ties up one blocking-pool
-//!   thread for the socket's lifetime — fine for v0.5.x (default blocking
-//!   pool is 512); cooperative `spawn_async` is a v0.6.0 optimization.
+//! - Uses `perry_ffi::spawn_blocking` plus an explicit current-thread Tokio
+//!   runtime instead of `crate::common::async_bridge::spawn` (cooperative async
+//!   over the shared runtime). Each socket reader task ties up one
+//!   blocking-pool thread for the socket's lifetime — fine for v0.5.x (default
+//!   blocking pool is 512); cooperative `spawn_async` is a v0.6.0 optimization.
 //! - Uses `perry_ffi::JsClosure` instead of raw `js_closure_call*` extern fns.
 //! - Uses `perry_ffi::alloc_buffer` / `BufferHeader` instead of
 //!   `perry-runtime::buffer::*` directly.
@@ -212,11 +212,22 @@ pub(crate) struct ServerState {
 
 static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
+extern "C" {
+    fn js_register_net_socket_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+}
+
+unsafe extern "C" fn ext_net_socket_handle_probe(handle: i64) -> bool {
+    is_net_socket_handle(handle)
+}
+
 /// Register the net GC root scanner exactly once. Safe to call from any
 /// `js_net_*` entry point on the main thread.
 pub(crate) fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
+        unsafe {
+            js_register_net_socket_handle_probe(ext_net_socket_handle_probe);
+        }
         // #2154 — publish the raw-consumer vtable for perry-ext-http (runs on
         // the first net FFI entry, before http could reference a socket).
         raw_bridge::register();
@@ -572,50 +583,16 @@ fn spawn_socket_runner<F>(fut_factory: F)
 where
     F: FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + 'static,
 {
-    // Schedule the future onto a tokio runtime worker (which has
-    // the I/O reactor) instead of spawn_blocking + block_on (which
-    // creates a fresh current_thread runtime without I/O reactor).
-    // The v0.5.578 `spawn_blocking_with_reactor` shim runs the
-    // closure inside an `async` block on the multi-thread runtime,
-    // so `tokio::spawn(fut)` from inside picks up the I/O reactor
-    // properly. Detached spawn — we don't wait for the socket task
-    // to complete (that's the whole point: it loops until close).
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        // We're already inside a tokio task (the
-        // spawn_blocking_with_reactor shim wraps us in
-        // `runtime().spawn(async {...})`), so `block_on` would
-        // panic with "cannot start a runtime from within a
-        // runtime". Schedule the socket future as a fresh
-        // detached task on the same multi-thread runtime
-        // instead — the future will drive itself to completion
-        // via `await` chains while we return immediately.
-        //
-        // Defeat the LTO pass that dead-strips perry-ext-net's
-        // private copy of tokio's CONTEXT statics. Without these
-        // touches, the subsequent `Handle::current()` panics with
-        // "there is no reactor running" — even though perry-stdlib's
-        // tokio runtime has the context entered. Two layers:
-        //   - eprintln of try_current() debug result keeps the
-        //     CONTEXT static referenced AT MULTIPLE call sites.
-        //   - black_box on the spawn handle prevents the
-        //     compiler from collapsing this whole closure into a
-        //     no-op when nothing later uses the result.
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-net] BUG: spawn_socket_runner Handle::try_current returned Err — \
-                 LTO has likely dead-stripped tokio's CONTEXT statics. This will panic on \
-                 the subsequent `Handle::current()`."
-            );
-        }
-        let handle = tokio::runtime::Handle::current();
-        let fut = fut_factory();
-        // Detach via JoinHandle drop — tokio doesn't cancel on drop
-        // (only on explicit `abort()`), unlike `JoinSet` semantics.
-        let jh = handle.spawn(fut);
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
+    // Run each socket future on an explicit current-thread runtime. Relying on
+    // the FFI callback's ambient Handle has proven brittle under release/LTO
+    // builds, while the socket task already occupies one blocking-pool thread
+    // for its lifetime.
+    perry_ffi::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create net socket runtime");
+        rt.block_on(fut_factory());
     });
 }
 
@@ -854,23 +831,15 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
     let host_for_spawn = host.clone();
     let server_id = handle;
 
-    // Schedule the accept loop on the multi-thread tokio runtime that
-    // perry-stdlib hosts. Mirrors `js_node_http_server_listen`'s
-    // spawn_blocking_with_reactor → tokio::spawn pattern: the outer
-    // closure tickles tokio's CONTEXT statics through LTO; the inner
-    // `tokio::spawn` actually runs the async work.
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        // Same LTO-defeating dance as `spawn_socket_runner` above.
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-net] BUG: js_net_server_listen Handle::try_current returned Err — \
-                 LTO has likely dead-stripped tokio's CONTEXT statics."
-            );
-        }
-        let rt = tokio::runtime::Handle::current();
-        let jh = rt.spawn(async move {
+    // Run the accept loop inside a current-thread runtime on a blocking-pool
+    // thread. This avoids relying on an ambient Handle in the FFI callback,
+    // which can be absent under some release/LTO builds.
+    perry_ffi::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create net server runtime");
+        rt.block_on(async move {
             let bind_str = format!("{}:{}", host_for_spawn, port_u16);
             let listener = match TcpListener::bind(&bind_str).await {
                 Ok(l) => l,
@@ -1015,8 +984,6 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                 }
             }
         });
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
     });
 }
 
