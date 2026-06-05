@@ -107,6 +107,8 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
             let iter = crate::symbol::js_get_iterator(val_f64);
             let arr = if iter.to_bits() != val_f64.to_bits() {
                 js_iterator_to_array(iter)
+            } else if is_builtin_iterator_class_id(raw_ptr as usize) {
+                js_iterator_to_array(iter)
             } else if has_named_next(iter) {
                 js_iterator_to_array(iter)
             } else {

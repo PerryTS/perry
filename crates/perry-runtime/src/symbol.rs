@@ -1589,6 +1589,31 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64) {
         return v;
     }
+    if sym_key != 0 {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key == sym_key_from_f64(iter_f64) {
+                let raw_iter_ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
+                if raw_iter_ptr >= 0x10000
+                    && crate::array::is_builtin_iterator_class_id(raw_iter_ptr)
+                {
+                    let receiver = if (bits >> 48) == 0x7FFD {
+                        obj_f64
+                    } else {
+                        crate::value::js_nanbox_pointer(raw_iter_ptr as i64)
+                    };
+                    let method = b"Symbol.iterator";
+                    return crate::object::js_class_method_bind(
+                        receiver,
+                        method.as_ptr(),
+                        method.len(),
+                    );
+                }
+            }
+        }
+    }
     // Buffer extends Uint8Array in Node, so Buffer values must expose
     // @@iterator as values(). Perry's direct Buffer.from() paths often
     // materialize through array-clone fast paths, but runtime-produced

@@ -11,3 +11,10 @@ console.log("object has 2:", Object.hasOwn(b, "2"));
 console.log("proto has 1:", Object.prototype.hasOwnProperty.call(b, "1"));
 console.log("proto has 2:", Object.prototype.hasOwnProperty.call(b, "2"));
 console.log("proto enum 0:", Object.prototype.propertyIsEnumerable.call(b, "0"));
+console.log("proto enum 2:", Object.prototype.propertyIsEnumerable.call(b, "2"));
+console.log("proto enum leading:", Object.prototype.propertyIsEnumerable.call(b, "01"));
+console.log("proto enum length:", Object.prototype.propertyIsEnumerable.call(b, "length"));
+console.log(
+  "empty proto enum 0:",
+  Object.prototype.propertyIsEnumerable.call(Buffer.alloc(0), "0"),
+);

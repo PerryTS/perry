@@ -702,6 +702,10 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             return f64::from_bits(if is_length { TAG_FALSE } else { TAG_TRUE });
         }
 
+        if let Some(present) = registered_buffer_index_own_property_present(obj_value, key_str) {
+            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
             let enumerable = crate::typedarray_props::typed_array_property_is_enumerable(
                 addr as *const crate::typedarray::TypedArrayHeader,
