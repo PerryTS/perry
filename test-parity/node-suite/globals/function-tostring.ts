@@ -45,3 +45,16 @@ try {
 
 // Object.prototype.toString stays lenient — no brand check, no throw.
 console.log(Object.prototype.toString.call({}));
+
+const originalFunctionToString = Function.prototype.toString;
+function shiftedTarget() { return 1; }
+Function.prototype.toString = function () {
+  return `SHIFTED:${typeof this}:${this === shiftedTarget}`;
+};
+
+console.log(String(shiftedTarget));
+console.log(Function.prototype.toString.call(shiftedTarget));
+const boxedShifted = new String(shiftedTarget);
+console.log(String(boxedShifted));
+console.log(boxedShifted.toString());
+Function.prototype.toString = originalFunctionToString;
