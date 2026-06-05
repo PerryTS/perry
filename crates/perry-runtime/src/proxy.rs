@@ -524,6 +524,19 @@ fn target_set(target: f64, key: f64, value: f64) {
         }
         return;
     }
+    let key_ptr = extract_pointer(property_key.to_bits()) as *const crate::StringHeader;
+    if crate::object::class_ref_id(target).is_some() {
+        // Preserve the INT32-tagged class-ref bits so class dynamic props
+        // land in CLASS_DYNAMIC_PROPS instead of being pointer-extracted to 0.
+        if !key_ptr.is_null() {
+            crate::object::js_object_set_field_by_name(
+                target.to_bits() as *mut crate::ObjectHeader,
+                key_ptr,
+                value,
+            );
+        }
+        return;
+    }
     let obj_addr = extract_pointer(target.to_bits()) as usize;
     if crate::closure::is_closure_ptr(obj_addr) {
         if let Some(name) = key_to_rust_string(property_key) {
@@ -532,7 +545,6 @@ fn target_set(target: f64, key: f64, value: f64) {
         return;
     }
     let obj_ptr = obj_addr as *mut crate::ObjectHeader;
-    let key_ptr = extract_pointer(property_key.to_bits()) as *const crate::StringHeader;
     if obj_ptr.is_null() || key_ptr.is_null() {
         return;
     }

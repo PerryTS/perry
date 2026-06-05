@@ -23,10 +23,18 @@ pub(crate) fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<
     let proto = crate::closure::closure_get_dynamic_prop(raw_addr, "prototype");
     let proto_jsv = crate::value::JSValue::from_bits(proto.to_bits());
     if proto_jsv.is_undefined() {
-        None
-    } else {
-        Some(proto)
+        return None;
     }
+    if proto_jsv.is_pointer() {
+        let proto_addr = proto_jsv.as_pointer::<u8>() as usize;
+        // Prototype objects commonly have `constructor` pointing back to the
+        // constructor whose `.prototype` is this same object. That is not their
+        // [[Prototype]]; let the caller fall back to Object.prototype/null.
+        if proto_addr == obj as usize {
+            return None;
+        }
+    }
+    Some(proto)
 }
 
 pub(crate) fn error_kind_prototype_value(kind: u32) -> Option<f64> {
