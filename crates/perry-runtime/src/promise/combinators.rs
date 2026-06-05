@@ -951,7 +951,6 @@ fn promise_all_reject_direct(
 pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_get_f64, js_array_length};
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
-    use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
 
@@ -973,28 +972,14 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
     let shared_reject = js_closure_alloc(promise_race_reject_handler as *const u8, 1);
     js_closure_set_capture_ptr(shared_reject, 0, result_promise as i64);
 
-    // For each promise, attach resolve/reject handlers that settle the result promise.
-    // Per the spec, even when an input promise is already settled we MUST route the
-    // resolution through the microtask queue (by registering `.then` handlers) rather
-    // than calling js_promise_resolve synchronously.  The synchronous short-circuit was
-    // causing race / any results to appear too early in the output when compared against
-    // Node's microtask-ordered output.
+    // Normalize each input with PromiseResolve semantics before attaching handlers.
+    // This keeps plain values asynchronous and gives thenables a chance to settle
+    // through the same guarded job path used by Promise.all/allSettled.
     for i in 0..count {
-        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
-        // Discriminate via GC-header obj_type — string/bigint NaN-boxed
-        // values would otherwise pass through pointer extraction and crash
-        // js_promise_then.
-        if js_value_is_promise(promise_f64) == 0 {
-            // Non-promise value — wrap as an already-resolved promise so the
-            // resolution goes through the normal microtask path.
-            let wrapped = js_promise_resolved(promise_f64);
-            js_promise_then(wrapped, shared_resolve, shared_reject);
-            continue;
-        }
-        let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
-
-        // Attach handlers via then — if the input is already settled this will
-        // push a microtask rather than resolving result_promise synchronously.
+        let promise_ptr = match promise_resolve_for_combinator(js_array_get_f64(promises_arr, i)) {
+            Ok(promise) => promise,
+            Err(reason) => js_promise_rejected(reason),
+        };
         js_promise_attach_handlers(promise_ptr, shared_resolve, shared_reject);
     }
 
@@ -1352,7 +1337,6 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     use crate::closure::{
         js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
     };
-    use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
 
@@ -1405,20 +1389,10 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     js_closure_set_capture_ptr(shared_fulfill, 1, state_arr as i64);
 
     for i in 0..count {
-        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
-        // Discriminate via GC-header obj_type — string/bigint NaN-boxed
-        // values would otherwise pass through pointer extraction and crash
-        // js_promise_then.
-        if js_value_is_promise(promise_f64) == 0 {
-            // Non-promise value — treat as fulfilled, settle immediately if not yet settled
-            let already_settled = js_array_get_f64(state_arr, 1);
-            if already_settled == 0.0 {
-                js_array_set_f64(state_arr, 1, 1.0);
-                js_promise_resolve(result_promise, promise_f64);
-            }
-            return result_promise;
-        }
-        let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
+        let promise_ptr = match promise_resolve_for_combinator(js_array_get_f64(promises_arr, i)) {
+            Ok(promise) => promise,
+            Err(reason) => js_promise_rejected(reason),
+        };
 
         let reject_closure = js_closure_alloc(promise_any_reject_handler as *const u8, 4);
         js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
