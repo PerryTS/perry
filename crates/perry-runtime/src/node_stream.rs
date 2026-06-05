@@ -1720,6 +1720,10 @@ pub use pipeline::*;
 mod readwrite;
 pub use readwrite::*;
 
+#[path = "node_stream_readable_read.rs"]
+mod readable_read;
+pub use readable_read::*;
+
 #[path = "node_stream_duplex_methods.rs"]
 mod duplex_method_table;
 pub use duplex_method_table::*;
