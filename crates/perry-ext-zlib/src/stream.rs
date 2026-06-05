@@ -63,6 +63,9 @@ extern "C" {
     // any bytes. The in-tree codecs validate inline; this shared helper gives
     // the ext crate the same rejection without the runtime's value typing.
     pub(crate) fn js_zlib_validate_buffer_arg(data_bits: i64);
+    // Async one-shot zlib helpers require a callable callback and throw
+    // synchronously before queuing codec work.
+    pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
     fn js_native_call_method_str_key(
         object: f64,
         name_handle: i64,
@@ -531,15 +534,6 @@ unsafe fn make_buffer_f64(bytes: &[u8]) -> Option<f64> {
     Some(f64::from_bits(POINTER_TAG | (buf as u64 & POINTER_MASK)))
 }
 
-fn callback_ptr(value: f64) -> i64 {
-    let bits = value.to_bits();
-    if JsValue::from_bits(bits).is_pointer() {
-        (bits & POINTER_MASK) as i64
-    } else {
-        0
-    }
-}
-
 unsafe fn call_one_shot_callback(callback: i64, result: Result<Vec<u8>, String>) {
     if callback == 0 {
         return;
@@ -567,6 +561,7 @@ pub(crate) unsafe fn queue_one_shot_callback<F>(
 ) where
     F: FnOnce(&[u8]) -> std::io::Result<Vec<u8>>,
 {
+    let callback = js_zlib_validate_callback(callback_value);
     let data_bits = data_value.to_bits() as i64;
     js_zlib_validate_buffer_arg(data_bits);
     let result = match read_input_from_bits(data_bits) {
@@ -579,10 +574,7 @@ pub(crate) unsafe fn queue_one_shot_callback<F>(
         .lock()
         .unwrap()
         .pending
-        .push(ZlibEvent::OneShotCallback(
-            callback_ptr(callback_value),
-            result,
-        ));
+        .push(ZlibEvent::OneShotCallback(callback, result));
     notify_main_thread();
 }
 

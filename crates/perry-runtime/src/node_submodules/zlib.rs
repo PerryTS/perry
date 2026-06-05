@@ -264,6 +264,15 @@ pub extern "C" fn js_zlib_validate_buffer_arg(data_bits: i64) {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
+/// Validate the required callback for async one-shot zlib helpers
+/// (`gzip(data, cb)`, `gunzip(data, cb)`, `brotliDecompress(data, cb)`, ...).
+/// Node throws synchronously before queuing codec work when the callback is
+/// missing or not callable.
+#[no_mangle]
+pub extern "C" fn js_zlib_validate_callback(callback: f64) -> i64 {
+    crate::fs::validate::validate_required_callback("callback", callback) as i64
+}
+
 /// Keep the codegen-emitted symbol alive through the whole-program LLVM
 /// bitcode rebuild performed by auto-optimize (see
 /// `project_auto_optimize_keepalive_3320`). Called only from generated `.o` /
@@ -276,3 +285,5 @@ static KEEP_JS_ZLIB_VALIDATE_PARAMS: extern "C" fn(f64, f64) -> i32 = js_zlib_va
 static KEEP_JS_ZLIB_VALIDATE_OPTIONS: extern "C" fn(f64, i32) = js_zlib_validate_options;
 #[used]
 static KEEP_JS_ZLIB_VALIDATE_BUFFER_ARG: extern "C" fn(i64) = js_zlib_validate_buffer_arg;
+#[used]
+static KEEP_JS_ZLIB_VALIDATE_CALLBACK: extern "C" fn(f64) -> i64 = js_zlib_validate_callback;
