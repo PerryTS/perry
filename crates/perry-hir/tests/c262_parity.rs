@@ -509,7 +509,10 @@ fn logical_property_assignment_short_circuits_the_store_4586() {
                 _ => None,
             })
             .unwrap_or_else(|| {
-                panic!("expected a short-circuiting Logical for `{src}`, got {:?}", module.init)
+                panic!(
+                    "expected a short-circuiting Logical for `{src}`, got {:?}",
+                    module.init
+                )
             });
 
         let Expr::Logical { op, left, right } = logical else {
