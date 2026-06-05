@@ -1,6 +1,6 @@
 use super::*;
 use perry_ffi::alloc_string;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard};
 
 static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -177,7 +177,8 @@ fn gc_mutable_scanner_rewrites_listener_and_pending_promise_roots() {
         events,
         event_order: vec!["ready".to_string()],
         pending_once_promises,
-        max_listeners: 10,
+        warned_events: HashSet::new(),
+        max_listeners: 10.0,
         capture_rejections: false,
         domain_handle: None,
     });
