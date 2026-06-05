@@ -2,6 +2,22 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1123 — fix(json): internalize JSON.parse reviver via the spec InternalizeJSONProperty walk (#4588)
+
+`JSON.parse(text, reviver)` previously walked the parsed value's raw object/array storage slots in place — it never went through `[[Get]]`/`[[Delete]]`/`CreateDataProperty`, so spec-mandated behaviours were invisible: deleting the property when the reviver returns `undefined`, re-reading a value the reviver mutated, holder `this` binding, the root `{ "": rootValue }` wrapper, and `Object.keys`/array-length snapshots taken before iteration.
+
+This reworks `crates/perry-runtime/src/json/reviver.rs` to implement ECMA-262 25.5.1.1 `InternalizeJSONProperty(holder, name, reviver)` post-order:
+
+- The root value is wrapped in `{ "": rootValue }` and the walk starts from that holder. `apply_reviver` builds the wrapper with a raw own-field set (`js_object_set_field_by_name`), not `[[Set]]`, so a setter installed on `Object.prototype` for the empty key is never invoked (matches `reviver-wrapper`).
+- For each key (objects: an `Object.keys` snapshot; arrays: a `length` snapshot via the header), the walk does a real `[[Get]]` re-read off the holder, recurses, then applies the reviver result: `undefined` → `[[Delete]]` (`delete-or-keep`), else `CreateDataProperty` (`create-or-keep`). Both follow ordinary-object semantics — a non-configurable property silently survives an attempted delete/redefine with no throw, per `OrdinaryDelete` / `CreateDataProperty` returning `false` rather than throwing.
+- The reviver is invoked with the holder bound as `this` (`js_implicit_this_set`); abrupt completions from a throwing reviver or holder getter propagate via the existing setjmp/longjmp unwind. GC-moved handles are refreshed across the callback and descriptor writes.
+
+Verified against test262 `built-ins/JSON/parse/reviver-*`: the applicable (non-`Proxy`, non-`json-parse-with-source`) cases go from 1/24 to 5/24 exit-code parity with Node — newly passing: `reviver-call-order`, `reviver-object-non-configurable-prop-create`, `reviver-object-non-configurable-prop-delete`, `reviver-wrapper`. Zero regressions; common value-transform usage (`JSON.parse(x, (k,v)=>…)`, including delete-via-`undefined`, nested objects/arrays, and the `""` root key) stays byte-identical to Node. The orthogonal arg-`ToString` fix (#4587) is untouched.
+
+Out of scope (separate pre-existing gaps, tracked as follow-ups): `Proxy`-holder traps (`reviver-*-{define-prop,delete,own-keys,length-*}-err`, `revived-proxy*`), the ES2025 `{ source }` third-argument feature (`reviver-context-source-*`, `reviver-forward-modifies-object`, `reviver-call-args-after-forward-modification`), `Object.prototype`-inherited re-reads (`reviver-*-get-prop-from-prototype` — a general object-model limitation), and array index `[[DefineOwnProperty]]`/accessor descriptors (`reviver-array-non-configurable-prop-*`, `reviver-get-name-err`).
+
+Authored by @andrewtdiz.
+
 ## v0.5.1122 — fix(release): decouple aspirational platform/framework smokes from the publish gate
 
 v0.5.1121's publish was blocked at `await-tests` because the tag-gated **Tests** workflow concluded failure — but the only *core*-job failures were `cargo-test` (the `secret_key_buffer_metadata_survives_ic_miss_for_aes_sizes` regression from #4363 typed-array own-properties, since fixed on `main` by #4399) and `lint` (a transient rustup/curl network flake during toolchain setup). The v0.5.1121 tag predated #4399, so its `cargo-test` could never pass; this release re-tags from a `main` that includes the fix.
