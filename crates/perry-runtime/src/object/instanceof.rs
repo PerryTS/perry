@@ -66,6 +66,20 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // `proxy instanceof C` uses the proxy's `[[GetPrototypeOf]]`, which (absent a
+    // trap) forwards to the target — so it is equivalent to `target instanceof
+    // C`. The proxy itself is a small registered id with no class chain, so
+    // without this it always returned false. Unwrap nested proxies (drizzle
+    // aliases columns as `new Proxy(column, …)` and its `is(value, type)` brand
+    // check relies on `value instanceof type`). Bounded to guard a cycle.
+    let mut value = value;
+    {
+        let mut depth = 0;
+        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
+            value = crate::proxy::js_proxy_target(value);
+            depth += 1;
+        }
+    }
     let bits = type_ref.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFE {
@@ -449,6 +463,18 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
     if class_id == 0 {
         return false_val;
+    }
+    // `proxy instanceof C` follows the proxy's prototype chain, which forwards
+    // to the target (absent a `getPrototypeOf` trap) — so unwrap to the target
+    // before walking the class chain. The proxy is a small id with no chain of
+    // its own. (drizzle's aliased-column proxies + `is(value, type)`.)
+    let mut value = value;
+    {
+        let mut depth = 0;
+        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
+            value = crate::proxy::js_proxy_target(value);
+            depth += 1;
+        }
     }
     // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
     let classic_stream_name = match class_id {

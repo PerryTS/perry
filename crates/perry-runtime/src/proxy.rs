@@ -1478,6 +1478,40 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64
     crate::object::reflect_define_property(obj, key, descriptor)
 }
 
+/// `[[GetPrototypeOf]]` for a Proxy: invoke the handler's `getPrototypeOf`
+/// trap when present, otherwise forward to the TARGET's `[[Prototype]]`. A
+/// Proxy itself is a small registered id (not a heap object), so the generic
+/// `js_object_get_prototype_of` would mis-read it and return `null` — which
+/// broke `Object.getPrototypeOf(proxy).constructor` (drizzle aliases columns as
+/// `new Proxy(column, …)` and its `is(value, type)` reads
+/// `getPrototypeOf(value).constructor`, crashing on `null.constructor`).
+/// Callers must have already confirmed `obj` is a registered proxy.
+pub(crate) fn js_proxy_get_prototype_of(obj: f64) -> f64 {
+    let Some(id) = lookup(obj) else {
+        return crate::object::js_object_get_prototype_of(obj);
+    };
+    let (target, handler, revoked) = PROXIES.with(|p| {
+        p.borrow()
+            .get(id as usize)
+            .and_then(|o| o.as_ref())
+            .map(|e| (e.target, e.handler, e.revoked))
+            .unwrap_or((
+                f64::from_bits(TAG_UNDEFINED),
+                f64::from_bits(TAG_UNDEFINED),
+                false,
+            ))
+    });
+    if revoked {
+        return revoked_return();
+    }
+    let trap = handler_trap(handler, "getPrototypeOf");
+    if is_callable(trap) {
+        return js_closure_call1(closure_from(trap), target);
+    }
+    // No trap — the prototype is the target's prototype.
+    crate::object::js_object_get_prototype_of(target)
+}
+
 /// `Reflect.getPrototypeOf(obj)` — shares the actual prototype lookup with
 /// `Object.getPrototypeOf` (#2757): returns the object's `[[Prototype]]`,
 /// including `null` for null-prototype objects, not the object itself.
@@ -1489,6 +1523,9 @@ pub extern "C" fn js_reflect_get_prototype_of(obj: f64) -> f64 {
     // entry and are objects, so they pass this check and dispatch below.
     if lookup(obj).is_none() && !reflect_value_is_object(obj) {
         return reflect_non_object_typeerror("getPrototypeOf");
+    }
+    if lookup(obj).is_some() {
+        return js_proxy_get_prototype_of(obj);
     }
     crate::object::js_object_get_prototype_of(obj)
 }

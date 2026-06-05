@@ -1707,6 +1707,15 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
             throw_object_type_error(b"Cannot convert undefined or null to object");
         }
     }
+    // A Proxy is a small registered id, NOT a heap object — the handle path
+    // below would mis-read it and return `null`. Route it to the proxy
+    // `[[GetPrototypeOf]]` (handler trap, else the target's prototype) so
+    // `Object.getPrototypeOf(proxy)` matches the target. drizzle aliases columns
+    // as `new Proxy(column, …)` and `is(value, type)` reads
+    // `getPrototypeOf(value).constructor`, which crashed on `null.constructor`.
+    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        return crate::proxy::js_proxy_get_prototype_of(obj_value);
+    }
     let bits = obj_value.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFD {
