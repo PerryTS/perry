@@ -474,6 +474,59 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // dedicated arms above; this catch-all only fires for
             // names with no resolution at all.
             if ctx.namespace_imports.contains(name) {
+                // A namespace import used as a whole VALUE (passed to a
+                // function, iterated by `Object.keys`/`for…in`/`Object.entries`,
+                // spread, …) must be a real object whose OWN ENUMERABLE
+                // properties are the source module's exports — not the empty
+                // `js_unresolved_namespace_stub`. Drizzle's
+                // `drizzle(pool, { schema })` (with `import * as schema`) and
+                // Stripe's `_prepResources` (`for (const name in resources)`
+                // over `import * as resources`) both enumerate the namespace and
+                // silently saw zero members otherwise. Materialize the object by
+                // resolving each exported member through the SAME per-member
+                // `ns.member` PropertyGet lowering (functions → closure
+                // singletons, consts → getters, classes → class refs).
+                let mut members: Vec<String> = ctx
+                    .namespace_member_prefixes
+                    .keys()
+                    .filter(|(ns, _)| ns == name)
+                    .map(|(_, m)| m.clone())
+                    .collect();
+                if !members.is_empty() {
+                    members.sort();
+                    members.dedup();
+                    let n_str = (members.len() as u32).to_string();
+                    let zero_str = "0".to_string();
+                    let handle = ctx.block().call(
+                        I64,
+                        "js_object_alloc",
+                        &[(I32, &zero_str), (I32, &n_str)],
+                    );
+                    for member in &members {
+                        let member_get = Expr::PropertyGet {
+                            object: Box::new(Expr::ExternFuncRef {
+                                name: name.clone(),
+                                param_types: Vec::new(),
+                                return_type: HirType::Any,
+                            }),
+                            property: member.clone(),
+                        };
+                        let v_box = lower_expr(ctx, &member_get)?;
+                        let key_idx = ctx.strings.intern(member);
+                        let key_handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        let blk = ctx.block();
+                        let key_box = blk.load(DOUBLE, &key_handle_global);
+                        let key_bits = blk.bitcast_double_to_i64(&key_box);
+                        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                        blk.call_void(
+                            "js_object_set_field_by_name",
+                            &[(I64, &handle), (I64, &key_raw), (DOUBLE, &v_box)],
+                        );
+                    }
+                    let blk = ctx.block();
+                    return Ok(nanbox_pointer_inline(blk, &handle));
+                }
                 return Ok(ctx
                     .block()
                     .call(DOUBLE, "js_unresolved_namespace_stub", &[]));

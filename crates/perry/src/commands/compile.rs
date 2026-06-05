@@ -911,9 +911,50 @@ pub fn run_with_parse_cache(
                 exports.insert(en.name.clone(), path_str.clone());
             }
         }
+        // `export type X` / `export interface X` still lower to an
+        // `Export::Named` (so type re-export chains resolve), but they are
+        // TYPE-ONLY — erased at runtime, with no `perry_fn_*` symbol. They must
+        // not enter the runtime export set: that set drives `import * as ns`
+        // materialization (Object.keys/for-in), and a phantom type name there
+        // resolves to a bogus closure value that breaks consumers enumerating
+        // the namespace (drizzle's `drizzle(pool, { schema })`, where the schema
+        // module also `export type Customer = …` alongside the real tables).
+        // A name that is ALSO a value export (declaration merging, a class)
+        // stays — only names that are exclusively types are dropped.
+        let value_export_names: std::collections::HashSet<&str> = hir_module
+            .functions
+            .iter()
+            .filter(|f| f.is_exported)
+            .map(|f| f.name.as_str())
+            .chain(hir_module.exported_objects.iter().map(|s| s.as_str()))
+            .chain(
+                hir_module
+                    .classes
+                    .iter()
+                    .filter(|c| c.is_exported)
+                    .map(|c| c.name.as_str()),
+            )
+            .chain(
+                hir_module
+                    .enums
+                    .iter()
+                    .filter(|e| e.is_exported)
+                    .map(|e| e.name.as_str()),
+            )
+            .collect();
+        let type_only_export_names: std::collections::HashSet<String> = hir_module
+            .type_aliases
+            .iter()
+            .map(|t| t.name.clone())
+            .chain(hir_module.interfaces.iter().map(|i| i.name.clone()))
+            .filter(|n| !value_export_names.contains(n.as_str()))
+            .collect();
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
             if let perry_hir::Export::Named { local, exported } = export {
+                if type_only_export_names.contains(exported) {
+                    continue;
+                }
                 exports.insert(exported.clone(), path_str.clone());
                 // #1758: a LOCAL renamed export of a CLASS
                 // (`export { Number$ as Number }`, no `from`) must record the
