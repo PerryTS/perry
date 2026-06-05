@@ -364,6 +364,15 @@ if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
             BUILD_FEATURES+=(perry-stdlib/external-http-server-pump perry-stdlib/external-http-client-pump)
             ;;
     esac
+    case "$MODULE_FILTER" in
+        ""|zlib|zlib/*)
+            # zlib no-auto node-suite runs still route `node:zlib` through the
+            # well-known external archive, so build that archive and the stdlib
+            # bridge that drains its stream queue and dispatches stream handles.
+            BUILD_PACKAGES+=(-p perry-ext-zlib)
+            BUILD_FEATURES+=(perry-stdlib/external-zlib-pump)
+            ;;
+    esac
 fi
 needs_wasm_host=0
 if [[ "$TEST_SUITE" == "node-suite" ]]; then

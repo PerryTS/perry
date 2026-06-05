@@ -522,7 +522,7 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     }
     // External path: the well-known flip routed `node:zlib` to perry-ext-zlib
     // and stripped `compression`. Drain perry-ext-zlib's queue via its extern.
-    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    #[cfg(feature = "external-zlib-pump")]
     {
         extern "C" {
             fn js_ext_zlib_process_pending() -> i32;
@@ -746,7 +746,7 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
         }
     }
     // External (perry-ext-zlib) path:
-    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    #[cfg(feature = "external-zlib-pump")]
     {
         extern "C" {
             fn js_ext_zlib_has_active_handles() -> i32;

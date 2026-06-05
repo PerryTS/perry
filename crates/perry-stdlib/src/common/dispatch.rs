@@ -651,10 +651,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     // External zlib path (#1843): when the well-known flip routes `node:zlib`
-    // to perry-ext-zlib and strips `compression`, the stream handle + dispatch
-    // live in perry-ext-zlib. Same registry-gated contract; the per-method
-    // match runs inside `js_ext_zlib_dispatch_method`.
-    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    // to perry-ext-zlib, the stream handle + dispatch live in perry-ext-zlib.
+    // Same registry-gated contract; the per-method match runs inside
+    // `js_ext_zlib_dispatch_method`. This may coexist with `compression` in
+    // no-auto test builds that use the full stdlib plus external archives.
+    #[cfg(feature = "external-zlib-pump")]
     if matches!(
         method_name,
         "write"
@@ -1721,7 +1722,51 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                     method_name_len: usize,
                 ) -> f64;
             }
-            return js_class_method_bind(handle as f64, name_bytes.as_ptr(), name_bytes.len());
+            return js_class_method_bind(
+                f64::from_bits(handle as u64),
+                name_bytes.as_ptr(),
+                name_bytes.len(),
+            );
+        }
+    }
+
+    #[cfg(feature = "external-zlib-pump")]
+    {
+        extern "C" {
+            fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
+            fn js_ext_zlib_stream_bytes_written(handle: i64) -> f64;
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+
+        if js_ext_zlib_is_stream_handle(handle) != 0 {
+            if property_name == "bytesWritten" {
+                return js_ext_zlib_stream_bytes_written(handle);
+            }
+            let method: Option<&'static [u8]> = match property_name {
+                "write" => Some(b"write"),
+                "end" => Some(b"end"),
+                "on" => Some(b"on"),
+                "once" => Some(b"once"),
+                "addListener" => Some(b"addListener"),
+                "pipe" => Some(b"pipe"),
+                "flush" => Some(b"flush"),
+                "close" => Some(b"close"),
+                "destroy" => Some(b"destroy"),
+                "params" => Some(b"params"),
+                "reset" => Some(b"reset"),
+                _ => None,
+            };
+            if let Some(name_bytes) = method {
+                return js_class_method_bind(
+                    f64::from_bits(handle as u64),
+                    name_bytes.as_ptr(),
+                    name_bytes.len(),
+                );
+            }
         }
     }
 

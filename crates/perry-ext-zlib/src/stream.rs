@@ -367,6 +367,7 @@ fn make_codec_state_with_level(codec: Codec, level: Compression) -> Option<Codec
 
 struct ZlibStreamState {
     codec: Codec,
+    level: Compression,
     /// Streaming codec, fed incrementally. `None` for `createUnzip` (uses
     /// `input` + `run_codec` on `.end()`) or once finalized.
     codec_state: Option<CodecState>,
@@ -377,6 +378,8 @@ struct ZlibStreamState {
     /// encoder at a new level (flate2 has no mid-stream `deflateParams`) before
     /// this flips; after data is written it validates + flushes only (#3285).
     wrote_data: bool,
+    bytes_written: usize,
+    pending_bytes_written: usize,
     /// `.pipe(dest)` destinations as NaN-boxed bits; 'data'/'end' forward here.
     pipes: Vec<u64>,
 }
@@ -453,10 +456,13 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
         id,
         ZlibStreamState {
             codec,
+            level,
             codec_state: make_codec_state_with_level(codec, level),
             input: Vec::new(),
             ended: false,
             wrote_data: false,
+            bytes_written: 0,
+            pending_bytes_written: 0,
             pipes: Vec::new(),
         },
     );
@@ -600,6 +606,7 @@ fn stream_write(handle: i64, bytes: &[u8]) {
     let event = match g.streams.get_mut(&handle) {
         Some(s) if !s.ended => {
             s.wrote_data = true;
+            s.pending_bytes_written = s.pending_bytes_written.saturating_add(bytes.len());
             match s.codec_state.as_mut() {
                 Some(cs) => match cs.write_chunk(bytes) {
                     Ok(()) => {
@@ -665,7 +672,9 @@ unsafe fn stream_params(handle: i64, level: f64, strategy: f64, cb: i64) {
     let mut g = statics().lock().unwrap();
     if let Some(s) = g.streams.get_mut(&handle) {
         if !s.ended && !s.wrote_data {
-            s.codec_state = make_codec_state_with_level(s.codec, Compression::new(clamped as u32));
+            let level = Compression::new(clamped as u32);
+            s.level = level;
+            s.codec_state = make_codec_state_with_level(s.codec, level);
         } else if !s.ended {
             if let Some(cs) = s.codec_state.as_mut() {
                 let _ = cs.flush_codec();
@@ -681,6 +690,34 @@ unsafe fn stream_params(handle: i64, level: f64, strategy: f64, cb: i64) {
     }
     drop(g);
     notify_main_thread();
+}
+
+fn stream_reset(handle: i64) {
+    let mut g = statics().lock().unwrap();
+    if let Some(s) = g.streams.get_mut(&handle) {
+        s.codec_state = make_codec_state_with_level(s.codec, s.level);
+        s.input.clear();
+        s.ended = false;
+        s.wrote_data = false;
+        s.bytes_written = 0;
+        s.pending_bytes_written = 0;
+    }
+}
+
+fn stream_bytes_written(handle: i64) -> f64 {
+    statics()
+        .lock()
+        .unwrap()
+        .streams
+        .get(&handle)
+        .map(|s| s.bytes_written as f64)
+        .unwrap_or(0.0)
+}
+
+fn publish_bytes_written(handle: i64) {
+    if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
+        s.bytes_written = s.pending_bytes_written;
+    }
 }
 
 /// Finalize the stream and queue the remaining output + 'end' (or 'error').
@@ -828,8 +865,17 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
             stream_params(handle, level, strategy, cb);
             self_ref
         }
+        "reset" => {
+            stream_reset(handle);
+            f64::from_bits(UNDEFINED)
+        }
         _ => f64::from_bits(UNDEFINED),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_ext_zlib_stream_bytes_written(handle: i64) -> f64 {
+    stream_bytes_written(handle)
 }
 
 // ── pump (drained on the main thread from perry-stdlib) ─────────────────────────
@@ -899,6 +945,7 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
     for ev in events {
         match ev {
             ZlibEvent::Data(id, bytes) => {
+                publish_bytes_written(id);
                 let cbs = listeners_for(id, "data");
                 if !cbs.is_empty() {
                     if let Some(buf_f64) = make_buffer_f64(&bytes) {
@@ -915,6 +962,7 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 }
             }
             ZlibEvent::End(id) => {
+                publish_bytes_written(id);
                 for cb in listeners_for(id, "end") {
                     if cb != 0 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
