@@ -869,6 +869,35 @@ pub fn lower_class_decl(
             }
         }
 
+        // Own instance method names. A constructor `this.method = this.method.bind(this)`
+        // (zod's `ZodType` ctor self-binds ~20 methods; React class components do the
+        // same) is a METHOD OVERRIDE, not a new data field — the assignment creates a
+        // runtime own property handled by the method-override dispatch path. Allocating
+        // an inline field slot for it makes the codegen field branch shadow the method on
+        // every read, so `this.method` reads the uninitialised slot (`undefined`) BEFORE
+        // the assignment runs — exactly what made `this.parse.bind(this)` throw "Bind must
+        // be called on a function" in zod. Mirrors the accessor exclusion (#665).
+        let mut method_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for member in &class_decl.class.body {
+            match member {
+                ast::ClassMember::Method(m) if matches!(m.kind, ast::MethodKind::Method) => {
+                    let key = match &m.key {
+                        ast::PropName::Ident(i) => i.sym.to_string(),
+                        ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                        _ => continue,
+                    };
+                    method_names.insert(key);
+                }
+                ast::ClassMember::PrivateMethod(m)
+                    if matches!(m.kind, ast::MethodKind::Method) =>
+                {
+                    method_names.insert(format!("#{}", m.key.name));
+                }
+                _ => {}
+            }
+        }
+
         let declared_field_names: std::collections::HashSet<String> =
             fields.iter().map(|f| f.name.clone()).collect();
         for member in &class_decl.class.body {
@@ -887,6 +916,7 @@ pub fn lower_class_decl(
                                             if !declared_field_names.contains(&fname)
                                                 && !inherited_field_names.contains(&fname)
                                                 && !accessor_names.contains(&fname)
+                                                && !method_names.contains(&fname)
                                             {
                                                 fields.push(ClassField {
                                                     name: fname,
