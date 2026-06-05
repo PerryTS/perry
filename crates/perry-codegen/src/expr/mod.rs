@@ -1581,6 +1581,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::FsMkdirSync(..)
         | Expr::IteratorToArray(..)
         | Expr::GetIterator(..)
+        | Expr::GetAsyncIterator(..)
         | Expr::ForOfToArray(..)
         | Expr::ForAwaitToArray(..)
         | Expr::WeakRefDeref(..)

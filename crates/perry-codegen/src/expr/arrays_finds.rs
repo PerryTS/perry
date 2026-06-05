@@ -563,6 +563,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_get_iterator", &[(DOUBLE, &v)]))
         }
+        Expr::GetAsyncIterator(o) => {
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_get_async_iterator", &[(DOUBLE, &v)]))
+        }
         Expr::ForOfToArray(o) => {
             // #321: materialize an untyped `for...of` receiver into a plain
             // Array. Runtime inspects the value's GC kind (Map → [k,v]

@@ -553,6 +553,7 @@ impl SH for Expr {
             Expr::IteratorFrom(e) => { tag(h, 12270); e.as_ref().hash(h); }
             Expr::IteratorToArray(e) => { tag(h, 398); e.as_ref().hash(h); }
             Expr::GetIterator(e) => { tag(h, 11238); e.as_ref().hash(h); }
+            Expr::GetAsyncIterator(e) => { tag(h, 12502); e.as_ref().hash(h); }
             Expr::ForOfToArray(e) => { tag(h, 11243); e.as_ref().hash(h); }
             Expr::ForAwaitToArray(e) => { tag(h, 12501); e.as_ref().hash(h); }
             Expr::ArrayFromMapped { iterable, map_fn, this_arg } => { tag(h, 399); iterable.as_ref().hash(h); map_fn.as_ref().hash(h); this_arg.is_some().hash(h); if let Some(t) = this_arg { t.as_ref().hash(h); } }

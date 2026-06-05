@@ -70,6 +70,7 @@ pub use alloc::*;
 pub use arguments::*;
 pub(crate) use array_object_ops::*;
 pub use assert::*;
+pub(crate) use async_generator_queue::is_async_generator_instance_value;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
 pub use class_constructors::*;

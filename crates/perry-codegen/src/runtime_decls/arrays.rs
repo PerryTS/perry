@@ -195,6 +195,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // #1831: `yield*` iterator resolution — `operand[Symbol.iterator]()` or the
     // operand itself when already an iterator. Returns a NaN-boxed JSValue.
     module.declare_function("js_get_iterator", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_get_async_iterator", DOUBLE, &[DOUBLE]);
     // #321: materialize an untyped `for...of` receiver into a plain Array by
     // inspecting its runtime GC kind (Map/Set/Array/string/iterable).
     // Returns a NaN-boxed array JSValue.

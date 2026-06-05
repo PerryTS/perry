@@ -255,6 +255,7 @@ fn collect_used_new_fields_in_expr(
         | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::GetAsyncIterator(operand)
         | Expr::ForOfToArray(operand)
         | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)

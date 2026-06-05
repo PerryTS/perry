@@ -175,6 +175,300 @@ fn has_named_next(value: f64) -> bool {
     is_callable_value(named_field(value, b"next"))
 }
 
+fn boxed_promise_value(promise: *mut crate::promise::Promise) -> f64 {
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+fn async_from_sync_type_error(message: &[u8]) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn async_from_sync_rejected(message: &[u8]) -> f64 {
+    boxed_promise_value(crate::promise::js_promise_rejected(
+        async_from_sync_type_error(message),
+    ))
+}
+
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn async_from_sync_iter_result(value: f64, done: bool) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
+    crate::object::js_object_set_field_by_name(obj, value_key, value);
+    crate::object::js_object_set_field_by_name(
+        obj,
+        done_key,
+        if done {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(crate::value::TAG_FALSE)
+        },
+    );
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+extern "C" fn async_from_sync_fulfilled(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let promise =
+        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let done = crate::closure::js_closure_get_capture_f64(closure, 1) != 0.0;
+    if !promise.is_null() {
+        crate::promise::js_promise_resolve(promise, async_from_sync_iter_result(value, done));
+    }
+    0.0
+}
+
+extern "C" fn async_from_sync_rejected_value(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let promise =
+        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let iter = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let close_on_rejection = crate::closure::js_closure_get_capture_f64(closure, 2) != 0.0;
+    if close_on_rejection {
+        async_from_sync_close(iter);
+    }
+    if !promise.is_null() {
+        crate::promise::js_promise_reject(promise, reason);
+    }
+    0.0
+}
+
+fn async_from_sync_continue(iter: f64, step_result: f64, close_on_rejection: bool) -> f64 {
+    let ptr = crate::value::js_nanbox_get_pointer(step_result);
+    if ptr == 0 {
+        return async_from_sync_rejected(b"Iterator result is not an object");
+    }
+
+    let result_obj = ptr as *const crate::object::ObjectHeader;
+    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
+    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    let done = {
+        let done_val = crate::object::js_object_get_field_by_name(result_obj, done_key);
+        let done_f64 = f64::from_bits(done_val.bits());
+        crate::value::js_is_truthy(done_f64) != 0
+    };
+    let value = {
+        let value_val = crate::object::js_object_get_field_by_name(result_obj, value_key);
+        f64::from_bits(value_val.bits())
+    };
+
+    let outer = crate::promise::js_promise_new();
+    let on_fulfilled = crate::closure::js_closure_alloc(async_from_sync_fulfilled as *const u8, 2);
+    let on_rejected =
+        crate::closure::js_closure_alloc(async_from_sync_rejected_value as *const u8, 3);
+    crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, outer as i64);
+    crate::closure::js_closure_set_capture_f64(on_fulfilled, 1, if done { 1.0 } else { 0.0 });
+    crate::closure::js_closure_set_capture_ptr(on_rejected, 0, outer as i64);
+    crate::closure::js_closure_set_capture_f64(on_rejected, 1, iter);
+    crate::closure::js_closure_set_capture_f64(
+        on_rejected,
+        2,
+        if close_on_rejection { 1.0 } else { 0.0 },
+    );
+
+    let value_promise = crate::promise::js_promise_resolved(value);
+    crate::promise::js_promise_then(value_promise, on_fulfilled, on_rejected);
+    boxed_promise_value(outer)
+}
+
+fn async_from_sync_rest_args(rest: f64) -> (usize, f64) {
+    let ptr = crate::value::js_nanbox_get_pointer(rest) as *const crate::array::ArrayHeader;
+    if ptr.is_null() {
+        return (0, undefined_value());
+    }
+    let len = crate::array::js_array_length(ptr) as usize;
+    let first = if len == 0 {
+        undefined_value()
+    } else {
+        crate::array::js_array_get_f64(ptr, 0)
+    };
+    (len, first)
+}
+
+fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Option<f64>, f64> {
+    let method_value = named_field(iter, method);
+    if method_value.to_bits() == crate::value::TAG_UNDEFINED {
+        let raw = crate::value::js_nanbox_get_pointer(iter) as usize;
+        if method != b"next" || !is_builtin_iterator_class_id(raw) {
+            return Ok(None);
+        }
+    } else if !is_callable_value(method_value) {
+        return Err(async_from_sync_type_error(
+            b"Async-from-sync iterator method is not callable",
+        ));
+    }
+
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
+    let result = if jumped == 0 {
+        let args_ptr = if args.is_empty() {
+            std::ptr::null()
+        } else {
+            args.as_ptr()
+        };
+        let value = unsafe {
+            crate::object::js_native_call_method(
+                iter,
+                method.as_ptr() as *const i8,
+                method.len(),
+                args_ptr,
+                args.len(),
+            )
+        };
+        Ok(Some(value))
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(exc)
+    };
+    crate::exception::js_try_end();
+    result
+}
+
+fn async_from_sync_close(iter: f64) {
+    let _ = async_from_sync_call_raw(iter, b"return", &[]);
+}
+
+fn async_from_sync_call(iter: f64, method: &[u8], args: &[f64], close_on_rejection: bool) -> f64 {
+    match async_from_sync_call_raw(iter, method, args) {
+        Ok(Some(step)) => async_from_sync_continue(iter, step, close_on_rejection),
+        Ok(None) => async_from_sync_rejected(b"Async-from-sync iterator method is not callable"),
+        Err(reason) => boxed_promise_value(crate::promise::js_promise_rejected(reason)),
+    }
+}
+
+extern "C" fn async_from_sync_next(
+    closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let iter = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let (argc, first) = async_from_sync_rest_args(rest);
+    let single = [first];
+    let args: &[f64] = if argc == 0 { &[] } else { &single };
+    async_from_sync_call(iter, b"next", args, true)
+}
+
+extern "C" fn async_from_sync_return(
+    closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let iter = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let (argc, first) = async_from_sync_rest_args(rest);
+    let single = [first];
+    let args: &[f64] = if argc == 0 { &[] } else { &single };
+    match async_from_sync_call_raw(iter, b"return", args) {
+        Ok(Some(step)) => async_from_sync_continue(iter, step, false),
+        Ok(None) => {
+            let value = if argc == 0 { undefined_value() } else { first };
+            let done = async_from_sync_iter_result(value, true);
+            boxed_promise_value(crate::promise::js_promise_resolved(done))
+        }
+        Err(reason) => boxed_promise_value(crate::promise::js_promise_rejected(reason)),
+    }
+}
+
+extern "C" fn async_from_sync_throw(
+    closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let iter = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let (argc, first) = async_from_sync_rest_args(rest);
+    let single = [first];
+    let args: &[f64] = if argc == 0 { &[] } else { &single };
+    match async_from_sync_call_raw(iter, b"throw", args) {
+        Ok(Some(step)) => async_from_sync_continue(iter, step, true),
+        Ok(None) => {
+            async_from_sync_close(iter);
+            async_from_sync_rejected(b"The iterator does not provide a 'throw' method.")
+        }
+        Err(reason) => boxed_promise_value(crate::promise::js_promise_rejected(reason)),
+    }
+}
+
+extern "C" fn async_from_sync_async_iterator(closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::closure::js_closure_get_capture_f64(closure, 0)
+}
+
+fn register_async_from_sync_thunks_once() {
+    thread_local! {
+        static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    REGISTERED.with(|flag| {
+        if flag.get() {
+            return;
+        }
+        crate::closure::js_register_closure_rest(async_from_sync_next as *const u8, 0);
+        crate::closure::js_register_closure_rest(async_from_sync_return as *const u8, 0);
+        crate::closure::js_register_closure_rest(async_from_sync_throw as *const u8, 0);
+        crate::closure::js_register_closure_arity(async_from_sync_async_iterator as *const u8, 0);
+        flag.set(true);
+    });
+}
+
+fn install_async_from_sync_method(
+    obj: *mut crate::object::ObjectHeader,
+    name: &[u8],
+    func: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
+    iter: f64,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(func as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(closure, 0, iter);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+    value
+}
+
+pub(crate) fn async_from_sync_wrap_iterator(iter: f64) -> f64 {
+    register_async_from_sync_thunks_once();
+    let obj = crate::object::js_object_alloc(0, 0);
+    let wrapper = crate::value::js_nanbox_pointer(obj as i64);
+    install_async_from_sync_method(obj, b"next", async_from_sync_next, iter);
+    install_async_from_sync_method(obj, b"return", async_from_sync_return, iter);
+    install_async_from_sync_method(obj, b"throw", async_from_sync_throw, iter);
+    let async_iter =
+        crate::closure::js_closure_alloc(async_from_sync_async_iterator as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(async_iter, 0, wrapper);
+    let sym = crate::symbol::well_known_symbol("asyncIterator");
+    if !sym.is_null() {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                wrapper,
+                f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits()),
+                crate::value::js_nanbox_pointer(async_iter as i64),
+            );
+        }
+    }
+    wrapper
+}
+
+#[no_mangle]
+pub extern "C" fn js_get_async_iterator(value: f64) -> f64 {
+    if let Some(iter) = call_symbol_async_iterator(value) {
+        return iter;
+    }
+
+    let iter = crate::symbol::js_get_iterator(value);
+    let raw = crate::value::js_nanbox_get_pointer(iter) as usize;
+    if iter.to_bits() == value.to_bits()
+        && !is_builtin_iterator_class_id(raw)
+        && !has_named_next(iter)
+    {
+        throw_not_iterable(value);
+    }
+
+    async_from_sync_wrap_iterator(iter)
+}
+
 #[cold]
 fn throw_not_iterable(value: f64) -> ! {
     let label = if value.to_bits() == crate::value::TAG_NULL {

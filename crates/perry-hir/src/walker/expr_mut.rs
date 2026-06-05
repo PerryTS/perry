@@ -244,6 +244,7 @@ where
         | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
+        | Expr::GetAsyncIterator(v)
         | Expr::ForOfToArray(v)
         | Expr::ForAwaitToArray(v)
         | Expr::ObjectRest { object: v, .. }

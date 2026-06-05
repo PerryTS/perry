@@ -587,7 +587,18 @@ fn iterator_value_for_from_async(input: f64) -> Option<f64> {
     if let Some(iter) = crate::array::call_symbol_async_iterator_for_flat_map(input) {
         return Some(iter);
     }
-    crate::array::has_iterator_next(input).then_some(input)
+    if crate::object::is_async_generator_instance_value(input) {
+        return Some(input);
+    }
+    let iter = crate::symbol::js_get_iterator(input);
+    let raw = crate::value::js_nanbox_get_pointer(iter) as usize;
+    if iter.to_bits() != input.to_bits()
+        || crate::array::is_builtin_iterator_class_id(raw)
+        || crate::array::has_iterator_next(iter)
+    {
+        return Some(crate::array::async_from_sync_wrap_iterator(iter));
+    }
+    None
 }
 
 /// `Array.fromAsync(input, mapFn?, thisArg?)` — Node 22+ static method.

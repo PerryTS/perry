@@ -1114,6 +1114,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::Uint8ArrayFrom(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::GetAsyncIterator(operand)
         | Expr::ForOfToArray(operand)
         | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)

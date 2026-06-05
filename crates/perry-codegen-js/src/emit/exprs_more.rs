@@ -1048,6 +1048,13 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
+            Expr::GetAsyncIterator(val) => {
+                self.output.push_str("(");
+                self.emit_expr(val);
+                self.output.push_str(")[Symbol.asyncIterator]?.() ?? (");
+                self.emit_expr(val);
+                self.output.push_str(")[Symbol.iterator]()");
+            }
             Expr::ArrayFromMapped {
                 iterable,
                 map_fn,

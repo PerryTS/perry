@@ -17,7 +17,10 @@ use super::class_computed::{
 use super::helpers::{async_iterator_method_call, is_filehandle_readlines_for_await_target};
 use super::*;
 
+mod for_await;
 mod nested_fn_decl;
+
+use for_await::lower_runtime_for_await_iterator_body;
 
 fn unwrap_stream_expr(mut expr: &ast::Expr) -> &ast::Expr {
     loop {
@@ -1313,6 +1316,9 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 && !is_iterable_set
                 && !is_iterable_typed_array
                 && !proven_array;
+            if for_of_stmt.is_await && needs_runtime_iterator {
+                return lower_runtime_for_await_iterator_body(ctx, for_of_stmt, arr_expr);
+            }
             let arr_expr = if is_iterable_map {
                 if map_kv_fastpath {
                     arr_expr

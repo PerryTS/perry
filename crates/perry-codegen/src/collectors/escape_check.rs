@@ -396,6 +396,7 @@ pub fn check_escapes_in_expr(
         | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::GetAsyncIterator(operand)
         | Expr::ForOfToArray(operand)
         | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)

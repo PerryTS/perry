@@ -203,6 +203,21 @@ fn is_queue_wrapper(closure: *const ClosureHeader) -> bool {
         || func == async_generator_throw_wrapper as *const u8
 }
 
+pub(crate) fn is_async_generator_instance_value(value: f64) -> bool {
+    let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
+    if ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let is_object = unsafe {
+        let gc = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+    };
+    if !is_object {
+        return false;
+    }
+    own_closure(ptr as *mut ObjectHeader, b"next").is_some_and(is_queue_wrapper)
+}
+
 fn state_id_from_wrapper(closure: *const ClosureHeader) -> Option<usize> {
     if closure.is_null() {
         return None;

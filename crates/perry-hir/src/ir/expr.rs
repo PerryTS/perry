@@ -2103,6 +2103,11 @@ pub enum Expr {
     /// `operand[Symbol.iterator]()` when iterable, else the operand itself (a
     /// generator object already *is* its iterator). Lowers to `js_get_iterator`.
     GetIterator(Box<Expr>),
+    /// Resolve the iterator for generic `for await...of`: use
+    /// `operand[Symbol.asyncIterator]()` when present, otherwise wrap the
+    /// synchronous iterator from `operand[Symbol.iterator]()` in Perry's
+    /// AsyncFromSyncIterator adapter.
+    GetAsyncIterator(Box<Expr>),
     /// #321: materialize an UNTYPED `for...of` receiver into a plain Array
     /// by inspecting its runtime kind. The `for...of` desugar uses an
     /// index loop (`for (i=0; i<arr.length; i++) item = arr[i]`); when the

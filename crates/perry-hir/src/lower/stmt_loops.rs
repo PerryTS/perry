@@ -307,6 +307,100 @@ fn insert_iterator_return_before_abrupts(
     *stmts = rewritten;
 }
 
+fn lower_runtime_for_await_iterator(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    for_of_stmt: &ast::ForOfStmt,
+    source_expr: Expr,
+) -> Result<()> {
+    let for_scope_mark = ctx.push_block_scope();
+    let iter_id = ctx.fresh_local();
+    ctx.locals
+        .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
+    module.init.push(Stmt::Let {
+        id: iter_id,
+        name: format!("__iter_{}", iter_id),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::GetAsyncIterator(Box::new(source_expr))),
+    });
+
+    let result_id = ctx.fresh_local();
+    ctx.locals
+        .push((format!("__result_{}", result_id), result_id, Type::Any));
+    let raw_next_call = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(iter_id)),
+            property: "next".to_string(),
+        }),
+        args: vec![],
+        type_args: vec![],
+    };
+    let next_call = Expr::Await(Box::new(raw_next_call));
+    module.init.push(Stmt::Let {
+        id: result_id,
+        name: format!("__result_{}", result_id),
+        ty: Type::Any,
+        mutable: true,
+        init: Some(next_call.clone()),
+    });
+
+    let binding_pat = match &for_of_stmt.left {
+        ast::ForHead::VarDecl(var_decl) => var_decl
+            .decls
+            .first()
+            .map(|decl| &decl.name)
+            .ok_or_else(|| anyhow!("for-await-of requires a variable declaration"))?,
+        ast::ForHead::Pat(pat) => pat,
+        _ => return Err(anyhow!("Unsupported for-await-of left-hand side")),
+    };
+    let mut var_ids = Vec::new();
+    collect_for_of_pattern_leaves(ctx, binding_pat, &mut var_ids);
+    if var_ids.is_empty() {
+        return Err(anyhow!("Unsupported for-await-of binding pattern"));
+    }
+
+    let mut body_stmts = Vec::new();
+    let mut var_idx = 0;
+    emit_for_of_pattern_binding(
+        ctx,
+        binding_pat,
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(result_id)),
+            property: "value".to_string(),
+        },
+        &var_ids,
+        &mut var_idx,
+        &mut body_stmts,
+    )?;
+    let init_before = module.init.len();
+    if let ast::Stmt::Block(block) = &*for_of_stmt.body {
+        for s in &block.stmts {
+            lower_stmt(ctx, module, s)?;
+        }
+    } else {
+        lower_stmt(ctx, module, &for_of_stmt.body)?;
+    }
+    let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
+    insert_iterator_return_before_abrupts(&mut user_body, iter_id, true);
+    body_stmts.append(&mut user_body);
+    body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));
+
+    module.init.push(Stmt::While {
+        condition: Expr::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(result_id)),
+                property: "done".to_string(),
+            }),
+        },
+        body: body_stmts,
+    });
+
+    ctx.pop_block_scope(for_scope_mark);
+    Ok(())
+}
+
 pub(crate) fn lower_stmt_for_of(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -961,6 +1055,9 @@ pub(crate) fn lower_stmt_for_of(
         && !is_iterable_set
         && !is_iterable_typed_array
         && !proven_array;
+    if for_of_stmt.is_await && needs_runtime_iterator {
+        return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr);
+    }
     let arr_expr = if is_iterable_map {
         if let Some(args) = map_type_args.as_ref() {
             if args.len() >= 2 {
