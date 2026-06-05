@@ -3049,6 +3049,45 @@ extern "C" fn number_is_integer_thunk(
     crate::builtins::js_number_is_integer(value)
 }
 
+extern "C" fn string_from_char_code_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let ptr = crate::string::js_string_from_char_code_array(rest);
+    crate::value::js_nanbox_string(ptr as i64)
+}
+
+extern "C" fn string_from_code_point_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let values = global_this_rest_array_values(rest);
+    if values.is_empty() {
+        let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+        return crate::value::js_nanbox_string(empty as i64);
+    }
+
+    let mut result = crate::string::js_string_from_code_point(values[0]);
+    for value in values.iter().skip(1) {
+        let left = crate::value::js_nanbox_string(result as i64);
+        let part = crate::string::js_string_from_code_point(*value);
+        let right = crate::value::js_nanbox_string(part as i64);
+        let joined = crate::string::js_string_concat_box(left, right);
+        result =
+            crate::value::js_get_string_pointer_unified(joined) as *mut crate::string::StringHeader;
+    }
+    crate::value::js_nanbox_string(result as i64)
+}
+
+extern "C" fn string_raw_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    call_site: f64,
+    substitutions: f64,
+) -> f64 {
+    let ptr = crate::string::js_string_raw(call_site, substitutions);
+    crate::value::js_nanbox_string(ptr as i64)
+}
+
 /// Shared impl for `BigInt.asIntN`/`asUintN` (both the ctor-static thunks and
 /// the `("bigint", ...)` native-module dispatch). Coerces `bits` via ToIndex
 /// (RangeError on negative/non-integer), brand-checks `value` is a BigInt
@@ -3608,6 +3647,32 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 number_parse_int_thunk as *const u8,
                 2,
                 false,
+            );
+        }
+        "String" => {
+            install_constructor_static_with_call_arity(
+                ctor,
+                "fromCharCode",
+                string_from_char_code_thunk as *const u8,
+                1,
+                0,
+                true,
+            );
+            install_constructor_static_with_call_arity(
+                ctor,
+                "fromCodePoint",
+                string_from_code_point_thunk as *const u8,
+                1,
+                0,
+                true,
+            );
+            install_constructor_static_with_call_arity(
+                ctor,
+                "raw",
+                string_raw_thunk as *const u8,
+                1,
+                1,
+                true,
             );
         }
         "BigInt" => {
