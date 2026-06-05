@@ -1147,51 +1147,59 @@ pub(super) fn try_builtin_prototype_method_apply_call(
     //     ref, e.g. `const m = [].map` (#3144).
     // `method_prop` is the `IdentName` for the resolved method; we reuse it as
     // the synthesized member's `.prop`.
-    let method_prop: ast::IdentName = match outer.obj.as_ref() {
-        ast::Expr::Member(inner) => {
-            let ast::MemberProp::Ident(method_ident) = &inner.prop else {
-                return Ok(None);
-            };
-            if !is_builtin_prototype_receiver(ctx, inner.obj.as_ref()) {
-                return Ok(None);
+    let (method_prop, method_from_array_prototype): (ast::IdentName, bool) =
+        match outer.obj.as_ref() {
+            ast::Expr::Member(inner) => {
+                let ast::MemberProp::Ident(method_ident) = &inner.prop else {
+                    return Ok(None);
+                };
+                if !is_builtin_prototype_receiver(ctx, inner.obj.as_ref()) {
+                    return Ok(None);
+                }
+                // #4101: keep `Function.prototype.toString.call(x)` reflective so
+                // the runtime thunk runs its brand check (throw a TypeError on a
+                // non-function `this`) and reconstructs source. Folding it to
+                // `x.toString()` would erase the Function brand and route through
+                // the lenient universal `toString` (returns "[object Object]", no
+                // throw). `Object.prototype.toString.call(x)` is unaffected — it
+                // keeps folding (ramda relies on it).
+                if method_ident.sym.as_ref() == "toString"
+                    && is_function_prototype_member(inner.obj.as_ref())
+                {
+                    return Ok(None);
+                }
+                // #4100: keep `Number.prototype.valueOf.call(x)` /
+                // `Boolean.prototype.toString.call(x)` reflective so the installed
+                // brand-check thunk runs (throws a `TypeError` on an incompatible
+                // `this`). Folding to `x.<method>()` routes through the lenient
+                // `Object.prototype` fallback (`"[object Object]"`, no throw).
+                if is_primitive_wrapper_brand_method(inner.obj.as_ref(), method_ident.sym.as_ref())
+                {
+                    return Ok(None);
+                }
+                (
+                    method_ident.clone(),
+                    is_array_prototype_receiver(ctx, inner.obj.as_ref()),
+                )
             }
-            // #4101: keep `Function.prototype.toString.call(x)` reflective so
-            // the runtime thunk runs its brand check (throw a TypeError on a
-            // non-function `this`) and reconstructs source. Folding it to
-            // `x.toString()` would erase the Function brand and route through
-            // the lenient universal `toString` (returns "[object Object]", no
-            // throw). `Object.prototype.toString.call(x)` is unaffected — it
-            // keeps folding (ramda relies on it).
-            if method_ident.sym.as_ref() == "toString"
-                && is_function_prototype_member(inner.obj.as_ref())
-            {
-                return Ok(None);
-            }
-            // #4100: keep `Number.prototype.valueOf.call(x)` /
-            // `Boolean.prototype.toString.call(x)` reflective so the installed
-            // brand-check thunk runs (throws a `TypeError` on an incompatible
-            // `this`). Folding to `x.<method>()` routes through the lenient
-            // `Object.prototype` fallback (`"[object Object]"`, no throw).
-            if is_primitive_wrapper_brand_method(inner.obj.as_ref(), method_ident.sym.as_ref()) {
-                return Ok(None);
-            }
-            method_ident.clone()
-        }
-        ast::Expr::Ident(id) => match ctx.builtin_proto_method_locals.get(id.sym.as_ref()) {
-            Some(name) => {
-                // Build the method `.prop` IdentName by cloning the outer
-                // `.call`/`.apply` IdentName and overwriting its `sym`
-                // (avoids needing a synthetic span).
-                let mut prop = outer_prop.clone();
-                prop.sym = name.as_str().into();
-                prop
-            }
-            // Not a tracked builtin-method local: leave unrelated
-            // `someFn.call(...)` untouched.
-            None => return Ok(None),
-        },
-        _ => return Ok(None),
-    };
+            ast::Expr::Ident(id) => match ctx.builtin_proto_method_locals.get(id.sym.as_ref()) {
+                Some(name) => {
+                    // Build the method `.prop` IdentName by cloning the outer
+                    // `.call`/`.apply` IdentName and overwriting its `sym`
+                    // (avoids needing a synthetic span).
+                    let mut prop = outer_prop.clone();
+                    prop.sym = name.as_str().into();
+                    (
+                        prop,
+                        ctx.array_proto_method_locals.contains(id.sym.as_ref()),
+                    )
+                }
+                // Not a tracked builtin-method local: leave unrelated
+                // `someFn.call(...)` untouched.
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
 
     // `.call`/`.apply` need at least the `thisArg` (the new receiver). A
     // spread in the `thisArg` slot can't be statically resolved to a receiver.
@@ -1239,10 +1247,15 @@ pub(super) fn try_builtin_prototype_method_apply_call(
     // (see `normalize_array_receiver`). Only the read-only/returning methods are
     // handled here; mutators and unsupported shapes fall through to the member
     // call below (unchanged behavior).
-    if let Some(folded) =
-        try_arraylike_receiver_method(ctx, method_prop.sym.as_ref(), &this_arg.expr, &rest_args)?
-    {
-        return Ok(Some(folded));
+    if method_from_array_prototype {
+        if let Some(folded) = try_arraylike_receiver_method(
+            ctx,
+            method_prop.sym.as_ref(),
+            &this_arg.expr,
+            &rest_args,
+        )? {
+            return Ok(Some(folded));
+        }
     }
 
     // Synthesize `(thisArg).<method>(rest_args)`: use the resolved method
@@ -1259,16 +1272,63 @@ pub(super) fn try_builtin_prototype_method_apply_call(
     Ok(Some(super::lower_call(ctx, &synth_call)?))
 }
 
-/// Build a dedicated `Expr::Array*` HIR variant for `Array.prototype.<m>.call`
-/// / `.apply` on a *generic array-like* receiver, bypassing the receiver-type
-/// gate that the normal member-call fast path applies. `receiver` is the
+fn array_like_extern_call(name: &str, args: Vec<Expr>) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: name.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }),
+        args,
+        type_args: Vec::new(),
+    }
+}
+
+fn lower_rest_arg_or(
+    ctx: &mut LoweringContext,
+    rest_args: &[ast::ExprOrSpread],
+    index: usize,
+    default: Expr,
+) -> Result<Expr> {
+    match rest_args.get(index) {
+        Some(arg) => Ok(lower_expr(ctx, &arg.expr)?),
+        None => Ok(default),
+    }
+}
+
+fn lower_rest_arg_or_undefined(
+    ctx: &mut LoweringContext,
+    rest_args: &[ast::ExprOrSpread],
+    index: usize,
+) -> Result<Expr> {
+    lower_rest_arg_or(ctx, rest_args, index, Expr::Undefined)
+}
+
+fn array_like_callback_extern_call(
+    ctx: &mut LoweringContext,
+    symbol: &str,
+    receiver: &ast::Expr,
+    rest_args: &[ast::ExprOrSpread],
+) -> Result<Expr> {
+    let receiver = lower_expr(ctx, receiver)?;
+    let callback = lower_rest_arg_or_undefined(ctx, rest_args, 0)?;
+    let this_arg = lower_rest_arg_or_undefined(ctx, rest_args, 1)?;
+    Ok(array_like_extern_call(
+        symbol,
+        vec![receiver, callback, this_arg],
+    ))
+}
+
+/// Build a direct runtime helper call for `Array.prototype.<m>.call` /
+/// `.apply` on a generic array-like receiver. The receiver is the `.call`
 /// `thisArg`; `rest_args` are the post-`thisArg` positional arguments (already
 /// expanded from the `.apply` array if applicable).
 ///
-/// Returns `Some(expr)` for a supported read-only/returning method, or `None`
-/// for mutators / unsupported methods (caller falls back to the synthesized
-/// member call). The chosen set mirrors the runtime methods that route through
-/// `normalize_array_receiver`.
+/// The helper-backed methods preserve ECMAScript array-like semantics that
+/// `Expr::ArrayFrom` cannot: sparse holes, per-index HasProperty checks,
+/// callback `thisArg`, and the `find`/`includes` hole-visiting distinction.
+/// A small legacy `ArrayFrom` fallback remains for Array methods that do not
+/// yet have dedicated generic helpers.
 fn try_arraylike_receiver_method(
     ctx: &mut LoweringContext,
     method: &str,
@@ -1279,48 +1339,155 @@ fn try_arraylike_receiver_method(
     if rest_args.iter().any(|a| a.spread.is_some()) {
         return Ok(None);
     }
-    // Only fold the read-only/returning methods. Bail early for everything else
-    // (mutators, flat, etc.) BEFORE lowering the receiver, so unrelated shapes
-    // keep the existing member-call behavior with no side effects.
-    let supported = matches!(
-        method,
-        "map"
-            | "filter"
-            | "forEach"
-            | "find"
-            | "findIndex"
-            | "findLast"
-            | "findLastIndex"
-            | "some"
-            | "every"
-            | "flatMap"
-            | "reduce"
-            | "reduceRight"
-            | "indexOf"
-            | "lastIndexOf"
-            | "includes"
-            | "slice"
-            | "at"
-            | "join"
-    );
-    if !supported {
+
+    let direct = match method {
+        "join" => {
+            let receiver = lower_expr(ctx, receiver)?;
+            let separator = lower_rest_arg_or_undefined(ctx, rest_args, 0)?;
+            Some(array_like_extern_call(
+                "js_array_like_join_value",
+                vec![receiver, separator],
+            ))
+        }
+        "map" => Some(array_like_callback_extern_call(
+            ctx,
+            "js_array_like_map_value",
+            receiver,
+            rest_args,
+        )?),
+        "filter" => Some(array_like_callback_extern_call(
+            ctx,
+            "js_array_like_filter_value",
+            receiver,
+            rest_args,
+        )?),
+        "forEach" => Some(array_like_callback_extern_call(
+            ctx,
+            "js_array_like_for_each_value",
+            receiver,
+            rest_args,
+        )?),
+        "some" => Some(array_like_callback_extern_call(
+            ctx,
+            "js_array_like_some",
+            receiver,
+            rest_args,
+        )?),
+        "every" => Some(array_like_callback_extern_call(
+            ctx,
+            "js_array_like_every",
+            receiver,
+            rest_args,
+        )?),
+        "find" => Some(array_like_callback_extern_call(
+            ctx,
+            "js_array_like_find",
+            receiver,
+            rest_args,
+        )?),
+        "findIndex" => Some(array_like_callback_extern_call(
+            ctx,
+            "js_array_like_find_index_value",
+            receiver,
+            rest_args,
+        )?),
+        "indexOf" => {
+            let receiver = lower_expr(ctx, receiver)?;
+            let search = lower_rest_arg_or_undefined(ctx, rest_args, 0)?;
+            let has_from = rest_args.get(1).is_some();
+            let from_index = lower_rest_arg_or_undefined(ctx, rest_args, 1)?;
+            Some(array_like_extern_call(
+                "js_array_like_index_of_value",
+                vec![
+                    receiver,
+                    search,
+                    from_index,
+                    Expr::Integer(if has_from { 1 } else { 0 }),
+                ],
+            ))
+        }
+        "lastIndexOf" => {
+            let receiver = lower_expr(ctx, receiver)?;
+            let search = lower_rest_arg_or_undefined(ctx, rest_args, 0)?;
+            let has_from = rest_args.get(1).is_some();
+            let from_index = lower_rest_arg_or_undefined(ctx, rest_args, 1)?;
+            Some(array_like_extern_call(
+                "js_array_like_last_index_of_value",
+                vec![
+                    receiver,
+                    search,
+                    from_index,
+                    Expr::Integer(if has_from { 1 } else { 0 }),
+                ],
+            ))
+        }
+        "includes" => {
+            let receiver = lower_expr(ctx, receiver)?;
+            let search = lower_rest_arg_or_undefined(ctx, rest_args, 0)?;
+            let has_from = rest_args.get(1).is_some();
+            let from_index = lower_rest_arg_or_undefined(ctx, rest_args, 1)?;
+            Some(array_like_extern_call(
+                "js_array_like_includes_value",
+                vec![
+                    receiver,
+                    search,
+                    from_index,
+                    Expr::Integer(if has_from { 1 } else { 0 }),
+                ],
+            ))
+        }
+        "reduce" => {
+            let receiver = lower_expr(ctx, receiver)?;
+            let callback = lower_rest_arg_or_undefined(ctx, rest_args, 0)?;
+            let has_initial = rest_args.get(1).is_some();
+            let initial = lower_rest_arg_or_undefined(ctx, rest_args, 1)?;
+            Some(array_like_extern_call(
+                "js_array_like_reduce_value",
+                vec![
+                    receiver,
+                    callback,
+                    Expr::Integer(if has_initial { 1 } else { 0 }),
+                    initial,
+                ],
+            ))
+        }
+        "reduceRight" => {
+            let receiver = lower_expr(ctx, receiver)?;
+            let callback = lower_rest_arg_or_undefined(ctx, rest_args, 0)?;
+            let has_initial = rest_args.get(1).is_some();
+            let initial = lower_rest_arg_or_undefined(ctx, rest_args, 1)?;
+            Some(array_like_extern_call(
+                "js_array_like_reduce_right_value",
+                vec![
+                    receiver,
+                    callback,
+                    Expr::Integer(if has_initial { 1 } else { 0 }),
+                    initial,
+                ],
+            ))
+        }
+        "slice" => {
+            let receiver = lower_expr(ctx, receiver)?;
+            let start = lower_rest_arg_or(ctx, rest_args, 0, Expr::Integer(0))?;
+            let end = lower_rest_arg_or_undefined(ctx, rest_args, 1)?;
+            Some(array_like_extern_call(
+                "js_array_like_slice_value",
+                vec![receiver, start, end],
+            ))
+        }
+        _ => None,
+    };
+    if direct.is_some() {
+        return Ok(direct);
+    }
+
+    let legacy_supported = matches!(method, "findLast" | "findLastIndex" | "flatMap" | "at");
+    if !legacy_supported {
         return Ok(None);
     }
-    // Materialize the array-like receiver into a REAL array up front via
-    // `Expr::ArrayFrom` (→ `js_array_from_value` → `js_array_clone`, which has
-    // the array-like `{length, 0:…}` detection). This makes EVERY downstream
-    // method see a genuine `ArrayHeader` — crucial for the methods whose codegen
-    // is INLINED (e.g. `forEach` reads `(*arr).length` + `arr[i]` directly
-    // rather than calling `js_array_forEach`), which the runtime-side
-    // `normalize_array_receiver` can't reach. For a real-array receiver this
-    // clones (correct; the read-only methods don't mutate the receiver), and
-    // for null/undefined `js_array_from_value` throws a TypeError to match Node.
-    // The receiver (`thisArg`) lowers before the positional args, matching
-    // source order.
     let array_src = lower_expr(ctx, receiver)?;
     let array = Box::new(Expr::ArrayFrom(Box::new(array_src)));
-    // Lower a positional argument by index, if present.
-    let mut arg = |ctx: &mut LoweringContext, i: usize| -> Result<Option<Box<Expr>>> {
+    let arg = |ctx: &mut LoweringContext, i: usize| -> Result<Option<Box<Expr>>> {
         match rest_args.get(i) {
             Some(a) => Ok(Some(Box::new(lower_expr(ctx, &a.expr)?))),
             None => Ok(None),
@@ -1339,80 +1506,9 @@ fn try_arraylike_receiver_method(
         }};
     }
     match method {
-        "map" => cb_method!(ArrayMap),
-        "filter" => cb_method!(ArrayFilter),
-        "forEach" => cb_method!(ArrayForEach),
-        "find" => cb_method!(ArrayFind),
-        "findIndex" => cb_method!(ArrayFindIndex),
         "findLast" => cb_method!(ArrayFindLast),
         "findLastIndex" => cb_method!(ArrayFindLastIndex),
-        "some" => cb_method!(ArraySome),
-        "every" => cb_method!(ArrayEvery),
         "flatMap" => cb_method!(ArrayFlatMap),
-        "reduce" => {
-            let Some(cb) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let initial = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayReduce {
-                array,
-                callback: cb,
-                initial,
-            }))
-        }
-        "reduceRight" => {
-            let Some(cb) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let initial = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayReduceRight {
-                array,
-                callback: cb,
-                initial,
-            }))
-        }
-        "indexOf" => {
-            let Some(value) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let from_index = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayIndexOf {
-                array,
-                value,
-                from_index,
-            }))
-        }
-        "lastIndexOf" => {
-            let Some(value) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let from_index = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayLastIndexOf {
-                array,
-                value,
-                from_index,
-            }))
-        }
-        "includes" => {
-            let Some(value) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let from_index = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayIncludes {
-                array,
-                value,
-                from_index,
-            }))
-        }
-        "slice" => {
-            // `slice()` with no args copies from index 0.
-            let start = match arg(ctx, 0)? {
-                Some(s) => s,
-                None => Box::new(Expr::Integer(0)),
-            };
-            let end = arg(ctx, 1)?;
-            Ok(Some(Expr::ArraySlice { array, start, end }))
-        }
         "at" => {
             let index = match arg(ctx, 0)? {
                 Some(i) => i,
@@ -1420,11 +1516,6 @@ fn try_arraylike_receiver_method(
             };
             Ok(Some(Expr::ArrayAt { array, index }))
         }
-        "join" => {
-            let separator = arg(ctx, 0)?;
-            Ok(Some(Expr::ArrayJoin { array, separator }))
-        }
-        // Unreachable: `supported` gate above filters to exactly these arms.
         _ => Ok(None),
     }
 }
@@ -1469,6 +1560,13 @@ pub(crate) fn as_builtin_proto_method_ref(
     }
 }
 
+pub(crate) fn is_array_proto_method_ref(ctx: &LoweringContext, init: &ast::Expr) -> bool {
+    let ast::Expr::Member(member) = init else {
+        return false;
+    };
+    is_array_prototype_receiver(ctx, &member.obj)
+}
+
 /// True when `recv` is a builtin constructor's `.prototype` (and that
 /// constructor name is not shadowed by a local/function binding) or an
 /// array/string literal — the receiver shapes whose prototype-method *values*
@@ -1498,6 +1596,27 @@ fn is_builtin_prototype_receiver(ctx: &LoweringContext, recv: &ast::Expr) -> boo
         ast::Expr::Array(_) => true,
         // `"".charAt.call(…)`.
         ast::Expr::Lit(ast::Lit::Str(_)) => true,
+        _ => false,
+    }
+}
+
+fn is_array_prototype_receiver(ctx: &LoweringContext, recv: &ast::Expr) -> bool {
+    match recv {
+        ast::Expr::Member(m) => {
+            let ast::MemberProp::Ident(p) = &m.prop else {
+                return false;
+            };
+            if p.sym.as_ref() != "prototype" {
+                return false;
+            }
+            let ast::Expr::Ident(base) = m.obj.as_ref() else {
+                return false;
+            };
+            base.sym.as_ref() == "Array"
+                && ctx.lookup_local("Array").is_none()
+                && ctx.lookup_func("Array").is_none()
+        }
+        ast::Expr::Array(_) => true,
         _ => false,
     }
 }

@@ -1,5 +1,6 @@
 //! Array representation for Perry — split into topical sub-modules.
 mod alloc;
+mod array_like_methods;
 mod concat_reverse;
 mod flat_clone;
 mod from_concat;
@@ -24,6 +25,12 @@ pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
     js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,
     js_array_from_f64,
+};
+pub use self::array_like_methods::{
+    js_array_like_every, js_array_like_filter, js_array_like_find, js_array_like_find_index,
+    js_array_like_for_each, js_array_like_includes, js_array_like_index_of, js_array_like_join,
+    js_array_like_last_index_of, js_array_like_map, js_array_like_reduce,
+    js_array_like_reduce_right, js_array_like_slice, js_array_like_some,
 };
 pub use self::concat_reverse::{
     js_array_concat, js_array_concat_new, js_array_fill, js_array_fill_range, js_array_reverse,

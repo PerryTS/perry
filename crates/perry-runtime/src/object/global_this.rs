@@ -1367,36 +1367,145 @@ extern "C" fn array_prototype_slice_thunk(
     start_val: f64,
     end_val: f64,
 ) -> f64 {
-    use crate::value::JSValue;
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
-    let this_jsv = JSValue::from_bits(this_bits);
-    let arr_ptr = if this_jsv.is_pointer() {
-        this_jsv.as_pointer::<crate::array::ArrayHeader>()
-    } else {
-        // Tolerate raw-i64-encoded array receivers (some module-init
-        // call sites stash array pointers in IMPLICIT_THIS without
-        // NaN-boxing). The clean_arr_ptr check inside js_array_slice
-        // re-validates.
-        let raw = this_bits as *const crate::array::ArrayHeader;
-        if (raw as usize) > 0x10000 {
-            raw
-        } else {
-            std::ptr::null()
-        }
-    };
-    if arr_ptr.is_null() {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    let result = unsafe {
-        if let Some(arr) =
-            crate::object::arguments_object_to_array(arr_ptr as *const crate::object::ObjectHeader)
-        {
-            crate::array::js_array_slice_values(arr, start_val, end_val)
-        } else {
-            crate::array::js_array_slice_values(arr_ptr, start_val, end_val)
-        }
-    };
+    let receiver = crate::object::js_implicit_this_get();
+    let result = crate::array::js_array_like_slice(receiver, start_val, end_val);
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
+}
+
+extern "C" fn array_prototype_join_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    separator: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    let result = crate::array::js_array_like_join(receiver, separator);
+    f64::from_bits(crate::value::JSValue::string_ptr(result).bits())
+}
+
+extern "C" fn array_prototype_map_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    let result = crate::array::js_array_like_map(receiver, callback, rest_arg(rest, 0));
+    f64::from_bits(crate::value::JSValue::pointer(result as *mut u8).bits())
+}
+
+extern "C" fn array_prototype_filter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    let result = crate::array::js_array_like_filter(receiver, callback, rest_arg(rest, 0));
+    f64::from_bits(crate::value::JSValue::pointer(result as *mut u8).bits())
+}
+
+extern "C" fn array_prototype_for_each_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_for_each(receiver, callback, rest_arg(rest, 0));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn array_prototype_some_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_some(receiver, callback, rest_arg(rest, 0))
+}
+
+extern "C" fn array_prototype_every_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_every(receiver, callback, rest_arg(rest, 0))
+}
+
+extern "C" fn array_prototype_find_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_find(receiver, callback, rest_arg(rest, 0))
+}
+
+extern "C" fn array_prototype_find_index_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_find_index(receiver, callback, rest_arg(rest, 0)) as f64
+}
+
+extern "C" fn array_prototype_index_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    search: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_index_of(receiver, search, rest_arg(rest, 0), rest_len(rest) as i32)
+        as f64
+}
+
+extern "C" fn array_prototype_last_index_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    search: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_last_index_of(
+        receiver,
+        search,
+        rest_arg(rest, 0),
+        rest_len(rest) as i32,
+    ) as f64
+}
+
+extern "C" fn array_prototype_includes_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    search: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_includes(receiver, search, rest_arg(rest, 0), rest_len(rest) as i32)
+}
+
+extern "C" fn array_prototype_reduce_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_reduce(
+        receiver,
+        callback,
+        if rest_len(rest) > 0 { 1 } else { 0 },
+        rest_arg(rest, 0),
+    )
+}
+
+extern "C" fn array_prototype_reduce_right_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::array::js_array_like_reduce_right(
+        receiver,
+        callback,
+        if rest_len(rest) > 0 { 1 } else { 0 },
+        rest_arg(rest, 0),
+    )
 }
 
 fn array_buffer_receiver_addr() -> Option<usize> {
@@ -3924,16 +4033,33 @@ extern "C" fn url_pattern_exec_thunk(
     crate::url::js_url_pattern_exec(pattern, input, base)
 }
 
-fn rest_first_arg(rest: f64) -> f64 {
+fn rest_len(rest: f64) -> u32 {
+    let value = crate::value::JSValue::from_bits(rest.to_bits());
+    if !value.is_pointer() {
+        return 0;
+    }
+    let arr = value.as_pointer::<crate::array::ArrayHeader>();
+    if arr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr)
+    }
+}
+
+fn rest_arg(rest: f64, index: u32) -> f64 {
     let value = crate::value::JSValue::from_bits(rest.to_bits());
     if !value.is_pointer() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let arr = value.as_pointer::<crate::array::ArrayHeader>();
-    if arr.is_null() || crate::array::js_array_length(arr) == 0 {
+    if arr.is_null() || crate::array::js_array_length(arr) <= index {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::array::js_array_get_f64(arr, 0)
+    crate::array::js_array_get_f64(arr, index)
+}
+
+fn rest_first_arg(rest: f64) -> f64 {
+    rest_arg(rest, 0)
 }
 
 /// Universal `Object.prototype` methods inherited by every receiver in
@@ -4003,6 +4129,96 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 array_prototype_slice_thunk as *const u8,
                 2,
             );
+            install_proto_method(
+                proto_obj,
+                "join",
+                array_prototype_join_thunk as *const u8,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "map",
+                array_prototype_map_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "filter",
+                array_prototype_filter_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "forEach",
+                array_prototype_for_each_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "some",
+                array_prototype_some_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "every",
+                array_prototype_every_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "find",
+                array_prototype_find_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "findIndex",
+                array_prototype_find_index_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "indexOf",
+                array_prototype_index_of_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "lastIndexOf",
+                array_prototype_last_index_of_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "includes",
+                array_prototype_includes_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "reduce",
+                array_prototype_reduce_thunk as *const u8,
+                1,
+                1,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "reduceRight",
+                array_prototype_reduce_right_thunk as *const u8,
+                1,
+                1,
+            );
             install_noop_proto_methods(
                 proto_obj,
                 &[
@@ -4010,29 +4226,16 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("concat", 1),
                     ("copyWithin", 2),
                     ("entries", 0),
-                    ("every", 1),
                     ("fill", 1),
-                    ("filter", 1),
-                    ("find", 1),
-                    ("findIndex", 1),
                     ("findLast", 1),
                     ("findLastIndex", 1),
                     ("flat", 0),
                     ("flatMap", 1),
-                    ("forEach", 1),
-                    ("includes", 1),
-                    ("indexOf", 1),
-                    ("join", 1),
                     ("keys", 0),
-                    ("lastIndexOf", 1),
-                    ("map", 1),
                     ("pop", 0),
                     ("push", 1),
-                    ("reduce", 1),
-                    ("reduceRight", 1),
                     ("reverse", 0),
                     ("shift", 0),
-                    ("some", 1),
                     ("sort", 1),
                     ("splice", 2),
                     ("toLocaleString", 0),

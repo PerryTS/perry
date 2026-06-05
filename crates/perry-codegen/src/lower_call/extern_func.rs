@@ -28,6 +28,26 @@ use super::{
     perry_updater_table_lookup, try_rewrite_perry_tui_jsx_intrinsic,
 };
 
+fn force_boxed_js_value_abi(name: &str) -> bool {
+    matches!(
+        name,
+        "js_array_like_join_value"
+            | "js_array_like_map_value"
+            | "js_array_like_filter_value"
+            | "js_array_like_for_each_value"
+            | "js_array_like_some"
+            | "js_array_like_every"
+            | "js_array_like_find"
+            | "js_array_like_find_index_value"
+            | "js_array_like_index_of_value"
+            | "js_array_like_last_index_of_value"
+            | "js_array_like_includes_value"
+            | "js_array_like_reduce_value"
+            | "js_array_like_reduce_right_value"
+            | "js_array_like_slice_value"
+    )
+}
+
 fn record_native_abi_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
@@ -1426,6 +1446,13 @@ pub fn try_lower_extern_func_call(
         }
         let arg_slices: Vec<(crate::types::LlvmType, &str)> =
             lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
+        if force_boxed_js_value_abi(name) {
+            ctx.pending_declares.push((
+                name.clone(),
+                DOUBLE,
+                std::iter::repeat_n(DOUBLE, args.len()).collect(),
+            ));
+        }
         return Ok(Some(ctx.block().call(DOUBLE, name, &arg_slices)));
     }
     // Issue #692: default-import call against an unresolved module.
@@ -1496,6 +1523,7 @@ pub fn try_lower_extern_func_call(
         // garbage value out of x0/x1 since Perry put the handle in
         // d-registers.
         let manifest_sig = ctx.ffi_signatures.get(name).cloned();
+        let force_boxed_js_value_abi = force_boxed_js_value_abi(name);
         let mut lowered: Vec<String> = Vec::with_capacity(args.len());
         let mut arg_types: Vec<crate::types::LlvmType> = Vec::with_capacity(args.len());
         let mut abi_slot_index = 0usize;
@@ -1542,14 +1570,14 @@ pub fn try_lower_extern_func_call(
                     &mut arg_types,
                 );
                 abi_slot_index += descriptor.abi_slot_count();
-            } else if is_string_expr(ctx, a) {
+            } else if !force_boxed_js_value_abi && is_string_expr(ctx, a) {
                 let blk = ctx.block();
                 let raw_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val)]);
                 let ptr_val = blk.inttoptr(I64, &raw_ptr);
                 lowered.push(ptr_val);
                 arg_types.push(PTR);
                 abi_slot_index += 1;
-            } else if is_array_expr(ctx, a) {
+            } else if !force_boxed_js_value_abi && is_array_expr(ctx, a) {
                 let blk = ctx.block();
                 let bits = blk.bitcast_double_to_i64(&val);
                 let header_handle = blk.and(I64, &bits, POINTER_MASK_I64);

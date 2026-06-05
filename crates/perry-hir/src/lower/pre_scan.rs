@@ -99,6 +99,13 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                 {
                     ctx.builtin_proto_method_locals
                         .insert(ident.id.sym.to_string(), method);
+                    if crate::lower::expr_call::intrinsics::is_array_proto_method_ref(
+                        ctx,
+                        init_unwrapped,
+                    ) {
+                        ctx.array_proto_method_locals
+                            .insert(ident.id.sym.to_string());
+                    }
                 }
             }
         }
