@@ -1478,6 +1478,17 @@ pub(crate) fn lower_module_decl(
                                             | Expr::FuncRef(_)
                                             | Expr::ExternFuncRef { .. }
                                             | Expr::PropertyGet { .. }
+                                            // A const aliasing a class STATIC field value
+                                            // (`const stringType = ZodString.create;
+                                            // export { stringType as string }`) lowers its
+                                            // init to `StaticFieldGet`. Like `PropertyGet`
+                                            // above it must flow through `exported_objects`
+                                            // so the importer reads the const's value via the
+                                            // module getter instead of link-failing to a
+                                            // nonexistent `perry_fn_<src>__<name>` symbol
+                                            // (which made the call return `undefined`). zod's
+                                            // `z.string`/`z.number`/… are all this shape.
+                                            | Expr::StaticFieldGet { .. }
                                             // #421 fix (v0.5.574): primitive literals must
                                             // also flow through `exported_objects` so the
                                             // importing module's `imported_vars` set picks
