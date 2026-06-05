@@ -4,12 +4,27 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use super::property_get_names::{
+    is_headers_method_name, is_http_client_request_method_name, is_net_native_method_value,
+    is_url_pattern_data_property,
+};
 #[allow(unused_imports)]
-use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
-#[allow(unused_imports)]
-use perry_types::Type as HirType;
-
+use super::{
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
+    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_lower_pod_field_get,
+    try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
+};
 #[allow(unused_imports)]
 use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
 #[allow(unused_imports)]
@@ -32,28 +47,11 @@ use crate::type_analysis::{
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
-
-use super::property_get_names::{
-    is_headers_method_name, is_http_client_request_method_name, is_net_native_method_value,
-    is_url_pattern_data_property,
-};
+use anyhow::{anyhow, bail, Result};
 #[allow(unused_imports)]
-use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
-    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
-    try_flat_const_2d_int, try_lower_flat_const_index_get, try_lower_pod_field_get,
-    try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
-    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
-};
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+#[allow(unused_imports)]
+use perry_types::Type as HirType;
 
 fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
@@ -99,7 +97,6 @@ fn lower_class_method_bind(
         &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
     ))
 }
-
 fn is_primitive_builtin_proto_method(builtin_name: &str, method_name: &str) -> bool {
     match builtin_name {
         "Number" => matches!(
@@ -111,7 +108,6 @@ fn is_primitive_builtin_proto_method(builtin_name: &str, method_name: &str) -> b
         _ => false,
     }
 }
-
 fn builtin_prototype_method_read<'a>(
     object: &'a Expr,
     property: &'a str,
