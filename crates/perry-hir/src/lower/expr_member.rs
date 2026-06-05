@@ -1850,10 +1850,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // undefined). `Array.fromAsync` is unreified and stays
                     // undefined either way. Direct calls keep the intrinsic
                     // fast path via the `!member_is_call_callee` gate.
+                    // #4627: all six Number statics (isFinite / isInteger /
+                    // isNaN / isSafeInteger / parseFloat / parseInt) are reified
+                    // with metadata via install_constructor_static, so routing
+                    // value reads to the reified Number receiver is safe and
+                    // fixes the missing `.name`/`.length` on isInteger /
+                    // isSafeInteger. (String's fromCharCode/etc. are NOT reified
+                    // yet — left to #4627.)
                     let outer_is_reified_builtin_static_value = !member_is_call_callee
                         && matches!(
                             property.as_str(),
-                            "JSON" | "Reflect" | "BigInt" | "Symbol" | "Array"
+                            "JSON" | "Reflect" | "BigInt" | "Symbol" | "Array" | "Number"
                         )
                         && outer_static_member
                             .map(|member| {
