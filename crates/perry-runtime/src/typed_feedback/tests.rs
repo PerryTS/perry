@@ -462,10 +462,10 @@ fn typed_feedback_non_bounded_array_set_guard_failure_uses_jsvalue_object_fallba
     // Models an array-typed compiled local slot that receives an object
     // from a dynamic boundary: the non-bounded set guard must fail before
     // codegen can read ArrayHeader fields or raw-store an element.
-    let guard = js_typed_feedback_plain_array_index_set_guard(24, obj_box, 0, 99.0, 0);
+    let guard = js_typed_feedback_plain_array_index_set_guard(24, obj_box, 0.0, 0, 99.0, 0);
     assert_eq!(guard, 0);
 
-    let returned = js_typed_feedback_array_index_set_fallback_boxed(24, obj_box, 0, 99.0);
+    let returned = js_typed_feedback_array_index_set_fallback_boxed(24, obj_box, 0.0, 99.0);
     assert_eq!(returned.to_bits(), obj_box.to_bits());
 
     let key = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
@@ -515,23 +515,77 @@ fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
     let arr_box = crate::value::js_nanbox_pointer(arr as i64);
 
-    let first = js_typed_feedback_numeric_array_index_set_guard(27, arr_box, 1, 3.0, 1);
+    let first = js_typed_feedback_numeric_array_index_set_guard(27, arr_box, 1.0, 1, 3.0, 1);
     assert_eq!(first, 1);
 
     let payload = crate::string::js_string_from_bytes(b"not-number".as_ptr(), 10);
     let payload_value = crate::value::js_nanbox_string(payload as i64);
     let nonnumeric =
-        js_typed_feedback_numeric_array_index_set_guard(27, arr_box, 1, payload_value, 1);
+        js_typed_feedback_numeric_array_index_set_guard(27, arr_box, 1.0, 1, payload_value, 1);
     assert_eq!(nonnumeric, 0);
 
     crate::array::js_array_set_f64(arr, 0, payload_value);
-    let downgraded = js_typed_feedback_numeric_array_index_set_guard(27, arr_box, 1, 4.0, 1);
+    let downgraded = js_typed_feedback_numeric_array_index_set_guard(27, arr_box, 1.0, 1, 4.0, 1);
     assert_eq!(downgraded, 0);
 
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);
     assert_eq!(site.guard_failures, 2);
     assert_eq!(site.fallback_calls, 0);
+}
+
+#[test]
+fn typed_feedback_array_set_guards_reject_noninteger_index_values() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(280, TypedFeedbackSiteKind::ArrayElement, "plain_arr[i]=");
+    register(281, TypedFeedbackSiteKind::ArrayElement, "numeric_arr[i]=");
+
+    let values = [1.0, 2.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert_eq!(
+        js_typed_feedback_plain_array_index_set_guard(280, arr_box, 1.5, 1, 3.0, 1),
+        0
+    );
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_set_guard(281, arr_box, 1.5, 1, 3.0, 1),
+        0
+    );
+
+    let snapshot = typed_feedback_snapshot();
+    assert_eq!(snapshot.sites[0].guard_passes, 0);
+    assert_eq!(snapshot.sites[0].guard_failures, 1);
+    assert_eq!(snapshot.sites[1].guard_passes, 0);
+    assert_eq!(snapshot.sites[1].guard_failures, 1);
+}
+
+#[test]
+fn typed_feedback_array_get_guards_reject_noninteger_index_values() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(282, TypedFeedbackSiteKind::ArrayElement, "plain_arr[i]");
+    register(283, TypedFeedbackSiteKind::ArrayElement, "numeric_arr[i]");
+
+    let values = [1.0, 2.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert_eq!(
+        js_typed_feedback_plain_array_index_get_guard(282, arr_box, 1.5, 1, 1),
+        0
+    );
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_get_guard(283, arr_box, 1.5, 1, 1),
+        0
+    );
+
+    let snapshot = typed_feedback_snapshot();
+    assert_eq!(snapshot.sites[0].guard_passes, 0);
+    assert_eq!(snapshot.sites[0].guard_failures, 1);
+    assert_eq!(snapshot.sites[1].guard_passes, 0);
+    assert_eq!(snapshot.sites[1].guard_failures, 1);
 }
 
 #[test]
@@ -1051,14 +1105,14 @@ fn typed_feedback_trace_json_includes_observed_kinds() {
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
     let arr_box = crate::value::js_nanbox_pointer(arr as i64);
     assert_eq!(
-        js_typed_feedback_numeric_array_index_set_guard(67, arr_box, 1, 3.0, 1),
+        js_typed_feedback_numeric_array_index_set_guard(67, arr_box, 1.0, 1, 3.0, 1),
         1
     );
 
     let payload = crate::string::js_string_from_bytes(b"not-number".as_ptr(), 10);
     let payload_value = crate::value::js_nanbox_string(payload as i64);
     assert_eq!(
-        js_typed_feedback_numeric_array_index_set_guard(67, arr_box, 1, payload_value, 1),
+        js_typed_feedback_numeric_array_index_set_guard(67, arr_box, 1.0, 1, payload_value, 1),
         0
     );
 

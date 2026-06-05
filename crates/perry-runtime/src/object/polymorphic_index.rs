@@ -190,10 +190,11 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
 
     if gc_type == crate::gc::GC_TYPE_ARRAY {
         if idx_i32 < 0 || idx != (idx_i32 as f64) {
-            let key = unsafe { property_key_string_ptr(idx) };
-            if !key.is_null() {
-                js_object_set_field_by_name(raw as *mut ObjectHeader, key, value);
-            }
+            crate::array::js_array_set_index_or_string(
+                raw as *mut crate::array::ArrayHeader,
+                idx,
+                value,
+            );
             return;
         }
         // Includes lazy/forwarded — js_array_set_f64_extend's clean_arr_ptr_mut

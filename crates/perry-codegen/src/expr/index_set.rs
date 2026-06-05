@@ -289,11 +289,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let val_double = lower_expr(ctx, value)?;
                         // Grab i32 slot name before mutably borrowing ctx for block().
                         let i32_slot_opt = ctx.i32_counter_slots.get(idx_id).cloned();
-                        let idx_i32 = if let Some(ref i32_slot) = i32_slot_opt {
-                            ctx.block().load(I32, i32_slot)
+                        let (idx_i32, idx_double) = if let Some(ref i32_slot) = i32_slot_opt {
+                            let idx_i32 = ctx.block().load(I32, i32_slot);
+                            let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+                            (idx_i32, idx_double)
                         } else {
                             let idx_double = lower_expr(ctx, index)?;
-                            ctx.block().fptosi(DOUBLE, &idx_double, I32)
+                            let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
+                            (idx_i32, idx_double)
                         };
                         if require_numeric_layout {
                             let feedback_site_id = emit_typed_feedback_register_site(
@@ -317,6 +320,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &[
                                         (I64, &feedback_site_id),
                                         (DOUBLE, &arr_box),
+                                        (DOUBLE, &idx_double),
                                         (I32, &idx_i32),
                                         (DOUBLE, &val_double),
                                         (I32, "1"),
@@ -334,7 +338,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &[
                                         (I64, &feedback_site_id),
                                         (DOUBLE, &arr_box),
-                                        (I32, &idx_i32),
+                                        (DOUBLE, &idx_double),
                                         (DOUBLE, &val_double),
                                     ],
                                 );
@@ -482,9 +486,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // receiver is a local that's actually in ctx.locals
                 // (stack slot). Module-level arrays accessed from inside
                 // a function are in ctx.module_globals instead — for
-                // those we use js_array_set_f64_extend (the realloc-
-                // capable variant) and write the new pointer back to
-                // the global slot. Issue #221: the previous code
+                // those we use the raw-key array set helper and write
+                // the new pointer back to the global slot. Issue #221:
+                // the previous code
                 // funneled module globals through js_array_set_f64
                 // which returns silently when `index >= length` — so
                 // every `arr[i] = v` against a `const A: T[] = []`
@@ -508,14 +512,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
                         let new_handle = blk.call(
                             I64,
-                            "js_typed_feedback_array_set_f64_extend",
+                            "js_typed_feedback_array_set_index_or_string",
                             &[
                                 (I64, &feedback_site_id),
                                 (I64, &arr_handle),
-                                (I32, &idx_i32),
+                                (DOUBLE, &idx_double),
                                 (DOUBLE, &val_double),
                             ],
                         );
@@ -538,23 +541,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // captured array (common pattern: closure body
                         // does `arr[++i] = X` to populate from outer
                         // scope), this dropped every write. Switch to
-                        // `js_array_set_f64_extend` — the forwarding-
-                        // pointer mechanism (issue #233) handles realloc
-                        // visibility for the caller, so we don't need a
-                        // writeback target here. Discard the returned
-                        // pointer; downstream reads via clean_arr_ptr
-                        // follow the forwarding chain to the new head.
+                        // the raw-key array set helper. Its canonical
+                        // integer path still extends storage, and the
+                        // forwarding-pointer mechanism (issue #233) handles
+                        // realloc visibility for the caller, so we don't
+                        // need a writeback target here. Discard the returned
+                        // pointer; downstream reads via clean_arr_ptr follow
+                        // the forwarding chain to the new head.
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
                         blk.call(
                             I64,
-                            "js_typed_feedback_array_set_f64_extend",
+                            "js_typed_feedback_array_set_index_or_string",
                             &[
                                 (I64, &feedback_site_id),
                                 (I64, &arr_handle),
-                                (I32, &idx_i32),
+                                (DOUBLE, &idx_double),
                                 (DOUBLE, &val_double),
                             ],
                         );
@@ -568,12 +571,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let blk = ctx.block();
                     let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                     let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                    // Issue #637 followup / hono r2: use the extend variant
-                    // so `arr[i] = X` for i >= length grows the array per
-                    // JS spec, instead of silently no-op'ing (which the
-                    // non-extend `js_array_set_f64` did via `if index >=
-                    // length { return; }`). The hono Trie's
+                    // Issue #637 followup / hono r2: use the raw-key helper
+                    // so canonical integer keys extend the array per JS spec
+                    // and non-integer keys stay ordinary properties, instead
+                    // of silently no-op'ing (which the non-extend
+                    // `js_array_set_f64` did via `if index >= length {
+                    // return; }`). The hono Trie's
                     // `indexReplacementMap[++captureIndex] = N` pattern
                     // (sparse-extend from a closure capturing the array)
                     // was the load-bearing site — pre-fix the array stayed
@@ -582,11 +585,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // zero times and `handlerMap` ended up empty.
                     blk.call(
                         I64,
-                        "js_typed_feedback_array_set_f64_extend",
+                        "js_typed_feedback_array_set_index_or_string",
                         &[
                             (I64, &feedback_site_id),
                             (I64, &arr_handle),
-                            (I32, &idx_i32),
+                            (DOUBLE, &idx_double),
                             (DOUBLE, &val_double),
                         ],
                     );

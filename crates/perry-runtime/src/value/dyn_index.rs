@@ -153,13 +153,21 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         // `undefined`. The narrow gate (GC_TYPE_ARRAY) keeps object
         // numeric-key fast path unchanged.
         if obj_type == crate::gc::GC_TYPE_ARRAY {
-            if idx_i32 < 0 {
-                return f64::from_bits(TAG_UNDEFINED);
-            }
             let arr = raw_ptr as *const crate::array::ArrayHeader;
-            let length = unsafe { (*arr).length };
-            if (idx_i32 as u32) >= length {
-                return f64::from_bits(TAG_UNDEFINED);
+            if index.is_finite() && idx_i32 >= 0 && index == idx_i32 as f64 {
+                let length = unsafe { (*arr).length };
+                if (idx_i32 as u32) >= length {
+                    return f64::from_bits(TAG_UNDEFINED);
+                }
+            } else {
+                let key = crate::value::js_jsvalue_to_string(index);
+                if key.is_null() {
+                    return f64::from_bits(TAG_UNDEFINED);
+                }
+                return crate::object::js_object_get_field_by_name_f64(
+                    raw_ptr as *const crate::object::ObjectHeader,
+                    key,
+                );
             }
         }
         if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {

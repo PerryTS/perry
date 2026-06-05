@@ -1168,7 +1168,9 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
-    let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
+    let index_valid =
+        is_plain_number_bits(index_value.to_bits()) && index_value == index as f64 && index >= 0;
+    let observed_index = if index_valid { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
@@ -1180,8 +1182,7 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
         aux,
         value_tag: element_kind,
     };
-    let contract_valid = is_plain_number_bits(index_value.to_bits())
-        && index >= 0
+    let contract_valid = index_valid
         && plain_array_index_guard(
             raw_addr as *const ArrayHeader,
             index as u32,
@@ -1209,7 +1210,9 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
-    let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
+    let index_valid =
+        is_plain_number_bits(index_value.to_bits()) && index_value == index as f64 && index >= 0;
+    let observed_index = if index_valid { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
@@ -1221,8 +1224,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
         aux,
         value_tag: element_kind,
     };
-    let contract_valid = is_plain_number_bits(index_value.to_bits())
-        && index >= 0
+    let contract_valid = index_valid
         && numeric_array_index_guard(
             raw_addr as *const ArrayHeader,
             index as u32,
@@ -1279,10 +1281,15 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
-                if !index.is_finite() || index < 0.0 {
-                    f64::from_bits(TAG_UNDEFINED)
-                } else {
+                let int_index = index as i32;
+                if index.is_finite() && index >= 0.0 && index == int_index as f64 {
                     crate::array::js_array_get_f64(raw_addr as *const ArrayHeader, index as u32)
+                } else {
+                    let key_ptr = index_value_to_property_key(index);
+                    crate::object::js_object_get_field_by_name_f64(
+                        raw_addr as *const ObjectHeader,
+                        key_ptr,
+                    )
                 }
             }
             crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
@@ -1389,12 +1396,15 @@ pub extern "C" fn js_typed_feedback_array_set_f64_extend(
 pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
     site_id: u64,
     receiver: f64,
+    index_value: f64,
     index: i32,
     value: f64,
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
-    let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
+    let index_valid =
+        is_plain_number_bits(index_value.to_bits()) && index_value == index as f64 && index >= 0;
+    let observed_index = if index_valid { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
@@ -1406,7 +1416,7 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
         aux,
         value_tag: stable_value_kind(value.to_bits()),
     };
-    let contract_valid = index >= 0
+    let contract_valid = index_valid
         && plain_array_index_guard(
             raw_addr as *const ArrayHeader,
             index as u32,
@@ -1429,12 +1439,15 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
 pub extern "C" fn js_typed_feedback_numeric_array_index_set_guard(
     site_id: u64,
     receiver: f64,
+    index_value: f64,
     index: i32,
     value: f64,
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
-    let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
+    let index_valid =
+        is_plain_number_bits(index_value.to_bits()) && index_value == index as f64 && index >= 0;
+    let observed_index = if index_valid { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
@@ -1446,7 +1459,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_set_guard(
         aux,
         value_tag: stable_value_kind(value.to_bits()),
     };
-    let contract_valid = index >= 0
+    let contract_valid = index_valid
         && is_numeric_value_bits(value.to_bits())
         && numeric_array_index_guard(
             raw_addr as *const ArrayHeader,
@@ -1507,7 +1520,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
 pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
     site_id: u64,
     receiver: f64,
-    index: i32,
+    index: f64,
     value: f64,
 ) -> f64 {
     record_fallback_call(site_id);
@@ -1517,15 +1530,10 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         return receiver;
     }
 
-    let index_value = index as f64;
     if crate::buffer::is_registered_buffer(raw_addr)
         || crate::typedarray::lookup_typed_array_kind(raw_addr).is_some()
     {
-        crate::array::js_array_set_index_or_string(
-            raw_addr as *mut ArrayHeader,
-            index_value,
-            value,
-        );
+        crate::array::js_array_set_index_or_string(raw_addr as *mut ArrayHeader, index, value);
         return receiver;
     }
 
@@ -1540,14 +1548,13 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 let new_arr = crate::array::js_array_set_index_or_string(
                     raw_addr as *mut ArrayHeader,
-                    index_value,
+                    index,
                     value,
                 );
                 crate::value::js_nanbox_pointer(new_arr as i64)
             }
             crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
-                let key = index.to_string();
-                let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+                let key_ptr = index_value_to_property_key(index);
                 crate::object::js_object_set_field_by_name(
                     raw_addr as *mut ObjectHeader,
                     key_ptr,
@@ -1589,7 +1596,7 @@ pub extern "C" fn js_typed_feedback_array_set_index_or_string(
     idx: f64,
     value: f64,
 ) -> *mut ArrayHeader {
-    let index = if idx.is_finite() && idx >= 0.0 && idx <= u32::MAX as f64 {
+    let index = if idx.is_finite() && idx.trunc() == idx && idx >= 0.0 && idx <= u32::MAX as f64 {
         idx as u32
     } else {
         u32::MAX
@@ -1611,7 +1618,7 @@ pub extern "C" fn js_typed_feedback_object_set_index_polymorphic(
     idx: f64,
     value: f64,
 ) {
-    let index = if idx.is_finite() && idx >= 0.0 && idx <= u32::MAX as f64 {
+    let index = if idx.is_finite() && idx.trunc() == idx && idx >= 0.0 && idx <= u32::MAX as f64 {
         idx as u32
     } else {
         u32::MAX

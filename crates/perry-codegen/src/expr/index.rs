@@ -114,6 +114,8 @@ pub(crate) fn lower_index_set_fast(
     // semantics and writes the returned receiver back to the local slot.
     let guard_ok = {
         let blk = ctx.block();
+        let idx_roundtrip = blk.sitofp(I32, &idx_i32, DOUBLE);
+        let idx_is_integer = blk.fcmp("oeq", idx_double, &idx_roundtrip);
         let guard_fn = if require_numeric_layout {
             "js_typed_feedback_numeric_array_index_set_guard"
         } else {
@@ -125,12 +127,14 @@ pub(crate) fn lower_index_set_fast(
             &[
                 (I64, feedback_site_id),
                 (DOUBLE, arr_box),
+                (DOUBLE, idx_double),
                 (I32, &idx_i32),
                 (DOUBLE, val_double),
                 (I32, "0"),
             ],
         );
-        blk.icmp_ne(I32, &guard_i32, "0")
+        let guard_passed = blk.icmp_ne(I32, &guard_i32, "0");
+        blk.and(I1, &guard_passed, &idx_is_integer)
     };
     ctx.block()
         .cond_br(&guard_ok, &guarded_label, &guard_fallback_label);
@@ -143,7 +147,7 @@ pub(crate) fn lower_index_set_fast(
             &[
                 (I64, feedback_site_id),
                 (DOUBLE, arr_box),
-                (I32, &idx_i32),
+                (DOUBLE, idx_double),
                 (DOUBLE, val_double),
             ],
         );

@@ -660,6 +660,50 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
                     ));
                 }
+                if let Expr::String(literal) = index.as_ref() {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let key_idx = ctx.strings.intern(literal);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::PropertyGet,
+                        "array[string_index]",
+                        TypedFeedbackContract::object_get_by_name(),
+                    );
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_typed_feedback_object_get_field_by_name_f64",
+                        &[(I64, &site_id), (I64, &arr_handle), (I64, &key_raw)],
+                    ));
+                }
+                if is_string_expr(ctx, index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    let (arr_handle, key_handle) = {
+                        let blk = ctx.block();
+                        let arr_handle = unbox_to_i64(blk, &arr_box);
+                        let key_handle = unbox_str_handle(blk, &key_box);
+                        (arr_handle, key_handle)
+                    };
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::PropertyGet,
+                        "array[string_index]",
+                        TypedFeedbackContract::object_get_by_name(),
+                    );
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_typed_feedback_object_get_field_by_name_f64",
+                        &[(I64, &site_id), (I64, &arr_handle), (I64, &key_handle)],
+                    ));
+                }
                 let require_numeric_layout =
                     expr_has_numeric_pointer_free_array_layout(ctx, object);
                 // Bounded-index fast path (mirrors the IndexSet
