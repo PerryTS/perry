@@ -285,10 +285,14 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // not stale data. The capacity stays unchanged — JS doesn't
             // require Perry to release the underlying buffer here, and growing
             // back via `push` would just re-overwrite these slots anyway.
-            for i in n..cur {
+            let dense_end = cur.min((*arr).capacity);
+            for i in n..dense_end {
                 note_array_slot(arr, i as usize, crate::value::TAG_HOLE);
             }
             (*arr).length = n;
+            if n <= (*arr).capacity {
+                array_clear_sparse_length(arr);
+            }
             refresh_array_numeric_layout(arr);
         } else if n > cur {
             // Extend: pad with TAG_HOLE. Past-capacity extensions go
@@ -296,6 +300,12 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // the OLD location (issue #233 mechanism), so the caller's stale
             // pointer transparently follows the chain to the resized buffer
             // on the next access — no callsite-side writeback needed.
+            if n > 100_000_000 {
+                array_mark_sparse_length(arr);
+                (*arr).length = n;
+                refresh_array_numeric_layout(arr);
+                return;
+            }
             let target = if n > (*arr).capacity {
                 js_array_grow(arr, n)
             } else {

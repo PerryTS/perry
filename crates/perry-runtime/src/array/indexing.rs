@@ -2,6 +2,8 @@
 use super::*;
 use std::ptr;
 
+const MAX_DENSE_ARRAY_WRITE_LENGTH: u32 = 100_000_000;
+
 #[no_mangle]
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     let arr = {
@@ -95,10 +97,17 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     unsafe {
         let length = (*arr).length;
+        let capacity = (*arr).capacity;
+        if index == u32::MAX || index >= capacity {
+            let name = index.to_string();
+            if let Some(value) = array_named_property_get_by_name(arr, &name) {
+                return value;
+            }
+        }
         if index >= length {
             return TAG_UNDEFINED_F64;
         }
-        if length > 100_000_000 {
+        if index >= capacity || capacity > MAX_DENSE_ARRAY_WRITE_LENGTH {
             return TAG_UNDEFINED_F64;
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -210,11 +219,18 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     unsafe {
         let length = (*arr).length;
+        let capacity = (*arr).capacity;
+        if index == u32::MAX || index >= capacity {
+            let name = index.to_string();
+            if let Some(value) = array_named_property_get_by_name(arr, &name) {
+                return value;
+            }
+        }
         if index >= length {
             return TAG_UNDEFINED_F64;
         }
-        // Guard: corrupted arrays with unreasonably large length
-        if length > 100_000_000 {
+        // Guard: dense storage is only safe up to the actual inline capacity.
+        if index >= capacity || capacity > MAX_DENSE_ARRAY_WRITE_LENGTH {
             return TAG_UNDEFINED_F64;
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -243,6 +259,9 @@ pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, 
     unsafe {
         let length = (*arr).length;
         if index >= length {
+            return;
+        }
+        if index >= (*arr).capacity {
             return;
         }
         let value = canonicalize_array_numeric_store_value(arr, value);
@@ -305,6 +324,9 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
         if index >= length {
             return;
         }
+        if index >= (*arr).capacity {
+            return;
+        }
         let value = canonicalize_array_numeric_store_value(arr, value);
         let value_bits = value.to_bits();
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
@@ -312,6 +334,47 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
         ptr::write(elements_ptr.add(index as usize), value);
         note_array_slot(arr, index as usize, value_bits);
     }
+}
+
+unsafe fn js_array_set_sparse_index_property(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> *mut ArrayHeader {
+    if arr.is_null() || index == u32::MAX {
+        return arr;
+    }
+    if array_is_frozen(arr) {
+        return arr;
+    }
+
+    let name = index.to_string();
+    let existing = array_named_property_get_by_name(arr, &name).is_some();
+    if !existing && array_is_sealed_or_no_extend(arr) {
+        return arr;
+    }
+    if let Some(attrs) = crate::object::get_property_attrs(arr as usize, &name) {
+        if !attrs.writable() {
+            return arr;
+        }
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+    if arr.is_null() {
+        return arr;
+    }
+
+    array_mark_sparse_length(arr);
+    array_named_property_set(arr, key, value_handle.get_nanbox_f64());
+    let new_length = index + 1;
+    if new_length > (*arr).length {
+        (*arr).length = new_length;
+    }
+    arr
 }
 
 /// Set an element in an array by index, extending the array if needed
@@ -364,6 +427,13 @@ pub extern "C" fn js_array_set_f64_extend(
             if is_frozen {
                 return arr;
             }
+            if index >= (*arr).capacity {
+                return js_array_set_sparse_index_property(
+                    arr,
+                    index,
+                    value_handle.get_nanbox_f64(),
+                );
+            }
             let value = canonicalize_array_numeric_store_value(arr, value);
             let value_bits = value.to_bits();
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
@@ -379,6 +449,9 @@ pub extern "C" fn js_array_set_f64_extend(
 
         // Need to extend the array
         let new_length = index + 1;
+        if new_length > MAX_DENSE_ARRAY_WRITE_LENGTH {
+            return js_array_set_sparse_index_property(arr, index, value_handle.get_nanbox_f64());
+        }
         let arr = if new_length > (*arr).capacity {
             js_array_grow(arr, new_length)
         } else {

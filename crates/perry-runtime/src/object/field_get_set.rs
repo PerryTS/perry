@@ -1361,14 +1361,16 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 let arr = stripped as *const crate::array::ArrayHeader;
                 let length = (*arr).length;
-                if length > 100_000 {
+                let named = crate::array::array_named_property_names(arr, true);
+                if length > 100_000 && named.is_empty() {
                     return crate::array::js_array_alloc(0);
                 }
                 let elements = (arr as *const u8)
                     .add(std::mem::size_of::<crate::array::ArrayHeader>())
                     as *const u64;
-                let result = crate::array::js_array_alloc(length);
-                for i in 0..length {
+                let dense_len = length.min((*arr).capacity).min(100_000);
+                let result = crate::array::js_array_alloc(dense_len + named.len() as u32);
+                for i in 0..dense_len {
                     if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
                         continue;
                     }
@@ -1379,7 +1381,7 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                     let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
                     crate::array::js_array_push_f64(result, key_box);
                 }
-                for name in crate::array::array_named_property_names(arr, true) {
+                for name in named {
                     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                     crate::array::js_array_push(result, JSValue::string_ptr(key));
                 }
@@ -1834,12 +1836,10 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 let arr = obj_ptr as *const crate::array::ArrayHeader;
                 let length = (*arr).length;
-                if length > 100_000 {
-                    return nanbox_false;
-                }
                 // Numeric key: extract the index. Accept both NaN-boxed i32
                 // and plain f64 (e.g. literal `1`) provided it's a
                 // non-negative integer in range.
+                let mut numeric_property_name: Option<String> = None;
                 let idx: Option<u32> = if key_val.is_int32() {
                     let i = key_val.as_int32();
                     if i >= 0 {
@@ -1852,6 +1852,9 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     if f >= 0.0 && f.fract() == 0.0 && f < u32::MAX as f64 {
                         Some(f as u32)
                     } else {
+                        if f.is_finite() && f.fract() == 0.0 {
+                            numeric_property_name = Some(format!("{}", f));
+                        }
                         None
                     }
                 } else {
@@ -1861,6 +1864,16 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     if idx >= length {
                         return nanbox_false;
                     }
+                    if idx >= (*arr).capacity {
+                        let name = idx.to_string();
+                        return if crate::array::array_named_property_get_by_name(arr, &name)
+                            .is_some()
+                        {
+                            nanbox_true
+                        } else {
+                            nanbox_false
+                        };
+                    }
                     let elements = (arr as *const u8)
                         .add(std::mem::size_of::<crate::array::ArrayHeader>())
                         as *const u64;
@@ -1868,6 +1881,11 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                         return nanbox_false;
                     }
                     return nanbox_true;
+                }
+                if let Some(name) = numeric_property_name {
+                    if crate::array::array_named_property_get_by_name(arr, &name).is_some() {
+                        return nanbox_true;
+                    }
                 }
                 if key_val.is_any_string() {
                     let key_str = crate::value::js_get_string_pointer_unified(key)
@@ -1881,6 +1899,17 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                             }
                             if let Some(index) = super::canonical_array_index(key_name) {
                                 if index < length {
+                                    if index >= (*arr).capacity {
+                                        return if crate::array::array_named_property_get_by_name(
+                                            arr, key_name,
+                                        )
+                                        .is_some()
+                                        {
+                                            nanbox_true
+                                        } else {
+                                            nanbox_false
+                                        };
+                                    }
                                     let elements = (arr as *const u8)
                                         .add(std::mem::size_of::<crate::array::ArrayHeader>())
                                         as *const u64;

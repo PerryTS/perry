@@ -125,6 +125,7 @@ pub(crate) fn lower_index_set_fast(
             &[
                 (I64, feedback_site_id),
                 (DOUBLE, arr_box),
+                (DOUBLE, idx_double),
                 (I32, &idx_i32),
                 (DOUBLE, val_double),
                 (I32, "0"),
@@ -143,7 +144,7 @@ pub(crate) fn lower_index_set_fast(
             &[
                 (I64, feedback_site_id),
                 (DOUBLE, arr_box),
-                (I32, &idx_i32),
+                (DOUBLE, idx_double),
                 (DOUBLE, val_double),
             ],
         );
@@ -326,8 +327,12 @@ pub(crate) fn lower_index_set_fast(
         );
         let new_handle = blk.call(
             I64,
-            "js_array_set_f64_extend",
-            &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, val_double)],
+            "js_array_set_index_or_string",
+            &[
+                (I64, &arr_handle),
+                (DOUBLE, idx_double),
+                (DOUBLE, val_double),
+            ],
         );
         let new_box = nanbox_pointer_inline(blk, &new_handle);
         blk.store(DOUBLE, &new_box, &slot);

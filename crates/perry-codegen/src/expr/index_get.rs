@@ -87,6 +87,20 @@ fn is_async_dispose_symbol_index(index: &Expr) -> bool {
     }
 }
 
+fn static_numeric_index_value(index: &Expr) -> Option<f64> {
+    match index {
+        Expr::Integer(value) => Some(*value as f64),
+        Expr::Number(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn static_numeric_index_needs_raw_key(index: &Expr) -> bool {
+    static_numeric_index_value(index).is_some_and(|value| {
+        value.is_finite() && value.trunc() == value && (value < 0.0 || value > i32::MAX as f64)
+    })
+}
+
 fn lower_class_method_bind(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -660,6 +674,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
                     ));
                 }
+                if matches!(index.as_ref(), Expr::String(_)) || is_string_expr(ctx, index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    let (arr_handle, key_handle) = {
+                        let blk = ctx.block();
+                        (unbox_to_i64(blk, &arr_box), unbox_str_handle(blk, &key_box))
+                    };
+                    let site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::PropertyGet,
+                        "array[string_index]",
+                        TypedFeedbackContract::object_get_by_name(),
+                    );
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_typed_feedback_object_get_field_by_name_f64",
+                        &[(I64, &site_id), (I64, &arr_handle), (I64, &key_handle)],
+                    ));
+                }
                 let require_numeric_layout =
                     expr_has_numeric_pointer_free_array_layout(ctx, object);
                 // Bounded-index fast path (mirrors the IndexSet
@@ -701,6 +734,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_double = lower_expr(ctx, index)?;
+                if static_numeric_index_needs_raw_key(index) {
+                    let feedback_site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::ArrayElement,
+                        "array[index]",
+                        TypedFeedbackContract::array_get_index(),
+                    );
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_typed_feedback_array_index_get_fallback_boxed",
+                        &[
+                            (I64, &feedback_site_id),
+                            (DOUBLE, &arr_box),
+                            (DOUBLE, &idx_double),
+                        ],
+                    ));
+                }
                 let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
                 if !require_numeric_layout
                     && !matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_))

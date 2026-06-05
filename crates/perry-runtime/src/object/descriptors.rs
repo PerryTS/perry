@@ -801,10 +801,12 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 None
             };
             if let Some(n) = n {
-                let result = crate::array::js_array_alloc(n + 1);
                 if crate::array::js_array_is_array(obj_value).to_bits() == TAG_TRUE_BITS {
                     let ap = extract_obj_ptr(obj_value) as *const crate::array::ArrayHeader;
-                    for i in 0..n {
+                    let named = crate::array::array_named_property_names(ap, false);
+                    let dense_len = n.min((*ap).capacity).min(100_000);
+                    let result = crate::array::js_array_alloc(dense_len + 1 + named.len() as u32);
+                    for i in 0..dense_len {
                         if super::has_own_helpers::array_own_key_present(ap, {
                             let s = i.to_string();
                             crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
@@ -816,12 +818,14 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                     }
                     let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                     crate::array::js_array_push(result, JSValue::string_ptr(lk));
-                    for name in crate::array::array_named_property_names(ap, false) {
+                    for name in named {
                         let k =
                             crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                         crate::array::js_array_push(result, JSValue::string_ptr(k));
                     }
+                    return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
                 } else {
+                    let result = crate::array::js_array_alloc(n + 1);
                     for i in 0..n {
                         let s = i.to_string();
                         let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -829,8 +833,8 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                     }
                     let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                     crate::array::js_array_push(result, JSValue::string_ptr(lk));
+                    return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
                 }
-                return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
             }
         }
 

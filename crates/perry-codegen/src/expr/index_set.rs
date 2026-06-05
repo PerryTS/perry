@@ -78,6 +78,20 @@ fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     )
 }
 
+fn static_numeric_index_value(index: &Expr) -> Option<f64> {
+    match index {
+        Expr::Integer(value) => Some(*value as f64),
+        Expr::Number(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn static_numeric_index_needs_raw_key(index: &Expr) -> bool {
+    static_numeric_index_value(index).is_some_and(|value| {
+        value.is_finite() && value.trunc() == value && (value < 0.0 || value > i32::MAX as f64)
+    })
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::IndexSet {
@@ -265,6 +279,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // string key on dynamic receiver → object field set, otherwise
             // bail with a clear error.
             if is_array_expr(ctx, object) {
+                if static_numeric_index_needs_raw_key(index) {
+                    let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
+                    let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_double = lower_expr(ctx, index)?;
+                    let val_double = lower_expr(ctx, value)?;
+                    let feedback_site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::ArrayElement,
+                        "array[index]=",
+                        TypedFeedbackContract::array_set_index(),
+                    );
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    let new_handle = blk.call(
+                        I64,
+                        "js_typed_feedback_array_set_index_or_string",
+                        &[
+                            (I64, &feedback_site_id),
+                            (I64, &arr_handle),
+                            (DOUBLE, &idx_double),
+                            (DOUBLE, &val_double),
+                        ],
+                    );
+                    let new_box = nanbox_pointer_inline(blk, &new_handle);
+                    if let Expr::LocalGet(id) = object.as_ref() {
+                        if let Some(slot) = ctx.locals.get(id).cloned() {
+                            ctx.block().store(DOUBLE, &new_box, &slot);
+                        } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
+                            let g_ref = format!("@{}", global_name);
+                            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+                        }
+                    }
+                    if write_barrier_needed {
+                        let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                        let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
+                        emit_write_barrier(ctx, &arr_bits, &val_bits);
+                    }
+                    if layout_note_needed {
+                        let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                        emit_array_numeric_write_note_on_block(ctx.block(), &arr_handle, &val_bits);
+                    }
+                    return Ok(val_double);
+                }
                 // Bounded-index fast-fast path: when the surrounding
                 // for-loop has registered `(counter_id, arr_id)` as a
                 // bounded pair (via `lower_for`'s
@@ -289,12 +348,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let val_double = lower_expr(ctx, value)?;
                         // Grab i32 slot name before mutably borrowing ctx for block().
                         let i32_slot_opt = ctx.i32_counter_slots.get(idx_id).cloned();
-                        let idx_i32 = if let Some(ref i32_slot) = i32_slot_opt {
-                            ctx.block().load(I32, i32_slot)
-                        } else {
-                            let idx_double = lower_expr(ctx, index)?;
-                            ctx.block().fptosi(DOUBLE, &idx_double, I32)
-                        };
+                        let (idx_i32, idx_double_for_runtime) =
+                            if let Some(ref i32_slot) = i32_slot_opt {
+                                let idx_i32 = ctx.block().load(I32, i32_slot);
+                                let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+                                (idx_i32, idx_double)
+                            } else {
+                                let idx_double = lower_expr(ctx, index)?;
+                                let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
+                                (idx_i32, idx_double)
+                            };
                         if require_numeric_layout {
                             let feedback_site_id = emit_typed_feedback_register_site(
                                 ctx,
@@ -317,6 +380,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &[
                                         (I64, &feedback_site_id),
                                         (DOUBLE, &arr_box),
+                                        (DOUBLE, &idx_double_for_runtime),
                                         (I32, &idx_i32),
                                         (DOUBLE, &val_double),
                                         (I32, "1"),
@@ -334,7 +398,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &[
                                         (I64, &feedback_site_id),
                                         (DOUBLE, &arr_box),
-                                        (I32, &idx_i32),
+                                        (DOUBLE, &idx_double_for_runtime),
                                         (DOUBLE, &val_double),
                                     ],
                                 );
@@ -508,14 +572,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
                         let new_handle = blk.call(
                             I64,
-                            "js_typed_feedback_array_set_f64_extend",
+                            "js_typed_feedback_array_set_index_or_string",
                             &[
                                 (I64, &feedback_site_id),
                                 (I64, &arr_handle),
-                                (I32, &idx_i32),
+                                (DOUBLE, &idx_double),
                                 (DOUBLE, &val_double),
                             ],
                         );
@@ -547,14 +610,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let blk = ctx.block();
                         let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                        let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
                         blk.call(
                             I64,
-                            "js_typed_feedback_array_set_f64_extend",
+                            "js_typed_feedback_array_set_index_or_string",
                             &[
                                 (I64, &feedback_site_id),
                                 (I64, &arr_handle),
-                                (I32, &idx_i32),
+                                (DOUBLE, &idx_double),
                                 (DOUBLE, &val_double),
                             ],
                         );
@@ -568,12 +630,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let blk = ctx.block();
                     let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                     let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                    // Issue #637 followup / hono r2: use the extend variant
+                    // Issue #637 followup / hono r2: use the raw-key helper
                     // so `arr[i] = X` for i >= length grows the array per
                     // JS spec, instead of silently no-op'ing (which the
                     // non-extend `js_array_set_f64` did via `if index >=
-                    // length { return; }`). The hono Trie's
+                    // length { return; }`) and so large numeric literals do
+                    // not truncate through i32. The hono Trie's
                     // `indexReplacementMap[++captureIndex] = N` pattern
                     // (sparse-extend from a closure capturing the array)
                     // was the load-bearing site — pre-fix the array stayed
@@ -582,11 +644,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // zero times and `handlerMap` ended up empty.
                     blk.call(
                         I64,
-                        "js_typed_feedback_array_set_f64_extend",
+                        "js_typed_feedback_array_set_index_or_string",
                         &[
                             (I64, &feedback_site_id),
                             (I64, &arr_handle),
-                            (I32, &idx_i32),
+                            (DOUBLE, &idx_double),
                             (DOUBLE, &val_double),
                         ],
                     );

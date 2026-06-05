@@ -3,7 +3,7 @@
 //! pulls these basics in via `use super::*;`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 thread_local! {
     /// Tagged-template `.raw` side-table — maps a cooked-strings array
@@ -31,6 +31,13 @@ thread_local! {
     /// `"4294967295"` are stored here per ECMA-262.
     static ARRAY_NAMED_PROPS: RefCell<HashMap<usize, Vec<ArrayNamedProperty>>> =
         RefCell::new(HashMap::new());
+
+    /// Arrays whose logical length is intentionally larger than their dense
+    /// inline capacity because a very high index is stored in the named-property
+    /// side table. This preserves the ArrayHeader corruption guard for ordinary
+    /// arrays while allowing `a[4294967294] = v` to set `length` to 2^32-1
+    /// without allocating a dense 4B-slot buffer.
+    static ARRAY_SPARSE_LENGTHS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 }
 
 #[derive(Clone)]
@@ -269,6 +276,21 @@ pub(crate) fn scan_array_named_property_roots_mut(visitor: &mut crate::gc::Runti
             }
         }
     });
+    ARRAY_SPARSE_LENGTHS.with(|m| {
+        let mut sparse = m.borrow_mut();
+        let owners: Vec<usize> = sparse.iter().copied().collect();
+        let mut moved = Vec::new();
+        for owner in owners {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved.push((owner, new_owner));
+            }
+        }
+        for (old_owner, new_owner) in moved {
+            sparse.remove(&old_owner);
+            sparse.insert(new_owner);
+        }
+    });
 }
 
 unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
@@ -404,6 +426,29 @@ pub(crate) unsafe fn array_named_property_delete(
         props.remove(index);
         true
     })
+}
+
+pub(crate) unsafe fn array_mark_sparse_length(arr: *mut ArrayHeader) {
+    if arr.is_null() {
+        return;
+    }
+    ARRAY_SPARSE_LENGTHS.with(|m| {
+        m.borrow_mut().insert(arr as usize);
+    });
+}
+
+pub(crate) unsafe fn array_clear_sparse_length(arr: *mut ArrayHeader) {
+    if arr.is_null() {
+        return;
+    }
+    ARRAY_SPARSE_LENGTHS.with(|m| {
+        m.borrow_mut().remove(&(arr as usize));
+    });
+}
+
+#[inline]
+pub(crate) fn array_has_sparse_length_owner(owner: usize) -> bool {
+    ARRAY_SPARSE_LENGTHS.with(|m| m.borrow().contains(&owner))
 }
 
 #[cfg(test)]
@@ -575,6 +620,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             let addr = cleaned as usize;
             if !crate::buffer::is_registered_buffer(addr)
                 && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+                && !array_has_sparse_length_owner(addr)
             {
                 return std::ptr::null();
             }

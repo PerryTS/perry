@@ -146,6 +146,50 @@ fn test_array_exotic_named_indices_and_boundary_props() {
         crate::object::js_object_get_field_by_name(arr_obj, max_key).bits(),
         99.0f64.to_bits()
     );
+    assert_eq!(js_array_get_f64(arr, u32::MAX), 99.0);
+    assert_eq!(
+        crate::object::js_object_has_property(boxed_pointer(arr as *mut u8), string_value(max_key))
+            .to_bits(),
+        crate::value::TAG_TRUE
+    );
+    assert_eq!(
+        crate::object::js_object_has_property(boxed_pointer(arr as *mut u8), u32::MAX as f64)
+            .to_bits(),
+        crate::value::TAG_TRUE
+    );
+
+    arr = js_array_set_f64_extend(arr, u32::MAX - 1, 123.0);
+    assert_eq!(
+        js_array_length(arr),
+        u32::MAX,
+        "2^32-2 is the maximum array index"
+    );
+    assert_eq!(js_array_get_f64(arr, u32::MAX - 1), 123.0);
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(arr_obj, string_key(b"4294967294")).bits(),
+        123.0f64.to_bits()
+    );
+    assert_eq!(
+        crate::object::js_object_has_own(
+            boxed_pointer(arr as *mut u8),
+            string_value(string_key(b"4294967294"))
+        )
+        .to_bits(),
+        crate::value::TAG_TRUE
+    );
+    assert_eq!(
+        crate::object::js_object_has_property(
+            boxed_pointer(arr as *mut u8),
+            string_value(string_key(b"4294967294"))
+        )
+        .to_bits(),
+        crate::value::TAG_TRUE
+    );
+    assert_eq!(
+        crate::object::js_object_has_property(boxed_pointer(arr as *mut u8), (u32::MAX - 1) as f64)
+            .to_bits(),
+        crate::value::TAG_TRUE
+    );
 
     let foo = string_key(b"foo");
     crate::object::js_object_set_field_by_name(arr_obj, foo, 7.0);
@@ -157,6 +201,7 @@ fn test_array_exotic_named_indices_and_boundary_props() {
     let keys = crate::object::js_object_keys(arr_obj);
     assert!(array_keys_contain(keys, b"2"));
     assert!(array_keys_contain(keys, b"foo"));
+    assert!(array_keys_contain(keys, b"4294967294"));
     assert!(array_keys_contain(keys, b"4294967295"));
     assert!(!array_keys_contain(keys, b"0"));
 }

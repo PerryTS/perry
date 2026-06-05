@@ -83,7 +83,10 @@ impl TypedFeedbackContract {
     }
 
     pub(crate) const fn array_set_index() -> Self {
-        Self::new("plain_array_index_set_guard", "js_array_set_f64_extend")
+        Self::new(
+            "plain_array_index_set_guard",
+            "js_array_set_index_or_string",
+        )
     }
 
     // #854: near-future typed-feedback contract seam, not yet emitted.
@@ -96,7 +99,10 @@ impl TypedFeedbackContract {
     }
 
     pub(crate) const fn numeric_array_set_index() -> Self {
-        Self::new("numeric_array_index_set_guard", "js_array_set_f64_extend")
+        Self::new(
+            "numeric_array_index_set_guard",
+            "js_array_set_index_or_string",
+        )
     }
 
     // #854: near-future typed-feedback contract seam, not yet emitted.
