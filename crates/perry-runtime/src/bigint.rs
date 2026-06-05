@@ -267,6 +267,42 @@ pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
         throw_bigint_type_error("Cannot convert null to a BigInt");
     }
 
+    // Object / Symbol pointer. ECMAScript ToBigInt step 1 is
+    // `ToPrimitive(value, number)`, so `valueOf` / `toString` /
+    // `@@toPrimitive` must run (and propagate their exceptions) *before* the
+    // integer check — `BigInt({valueOf(){throw}})` rethrows, and
+    // `BigInt({valueOf(){return 2n}})` is 2n. Previously a non-string,
+    // non-bigint pointer fell through to the Number branch below, where its
+    // NaN-boxed bits read as NaN and threw a (premature) RangeError. A Symbol
+    // has no primitive conversion → TypeError. Mirrors `js_number_coerce`.
+    if jsval.is_pointer() {
+        let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if crate::symbol::is_registered_symbol(ptr) {
+            throw_bigint_type_error("Cannot convert a Symbol value to a BigInt");
+        }
+        // `@@toPrimitive("number")` first.
+        let primitive = unsafe { crate::symbol::js_to_primitive(value, 1) };
+        if primitive.to_bits() != value.to_bits() {
+            return js_bigint_from_f64(primitive);
+        }
+        // OrdinaryToPrimitive(O, "number"): valueOf then toString.
+        match unsafe { crate::value::ordinary_to_primitive_number_for_add(value) } {
+            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => {
+                if p.to_bits() != value.to_bits() {
+                    return js_bigint_from_f64(p);
+                }
+            }
+            crate::value::OrdinaryToPrimitiveOutcome::TypeError
+            | crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {}
+        }
+        // Fall back to string coercion (e.g. an array → join → parse:
+        // `BigInt([5])` === 5n, `BigInt([])` === 0n).
+        let str_ptr = crate::value::js_jsvalue_to_string(value);
+        if !str_ptr.is_null() {
+            return js_bigint_from_f64(crate::value::js_nanbox_string(str_ptr as i64));
+        }
+    }
+
     // Remaining case: a real Number. Node only converts finite integers;
     // NaN, ±Infinity, and any value with a fractional part throw RangeError.
     if !value.is_finite() || value.fract() != 0.0 {
