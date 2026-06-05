@@ -806,13 +806,11 @@ unsafe extern "C" fn js_mysql2_handle_method_dispatch(
     if method_name_ptr.is_null() || method_name_len == 0 {
         return 0;
     }
-    let method = match std::str::from_utf8(std::slice::from_raw_parts(
-        method_name_ptr,
-        method_name_len,
-    )) {
-        Ok(m) => m,
-        Err(_) => return 0,
-    };
+    let method =
+        match std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len)) {
+            Ok(m) => m,
+            Err(_) => return 0,
+        };
     let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
         &[]
     } else {
@@ -835,12 +833,13 @@ unsafe extern "C" fn js_mysql2_handle_method_dispatch(
 
     let result: f64 = match method {
         "query" | "execute" => {
-            let Some((sql_ptr, rows_as_array)) =
-                query_sql_ptr_and_rows_as_array(arg(0))
-            else {
+            let Some((sql_ptr, rows_as_array)) = query_sql_ptr_and_rows_as_array(arg(0)) else {
                 return 0;
             };
-            let params_f = args.get(1).copied().unwrap_or(f64::from_bits(DISPATCH_TAG_UNDEFINED));
+            let params_f = args
+                .get(1)
+                .copied()
+                .unwrap_or(f64::from_bits(DISPATCH_TAG_UNDEFINED));
             let promise = if is_pool {
                 run_pool_query(handle, sql_ptr, params_f, rows_as_array)
             } else if is_pool_conn {
