@@ -345,7 +345,15 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
         if index >= length {
             return 1; // delete on out-of-bounds always returns true in JS
         }
+        let key = index.to_string();
+        if let Some(attrs) = crate::object::get_property_attrs(arr as usize, &key) {
+            if !attrs.configurable() {
+                return 0;
+            }
+        }
         note_array_slot(arr, index as usize, crate::value::TAG_HOLE);
+        crate::object::clear_property_attrs(arr as usize, &key);
+        crate::object::clear_accessor_descriptor(arr as usize, &key);
         1
     }
 }

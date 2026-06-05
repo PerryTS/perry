@@ -105,6 +105,9 @@ pub(super) unsafe fn array_own_key_present(
     if key_name == "length" {
         return true;
     }
+    if super::get_accessor_descriptor(arr as usize, key_name).is_some() {
+        return true;
+    }
     if crate::array::array_named_property_has(arr, key) {
         return true;
     }

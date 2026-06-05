@@ -212,12 +212,39 @@ fn test_array_exotic_descriptors_and_global_prototype_identity() {
         crate::value::TAG_FALSE
     );
 
-    let global = crate::object::js_get_global_this();
-    let global_ptr =
-        crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
-    let array_ctor = crate::object::js_object_get_field_by_name(global_ptr, string_key(b"Array"));
-    let ctor_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(array_ctor.bits())) as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let mut array_ctor = crate::value::JSValue::undefined();
+    let mut proto = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let mut literal_to_string = crate::value::JSValue::undefined();
+    let mut proto_to_string = crate::value::JSValue::undefined();
+    for _ in 0..256 {
+        let global = crate::object::js_get_global_this();
+        let global_ptr =
+            crate::value::js_nanbox_get_pointer(global) as *const crate::object::ObjectHeader;
+        array_ctor = crate::object::js_object_get_field_by_name(global_ptr, string_key(b"Array"));
+        if !array_ctor.is_pointer() {
+            std::thread::yield_now();
+            continue;
+        }
+        let ctor_ptr =
+            crate::value::js_nanbox_get_pointer(f64::from_bits(array_ctor.bits())) as usize;
+        proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+        if js_array_is_array(proto).to_bits() != crate::value::TAG_TRUE {
+            std::thread::yield_now();
+            continue;
+        }
+        literal_to_string = crate::object::js_object_get_field_by_name(
+            arr as *const crate::object::ObjectHeader,
+            string_key(b"toString"),
+        );
+        proto_to_string = crate::object::js_object_get_field_by_name(
+            crate::value::js_nanbox_get_pointer(proto) as *const crate::object::ObjectHeader,
+            string_key(b"toString"),
+        );
+        if literal_to_string.bits() == proto_to_string.bits() {
+            break;
+        }
+        std::thread::yield_now();
+    }
     assert_eq!(js_array_is_array(proto).to_bits(), crate::value::TAG_TRUE);
     let constructor_desc = crate::object::js_object_get_own_property_descriptor(
         proto,
@@ -230,14 +257,6 @@ fn test_array_exotic_descriptors_and_global_prototype_identity() {
         array_ctor.bits()
     );
 
-    let literal_to_string = crate::object::js_object_get_field_by_name(
-        arr as *const crate::object::ObjectHeader,
-        string_key(b"toString"),
-    );
-    let proto_to_string = crate::object::js_object_get_field_by_name(
-        crate::value::js_nanbox_get_pointer(proto) as *const crate::object::ObjectHeader,
-        string_key(b"toString"),
-    );
     assert_eq!(literal_to_string.bits(), proto_to_string.bits());
 
     let array_from_call = unsafe {

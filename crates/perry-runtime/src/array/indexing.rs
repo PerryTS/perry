@@ -299,6 +299,18 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             return std::ptr::read(entries.add(index as usize * 2));
         }
     }
+    if crate::object::descriptors_in_use() {
+        let key = index.to_string();
+        if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, &key) {
+            if acc.get != 0 {
+                let receiver = crate::value::js_nanbox_pointer(arr as i64);
+                return f64::from_bits(
+                    unsafe { crate::object::invoke_accessor_getter(acc.get, receiver) }.bits(),
+                );
+            }
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+    }
     // JS spec: out-of-bounds array access returns `undefined`, not NaN.
     // This matters for destructuring defaults (`const [a, b, c = 30] = [1, 2]`)
     // where the `?? fallback` must see TAG_UNDEFINED, not NaN.

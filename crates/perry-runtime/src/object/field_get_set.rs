@@ -338,7 +338,65 @@ pub(crate) unsafe fn own_data_field_by_name(
     None
 }
 
-unsafe fn ordinary_object_prototype_method_value(
+thread_local! {
+    static OBJECT_PROTOTYPE_LOOKUP_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+struct ObjectPrototypeLookupGuard;
+
+impl Drop for ObjectPrototypeLookupGuard {
+    fn drop(&mut self) {
+        OBJECT_PROTOTYPE_LOOKUP_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+    }
+}
+
+fn object_prototype_lookup_guard() -> Option<ObjectPrototypeLookupGuard> {
+    OBJECT_PROTOTYPE_LOOKUP_DEPTH.with(|depth| {
+        if depth.get() != 0 {
+            None
+        } else {
+            depth.set(1);
+            Some(ObjectPrototypeLookupGuard)
+        }
+    })
+}
+
+unsafe fn default_object_prototype_property_value(
+    receiver_addr: usize,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    let _guard = object_prototype_lookup_guard()?;
+    let object_ctor = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_value = JSValue::from_bits(object_ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
+    if proto_ptr.is_null() || proto_ptr as usize == receiver_addr {
+        return None;
+    }
+    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(receiver_addr as i64).to_bits());
+    let previous_this = super::js_implicit_this_set(receiver);
+    let prev_override = accessor_receiver_override_begin(receiver);
+    let property = js_object_get_field_by_name(proto_ptr, key);
+    accessor_receiver_override_end(prev_override);
+    super::js_implicit_this_set(previous_this);
+    if property.is_undefined() {
+        None
+    } else {
+        Some(property)
+    }
+}
+
+unsafe fn ordinary_object_prototype_property_value(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
@@ -359,34 +417,7 @@ unsafe fn ordinary_object_prototype_method_value(
     if class_id != 0 && !is_anon_shape_class_id(class_id) {
         return None;
     }
-    let key_bytes = std::slice::from_raw_parts(
-        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-        (*key).byte_len as usize,
-    );
-    if !is_primitive_proto_method(key_bytes) {
-        return None;
-    }
-    let object_ctor = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_value = JSValue::from_bits(object_ctor.to_bits());
-    if !ctor_value.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_value = JSValue::from_bits(proto.to_bits());
-    if !proto_value.is_pointer() {
-        return None;
-    }
-    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
-    if proto_ptr.is_null() || proto_ptr == obj {
-        return None;
-    }
-    let method = js_object_get_field_by_name(proto_ptr, key);
-    if method.is_undefined() {
-        None
-    } else {
-        Some(method)
-    }
+    default_object_prototype_property_value(obj as usize, key)
 }
 
 thread_local! {
@@ -426,7 +457,7 @@ unsafe fn class_getter_this(obj: *const ObjectHeader) -> f64 {
         .unwrap_or_else(|| f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits()))
 }
 
-unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
+pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
     let closure = (get_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure.is_null() {
         return JSValue::undefined();
@@ -438,6 +469,11 @@ unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
     let eff_receiver = ACCESSOR_RECEIVER_OVERRIDE
         .with(|c| c.take())
         .unwrap_or(receiver);
+    let call_bits = crate::closure::clone_closure_rebind_this(get_bits, eff_receiver);
+    let closure = (call_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+    if closure.is_null() {
+        return JSValue::undefined();
+    }
     let prev = super::js_implicit_this_set(eff_receiver);
     let result_f64 = crate::closure::js_closure_call0(closure);
     super::js_implicit_this_set(prev);
@@ -656,11 +692,14 @@ unsafe fn array_prototype_property_value(name: &str, receiver_addr: usize) -> Op
         return Some(JSValue::from_bits(v.to_bits()));
     }
     if proto_ptr == receiver_addr {
-        return None;
+        return default_object_prototype_property_value(receiver_addr, key);
     }
+    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(receiver_addr as i64).to_bits());
+    let prev_override = accessor_receiver_override_begin(receiver);
     let v = js_object_get_field_by_name(proto_ptr as *const ObjectHeader, key);
+    accessor_receiver_override_end(prev_override);
     if v.is_undefined() {
-        None
+        default_object_prototype_property_value(receiver_addr, key)
     } else {
         Some(v)
     }
@@ -2410,8 +2449,9 @@ unsafe fn ordinary_has_property(
             None => break,
         }
     }
-    // Inherited `Object.prototype` methods (`toString`, `hasOwnProperty`, …).
-    ordinary_object_prototype_method_value(last_valid, key).is_some()
+    // Inherited `Object.prototype` properties (`toString`, `hasOwnProperty`, …,
+    // plus any user-assigned `Object.prototype` members).
+    ordinary_object_prototype_property_value(last_valid, key).is_some()
 }
 
 /// Get a field by its string key name
@@ -3936,9 +3976,24 @@ pub extern "C" fn js_object_get_field_by_name(
                 }
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
                     if let Some(index) = super::canonical_array_index(name) {
-                        return JSValue::from_bits(
-                            crate::array::js_array_get_f64(arr, index).to_bits(),
-                        );
+                        if ACCESSORS_IN_USE.with(|c| c.get()) {
+                            if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                                if acc.get != 0 {
+                                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                                    return invoke_accessor_getter(acc.get, receiver);
+                                }
+                                return JSValue::undefined();
+                            }
+                        }
+                        if super::has_own_helpers::array_own_key_present(arr, key) {
+                            return JSValue::from_bits(
+                                crate::array::js_array_get_f64(arr, index).to_bits(),
+                            );
+                        }
+                        if let Some(v) = array_prototype_property_value(name, obj as usize) {
+                            return v;
+                        }
+                        return JSValue::undefined();
                     }
                     if let Some(v) = own_data_field_by_name(obj, key) {
                         return v;
@@ -4504,7 +4559,7 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return v;
                 }
-                if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
+                if let Some(v) = ordinary_object_prototype_property_value(obj, key) {
                     return v;
                 }
             }
@@ -4524,7 +4579,7 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return v;
                 }
-                if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
+                if let Some(v) = ordinary_object_prototype_property_value(obj, key) {
                     return v;
                 }
             }
@@ -4810,7 +4865,7 @@ pub extern "C" fn js_object_get_field_by_name(
             if let Some(v) = super::prototype_chain::resolve_inherited_field(obj as usize, key) {
                 return v;
             }
-            if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
+            if let Some(v) = ordinary_object_prototype_property_value(obj, key) {
                 return v;
             }
         }

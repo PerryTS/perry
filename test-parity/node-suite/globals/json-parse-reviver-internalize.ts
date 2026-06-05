@@ -129,3 +129,151 @@ console.log(
   nonConfigDefineDesc?.writable,
   nonConfigDefineDesc?.configurable,
 );
+
+const inheritedKey = "__perry_json_reviver_inherited__";
+const inheritedHadOwn = own(Object.prototype, inheritedKey);
+const inheritedPrevious = (Object.prototype as any)[inheritedKey];
+const inheritedSeen: unknown[] = [];
+try {
+  const inheritedObject = JSON.parse(`{"a":1,"${inheritedKey}":2}`, function (key, value) {
+    if (key === "a") {
+      delete this[inheritedKey];
+      (Object.prototype as any)[inheritedKey] = 99;
+    }
+    if (key === inheritedKey) {
+      inheritedSeen.push(value);
+    }
+    return value;
+  });
+  console.log(
+    "object prototype reread:",
+    inheritedSeen.join("|"),
+    own(inheritedObject, inheritedKey),
+    inheritedObject[inheritedKey],
+  );
+} finally {
+  if (inheritedHadOwn) {
+    (Object.prototype as any)[inheritedKey] = inheritedPrevious;
+  } else {
+    delete (Object.prototype as any)[inheritedKey];
+  }
+}
+
+const inheritedArrayHadOwn = own(Object.prototype, "1");
+const inheritedArrayPrevious = (Object.prototype as any)["1"];
+const inheritedArraySeen: unknown[] = [];
+try {
+  const inheritedArray = JSON.parse("[1,2,3]", function (key, value) {
+    if (key === "0") {
+      delete this[1];
+      (Object.prototype as any)["1"] = 88;
+    }
+    if (key === "1") {
+      inheritedArraySeen.push(value);
+    }
+    return value;
+  });
+  console.log(
+    "array prototype reread:",
+    inheritedArraySeen.join("|"),
+    inheritedArray.length,
+    own(inheritedArray, "1"),
+    inheritedArray[1],
+  );
+} finally {
+  if (inheritedArrayHadOwn) {
+    (Object.prototype as any)["1"] = inheritedArrayPrevious;
+  } else {
+    delete (Object.prototype as any)["1"];
+  }
+}
+
+const inheritedArrayAccessorPrevious = Object.getOwnPropertyDescriptor(Object.prototype, "1");
+const inheritedArrayAccessorSeen: unknown[] = [];
+try {
+  const inheritedArrayAccessor = JSON.parse("[1,2,3]", function (key, value) {
+    if (key === "0") {
+      delete this[1];
+      Object.defineProperty(Object.prototype, "1", {
+        get() {
+          return this.length;
+        },
+        configurable: true,
+      });
+    }
+    if (key === "1") {
+      inheritedArrayAccessorSeen.push(value);
+    }
+    return value;
+  });
+  console.log(
+    "array prototype accessor receiver:",
+    inheritedArrayAccessorSeen.join("|"),
+    inheritedArrayAccessor.length,
+    own(inheritedArrayAccessor, "1"),
+    inheritedArrayAccessor[1],
+  );
+} finally {
+  if (inheritedArrayAccessorPrevious) {
+    Object.defineProperty(Object.prototype, "1", inheritedArrayAccessorPrevious);
+  } else {
+    delete (Object.prototype as any)["1"];
+  }
+}
+
+const arrayNonConfigDelete = JSON.parse("[1,2,3]", function (key, value) {
+  if (key === "1") {
+    Object.defineProperty(this, "1", {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: false,
+    });
+    return undefined;
+  }
+  return value;
+});
+const arrayNonConfigDeleteDesc = Object.getOwnPropertyDescriptor(arrayNonConfigDelete, "1");
+console.log(
+  "array nonconfig delete:",
+  arrayNonConfigDelete.length,
+  own(arrayNonConfigDelete, "1"),
+  arrayNonConfigDelete[1],
+  Object.keys(arrayNonConfigDelete).join("|"),
+  arrayNonConfigDeleteDesc?.configurable,
+);
+
+const arrayNonConfigDefine = JSON.parse("[1,2,3]", function (key, value) {
+  if (key === "1") {
+    Object.defineProperty(this, "1", {
+      value,
+      writable: false,
+      enumerable: true,
+      configurable: false,
+    });
+    return 9;
+  }
+  return value;
+});
+const arrayNonConfigDefineDesc = Object.getOwnPropertyDescriptor(arrayNonConfigDefine, "1");
+console.log(
+  "array nonconfig define:",
+  arrayNonConfigDefine[1],
+  arrayNonConfigDefineDesc?.writable,
+  arrayNonConfigDefineDesc?.configurable,
+);
+
+errorLine("array getter abrupt", () =>
+  JSON.parse("[1,2,3]", function (key, value) {
+    if (key === "0") {
+      Object.defineProperty(this, "1", {
+        get() {
+          throw new Error("boom-array-get");
+        },
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    return value;
+  }),
+);
