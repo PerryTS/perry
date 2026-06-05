@@ -20,8 +20,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
+mod json;
 mod reflect;
 
+pub(crate) use json::{
+    js_proxy_checked_target, js_proxy_checked_target_for_is_array, js_proxy_own_keys_for_json,
+};
 pub use reflect::{js_reflect_delete, js_reflect_get, js_reflect_has, js_reflect_set};
 
 /// A single Proxy registry entry.
@@ -249,7 +253,10 @@ fn handler_trap(handler: f64, trap_name: &str) -> f64 {
 
 /// Raise a "proxy revoked" TypeError via `js_throw`. Does not return.
 fn revoked_return() -> f64 {
-    let msg = "Cannot perform operation on a proxy that has been revoked";
+    revoked_return_with_message("Cannot perform operation on a proxy that has been revoked")
+}
+
+fn revoked_return_with_message(msg: &str) -> f64 {
     let msg_handle = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err = crate::error::js_typeerror_new(msg_handle);
     let boxed = f64::from_bits(POINTER_TAG | ((err as u64) & POINTER_MASK));

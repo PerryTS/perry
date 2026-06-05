@@ -19,7 +19,7 @@ unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
         return value;
     }
     let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if ptr.is_null() || (ptr as usize) < 0x100000 {
         return value;
     }
     let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -35,17 +35,6 @@ unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
         return value;
     }
     JSValue::object_ptr(materialized as *mut u8)
-}
-
-unsafe fn key_name_from_string_ptr(key: *const StringHeader) -> Option<String> {
-    if key.is_null() {
-        return None;
-    }
-    let data = (key as *const u8).add(std::mem::size_of::<StringHeader>());
-    let len = (*key).byte_len as usize;
-    std::str::from_utf8(std::slice::from_raw_parts(data, len))
-        .ok()
-        .map(|s| s.to_string())
 }
 
 unsafe fn pointer_value(bits: u64) -> f64 {
@@ -81,21 +70,66 @@ unsafe fn data_descriptor_value(value_handle: &crate::gc::RuntimeHandle<'_>) -> 
     pointer_value(desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as u64)
 }
 
-unsafe fn holder_ptr_from_bits(bits: u64) -> *mut crate::ObjectHeader {
-    (bits & POINTER_MASK) as *mut crate::ObjectHeader
+unsafe fn reflect_get_property(
+    holder_handle: &crate::gc::RuntimeHandle<'_>,
+    key_handle: &crate::gc::RuntimeHandle<'_>,
+) -> JSValue {
+    let result = crate::proxy::js_reflect_get(
+        holder_handle.get_nanbox_f64(),
+        key_handle.get_nanbox_f64(),
+        holder_handle.get_nanbox_f64(),
+    );
+    JSValue::from_bits(result.to_bits())
+}
+
+fn to_length(value: f64) -> usize {
+    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_nan() || number <= 0.0 {
+        return 0;
+    }
+    if number.is_infinite() {
+        return MAX_SAFE_INTEGER as usize;
+    }
+    number.floor().min(MAX_SAFE_INTEGER) as usize
+}
+
+unsafe fn json_is_array(value: f64) -> bool {
+    let mut current = value;
+    for _ in 0..64 {
+        if crate::proxy::js_proxy_is_proxy(current) != 0 {
+            let Some(target) = crate::proxy::js_proxy_checked_target_for_is_array(current) else {
+                return false;
+            };
+            current = target;
+            continue;
+        }
+        return crate::array::js_array_is_array(current).to_bits() == TAG_TRUE;
+    }
+    false
+}
+
+unsafe fn json_is_object(value: f64) -> bool {
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        let _ = crate::proxy::js_proxy_checked_target(value);
+        return true;
+    }
+    if let Some(ptr) = extract_pointer(value.to_bits()) {
+        if ptr.is_null() || (ptr as usize) < 0x100000 {
+            return false;
+        }
+        return gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT;
+    }
+    false
 }
 
 unsafe fn delete_property_or_keep(
     holder_handle: &crate::gc::RuntimeHandle<'_>,
     key_handle: &crate::gc::RuntimeHandle<'_>,
 ) {
-    let holder = holder_ptr_from_bits(holder_handle.get_nanbox_u64());
-    if holder.is_null() {
-        return;
-    }
-    let _ = crate::object::js_object_delete_field(
-        holder,
-        key_handle.get_raw_const_ptr::<StringHeader>(),
+    let _ = crate::proxy::js_reflect_delete(
+        holder_handle.get_nanbox_f64(),
+        key_handle.get_nanbox_f64(),
     );
 }
 
@@ -104,21 +138,12 @@ unsafe fn create_data_property_or_keep(
     key_handle: &crate::gc::RuntimeHandle<'_>,
     value_handle: &crate::gc::RuntimeHandle<'_>,
 ) {
-    let holder_addr = (holder_handle.get_nanbox_u64() & POINTER_MASK) as usize;
-    if let Some(name) = key_name_from_string_ptr(key_handle.get_raw_const_ptr::<StringHeader>()) {
-        if crate::object::get_property_attrs(holder_addr, &name)
-            .is_some_and(|attrs| !attrs.configurable())
-        {
-            return;
-        }
-    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let descriptor = data_descriptor_value(value_handle);
     let descriptor_handle = scope.root_nanbox_f64(descriptor);
-    let key_value = nanbox_string_f64(key_handle.get_raw_const_ptr::<StringHeader>());
-    crate::object::js_object_define_property(
+    let _ = crate::proxy::js_reflect_define_property(
         holder_handle.get_nanbox_f64(),
-        key_value,
+        key_handle.get_nanbox_f64(),
         descriptor_handle.get_nanbox_f64(),
     );
 }
@@ -143,24 +168,37 @@ unsafe fn internalize_array(
 ) {
     let reviver_scope = crate::gc::RuntimeHandleScope::new();
     let reviver_handle = reviver_scope.root_raw_const_ptr(reviver);
-    let arr = (value_handle.get_nanbox_u64() & POINTER_MASK) as *const crate::ArrayHeader;
-    if arr.is_null() {
-        return;
-    }
-    let len = (*arr).length;
+    let length_key = js_string_from_bytes(b"length".as_ptr(), 6);
+    let length_key_handle = reviver_scope.root_nanbox_f64(nanbox_string_f64(length_key));
+    let length_value = reflect_get_property(value_handle, &length_key_handle);
+    let len = to_length(f64::from_bits(length_value.bits()));
     for i in 0..len {
         let iteration_scope = crate::gc::RuntimeHandleScope::new();
         let idx = i.to_string();
         let key = js_string_from_bytes(idx.as_ptr(), idx.len() as u32);
         let key_handle = iteration_scope.root_string_ptr(key);
         let key_value = nanbox_string_f64(key_handle.get_raw_const_ptr::<StringHeader>());
+        let key_value_handle = iteration_scope.root_nanbox_f64(key_value);
         let child = internalize_json_property(
             JSValue::from_bits(value_handle.get_nanbox_u64()),
-            key_value,
+            key_value_handle.get_nanbox_f64(),
             reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
         );
-        apply_internalized_child(value_handle, &key_handle, child);
+        apply_internalized_child(value_handle, &key_value_handle, child);
     }
+}
+
+unsafe fn enumerable_keys_for_internalize(
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+) -> *mut crate::ArrayHeader {
+    let value = value_handle.get_nanbox_f64();
+    let keys_value = if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        crate::proxy::js_proxy_own_keys_for_json(value)
+    } else {
+        let keys = crate::object::js_object_keys_value(value);
+        f64::from_bits(POINTER_TAG | ((keys as u64) & POINTER_MASK))
+    };
+    (keys_value.to_bits() & POINTER_MASK) as *mut crate::ArrayHeader
 }
 
 unsafe fn internalize_object(
@@ -169,7 +207,7 @@ unsafe fn internalize_object(
 ) {
     let reviver_scope = crate::gc::RuntimeHandleScope::new();
     let reviver_handle = reviver_scope.root_raw_const_ptr(reviver);
-    let keys = crate::object::js_object_keys_value(value_handle.get_nanbox_f64());
+    let keys = enumerable_keys_for_internalize(value_handle);
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys_handle = scope.root_raw_mut_ptr(keys);
     let len = crate::array::js_array_length(keys_handle.get_raw_mut_ptr::<crate::ArrayHeader>());
@@ -180,14 +218,18 @@ unsafe fn internalize_object(
         let key_value_handle = iteration_scope.root_nanbox_u64(key_value.bits());
         let key_ptr = crate::value::js_get_string_pointer_unified(key_value_handle.get_nanbox_f64())
             as *const StringHeader;
+        if key_ptr.is_null() {
+            continue;
+        }
         let key_handle = iteration_scope.root_string_ptr(key_ptr);
         let key_value = nanbox_string_f64(key_handle.get_raw_const_ptr::<StringHeader>());
+        let key_value_handle = iteration_scope.root_nanbox_f64(key_value);
         let child = internalize_json_property(
             JSValue::from_bits(value_handle.get_nanbox_u64()),
-            key_value,
+            key_value_handle.get_nanbox_f64(),
             reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
         );
-        apply_internalized_child(value_handle, &key_handle, child);
+        apply_internalized_child(value_handle, &key_value_handle, child);
     }
 }
 
@@ -225,33 +267,20 @@ unsafe fn internalize_json_property(
     let holder_handle = scope.root_nanbox_u64(holder.bits());
     let reviver_handle = scope.root_raw_const_ptr(reviver);
     let key_handle = scope.root_nanbox_f64(key_f64);
-    let key_ptr = crate::value::js_get_string_pointer_unified(key_handle.get_nanbox_f64())
-        as *const StringHeader;
-    let key_ptr_handle = scope.root_string_ptr(key_ptr);
-    let holder_ptr = holder_ptr_from_bits(holder_handle.get_nanbox_u64());
-    let value = crate::object::js_object_get_field_by_name(
-        holder_ptr as *const crate::ObjectHeader,
-        key_ptr_handle.get_raw_const_ptr::<StringHeader>(),
-    );
+    let value = reflect_get_property(&holder_handle, &key_handle);
     let value = force_materialize_if_lazy(value);
     let value_handle = scope.root_nanbox_u64(value.bits());
 
-    if let Some(ptr) = extract_pointer(value_handle.get_nanbox_u64()) {
-        match gc_obj_type(ptr) {
-            crate::gc::GC_TYPE_ARRAY => {
-                internalize_array(
-                    &value_handle,
-                    reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
-                );
-            }
-            crate::gc::GC_TYPE_OBJECT => {
-                internalize_object(
-                    &value_handle,
-                    reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
-                );
-            }
-            _ => {}
-        }
+    if json_is_array(value_handle.get_nanbox_f64()) {
+        internalize_array(
+            &value_handle,
+            reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
+        );
+    } else if json_is_object(value_handle.get_nanbox_f64()) {
+        internalize_object(
+            &value_handle,
+            reviver_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
+        );
     }
 
     call_reviver(
