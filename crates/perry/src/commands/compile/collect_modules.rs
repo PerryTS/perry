@@ -734,6 +734,11 @@ fn collect_module_one(
     // `` import(`./prefix_${localStringVar}.ts`) `` paths transitively.
     let module_const_locals = perry_hir::collect_module_const_locals(&hir_module);
     let dynamic_param_literals = perry_hir::collect_dynamic_import_param_literals(&hir_module);
+    let dynamic_local_literals = perry_hir::collect_dynamic_import_local_candidate_literals(
+        &hir_module,
+        &module_const_locals,
+        &dynamic_param_literals,
+    );
     let mut dynamic_path_sets: Vec<Vec<String>> = Vec::new();
     perry_hir::for_each_dynamic_import(&hir_module, &mut |expr| {
         if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
@@ -742,10 +747,11 @@ fn collect_module_one(
                 return;
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            match perry_hir::resolve_import_path_with_consts_and_params(
+            match perry_hir::resolve_import_path_with_context(
                 arg.as_ref(),
                 &module_const_locals,
                 &dynamic_param_literals,
+                &dynamic_local_literals,
                 &mut visiting,
             ) {
                 perry_hir::Resolution::Set(set) => {
@@ -825,10 +831,11 @@ fn collect_module_one(
                 return;
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            match perry_hir::resolve_import_path_with_consts_and_params(
+            match perry_hir::resolve_import_path_with_context(
                 filename.as_ref(),
                 &module_const_locals,
                 &dynamic_param_literals,
+                &dynamic_local_literals,
                 &mut visiting,
             ) {
                 perry_hir::Resolution::Set(set) => {
@@ -866,6 +873,7 @@ fn collect_module_one(
             }
         }
     });
+    drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {
         return Err(anyhow!("{}", dyn_errors.join("\n")));

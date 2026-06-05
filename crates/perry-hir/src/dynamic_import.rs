@@ -21,7 +21,7 @@ use crate::ir::{BinaryOp, Export, Expr, Function, Module, Param, Stmt};
 use crate::walker::walk_expr_children;
 use perry_types::Type;
 use std::borrow::Borrow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Hard cap on the number of paths a single `import()` site can resolve
 /// to. Over-cap produces a compile error per D2 (issue #100).
@@ -297,10 +297,7 @@ pub fn collect_module_const_locals<'a>(
 /// #1674: collect function/closure parameters whose declared type is a finite
 /// set of string literals. These locals can safely seed dynamic `import()`
 /// candidate sets even though their runtime value is not constant.
-pub fn collect_dynamic_import_param_literals(
-    module: &Module,
-) -> std::collections::HashMap<u32, Vec<String>> {
-    use std::collections::HashMap;
+pub fn collect_dynamic_import_param_literals(module: &Module) -> HashMap<u32, Vec<String>> {
     let mut out: HashMap<u32, Vec<String>> = HashMap::new();
 
     let mut funcs: Vec<&Function> = module.functions.iter().collect();
@@ -344,6 +341,243 @@ pub fn collect_dynamic_import_param_literals(
     }
 
     out
+}
+
+/// #1674: collect locals whose full set of observed definitions is finite and
+/// string-resolvable, even when the values come from later `LocalSet`
+/// assignments instead of the declaration initializer.
+///
+/// This is intentionally a bounded candidate collector, not a full flow
+/// analysis. If any observed definition for a local is not resolvable by the
+/// existing dynamic-import resolver, the local is omitted so the import site
+/// keeps the normal compile-time error.
+pub fn collect_dynamic_import_local_candidate_literals<V: Borrow<Expr>>(
+    module: &Module,
+    consts: &HashMap<u32, V>,
+    param_literals: &HashMap<u32, Vec<String>>,
+) -> HashMap<u32, Vec<String>> {
+    let mut defs: HashMap<u32, Vec<&Expr>> = HashMap::new();
+    let mut invalid: HashSet<u32> = HashSet::new();
+
+    let mut funcs: Vec<&Function> = module.functions.iter().collect();
+    let mut init_exprs: Vec<&Expr> = Vec::new();
+    for cls in &module.classes {
+        if let Some(ctor) = &cls.constructor {
+            funcs.push(ctor);
+        }
+        funcs.extend(cls.methods.iter());
+        funcs.extend(cls.getters.iter().map(|(_, f)| f));
+        funcs.extend(cls.setters.iter().map(|(_, f)| f));
+        funcs.extend(cls.static_methods.iter());
+        for field in cls.fields.iter().chain(cls.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                init_exprs.push(init);
+            }
+        }
+    }
+    for g in &module.globals {
+        if let Some(init) = &g.init {
+            init_exprs.push(init);
+        }
+    }
+
+    for stmt in &module.init {
+        collect_local_candidate_defs_stmt(stmt, &mut defs, &mut invalid);
+    }
+    for func in funcs {
+        for stmt in &func.body {
+            collect_local_candidate_defs_stmt(stmt, &mut defs, &mut invalid);
+        }
+        for param in &func.params {
+            if let Some(default) = &param.default {
+                collect_local_candidate_defs_expr(default, &mut defs, &mut invalid);
+            }
+        }
+    }
+    for expr in init_exprs {
+        collect_local_candidate_defs_expr(expr, &mut defs, &mut invalid);
+    }
+
+    let mut out: HashMap<u32, Vec<String>> = HashMap::new();
+    for (id, exprs) in defs {
+        if invalid.contains(&id) {
+            continue;
+        }
+        let mut candidates: Vec<String> = Vec::new();
+        let mut ok = true;
+        for expr in exprs {
+            let mut visiting = HashSet::new();
+            match resolve_import_path_with_consts_and_params(
+                expr,
+                consts,
+                param_literals,
+                &mut visiting,
+            ) {
+                Resolution::Set(paths) => {
+                    for path in paths {
+                        if !candidates.contains(&path) {
+                            candidates.push(path);
+                        }
+                    }
+                }
+                Resolution::Unresolved(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok && !candidates.is_empty() {
+            out.insert(id, candidates);
+        }
+    }
+    out
+}
+
+fn collect_local_candidate_defs_stmt<'a>(
+    stmt: &'a Stmt,
+    defs: &mut HashMap<u32, Vec<&'a Expr>>,
+    invalid: &mut HashSet<u32>,
+) {
+    collect_local_candidate_defs_from_frames(
+        &mut vec![LocalCandidateFrame::Stmt(stmt)],
+        defs,
+        invalid,
+    );
+}
+
+fn collect_local_candidate_defs_expr<'a>(
+    expr: &'a Expr,
+    defs: &mut HashMap<u32, Vec<&'a Expr>>,
+    invalid: &mut HashSet<u32>,
+) {
+    collect_local_candidate_defs_from_frames(
+        &mut vec![LocalCandidateFrame::Expr(expr)],
+        defs,
+        invalid,
+    );
+}
+
+enum LocalCandidateFrame<'a> {
+    Stmt(&'a Stmt),
+    Expr(&'a Expr),
+}
+
+fn collect_local_candidate_defs_from_frames<'a>(
+    stack: &mut Vec<LocalCandidateFrame<'a>>,
+    defs: &mut HashMap<u32, Vec<&'a Expr>>,
+    invalid: &mut HashSet<u32>,
+) {
+    while let Some(frame) = stack.pop() {
+        match frame {
+            LocalCandidateFrame::Stmt(stmt) => match stmt {
+                Stmt::Let {
+                    id, init: Some(e), ..
+                } => {
+                    defs.entry(*id).or_default().push(e);
+                    stack.push(LocalCandidateFrame::Expr(e));
+                }
+                Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+                Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+                    stack.push(LocalCandidateFrame::Expr(e));
+                }
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    if let Some(else_branch) = else_branch {
+                        push_local_candidate_stmt_slice(stack, else_branch);
+                    }
+                    push_local_candidate_stmt_slice(stack, then_branch);
+                    stack.push(LocalCandidateFrame::Expr(condition));
+                }
+                Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                    push_local_candidate_stmt_slice(stack, body);
+                    stack.push(LocalCandidateFrame::Expr(condition));
+                }
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
+                    push_local_candidate_stmt_slice(stack, body);
+                    if let Some(update) = update {
+                        stack.push(LocalCandidateFrame::Expr(update));
+                    }
+                    if let Some(condition) = condition {
+                        stack.push(LocalCandidateFrame::Expr(condition));
+                    }
+                    if let Some(init) = init {
+                        stack.push(LocalCandidateFrame::Stmt(init.as_ref()));
+                    }
+                }
+                Stmt::Labeled { body, .. } => {
+                    stack.push(LocalCandidateFrame::Stmt(body.as_ref()));
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    if let Some(finally) = finally {
+                        push_local_candidate_stmt_slice(stack, finally);
+                    }
+                    if let Some(catch) = catch {
+                        push_local_candidate_stmt_slice(stack, &catch.body);
+                    }
+                    push_local_candidate_stmt_slice(stack, body);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                } => {
+                    for case in cases.iter().rev() {
+                        push_local_candidate_stmt_slice(stack, &case.body);
+                        if let Some(test) = &case.test {
+                            stack.push(LocalCandidateFrame::Expr(test));
+                        }
+                    }
+                    stack.push(LocalCandidateFrame::Expr(discriminant));
+                }
+                Stmt::Break
+                | Stmt::Continue
+                | Stmt::LabeledBreak(_)
+                | Stmt::LabeledContinue(_)
+                | Stmt::PreallocateBoxes(_) => {}
+            },
+            LocalCandidateFrame::Expr(expr) => {
+                match expr {
+                    Expr::LocalSet(id, value) => {
+                        defs.entry(*id).or_default().push(value);
+                    }
+                    Expr::Update { id, .. } => {
+                        invalid.insert(*id);
+                    }
+                    Expr::Closure { body, .. } => {
+                        push_local_candidate_stmt_slice(stack, body);
+                    }
+                    _ => {}
+                }
+                let mut children = Vec::new();
+                walk_expr_children(expr, &mut |child| {
+                    children.push(child);
+                });
+                for child in children.into_iter().rev() {
+                    stack.push(LocalCandidateFrame::Expr(child));
+                }
+            }
+        }
+    }
+}
+
+fn push_local_candidate_stmt_slice<'a>(
+    stack: &mut Vec<LocalCandidateFrame<'a>>,
+    stmts: &'a [Stmt],
+) {
+    for stmt in stmts.iter().rev() {
+        stack.push(LocalCandidateFrame::Stmt(stmt));
+    }
 }
 
 fn collect_param_literal_sets(
@@ -897,6 +1131,17 @@ pub fn resolve_import_path_with_consts_and_params<V: Borrow<Expr>>(
     param_literals: &std::collections::HashMap<u32, Vec<String>>,
     visiting: &mut std::collections::HashSet<u32>,
 ) -> Resolution {
+    let local_literals: HashMap<u32, Vec<String>> = HashMap::new();
+    resolve_import_path_with_context(arg, consts, param_literals, &local_literals, visiting)
+}
+
+pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
+    arg: &Expr,
+    consts: &std::collections::HashMap<u32, V>,
+    param_literals: &std::collections::HashMap<u32, Vec<String>>,
+    local_literals: &std::collections::HashMap<u32, Vec<String>>,
+    visiting: &mut std::collections::HashSet<u32>,
+) -> Resolution {
     match arg {
         Expr::String(s) => Resolution::Set(vec![s.clone()]),
         Expr::Conditional {
@@ -904,16 +1149,18 @@ pub fn resolve_import_path_with_consts_and_params<V: Borrow<Expr>>(
             else_expr,
             ..
         } => {
-            let a = resolve_import_path_with_consts_and_params(
+            let a = resolve_import_path_with_context(
                 then_expr,
                 consts,
                 param_literals,
+                local_literals,
                 visiting,
             );
-            let b = resolve_import_path_with_consts_and_params(
+            let b = resolve_import_path_with_context(
                 else_expr,
                 consts,
                 param_literals,
+                local_literals,
                 visiting,
             );
             a.merge(b)
@@ -935,10 +1182,11 @@ pub fn resolve_import_path_with_consts_and_params<V: Borrow<Expr>>(
             // Unresolved.
             let mut sets: Vec<Vec<String>> = Vec::with_capacity(parts.len());
             for p in &parts {
-                match resolve_import_path_with_consts_and_params(
+                match resolve_import_path_with_context(
                     p,
                     consts,
                     param_literals,
+                    local_literals,
                     visiting,
                 ) {
                     Resolution::Set(v) => sets.push(v),
@@ -976,13 +1224,16 @@ pub fn resolve_import_path_with_consts_and_params<V: Borrow<Expr>>(
                 );
             }
             let resolved = if let Some(init) = consts.get(id) {
-                resolve_import_path_with_consts_and_params(
+                resolve_import_path_with_context(
                     init.borrow(),
                     consts,
                     param_literals,
+                    local_literals,
                     visiting,
                 )
             } else if let Some(paths) = param_literals.get(id) {
+                Resolution::Set(paths.clone())
+            } else if let Some(paths) = local_literals.get(id) {
                 Resolution::Set(paths.clone())
             } else {
                 Resolution::Unresolved(
@@ -990,8 +1241,9 @@ pub fn resolve_import_path_with_consts_and_params<V: Borrow<Expr>>(
                      resolvable to a literal (supported: string literals, ternaries, \
                      template literals over resolvable locals, and `const`/never-\
                      reassigned `let` bindings initialized to a resolvable value, \
-                     plus parameters annotated with finite string-literal unions; \
-                     broad or mixed parameter types fall back here)"
+                     parameters annotated with finite string-literal unions, and \
+                     locals whose observed assignments form a finite string-literal \
+                     candidate set; broad or mixed parameter/local values fall back here)"
                         .to_string(),
                 )
             };
@@ -1412,6 +1664,75 @@ mod tests {
             }
             Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
         }
+    }
+
+    #[test]
+    fn resolve_reassigned_local_literal_candidates() {
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "p".into(),
+            ty: Type::String,
+            mutable: true,
+            init: None,
+        });
+        m.init.push(Stmt::If {
+            condition: Expr::Bool(true),
+            then_branch: vec![Stmt::Expr(Expr::LocalSet(
+                5,
+                Box::new(Expr::String("./a.ts".into())),
+            ))],
+            else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
+                5,
+                Box::new(Expr::String("./b.ts".into())),
+            ))]),
+        });
+
+        let consts = collect_module_const_locals(&m);
+        let params = collect_dynamic_import_param_literals(&m);
+        let locals = collect_dynamic_import_local_candidate_literals(&m, &consts, &params);
+        assert_eq!(
+            locals.get(&5),
+            Some(&vec!["./a.ts".to_string(), "./b.ts".to_string()])
+        );
+
+        let mut visiting = HashSet::new();
+        match resolve_import_path_with_context(
+            &Expr::LocalGet(5),
+            &consts,
+            &params,
+            &locals,
+            &mut visiting,
+        ) {
+            Resolution::Set(v) => assert_eq!(v, vec!["./a.ts", "./b.ts"]),
+            Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+        }
+    }
+
+    #[test]
+    fn reassigned_local_candidates_drop_mixed_dynamic_defs() {
+        let mut m = Module::new("t");
+        m.init.push(Stmt::Let {
+            id: 5,
+            name: "p".into(),
+            ty: Type::String,
+            mutable: true,
+            init: None,
+        });
+        m.init.push(Stmt::Expr(Expr::LocalSet(
+            5,
+            Box::new(Expr::String("./a.ts".into())),
+        )));
+        m.init
+            .push(Stmt::Expr(Expr::LocalSet(5, Box::new(Expr::LocalGet(99)))));
+
+        let consts = collect_module_const_locals(&m);
+        let params = collect_dynamic_import_param_literals(&m);
+        let locals = collect_dynamic_import_local_candidate_literals(&m, &consts, &params);
+        assert!(
+            !locals.contains_key(&5),
+            "any non-resolvable assignment keeps the import site unresolved"
+        );
     }
 
     #[test]

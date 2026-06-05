@@ -30,10 +30,11 @@ pub use audit::{audit_module, AuditManifest, ModuleAudit};
 pub use capability::{audit_module_capabilities, CapabilityPolicy, CapabilityViolation};
 pub use deferral::{arm_deferral_sink, disarm_deferral_sink, try_defer_refusal, DeferredRefusal};
 pub use dynamic_import::{
-    collect_dynamic_import_param_literals, collect_module_const_locals, detect_top_level_await,
-    dynamic_import_glob_pattern, flatten_exports, for_each_dynamic_import,
-    for_each_dynamic_import_mut, for_each_worker_new, for_each_worker_new_mut, resolve_import_path,
-    resolve_import_path_with_consts, resolve_import_path_with_consts_and_params, FlatExport,
+    collect_dynamic_import_local_candidate_literals, collect_dynamic_import_param_literals,
+    collect_module_const_locals, detect_top_level_await, dynamic_import_glob_pattern,
+    flatten_exports, for_each_dynamic_import, for_each_dynamic_import_mut, for_each_worker_new,
+    for_each_worker_new_mut, resolve_import_path, resolve_import_path_with_consts,
+    resolve_import_path_with_consts_and_params, resolve_import_path_with_context, FlatExport,
     Resolution, DYNAMIC_IMPORT_PATH_CAP,
 };
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
