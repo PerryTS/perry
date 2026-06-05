@@ -74,6 +74,11 @@ unsafe fn call_primitive_builtin_prototype_method(
     call_primitive_closure_value(receiver, value, args_ptr, args_len)
 }
 
+#[inline]
+fn closure_function_proto_method_uses_builtin_dispatch(method_name: &str) -> bool {
+    matches!(method_name, "bind" | "call" | "apply" | "isPrototypeOf")
+}
+
 /// Call a method on an object with dynamic dispatch
 /// This is used for runtime method calls when the method cannot be resolved statically.
 /// object: NaN-boxed f64 containing an object pointer
@@ -426,6 +431,19 @@ unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     }
 }
 
+#[inline]
+unsafe fn prototype_identity_ptr_from_value(value: f64) -> Option<*const u8> {
+    let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
+    match gc_type {
+        crate::gc::GC_TYPE_OBJECT
+        | crate::gc::GC_TYPE_CLOSURE
+        | crate::gc::GC_TYPE_ERROR
+        | crate::gc::GC_TYPE_ARRAY
+        | crate::gc::GC_TYPE_TYPED_ARRAY => Some(ptr),
+        _ => None,
+    }
+}
+
 unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
     let gc_header =
         (object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -526,19 +544,11 @@ pub extern "C" fn js_value_to_locale_string(receiver: f64) -> f64 {
 
 /// Shared implementation for `Object.prototype.isPrototypeOf`.
 pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64) -> bool {
-    // The receiver (and every link in the target's `[[Prototype]]` chain) is
-    // compared by raw heap address. Exotic-typed prototype objects —
-    // `Array.prototype` is itself a GC_TYPE_ARRAY, `Uint8Array.prototype` a
-    // typed-array proto — are NOT `GC_TYPE_OBJECT`, so resolving them with
-    // `object_ptr_from_value` (which only accepts GC_TYPE_OBJECT) returned
-    // `None` and the walk bailed. #4549: use the raw GC pointer instead.
-    let heap_addr = |v: f64| -> Option<usize> {
-        gc_pointer_and_type_from_value(v).map(|(ptr, _)| ptr as usize)
-    };
-    let receiver_addr = match heap_addr(receiver) {
-        Some(addr) => addr,
+    let receiver_identity_ptr = match prototype_identity_ptr_from_value(receiver) {
+        Some(ptr) => ptr,
         None => return false,
     };
+    let receiver_object_ptr = object_ptr_from_value(receiver);
 
     if crate::date::is_date_value(target) {
         let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
@@ -547,8 +557,8 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             return false;
         }
         let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-        if let Some(proto_addr) = heap_addr(proto) {
-            return proto_addr == receiver_addr;
+        if let Some(proto_ptr) = prototype_identity_ptr_from_value(proto) {
+            return std::ptr::addr_eq(proto_ptr, receiver_identity_ptr);
         }
         return false;
     }
@@ -561,7 +571,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     if let Some(target_ptr) = object_ptr_from_value(target) {
         let has_instance_prototype =
             crate::object::prototype_chain::object_static_prototype(target_ptr as usize).is_some();
-        if target_ptr as usize == receiver_addr {
+        if std::ptr::addr_eq(target_ptr as *const u8, receiver_identity_ptr) {
             return false;
         }
         // A `new Func()` instance snapshots the function's current
@@ -570,37 +580,40 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
         // because later `Func.prototype = other` must not rewrite older
         // instances.
         if !has_instance_prototype {
-            let mut cid = crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
-            let mut depth = 0usize;
-            let mut visited: [u32; 32] = [0; 32];
-            while cid != 0 && depth < visited.len() {
-                if visited[..depth].contains(&cid) {
-                    break;
-                }
-                visited[depth] = cid;
-
-                let proto_obj = crate::object::class_registry::class_prototype_object(cid);
-                let mut next_cid = 0;
-                if !proto_obj.is_null() {
-                    if proto_obj as usize == receiver_addr {
-                        return true;
+            if let Some(receiver_ptr) = receiver_object_ptr {
+                let mut cid =
+                    crate::object::js_object_get_class_id(target_ptr as *const ObjectHeader);
+                let mut depth = 0usize;
+                let mut visited: [u32; 32] = [0; 32];
+                while cid != 0 && depth < visited.len() {
+                    if visited[..depth].contains(&cid) {
+                        break;
                     }
-                    next_cid =
-                        crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
-                }
+                    visited[depth] = cid;
 
-                if next_cid != 0 && next_cid != cid {
-                    cid = next_cid;
-                    depth += 1;
-                    continue;
-                }
+                    let proto_obj = crate::object::class_registry::class_prototype_object(cid);
+                    let mut next_cid = 0;
+                    if !proto_obj.is_null() {
+                        if std::ptr::addr_eq(proto_obj, receiver_ptr) {
+                            return true;
+                        }
+                        next_cid =
+                            crate::object::js_object_get_class_id(proto_obj as *const ObjectHeader);
+                    }
 
-                match crate::object::class_registry::get_parent_class_id(cid) {
-                    Some(parent_id) if parent_id != 0 && parent_id != cid => {
-                        cid = parent_id;
+                    if next_cid != 0 && next_cid != cid {
+                        cid = next_cid;
                         depth += 1;
+                        continue;
                     }
-                    _ => break,
+
+                    match crate::object::class_registry::get_parent_class_id(cid) {
+                        Some(parent_id) if parent_id != 0 && parent_id != cid => {
+                            cid = parent_id;
+                            depth += 1;
+                        }
+                        _ => break,
+                    }
                 }
             }
         }
@@ -629,20 +642,20 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
 
     let mut current = target;
     for _ in 0..32 {
-        let current_addr = heap_addr(current);
+        let current_ptr = prototype_identity_ptr_from_value(current);
         let proto = crate::object::js_object_get_prototype_of(current);
         let proto_jsval = JSValue::from_bits(proto.to_bits());
         if proto_jsval.is_null() || proto_jsval.is_undefined() {
             break;
         }
-        let proto_addr = match heap_addr(proto) {
-            Some(addr) => addr,
+        let proto_ptr = match prototype_identity_ptr_from_value(proto) {
+            Some(ptr) => ptr,
             None => break,
         };
-        if current_addr == Some(proto_addr) {
+        if current_ptr.is_some_and(|ptr| std::ptr::addr_eq(ptr, proto_ptr)) {
             break;
         }
-        if proto_addr == receiver_addr {
+        if std::ptr::addr_eq(proto_ptr, receiver_identity_ptr) {
             return true;
         }
         current = proto;
@@ -1112,12 +1125,23 @@ pub unsafe extern "C" fn js_native_call_method(
             && crate::closure::is_closure_ptr(raw_addr)
             && !crate::closure::closure_is_key_deleted(raw_addr, method_name)
         {
-            let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
-            if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
-                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
-                let result = crate::closure::js_native_call_value(dyn_val, args_ptr, args_len);
-                IMPLICIT_THIS.with(|c| c.set(prev_this));
-                return result;
+            let own_dynamic_prop =
+                crate::closure::closure_has_own_dynamic_prop(raw_addr, method_name);
+            let skip_inherited_function_proto_method =
+                closure_function_proto_method_uses_builtin_dispatch(method_name)
+                    && !own_dynamic_prop;
+            // Inherited Function/Object prototype methods fall through to the
+            // dedicated arms below. Resolving them through the closure side
+            // table re-enters this dispatch path by name and can trip the
+            // call-depth guard before producing the primitive result.
+            if !skip_inherited_function_proto_method {
+                let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
+                if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                    let result = crate::closure::js_native_call_value(dyn_val, args_ptr, args_len);
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
+                }
             }
         }
     }

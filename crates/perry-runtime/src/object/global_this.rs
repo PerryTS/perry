@@ -1121,6 +1121,19 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     )
 }
 
+fn is_native_error_subclass_constructor(name: &str) -> bool {
+    matches!(
+        name,
+        "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "AggregateError"
+    )
+}
+
 extern "C" fn date_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -2303,6 +2316,8 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // `%Generator(.prototype)%` chains resolve to real objects.
     ensure_generator_intrinsics();
     // Constructors: ClosureHeader-backed so typeof is "function".
+    let mut error_ctor_bits: Option<u64> = None;
+    let mut error_prototype_bits: Option<u64> = None;
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
@@ -2428,6 +2443,13 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             install_error_static_methods(closure_ptr);
         }
         let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
+        if name == "Error" {
+            error_ctor_bits = Some(ctor_value.to_bits());
+        } else if is_native_error_subclass_constructor(name) {
+            if let Some(proto_bits) = error_ctor_bits {
+                crate::closure::closure_set_static_prototype(closure_ptr as usize, proto_bits);
+            }
+        }
         // Stash `prototype` on the closure's dynamic-prop side table.
         // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
         // at offset 12 and dispatches into `closure_set_dynamic_prop`
@@ -2455,6 +2477,16 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 "constructor".to_string(),
                 super::PropertyAttrs::new(true, false, true),
             );
+            if name == "Error" {
+                error_prototype_bits = Some(proto_value.to_bits());
+            } else if is_native_error_subclass_constructor(name) {
+                if let Some(proto_bits) = error_prototype_bits {
+                    super::prototype_chain::object_set_static_prototype(
+                        proto_obj as usize,
+                        proto_bits,
+                    );
+                }
+            }
             if is_web_fetch_constructor(name) {
                 js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
                 super::set_builtin_property_attrs(
@@ -4090,7 +4122,21 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 function_prototype_call_thunk as *const u8,
                 1,
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("hasOwnProperty", 1),
+                    ("propertyIsEnumerable", 1),
+                    ("toLocaleString", 0),
+                    ("valueOf", 0),
+                ],
+            );
+            install_proto_method(
+                proto_obj,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+            );
             install_function_has_instance_symbol(proto_obj);
         }
         "String" => {

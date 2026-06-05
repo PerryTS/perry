@@ -1708,6 +1708,20 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 return Ok(Expr::Number(value));
             }
         }
+        if matches!(
+            prop_ident.sym.as_ref(),
+            "bind" | "call" | "apply" | "isPrototypeOf"
+        ) {
+            if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                let obj_name = obj_ident.sym.as_ref();
+                if crate::analysis::is_builtin_global_value_name(obj_name) {
+                    object_expr = Expr::PropertyGet {
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: obj_name.to_string(),
+                    };
+                }
+            }
+        }
     }
     let member_object_is_global_this = matches!(
         unwrap_transparent(member.obj.as_ref()),
@@ -1846,6 +1860,18 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 crate::analysis::is_builtin_static_function_member(property, member)
                             })
                             .unwrap_or(false);
+                    let outer_is_inherited_object_proto_method = matches!(
+                        outer_static_member,
+                        Some(
+                            "hasOwnProperty"
+                                | "isPrototypeOf"
+                                | "propertyIsEnumerable"
+                                | "toLocaleString"
+                                | "valueOf"
+                        )
+                    );
+                    let outer_is_inherited_function_proto_method =
+                        matches!(outer_static_member, Some("bind" | "call" | "apply"));
                     // Non-callee `console.log` reads need the namespace
                     // receiver; the property-only GlobalGet path collides
                     // with detached `Math.log`.
@@ -1856,6 +1882,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
                         && !outer_is_reified_builtin_static_value
+                        && !outer_is_inherited_object_proto_method
+                        && !outer_is_inherited_function_proto_method
                         && !receiver_is_detached_console_read
                     {
                         object_expr = Expr::GlobalGet(0);

@@ -1977,10 +1977,27 @@ unsafe fn closure_dynamic_prop_by_key(obj: usize, key: *const crate::StringHeade
     let key_len = (*key).byte_len as usize;
     let name = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()?;
     let val = crate::closure::closure_get_dynamic_prop(obj, name);
-    if val.to_bits() == crate::value::TAG_UNDEFINED {
-        None
-    } else {
-        Some(val)
+    if val.to_bits() != crate::value::TAG_UNDEFINED {
+        return Some(val);
+    }
+    if crate::closure::is_closure_ptr(obj) {
+        if let Some(method) = reified_function_method_name(name) {
+            let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+            return Some(crate::closure::reify_function_method_value(
+                receiver, method,
+            ));
+        }
+    }
+    None
+}
+
+fn reified_function_method_name(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "bind" => Some(b"bind"),
+        "call" => Some(b"call"),
+        "apply" => Some(b"apply"),
+        "isPrototypeOf" => Some(b"isPrototypeOf"),
+        _ => None,
     }
 }
 
@@ -2793,6 +2810,13 @@ pub extern "C" fn js_object_get_field_by_name(
                     let s = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
                     return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                 }
+                if let Some(method) = reified_function_method_name(name_str) {
+                    let receiver =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    return JSValue::from_bits(
+                        crate::closure::reify_function_method_value(receiver, method).to_bits(),
+                    );
+                }
             }
             return JSValue::undefined();
         }
@@ -3176,13 +3200,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     // `Function.prototype.call.bind(method)` work — reading `.bind`
                     // off the reified `Function.prototype.call` previously read
                     // back `undefined`, so the bound function was never produced.
-                    let reified: Option<&'static [u8]> = match name_str {
-                        "bind" => Some(b"bind"),
-                        "call" => Some(b"call"),
-                        "apply" => Some(b"apply"),
-                        _ => None,
-                    };
-                    if let Some(method) = reified {
+                    if let Some(method) = reified_function_method_name(name_str) {
                         let receiver =
                             f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                         return JSValue::from_bits(
