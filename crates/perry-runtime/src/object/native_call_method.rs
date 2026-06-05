@@ -526,8 +526,17 @@ pub extern "C" fn js_value_to_locale_string(receiver: f64) -> f64 {
 
 /// Shared implementation for `Object.prototype.isPrototypeOf`.
 pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64) -> bool {
-    let receiver_ptr = match object_ptr_from_value(receiver) {
-        Some(ptr) => ptr,
+    // The receiver (and every link in the target's `[[Prototype]]` chain) is
+    // compared by raw heap address. Exotic-typed prototype objects —
+    // `Array.prototype` is itself a GC_TYPE_ARRAY, `Uint8Array.prototype` a
+    // typed-array proto — are NOT `GC_TYPE_OBJECT`, so resolving them with
+    // `object_ptr_from_value` (which only accepts GC_TYPE_OBJECT) returned
+    // `None` and the walk bailed. #4549: use the raw GC pointer instead.
+    let heap_addr = |v: f64| -> Option<usize> {
+        gc_pointer_and_type_from_value(v).map(|(ptr, _)| ptr as usize)
+    };
+    let receiver_addr = match heap_addr(receiver) {
+        Some(addr) => addr,
         None => return false,
     };
 
@@ -538,8 +547,8 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             return false;
         }
         let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-        if let Some(proto_ptr) = object_ptr_from_value(proto) {
-            return std::ptr::addr_eq(proto_ptr, receiver_ptr);
+        if let Some(proto_addr) = heap_addr(proto) {
+            return proto_addr == receiver_addr;
         }
         return false;
     }
@@ -552,7 +561,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     if let Some(target_ptr) = object_ptr_from_value(target) {
         let has_instance_prototype =
             crate::object::prototype_chain::object_static_prototype(target_ptr as usize).is_some();
-        if std::ptr::addr_eq(target_ptr, receiver_ptr) {
+        if target_ptr as usize == receiver_addr {
             return false;
         }
         // A `new Func()` instance snapshots the function's current
@@ -573,7 +582,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
                 let proto_obj = crate::object::class_registry::class_prototype_object(cid);
                 let mut next_cid = 0;
                 if !proto_obj.is_null() {
-                    if std::ptr::addr_eq(proto_obj, receiver_ptr) {
+                    if proto_obj as usize == receiver_addr {
                         return true;
                     }
                     next_cid =
@@ -600,8 +609,19 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             Some(info) => info,
             None => return false,
         };
+        // #4549: arrays and typed arrays are objects whose `[[Prototype]]`
+        // chain is modeled (`Array.prototype` → `Object.prototype`,
+        // `Uint8Array.prototype` → `%TypedArray%.prototype` →
+        // `Object.prototype`), so they must reach the generic walk below.
+        // Previously only closures/errors were allowed, so
+        // `Array.prototype.isPrototypeOf([1, 2])` and
+        // `Object.prototype.isPrototypeOf([])` wrongly returned `false`.
+        // (ArrayBuffer's BufferHeader representation isn't resolved by the
+        // generic pointer walk yet — tracked separately.)
         if target_gc_type != crate::gc::GC_TYPE_CLOSURE
             && target_gc_type != crate::gc::GC_TYPE_ERROR
+            && target_gc_type != crate::gc::GC_TYPE_ARRAY
+            && target_gc_type != crate::gc::GC_TYPE_TYPED_ARRAY
         {
             return false;
         }
@@ -609,20 +629,20 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
 
     let mut current = target;
     for _ in 0..32 {
-        let current_ptr = object_ptr_from_value(current);
+        let current_addr = heap_addr(current);
         let proto = crate::object::js_object_get_prototype_of(current);
         let proto_jsval = JSValue::from_bits(proto.to_bits());
         if proto_jsval.is_null() || proto_jsval.is_undefined() {
             break;
         }
-        let proto_ptr = match object_ptr_from_value(proto) {
-            Some(ptr) => ptr,
+        let proto_addr = match heap_addr(proto) {
+            Some(addr) => addr,
             None => break,
         };
-        if current_ptr.is_some_and(|ptr| std::ptr::addr_eq(ptr, proto_ptr)) {
+        if current_addr == Some(proto_addr) {
             break;
         }
-        if std::ptr::addr_eq(proto_ptr, receiver_ptr) {
+        if proto_addr == receiver_addr {
             return true;
         }
         current = proto;
