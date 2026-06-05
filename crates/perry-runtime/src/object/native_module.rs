@@ -7362,6 +7362,21 @@ pub(crate) unsafe fn get_native_module_constant(
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
             "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
+            // `Http2ServerRequest` / `Http2ServerResponse` imported as VALUES are
+            // used by libraries purely for `req instanceof Http2ServerRequest`
+            // brand checks (e.g. @hono/node-server distinguishing HTTP/2 from
+            // HTTP/1 requests). Resolve them to callable class values so the
+            // `instanceof` RHS is a function (returns `false` for Perry's HTTP/1
+            // handles) instead of `undefined` — which threw "Right-hand side of
+            // 'instanceof' is not an object" and 400'd every request.
+            "Http2ServerRequest" => Some(bound_native_callable_export_value(
+                "http2",
+                "Http2ServerRequest",
+            )),
+            "Http2ServerResponse" => Some(bound_native_callable_export_value(
+                "http2",
+                "Http2ServerResponse",
+            )),
             // #3905: `import http2 from "node:http2"` — default is the module
             // namespace object.
             "default" => Some(native_namespace_or_create("http2", namespace_obj)),

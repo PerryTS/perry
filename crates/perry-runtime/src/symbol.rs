@@ -1626,6 +1626,31 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Small native handles (HTTP IncomingMessage/socket, fetch bodies, etc.)
+    // NaN-boxed as POINTER are NOT heap objects: the well-known-symbol dispatch
+    // above already handled the symbols they expose. Any OTHER symbol read must
+    // return undefined rather than falling through to the pointer-deref paths
+    // below (`symbol_accessor_property` / `own_symbol_property` /
+    // `resolve_explicit_object_prototype_symbol`), which reinterpret the tiny
+    // handle id as an ObjectHeader and read `id + offset` → EXC_BAD_ACCESS.
+    // @hono/node-server reads symbols off the IncomingMessage handle while
+    // adapting it to a web Request. Proxies share the small-id band
+    // (0xF0000..0x100000) but have real symbol semantics, so exclude them.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        // Only short-circuit values that are NOT real heap objects. A genuine
+        // ObjectHeader can live at a low address in a small program, so gate on
+        // `is_valid_obj_ptr` (validates the GcHeader) rather than the address
+        // band alone — otherwise a symbol read on a low-address object returned
+        // undefined. Proxies (registered small ids) keep their own semantics.
+        if id > 0
+            && id < 0x100000
+            && !crate::object::is_valid_obj_ptr(id as *const u8)
+            && crate::proxy::js_proxy_is_proxy(obj_f64) == 0
+        {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    }
     if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
         return accessors::invoke_symbol_accessor_getter(acc.get, obj_f64);
     }

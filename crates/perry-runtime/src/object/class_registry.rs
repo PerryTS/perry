@@ -474,7 +474,14 @@ unsafe fn resolve_proto_chain_field_inner(
             }
             let field_val = if let Some(receiver) = receiver {
                 let previous_this = js_implicit_this_set(receiver);
+                // The recursive `get_field(proto_obj, key)` re-derives a class
+                // getter's `this` from `proto_obj`; stash the real instance so an
+                // inherited getter (object-literal `get x()` on an
+                // `Object.create(proto)` prototype) binds `this` to the instance.
+                let prev_override =
+                    super::field_get_set::accessor_receiver_override_begin(receiver);
                 let value = js_object_get_field_by_name(proto_obj as *const _, key);
+                super::field_get_set::accessor_receiver_override_end(prev_override);
                 js_implicit_this_set(previous_this);
                 value
             } else {

@@ -338,12 +338,56 @@ unsafe fn ordinary_object_prototype_method_value(
     }
 }
 
+thread_local! {
+    /// Receiver to bind when an accessor getter is reached by walking a
+    /// prototype chain. `js_object_get_field_by_name(proto, key)` re-derives the
+    /// accessor receiver from its `obj` argument — which is the PROTOTYPE during
+    /// an inherited read, not the original instance. `resolve_inherited_field`
+    /// stashes the real receiver here for the duration of the walk; the getter
+    /// invocation consumes it so `this` is the instance, matching the spec's
+    /// `[[Get]](P, Receiver)`. (object-literal getters on a `Object.create`
+    /// prototype — e.g. @hono/node-server's request prototype reading
+    /// `this[incomingKey].method`.)
+    static ACCESSOR_RECEIVER_OVERRIDE: std::cell::Cell<Option<f64>>
+        = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn accessor_receiver_override_begin(receiver: f64) -> Option<f64> {
+    ACCESSOR_RECEIVER_OVERRIDE.with(|c| {
+        // Keep the OUTERMOST receiver across multi-hop prototype walks.
+        let to_set = c.get().or(Some(receiver));
+        c.replace(to_set)
+    })
+}
+
+pub(crate) fn accessor_receiver_override_end(prev: Option<f64>) {
+    ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.set(prev));
+}
+
+/// `this` to pass to a class getter (vtable `getters`) found while resolving a
+/// property. When the getter was reached by walking a prototype chain, `obj` is
+/// the PROTOTYPE the getter lives on — bind the original instance stashed by
+/// `resolve_inherited_field` instead. Take() consumes it so the getter body
+/// runs with a clean override.
+unsafe fn class_getter_this(obj: *const ObjectHeader) -> f64 {
+    ACCESSOR_RECEIVER_OVERRIDE
+        .with(|c| c.take())
+        .unwrap_or_else(|| f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits()))
+}
+
 unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
     let closure = (get_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure.is_null() {
         return JSValue::undefined();
     }
-    let prev = super::js_implicit_this_set(receiver);
+    // Consume any inherited-receiver override: the getter's `this` must be the
+    // original instance, not the prototype the accessor lives on. Take() clears
+    // it so the getter BODY runs with a fresh override (a nested inherited read
+    // inside the getter gets its own).
+    let eff_receiver = ACCESSOR_RECEIVER_OVERRIDE
+        .with(|c| c.take())
+        .unwrap_or(receiver);
+    let prev = super::js_implicit_this_set(eff_receiver);
     let result_f64 = crate::closure::js_closure_call0(closure);
     super::js_implicit_this_set(prev);
     JSValue::from_bits(result_f64.to_bits())
@@ -3920,9 +3964,7 @@ pub extern "C" fn js_object_get_field_by_name(
                             while depth < 32 {
                                 if let Some(vtable) = reg.get(&cid) {
                                     if let Some(&getter_ptr) = vtable.getters.get(name) {
-                                        let this_f64 = f64::from_bits(
-                                            crate::value::js_nanbox_pointer(obj as i64).to_bits(),
-                                        );
+                                        let this_f64 = class_getter_this(obj);
                                         let f: extern "C" fn(f64) -> f64 =
                                             std::mem::transmute(getter_ptr);
                                         return JSValue::from_bits(f(this_f64).to_bits());
@@ -4186,9 +4228,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                     // Getters take `this` as f64 (NaN-boxed
                                     // POINTER_TAG), matching the codegen
                                     // calling convention for class methods.
-                                    let this_f64: f64 = f64::from_bits(
-                                        crate::value::js_nanbox_pointer(obj as i64).to_bits(),
-                                    );
+                                                                    let this_f64: f64 = class_getter_this(obj);
                                     let f: extern "C" fn(f64) -> f64 =
                                         std::mem::transmute(getter_ptr);
                                     return JSValue::from_bits(f(this_f64).to_bits());

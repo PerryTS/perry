@@ -171,7 +171,12 @@ pub(crate) fn resolve_inherited_field(
     // object instead of the instance.
     let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
     let previous_this = super::js_implicit_this_set(receiver);
+    // The recursive `get_field(proto, key)` re-derives the accessor receiver
+    // from `proto`; stash the real instance so an inherited getter binds `this`
+    // to it, not to the prototype.
+    let prev_override = super::field_get_set::accessor_receiver_override_begin(receiver);
     let v = super::js_object_get_field_by_name(proto, key);
+    super::field_get_set::accessor_receiver_override_end(prev_override);
     super::js_implicit_this_set(previous_this);
     if v.bits() == 0x7FFC_0000_0000_0001 {
         // undefined — treat as "not present" so callers fall back cleanly.
