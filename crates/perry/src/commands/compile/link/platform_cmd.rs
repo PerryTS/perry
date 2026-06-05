@@ -324,7 +324,13 @@ pub fn select_linker_command(
             .arg(format!(
                 "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}",
                 developer_dir, sdk
-            ));
+            ))
+            // Native C++ deps (e.g. Jolt physics) pull in libc++ / libc++abi
+            // symbols; clang links these only when it sees C++ inputs, which it
+            // doesn't here (we hand it objects + .a archives), so request them
+            // explicitly. Mirrors the cross-iOS branch.
+            .arg("-lc++")
+            .arg("-lc++abi");
         c
     } else if is_tvos && is_cross_tvos {
         // Cross-compile tvOS from Linux using ld64.lld + Apple SDK sysroot.
