@@ -28,6 +28,9 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
+#[cfg(test)]
+mod test_async_shims;
+
 const MIN_HEAP_POINTER: u64 = 0x1000;
 const EVENT_TARGET_MIN_HEAP_POINTER: u64 = 0x10000;
 const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -85,6 +88,10 @@ extern "C" {
     fn js_event_target_get_max_listeners(target: *mut u8) -> f64;
     fn js_event_target_set_max_listeners(target: *mut u8, n: f64) -> i32;
     fn js_node_stream_method_listeners(stream_handle: i64, event: f64) -> i64;
+    fn js_node_stream_method_once(stream_handle: i64, event: f64, cb: f64) -> f64;
+    fn js_node_stream_method_remove_listener(stream_handle: i64, event: f64, cb: f64) -> f64;
+    fn js_node_stream_is_readable(stream: f64) -> f64;
+    fn js_node_stream_is_writable(stream: f64) -> f64;
     fn js_abort_signal_remove_listener(signal: *mut u8, event: f64, listener: f64);
     fn js_abort_signal_is_aborted(signal: *mut u8) -> i32;
     fn js_abort_error_value() -> f64;
@@ -104,6 +111,7 @@ extern "C" {
     // TypeError [ERR_INVALID_ARG_TYPE]. Centralized in perry-runtime so the
     // stdlib and ext-events EventEmitter implementations stay byte-identical.
     fn js_validate_event_listener(listener_bits: i64, name_ptr: *const u8, name_len: u32) -> i64;
+    fn js_register_closure_rest(fn_ptr: *const u8, fixed_arity: u32);
 }
 
 /// #3072: validate an EventEmitter listener argument, returning the closure
@@ -430,6 +438,21 @@ unsafe fn stream_listeners_for_heap_object(
     }
     let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
     Some(js_node_stream_method_listeners(handle, event) as *mut ArrayHeader)
+}
+
+unsafe fn stream_value_from_handle(handle: Handle) -> Option<f64> {
+    let addr = handle as u64;
+    if !(EVENT_TARGET_MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) || addr & 0x7 != 0 {
+        return None;
+    }
+    let value = nanbox_pointer_bits(handle);
+    let readable = js_node_stream_is_readable(value);
+    let writable = js_node_stream_is_writable(value);
+    if readable.to_bits() == TAG_NULL_F64_BITS && writable.to_bits() == TAG_NULL_F64_BITS {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn handle_from_js_value_bits(bits: u64) -> Handle {
@@ -1305,8 +1328,74 @@ extern "C" fn events_once_abort_listener(closure: *const RawClosureHeader) -> f6
     undefined_value()
 }
 
+extern "C" fn events_once_stream_resolve_listener(
+    closure: *const RawClosureHeader,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+        let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
+        let error_listener = js_closure_get_capture_ptr(closure, 2);
+        let error_event_ptr = js_closure_get_capture_ptr(closure, 3);
+        if promise.is_null() {
+            return undefined_value();
+        }
+        if handle != 0 && error_listener != 0 && error_event_ptr != 0 {
+            let error_event =
+                f64::from_bits(nanbox_string_bits(error_event_ptr as *mut StringHeader));
+            let error_listener_value = nanbox_pointer_bits(error_listener);
+            let _ =
+                js_node_stream_method_remove_listener(handle, error_event, error_listener_value);
+        }
+        js_promise_resolve(promise, rest_array_or_empty(rest));
+    }
+    undefined_value()
+}
+
+extern "C" fn events_once_stream_reject_listener(
+    closure: *const RawClosureHeader,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+        let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
+        let event_name_ptr = js_closure_get_capture_ptr(closure, 2);
+        let resolve_listener = js_closure_get_capture_ptr(closure, 3);
+        if handle != 0 && event_name_ptr != 0 && resolve_listener != 0 {
+            let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+            let resolve_listener_value = nanbox_pointer_bits(resolve_listener);
+            let _ = js_node_stream_method_remove_listener(handle, event, resolve_listener_value);
+        }
+        if !promise.is_null() {
+            js_promise_reject(promise, first_rest_arg_or_undefined(rest));
+        }
+    }
+    undefined_value()
+}
+
+fn rest_array_or_empty(rest: f64) -> f64 {
+    if JsValue::from_bits(rest.to_bits()).is_pointer() {
+        rest
+    } else {
+        nanbox_pointer_bits(unsafe { js_array_alloc(0) } as i64)
+    }
+}
+
+unsafe fn first_rest_arg_or_undefined(rest: f64) -> f64 {
+    let value = JsValue::from_bits(rest.to_bits());
+    if !value.is_pointer() {
+        return undefined_value();
+    }
+    let arr = value.as_pointer::<ArrayHeader>();
+    if arr.is_null() || (*arr).length == 0 {
+        undefined_value()
+    } else {
+        f64::from_bits(js_array_get(arr, 0).bits())
+    }
+}
+
 /// `events.once(emitter, eventName[, options])` — returns a Promise that resolves
-/// to a 1-element array `[arg]` on the next `emit(eventName, arg)`.
+/// to the args array from the next matching event.
 ///
 /// # Safety
 ///
@@ -1354,6 +1443,39 @@ pub unsafe extern "C" fn js_events_once(
             .entry(event_name)
             .or_default()
             .push(pending);
+        return raw;
+    }
+    if stream_value_from_handle(handle).is_some() {
+        let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
+        if event_name_ptr.is_null() {
+            return raw;
+        }
+        js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
+        js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
+        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        js_closure_set_capture_ptr(listener, 0, raw as i64);
+        js_closure_set_capture_ptr(listener, 1, handle);
+        js_closure_set_capture_ptr(listener, 2, 0);
+        js_closure_set_capture_ptr(listener, 3, 0);
+        let event_value = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+        let listener_value = nanbox_pointer_bits(listener as i64);
+        if event_name != "error" {
+            let error_event_name = b"error";
+            let error_event_ptr =
+                js_string_from_bytes(error_event_name.as_ptr(), error_event_name.len() as u32);
+            let reject_listener =
+                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            js_closure_set_capture_ptr(reject_listener, 0, raw as i64);
+            js_closure_set_capture_ptr(reject_listener, 1, handle);
+            js_closure_set_capture_ptr(reject_listener, 2, event_name_ptr as i64);
+            js_closure_set_capture_ptr(reject_listener, 3, listener as i64);
+            js_closure_set_capture_ptr(listener, 2, reject_listener as i64);
+            js_closure_set_capture_ptr(listener, 3, error_event_ptr as i64);
+            let error_event = f64::from_bits(nanbox_string_bits(error_event_ptr));
+            let reject_listener_value = nanbox_pointer_bits(reject_listener as i64);
+            let _ = js_node_stream_method_once(handle, error_event, reject_listener_value);
+        }
+        let _ = js_node_stream_method_once(handle, event_value, listener_value);
     }
     raw
 }
@@ -1656,6 +1778,10 @@ mod tests {
         nanbox_pointer_bits(closure as i64).to_bits() as i64
     }
 
+    fn string_event_value(name: &JsString) -> f64 {
+        f64::from_bits(nanbox_string_bits(name.as_raw()))
+    }
+
     fn assert_rewritten(before: usize, after: usize) {
         assert_ne!(after, before);
         assert!(perry_runtime::arena::pointer_in_nursery(after));
@@ -1789,5 +1915,46 @@ mod tests {
             );
         }
         drop_event_emitter_handle(handle);
+    }
+
+    #[test]
+    fn static_once_on_runtime_stream_attaches_and_cleans_error_pair() {
+        let stream = perry_runtime::node_stream::js_node_stream_readable_new(undefined_value());
+        let handle = handle_from_value(stream);
+        let data = alloc_string("data");
+        let error = alloc_string("error");
+        let data_value = string_event_value(&data);
+        let error_value = string_event_value(&error);
+
+        let promise = unsafe { js_events_once(stream, data.as_raw(), undefined_value()) };
+        assert!(!promise.is_null());
+        assert_eq!(
+            perry_runtime::node_stream::js_node_stream_method_listener_count(handle, data_value),
+            1.0
+        );
+        assert_eq!(
+            perry_runtime::node_stream::js_node_stream_method_listener_count(handle, error_value),
+            1.0
+        );
+
+        let chunk = alloc_string("chunk");
+        perry_runtime::node_stream::js_node_stream_method_emit(
+            handle,
+            data_value,
+            string_event_value(&chunk),
+        );
+
+        assert_eq!(
+            perry_runtime::promise::js_promise_state(promise as *mut perry_runtime::Promise),
+            1
+        );
+        assert_eq!(
+            perry_runtime::node_stream::js_node_stream_method_listener_count(handle, data_value),
+            0.0
+        );
+        assert_eq!(
+            perry_runtime::node_stream::js_node_stream_method_listener_count(handle, error_value),
+            0.0
+        );
     }
 }
