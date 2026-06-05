@@ -2342,7 +2342,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     && is_class_id_registered(class_id)
                     && !is_prototype_ref
                 {
-                    let value = super::class_prototype_ref_value(class_id);
+                    let value = super::class_registry::class_decl_prototype_value(class_id);
+                    if value.to_bits() == crate::value::TAG_UNDEFINED {
+                        let value = super::class_prototype_ref_value(class_id);
+                        return JSValue::from_bits(value.to_bits());
+                    }
                     return JSValue::from_bits(value.to_bits());
                 }
                 if class_id != 0 && class_has_own_method(class_id, name) {

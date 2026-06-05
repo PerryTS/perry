@@ -676,7 +676,8 @@ fn test_class_inheritance_side_table_roots_mark_and_rewrite() {
     use crate::object::{
         scan_class_inheritance_roots_mut, test_class_parent_closure_root,
         test_class_prototype_object_root, test_clear_class_inheritance_roots,
-        test_seed_class_inheritance_roots, test_seed_class_parent_closure_root,
+        test_decl_class_prototype_root, test_seed_class_inheritance_roots,
+        test_seed_class_parent_closure_root, test_seed_decl_class_prototype_root,
     };
 
     const PROTO_CID: u32 = 0xDEAD_0001;
@@ -685,26 +686,35 @@ fn test_class_inheritance_side_table_roots_mark_and_rewrite() {
     clear_marks();
     clear_mark_seeds();
 
-    // Allocate the two "parent" objects in the nursery before snapshotting the
+    // Allocate the side-table objects in the nursery before snapshotting the
     // valid-pointer set so the mark phase recognizes them as roots.
     let proto_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let decl_proto_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let closure_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid_ptrs = build_valid_pointer_set();
     let proto_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+    let decl_proto_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
     let closure_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
     let proto_hdr = unsafe { header_from_user_ptr(proto_user) as *mut GcHeader };
+    let decl_proto_hdr = unsafe { header_from_user_ptr(decl_proto_user) as *mut GcHeader };
     let closure_hdr = unsafe { header_from_user_ptr(closure_user) as *mut GcHeader };
 
     test_seed_class_inheritance_roots(PROTO_CID, proto_user as usize);
+    test_seed_decl_class_prototype_root(PROTO_CID, decl_proto_user as usize);
     test_seed_class_parent_closure_root(CLOSURE_CID, closure_user as usize);
 
-    // Mark phase: both parents become live roots.
+    // Mark phase: all side-table parents become live roots.
     scan_class_inheritance_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
     unsafe {
         assert_ne!(
             (*proto_hdr).gc_flags & GC_FLAG_MARKED,
             0,
             "CLASS_PROTOTYPE_OBJECTS parent must be marked as a root"
+        );
+        assert_ne!(
+            (*decl_proto_hdr).gc_flags & GC_FLAG_MARKED,
+            0,
+            "CLASS_DECL_PROTOTYPE_OBJECTS prototype must be marked as a root"
         );
         assert_ne!(
             (*closure_hdr).gc_flags & GC_FLAG_MARKED,
@@ -717,6 +727,7 @@ fn test_class_inheritance_side_table_roots_mark_and_rewrite() {
     // follow the forwarding address.
     unsafe {
         set_forwarding_address(proto_hdr, proto_old);
+        set_forwarding_address(decl_proto_hdr, decl_proto_old);
         set_forwarding_address(closure_hdr, closure_old);
     }
     scan_class_inheritance_roots_mut(&mut RuntimeRootVisitor::for_rewrite(&valid_ptrs));
@@ -725,6 +736,11 @@ fn test_class_inheritance_side_table_roots_mark_and_rewrite() {
         test_class_prototype_object_root(PROTO_CID),
         proto_old as usize,
         "CLASS_PROTOTYPE_OBJECTS parent must be rewritten to the evacuated address"
+    );
+    assert_eq!(
+        test_decl_class_prototype_root(PROTO_CID),
+        decl_proto_old as usize,
+        "CLASS_DECL_PROTOTYPE_OBJECTS prototype must be rewritten to the evacuated address"
     );
     assert_eq!(
         test_class_parent_closure_root(CLOSURE_CID),

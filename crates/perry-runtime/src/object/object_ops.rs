@@ -1864,6 +1864,13 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
                         return proto;
                     }
+                    if let Some(proto) =
+                        super::class_registry::class_decl_prototype_value_for_instance_class(
+                            (*obj).class_id,
+                        )
+                    {
+                        return proto;
+                    }
                 }
             }
             return obj_value;
@@ -1933,6 +1940,13 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 }
                 if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
                     if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
+                        return proto;
+                    }
+                    if let Some(proto) =
+                        super::class_registry::class_decl_prototype_value_for_instance_class(
+                            (*obj).class_id,
+                        )
+                    {
                         return proto;
                     }
                 }

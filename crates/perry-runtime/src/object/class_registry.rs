@@ -179,6 +179,14 @@ pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(N
 // usage is guaranteed.
 pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 
+/// Lazily materialized `Class.prototype` objects for declared ES classes.
+/// These are separate from `CLASS_PROTOTYPE_OBJECTS`: that older table is
+/// intentionally overloaded for synthetic prototype sources and static
+/// inheritance shortcuts. Declared class prototypes need stable heap identity
+/// for `typeof C.prototype`, `Object.getPrototypeOf(new C())`, and
+/// `C.prototype.isPrototypeOf(instance)` without perturbing those paths.
+pub static CLASS_DECL_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+
 /// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
 /// (function value) when `class Child extends <function value> {}`. effect's
 /// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function
@@ -196,6 +204,18 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
         return;
     }
     let mut guard = CLASS_PROTOTYPE_OBJECTS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard.as_mut().unwrap().insert(class_id, proto_ptr as usize);
+    crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+}
+
+pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
+    if class_id == 0 || proto_ptr.is_null() {
+        return;
+    }
+    let mut guard = CLASS_DECL_PROTOTYPE_OBJECTS.write().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
@@ -221,6 +241,97 @@ pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
         .read()
         .ok()
         .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
+}
+
+pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    if let Ok(read) = CLASS_DECL_PROTOTYPE_OBJECTS.read() {
+        if let Some(map) = read.as_ref() {
+            return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
+        }
+    }
+    std::ptr::null_mut()
+}
+
+fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+        if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
+            names.extend(
+                vtable
+                    .methods
+                    .keys()
+                    .filter(|name| *name != "constructor")
+                    .cloned(),
+            );
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id: u32) {
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    for name in class_decl_prototype_method_names(class_id) {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let leaked: &'static [u8] = name.as_bytes().to_vec().leak();
+        let method = js_class_method_bind(proto_value, leaked.as_ptr(), leaked.len());
+        js_object_set_field_by_name(proto, key, method);
+        set_builtin_property_attrs(proto as usize, name, PropertyAttrs::new(true, false, true));
+    }
+}
+
+pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
+    if class_id == 0 || class_name_for_id(class_id).is_none() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    let existing = class_decl_prototype_object(class_id);
+    if !existing.is_null() {
+        return crate::value::js_nanbox_pointer(existing as i64);
+    }
+
+    let proto = js_object_alloc(class_id, 0);
+    if proto.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    class_decl_prototype_object_root_store(class_id, proto);
+
+    let constructor_key =
+        crate::string::js_string_from_bytes(b"constructor".as_ptr(), "constructor".len() as u32);
+    js_object_set_field_by_name(
+        proto,
+        constructor_key,
+        class_constructor_ref_value(class_id),
+    );
+    set_builtin_property_attrs(
+        proto as usize,
+        "constructor".to_string(),
+        PropertyAttrs::new(true, false, true),
+    );
+    install_class_decl_prototype_method_fields(proto, class_id);
+
+    let parent_proto_bits = get_parent_class_id(class_id)
+        .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
+        .and_then(|parent_id| {
+            let parent_proto = class_decl_prototype_value(parent_id);
+            let parent_bits = parent_proto.to_bits();
+            ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
+        })
+        .or_else(global_object_prototype_bits);
+    if let Some(bits) = parent_proto_bits {
+        super::prototype_chain::object_set_static_prototype(proto as usize, bits);
+    }
+
+    crate::value::js_nanbox_pointer(proto as i64)
+}
+
+pub(crate) fn class_decl_prototype_value_for_instance_class(class_id: u32) -> Option<f64> {
+    if class_id == 0 || class_name_for_id(class_id).is_none() {
+        return None;
+    }
+    let proto = class_decl_prototype_value(class_id);
+    ((proto.to_bits() >> 48) == 0x7FFD).then_some(proto)
 }
 
 fn global_object_prototype_bits() -> Option<u64> {
