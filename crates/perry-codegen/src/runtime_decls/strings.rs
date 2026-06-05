@@ -971,6 +971,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I64, DOUBLE, DOUBLE, I32, DOUBLE],
     );
+    module.declare_function(
+        "js_array_copy_within_value",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32, DOUBLE],
+    );
     module.declare_function("js_regexp_new", I64, &[I64, I64]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).

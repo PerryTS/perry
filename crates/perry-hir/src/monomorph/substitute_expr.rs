@@ -644,6 +644,19 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|e| Box::new(substitute_expr(e, substitutions))),
         },
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => Expr::ArrayCopyWithinValue {
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+            target: Box::new(substitute_expr(target, substitutions)),
+            start: Box::new(substitute_expr(start, substitutions)),
+            end: end
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        },
         Expr::ArrayEntries(array) => {
             Expr::ArrayEntries(Box::new(substitute_expr(array, substitutions)))
         }

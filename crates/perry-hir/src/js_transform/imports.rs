@@ -1115,6 +1115,12 @@ pub fn transform_expr(
             transform_expr(start, js_imports, extern_func_to_js, local_name_to_js, tracker);
             if let Some(e) = end { transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker); }
         }
+        Expr::ArrayCopyWithinValue { receiver, target, start, end } => {
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(target, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(start, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if let Some(e) = end { transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker); }
+        }
         Expr::StringSplit(a, b) => {
             transform_expr(a, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(b, js_imports, extern_func_to_js, local_name_to_js, tracker);

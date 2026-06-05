@@ -1279,6 +1279,30 @@ fn try_arraylike_receiver_method(
     if rest_args.iter().any(|a| a.spread.is_some()) {
         return Ok(None);
     }
+    if method == "copyWithin" {
+        let receiver = Box::new(lower_expr(ctx, receiver)?);
+        let arg = |ctx: &mut LoweringContext, i: usize| -> Result<Option<Box<Expr>>> {
+            match rest_args.get(i) {
+                Some(a) => Ok(Some(Box::new(lower_expr(ctx, &a.expr)?))),
+                None => Ok(None),
+            }
+        };
+        let target = match arg(ctx, 0)? {
+            Some(t) => t,
+            None => Box::new(Expr::Undefined),
+        };
+        let start = match arg(ctx, 1)? {
+            Some(s) => s,
+            None => Box::new(Expr::Undefined),
+        };
+        let end = arg(ctx, 2)?;
+        return Ok(Some(Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        }));
+    }
     // Only fold the read-only/returning methods. Bail early for everything else
     // (mutators, flat, etc.) BEFORE lowering the receiver, so unrelated shapes
     // keep the existing member-call behavior with no side effects.

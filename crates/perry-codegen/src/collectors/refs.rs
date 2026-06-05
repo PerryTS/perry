@@ -863,6 +863,19 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(e, out);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            walk(receiver, out);
+            walk(target, out);
+            walk(start, out);
+            if let Some(e) = end {
+                walk(e, out);
+            }
+        }
         // Issue #894: prepended to the Sequence wrapping `Expr::ClassRef`
         // for class expressions returned from factory functions. The
         // key/value reference module-level (or function-local) lets;

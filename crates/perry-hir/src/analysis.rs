@@ -624,6 +624,19 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(e, assigned);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_assigned_locals_expr(receiver, assigned);
+            collect_assigned_locals_expr(target, assigned);
+            collect_assigned_locals_expr(start, assigned);
+            if let Some(e) = end {
+                collect_assigned_locals_expr(e, assigned);
+            }
+        }
         Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
             collect_assigned_locals_expr(array, assigned);
         }

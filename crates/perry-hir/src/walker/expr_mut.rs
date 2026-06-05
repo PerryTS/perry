@@ -1606,6 +1606,19 @@ where
                 f(e);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            f(receiver);
+            f(target);
+            f(start);
+            if let Some(e) = end {
+                f(e);
+            }
+        }
 
         // ─── Map / Set methods (non-leaf) ────────────────────────────────
         Expr::MapSet { map, key, value } => {

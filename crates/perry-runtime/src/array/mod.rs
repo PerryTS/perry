@@ -41,8 +41,9 @@ pub use self::header::{
     scan_template_raw_roots_mut, ArrayHeader,
 };
 pub use self::immutable::{
-    js_array_copy_within, js_array_to_reversed, js_array_to_sorted_default,
-    js_array_to_sorted_with_comparator, js_array_to_spliced, js_array_with,
+    js_array_copy_within, js_array_copy_within_value, js_array_to_reversed,
+    js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_to_spliced,
+    js_array_with,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,

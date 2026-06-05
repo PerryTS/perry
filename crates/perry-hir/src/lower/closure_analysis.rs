@@ -339,6 +339,19 @@ fn widen_mutable_captures_expr(
                 widen_mutable_captures_expr(e, scope_mutable);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            widen_mutable_captures_expr(receiver, scope_mutable);
+            widen_mutable_captures_expr(target, scope_mutable);
+            widen_mutable_captures_expr(start, scope_mutable);
+            if let Some(e) = end {
+                widen_mutable_captures_expr(e, scope_mutable);
+            }
+        }
         Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
             widen_mutable_captures_expr(array, scope_mutable);
         }
@@ -634,6 +647,19 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_assigned_expr(e, out);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_closure_assigned_expr(receiver, out);
+            collect_closure_assigned_expr(target, out);
+            collect_closure_assigned_expr(start, out);
+            if let Some(e) = end {
+                collect_closure_assigned_expr(e, out);
+            }
+        }
         Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
             collect_closure_assigned_expr(array, out);
         }
@@ -897,6 +923,19 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            collect_closure_captures_expr(target, out);
+            collect_closure_captures_expr(start, out);
+            if let Some(e) = end {
+                collect_closure_captures_expr(e, out);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_closure_captures_expr(receiver, out);
             collect_closure_captures_expr(target, out);
             collect_closure_captures_expr(start, out);
             if let Some(e) = end {
@@ -1327,6 +1366,19 @@ fn collect_closure_assigned_in_body_expr(
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            collect_closure_assigned_in_body_expr(target, out);
+            collect_closure_assigned_in_body_expr(start, out);
+            if let Some(e) = end {
+                collect_closure_assigned_in_body_expr(e, out);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_closure_assigned_in_body_expr(receiver, out);
             collect_closure_assigned_in_body_expr(target, out);
             collect_closure_assigned_in_body_expr(start, out);
             if let Some(e) = end {

@@ -1773,6 +1773,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DateToJSON(..)
         | Expr::ArrayWith { .. }
         | Expr::ArrayCopyWithin { .. }
+        | Expr::ArrayCopyWithinValue { .. }
         | Expr::ArrayToReversed { .. }
         | Expr::ArrayToSorted { .. }
         | Expr::ArrayToSpliced { .. }

@@ -853,6 +853,19 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(e, candidates, classes, escaped);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
+            check_escapes_in_expr(target, candidates, classes, escaped);
+            check_escapes_in_expr(start, candidates, classes, escaped);
+            if let Some(e) = end {
+                check_escapes_in_expr(e, candidates, classes, escaped);
+            }
+        }
         Expr::ArrayAt { array, index } => {
             check_escapes_in_expr(array, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);

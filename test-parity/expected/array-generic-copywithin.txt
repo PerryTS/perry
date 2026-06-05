@@ -1,0 +1,14 @@
+sparse return same: true
+sparse: a,a,b,<hole>,d keys=0|1|2|4|length
+overlap backward: a,a,b,c,d keys=0|1|2|3|4|length
+negative offsets: a,b,c,b,c keys=0|1|2|3|4|length
+apply return same: true
+apply: y,z,y,z keys=0|1|2|3|length
+delete missing source: a,<hole>,<hole>,c keys=0|3|length
+delete has: false true
+coerced bounds: a,a,b,c,d keys=0|1|2|3|4|length
+no args return same: true
+no args: a,b keys=0|1|length
+null receiver: TypeError
+undefined receiver: TypeError
+string receiver: TypeError

@@ -634,6 +634,19 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(end, non_escaping_news, used);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
+            collect_used_new_fields_in_expr(target, non_escaping_news, used);
+            collect_used_new_fields_in_expr(start, non_escaping_news, used);
+            if let Some(end) = end {
+                collect_used_new_fields_in_expr(end, non_escaping_news, used);
+            }
+        }
         Expr::ArrayAt { array, index } => {
             collect_used_new_fields_in_expr(array, non_escaping_news, used);
             collect_used_new_fields_in_expr(index, non_escaping_news, used);

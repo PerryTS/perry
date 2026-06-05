@@ -392,6 +392,7 @@ impl SH for Expr {
             Expr::ArrayToSpliced { array, start, delete_count, items, } => { tag(h, 276); array.as_ref().hash(h); start.as_ref().hash(h); delete_count.as_ref().hash(h); items.hash(h); }
             Expr::ArrayWith { array, index, value, } => { tag(h, 277); array.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ArrayCopyWithin { array_id, target, start, end, } => { tag(h, 278); array_id.hash(h); target.as_ref().hash(h); start.as_ref().hash(h); end.hash(h); }
+            Expr::ArrayCopyWithinValue { receiver, target, start, end, } => { tag(h, 12091); receiver.as_ref().hash(h); target.as_ref().hash(h); start.as_ref().hash(h); end.hash(h); }
             Expr::ArrayEntries(e) => { tag(h, 279); e.as_ref().hash(h); }
             Expr::ArrayKeys(e) => { tag(h, 280); e.as_ref().hash(h); }
             Expr::ArrayValues(e) => { tag(h, 281); e.as_ref().hash(h); }

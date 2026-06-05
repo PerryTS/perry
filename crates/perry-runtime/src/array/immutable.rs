@@ -333,3 +333,123 @@ pub extern "C" fn js_array_copy_within(
         arr
     }
 }
+
+#[cold]
+fn throw_copy_within_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn copy_within_to_integer_or_infinity(value: f64) -> f64 {
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_nan() || number == 0.0 {
+        0.0
+    } else if number.is_infinite() {
+        number
+    } else {
+        number.trunc()
+    }
+}
+
+fn copy_within_to_length(value: f64) -> u32 {
+    let number = crate::builtins::js_number_coerce(value);
+    if number.is_nan() || number <= 0.0 {
+        0
+    } else if number.is_infinite() {
+        if number.is_sign_positive() {
+            u32::MAX
+        } else {
+            0
+        }
+    } else {
+        number.trunc().min(u32::MAX as f64) as u32
+    }
+}
+
+fn copy_within_relative_index(value: f64, len: i64) -> i64 {
+    let integer = copy_within_to_integer_or_infinity(value);
+    if integer == f64::NEG_INFINITY {
+        0
+    } else if integer < 0.0 {
+        (len as f64 + integer).max(0.0) as i64
+    } else {
+        integer.min(len as f64) as i64
+    }
+}
+
+fn copy_within_length_of_array_like(receiver: f64) -> u32 {
+    let length = unsafe {
+        crate::value::js_dynamic_object_get_property(receiver, b"length".as_ptr() as *const i8, 6)
+    };
+    copy_within_to_length(length)
+}
+
+fn copy_within_has_property(receiver: f64, index: i64) -> bool {
+    crate::value::js_is_truthy(crate::object::js_object_has_own(receiver, index as f64)) != 0
+}
+
+/// Generic `Array.prototype.copyWithin.call(arrayLike, target, start?, end?)`.
+///
+/// This keeps the original `this` value rather than materializing an Array:
+/// the spec mutates the receiver's indexed properties and returns that same
+/// receiver after ToObject coercion.
+#[no_mangle]
+pub extern "C" fn js_array_copy_within_value(
+    receiver: f64,
+    target: f64,
+    start: f64,
+    has_end: i32,
+    end: f64,
+) -> f64 {
+    let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
+    if receiver_value.is_null() || receiver_value.is_undefined() {
+        throw_copy_within_type_error(b"Cannot convert undefined or null to object");
+    }
+
+    let receiver = crate::object::js_object_coerce(receiver);
+    let len = copy_within_length_of_array_like(receiver) as i64;
+    let to = copy_within_relative_index(target, len);
+    let from = copy_within_relative_index(start, len);
+    let final_index = if has_end != 0 {
+        copy_within_relative_index(end, len)
+    } else {
+        len
+    };
+    let count = (final_index - from).min(len - to).max(0);
+    if count <= 0 {
+        return receiver;
+    }
+
+    if crate::builtins::boxed_primitive_to_string_tag(receiver) == Some("String") {
+        throw_copy_within_type_error(b"Cannot assign to read only property");
+    }
+
+    let mut from_idx = from;
+    let mut to_idx = to;
+    let direction = if from < to && to < from + count {
+        from_idx += count - 1;
+        to_idx += count - 1;
+        -1
+    } else {
+        1
+    };
+
+    let receiver_bits = receiver.to_bits() as i64;
+    for _ in 0..count {
+        if copy_within_has_property(receiver, from_idx) {
+            let value =
+                crate::object::js_object_get_index_polymorphic(receiver_bits, from_idx as f64);
+            crate::object::js_object_set_index_polymorphic(receiver_bits, to_idx as f64, value);
+        } else {
+            let obj = unsafe { crate::object::extract_obj_ptr(receiver) };
+            if !obj.is_null() && crate::object::js_object_delete_dynamic(obj, to_idx as f64) == 0 {
+                throw_copy_within_type_error(b"Cannot delete property");
+            }
+        }
+        from_idx += direction;
+        to_idx += direction;
+    }
+
+    receiver
+}
