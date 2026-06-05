@@ -13,6 +13,30 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     let namespace_obj = js_closure_get_capture_f64(closure, 0);
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
+
+    // A bound-method VALUE (`const f = obj.method`) is resolved at READ time and
+    // must always invoke that method — even if `obj.method` is later reassigned.
+    // The ubiquitous `this.m = this.m.bind(this)` (zod's `ZodType` constructor,
+    // React class components, …) self-shadows: the own property `m` becomes the
+    // bound function whose target is THIS value, so re-resolving `m` by name here
+    // finds the own property and recurses until the call-depth guard returns the
+    // null object — observed by user code as `obj.m()` yielding `[object Object]`.
+    //
+    // For a class-instance receiver, dispatch straight through the vtable,
+    // bypassing any own data property of the same name (snapshot semantics).
+    // Non-instances (namespace objects; functions captured by a `.bind`/`.call`/
+    // `.apply` reify) yield None and fall through to the by-name path unchanged,
+    // so this only affects reads of genuine prototype methods.
+    if let Some(result) = crate::object::try_dispatch_instance_method_value(
+        namespace_obj,
+        method_name_ptr,
+        method_name_len,
+        args.as_ptr(),
+        args.len(),
+    ) {
+        return result;
+    }
+
     crate::object::js_native_call_method(
         namespace_obj,
         method_name_ptr,

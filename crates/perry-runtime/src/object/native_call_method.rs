@@ -971,6 +971,55 @@ fn throw_fn_proto_not_callable(method: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Dispatch `receiver.<method>(args)` straight through the class vtable,
+/// bypassing any own data property of the same name. Returns `None` when the
+/// receiver is not a class instance whose prototype chain defines `method`, so
+/// the caller falls back to the ordinary by-name lookup.
+///
+/// Used by bound-method VALUE dispatch (`dispatch_bound_method`): a method
+/// captured at READ time (`const f = obj.m`) must keep invoking that method even
+/// after `obj.m` is reassigned — the ubiquitous `this.m = this.m.bind(this)`
+/// pattern. Re-resolving by name would find the own (bound) property and recurse
+/// until the call-depth guard returns the null object.
+pub(crate) unsafe fn try_dispatch_instance_method_value(
+    receiver: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method_name_ptr.is_null() || method_name_len == 0 {
+        return None;
+    }
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    let ptr = crate::value::js_nanbox_get_pointer(receiver) as *const ObjectHeader;
+    // `js_object_get_class_id` returns 0 for anything that isn't a user class
+    // instance (null/non-pointer, Set/Map/Regex headers, closures, namespaces).
+    let class_id = crate::object::js_object_get_class_id(ptr);
+    if class_id == 0 {
+        return None;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(
+        method_name_ptr as *const u8,
+        method_name_len,
+    ))
+    .ok()?;
+    let (func_ptr, param_count, has_synthetic_arguments, has_rest) =
+        crate::object::class_registry::lookup_class_method_in_chain(class_id, name)?;
+    Some(crate::object::class_registry::call_vtable_method(
+        func_ptr,
+        receiver.to_bits() as i64,
+        args_ptr,
+        args_len,
+        param_count,
+        has_synthetic_arguments,
+        has_rest,
+    ))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,
