@@ -769,6 +769,27 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     ctx.class_stack.push(class_name.to_string());
 
                     restore_inline_constructor_scope(ctx, saved_scope);
+
+                    // Apply the field initializers of every class BELOW the
+                    // inherited-ctor class — the leaf and any intermediates —
+                    // now that the parent ctor body has run (the post-super()
+                    // step, mirroring the own-ctor path's SelfOnly-after). The
+                    // up-front pass above used `UpToInclusive(inherited)`, which
+                    // keeps `chain[0..=idx(inherited)]` and therefore EXCLUDES
+                    // the leaf, so without this a no-own-ctor subclass's own
+                    // field initializers never ran — e.g. zod's
+                    // `class ZodObject extends ZodType { private _cached = null }`
+                    // left `_cached` at the raw-0 slot, so `_getCached()`'s
+                    // `this._cached !== null` was true (0 !== null) and returned
+                    // 0; `_parse` then destructured `{ keys }` off 0, iterated
+                    // nothing, and every `z.object({...}).parse()` dropped all
+                    // fields.
+                    apply_field_initializers_recursive(
+                        ctx,
+                        class_name,
+                        FieldInitMode::BetweenExclusiveTo(pname.to_string()),
+                    )?;
+
                     found_inherited_ctor = true;
                     break; // Found and inlined the parent ctor.
                 }
