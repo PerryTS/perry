@@ -233,6 +233,39 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return value;
     }
 
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+            fn js_ext_http_agent_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+        }
+
+        if matches!(
+            method_name,
+            "getName" | "destroy" | "close" | "keepSocketAlive" | "reuseSocket"
+        ) && js_ext_http_agent_is_handle(handle) != 0
+        {
+            let args_ptr = if args.is_empty() {
+                std::ptr::null()
+            } else {
+                args.as_ptr()
+            };
+            return js_ext_http_agent_dispatch_method(
+                handle,
+                method_name.as_ptr(),
+                method_name.len(),
+                args_ptr,
+                args.len(),
+            );
+        }
+    }
+
     #[cfg(feature = "http-client")]
     if let Some(value) = crate::http::dispatch_client_request_method(handle, method_name, &args) {
         return value;

@@ -1027,7 +1027,11 @@ pub(crate) unsafe fn try_dispatch_instance_method_value(
     if !jsval.is_pointer() {
         return None;
     }
-    let ptr = crate::value::js_nanbox_get_pointer(receiver) as *const ObjectHeader;
+    let raw = crate::value::js_nanbox_get_pointer(receiver) as usize;
+    if raw < 0x100000 {
+        return None;
+    }
+    let ptr = raw as *const ObjectHeader;
     // `js_object_get_class_id` returns 0 for anything that isn't a user class
     // instance (null/non-pointer, Set/Map/Regex headers, closures, namespaces).
     let class_id = crate::object::js_object_get_class_id(ptr);

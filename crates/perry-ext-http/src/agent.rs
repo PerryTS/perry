@@ -74,6 +74,10 @@ fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
     unsafe { js_class_method_bind(instance, name.as_ptr(), name.len()) }
 }
 
+fn pointer_value(handle: Handle) -> f64 {
+    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+}
+
 // ------------------------------------------------------------------
 // AgentHandle
 // ------------------------------------------------------------------
@@ -452,6 +456,36 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "getName" => bind_agent_method_value(handle, b"getName"),
         "destroy" => bind_agent_method_value(handle, b"destroy"),
         "close" => bind_agent_method_value(handle, b"close"),
+        _ => f64::from_bits(TAG_UNDEFINED),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_agent_dispatch_method(
+    handle: Handle,
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if method_ptr.is_null() || method_len == 0 || get_handle_mut::<AgentHandle>(handle).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let method = String::from_utf8_lossy(std::slice::from_raw_parts(method_ptr, method_len));
+    match method.as_ref() {
+        "getName" => {
+            let options = if args_len > 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(TAG_UNDEFINED)
+            };
+            let ptr = js_http_agent_get_name(handle, options);
+            f64::from_bits(JsValue::from_string_ptr(ptr).bits())
+        }
+        "destroy" => pointer_value(js_http_agent_destroy(handle)),
+        "close" | "keepSocketAlive" | "reuseSocket" => {
+            pointer_value(js_http_agent_noop_self(handle))
+        }
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }

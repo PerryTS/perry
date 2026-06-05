@@ -38,6 +38,15 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+fn bound_native_method_length(name: &str) -> Option<u32> {
+    match name {
+        "keepSocketAlive" => Some(1),
+        "reuseSocket" => Some(2),
+        "getName" | "destroy" | "close" => Some(0),
+        _ => None,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_vm_create_context(sandbox: f64) -> f64 {
     crate::node_vm::create_context(sandbox)
@@ -5814,6 +5823,9 @@ pub extern "C" fn js_class_method_bind(
             std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
         } {
             set_bound_native_closure_name(closure, name);
+            if let Some(length) = bound_native_method_length(name) {
+                set_builtin_closure_length(closure as usize, length);
+            }
         }
     }
     crate::value::js_nanbox_pointer(closure as i64)
@@ -7510,6 +7522,316 @@ unsafe fn http_methods_array() -> f64 {
     value
 }
 
+fn global_agent_string_value(s: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+unsafe fn global_agent_string_from_header(
+    ptr: *const crate::string::StringHeader,
+) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    std::str::from_utf8(std::slice::from_raw_parts(data, len))
+        .ok()
+        .map(|s| s.to_string())
+}
+
+unsafe fn global_agent_value_to_string(value: JSValue) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(f64::from_bits(value.bits()));
+    global_agent_string_from_header(ptr).unwrap_or_default()
+}
+
+unsafe fn global_agent_value_to_json_string(value: JSValue) -> String {
+    let ptr = crate::json::js_json_stringify(f64::from_bits(value.bits()), 0);
+    global_agent_string_from_header(ptr).unwrap_or_default()
+}
+
+fn global_agent_is_truthy(value: JSValue) -> bool {
+    crate::value::js_is_truthy(f64::from_bits(value.bits())) != 0
+}
+
+fn global_agent_is_undefined(value: f64) -> bool {
+    value.to_bits() == crate::value::TAG_UNDEFINED
+}
+
+unsafe fn global_agent_object_ptr(value: f64) -> Option<*const ObjectHeader> {
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    let ptr = if top16 == 0x7FFD {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader
+    } else if top16 == 0 && bits >= 0x10000 {
+        bits as *const ObjectHeader
+    } else {
+        return None;
+    };
+    (!ptr.is_null()).then_some(ptr)
+}
+
+unsafe fn global_agent_get_field_raw(value: f64, field: &str) -> Option<JSValue> {
+    let ptr = global_agent_object_ptr(value)?;
+    let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    Some(js_object_get_field_by_name(ptr, key))
+}
+
+unsafe fn global_agent_get_string_field(value: f64, field: &str) -> Option<String> {
+    let field_value = global_agent_get_field_raw(value, field)?;
+    if field_value.is_undefined() || field_value.is_null() {
+        return None;
+    }
+    if field_value.is_any_string() {
+        let coerced = crate::builtins::js_string_coerce(f64::from_bits(field_value.bits()));
+        return global_agent_string_from_header(coerced);
+    }
+    if field_value.is_number() {
+        return Some(format!("{}", field_value.as_number() as i64));
+    }
+    None
+}
+
+unsafe fn global_agent_get_number_field(value: f64, field: &str) -> Option<f64> {
+    let field_value = global_agent_get_field_raw(value, field)?;
+    if field_value.is_undefined() || field_value.is_null() {
+        return None;
+    }
+    field_value.is_number().then(|| field_value.as_number())
+}
+
+unsafe fn global_agent_has_name_option(value: f64) -> bool {
+    for field in ["host", "port", "localAddress", "family", "socketPath"] {
+        if let Some(field_value) = global_agent_get_field_raw(value, field) {
+            if !field_value.is_undefined() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+unsafe fn global_agent_select_options(first: f64, second: f64) -> f64 {
+    if global_agent_is_undefined(second) {
+        return first;
+    }
+    if global_agent_has_name_option(first) {
+        first
+    } else {
+        second
+    }
+}
+
+unsafe fn global_agent_build_http_name(options: f64) -> String {
+    let bits = options.to_bits();
+    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+        return "localhost::".to_string();
+    }
+
+    let host =
+        global_agent_get_string_field(options, "host").unwrap_or_else(|| "localhost".to_string());
+    let port = global_agent_get_string_field(options, "port").unwrap_or_default();
+    let local_address = global_agent_get_string_field(options, "localAddress").unwrap_or_default();
+    let mut name = format!("{}:{}:{}", host, port, local_address);
+
+    if let Some(family) = global_agent_get_number_field(options, "family") {
+        let family = family as i64;
+        if family == 4 || family == 6 {
+            name.push(':');
+            name.push_str(&family.to_string());
+        }
+    }
+    if let Some(socket_path) = global_agent_get_string_field(options, "socketPath") {
+        name.push(':');
+        name.push_str(&socket_path);
+    }
+
+    name
+}
+
+unsafe fn global_agent_append_https_name_fields(name: &mut String, options: f64) {
+    let bits = options.to_bits();
+    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+        for _ in 0..20 {
+            name.push(':');
+        }
+        return;
+    }
+
+    let host_value = global_agent_get_field_raw(options, "host");
+
+    let push_truthy_string = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(value) = global_agent_get_field_raw(options, field) {
+            if global_agent_is_truthy(value) {
+                name.push_str(&global_agent_value_to_string(value));
+            }
+        }
+    };
+    let push_defined = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(value) = global_agent_get_field_raw(options, field) {
+            if !value.is_undefined() {
+                name.push_str(&global_agent_value_to_string(value));
+            }
+        }
+    };
+
+    push_truthy_string(name, "ca");
+    push_truthy_string(name, "cert");
+    push_truthy_string(name, "clientCertEngine");
+    push_truthy_string(name, "ciphers");
+    push_truthy_string(name, "key");
+    push_truthy_string(name, "pfx");
+    push_defined(name, "rejectUnauthorized");
+
+    name.push(':');
+    if let Some(servername) = global_agent_get_field_raw(options, "servername") {
+        if global_agent_is_truthy(servername) {
+            let same_as_host = match host_value {
+                Some(host) if global_agent_is_truthy(host) => {
+                    global_agent_value_to_string(host) == global_agent_value_to_string(servername)
+                }
+                _ => false,
+            };
+            if !same_as_host {
+                name.push_str(&global_agent_value_to_string(servername));
+            }
+        }
+    }
+
+    push_truthy_string(name, "minVersion");
+    push_truthy_string(name, "maxVersion");
+    push_truthy_string(name, "secureProtocol");
+    push_truthy_string(name, "crl");
+    push_defined(name, "honorCipherOrder");
+    push_truthy_string(name, "ecdhCurve");
+    push_truthy_string(name, "dhparam");
+    push_defined(name, "secureOptions");
+    push_truthy_string(name, "sessionIdContext");
+
+    name.push(':');
+    if let Some(value) = global_agent_get_field_raw(options, "sigalgs") {
+        if global_agent_is_truthy(value) {
+            name.push_str(&global_agent_value_to_json_string(value));
+        }
+    }
+
+    push_truthy_string(name, "privateKeyIdentifier");
+    push_truthy_string(name, "privateKeyEngine");
+}
+
+unsafe fn global_agent_build_name(options: f64, is_https: bool) -> String {
+    let mut name = global_agent_build_http_name(options);
+    if is_https {
+        global_agent_append_https_name_fields(&mut name, options);
+    }
+    name
+}
+
+extern "C" fn global_agent_get_name_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    first: f64,
+    second: f64,
+) -> f64 {
+    unsafe {
+        let is_https = crate::closure::js_closure_get_capture_ptr(closure, 0) != 0;
+        let options = global_agent_select_options(first, second);
+        global_agent_string_value(&global_agent_build_name(options, is_https))
+    }
+}
+
+extern "C" fn global_agent_keep_socket_alive_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _socket: f64,
+) -> f64 {
+    f64::from_bits(JSValue::bool(true).bits())
+}
+
+extern "C" fn global_agent_reuse_socket_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _socket: f64,
+    _request: f64,
+) -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+extern "C" fn global_agent_destroy_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+fn global_agent_method_value(
+    name: &str,
+    func_ptr: *const u8,
+    call_arity: u32,
+    exposed_length: u32,
+    is_https: Option<bool>,
+) -> f64 {
+    crate::closure::js_register_closure_arity(func_ptr, call_arity);
+    let captures = if is_https.is_some() { 1 } else { 0 };
+    let closure = crate::closure::js_closure_alloc(func_ptr, captures);
+    if let Some(is_https) = is_https {
+        crate::closure::js_closure_set_capture_ptr(closure, 0, i64::from(is_https));
+    }
+    set_bound_native_closure_name(closure, name);
+    set_builtin_closure_length(closure as usize, exposed_length);
+    set_builtin_closure_non_constructable(closure as usize);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+unsafe fn global_agent_prototype(is_https: bool) -> f64 {
+    let proto = js_object_alloc(0, 0);
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    let attrs = super::PropertyAttrs::new(true, false, true);
+    for (name, value) in [
+        (
+            "keepSocketAlive",
+            global_agent_method_value(
+                "keepSocketAlive",
+                global_agent_keep_socket_alive_thunk as *const u8,
+                1,
+                1,
+                None,
+            ),
+        ),
+        (
+            "reuseSocket",
+            global_agent_method_value(
+                "reuseSocket",
+                global_agent_reuse_socket_thunk as *const u8,
+                2,
+                2,
+                None,
+            ),
+        ),
+        (
+            "getName",
+            global_agent_method_value(
+                "getName",
+                global_agent_get_name_thunk as *const u8,
+                2,
+                0,
+                Some(is_https),
+            ),
+        ),
+        (
+            "destroy",
+            global_agent_method_value(
+                "destroy",
+                global_agent_destroy_thunk as *const u8,
+                0,
+                0,
+                None,
+            ),
+        ),
+    ] {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_set_field_by_name(proto, key, value);
+        set_property_attrs(proto as usize, name.to_string(), attrs);
+    }
+    proto_value
+}
+
 unsafe fn https_global_agent_object() -> f64 {
     if let Some(bits) =
         NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("https.globalAgent").copied())
@@ -7542,6 +7864,7 @@ unsafe fn https_global_agent_object() -> f64 {
     js_object_set_field(obj, 4, JSValue::number(256.0));
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
+    crate::object::js_object_set_prototype_of(result, global_agent_prototype(true));
     NATIVE_MODULE_NAMESPACES.with(|cache| {
         cache
             .borrow_mut()
@@ -7586,6 +7909,7 @@ unsafe fn http_global_agent_object() -> f64 {
     js_object_set_field(obj, 4, JSValue::number(256.0));
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
+    crate::object::js_object_set_prototype_of(result, global_agent_prototype(false));
     NATIVE_MODULE_NAMESPACES.with(|cache| {
         cache
             .borrow_mut()
