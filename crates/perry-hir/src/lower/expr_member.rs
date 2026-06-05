@@ -772,7 +772,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "MAX_SAFE_INTEGER" => Some(9007199254740991.0),
                     "MIN_SAFE_INTEGER" => Some(-9007199254740991.0),
                     "MAX_VALUE" => Some(f64::MAX),
-                    "MIN_VALUE" => Some(f64::MIN_POSITIVE),
+                    // smallest denormal (5e-324), not smallest normal
+                    "MIN_VALUE" => Some(f64::from_bits(1)),
                     "EPSILON" => Some(f64::EPSILON),
                     "POSITIVE_INFINITY" => Some(f64::INFINITY),
                     "NEGATIVE_INFINITY" => Some(f64::NEG_INFINITY),

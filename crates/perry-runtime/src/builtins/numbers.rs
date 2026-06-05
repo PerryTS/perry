@@ -367,6 +367,17 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
                             Err(_) => f64::NAN,
                         };
                     }
+                    // Rust's f64::from_str accepts `inf`/`infinity`/`INFINITY`
+                    // case-insensitively, but ECMAScript StrNumericLiteral only
+                    // accepts exactly `Infinity` (optionally signed). Reject any
+                    // alphabetic body that isn't exactly `Infinity`.
+                    let body = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+                    if body.eq_ignore_ascii_case("inf")
+                        || (body.eq_ignore_ascii_case("infinity") && body != "Infinity")
+                        || body.eq_ignore_ascii_case("nan")
+                    {
+                        return f64::NAN;
+                    }
                     trimmed.parse::<f64>().unwrap_or(f64::NAN)
                 } else {
                     f64::NAN

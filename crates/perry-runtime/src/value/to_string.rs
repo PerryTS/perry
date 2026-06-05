@@ -498,6 +498,15 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
 /// Returns NaN for anything that does not coerce to a finite number.
 unsafe fn radix_arg_to_number(radix_value: f64) -> f64 {
     let jsval = JSValue::from_bits(radix_value.to_bits());
+    // ToInteger(radix) → ToNumber(radix): a Symbol or BigInt radix throws a
+    // TypeError (must precede the NaN→RangeError path). e.g.
+    // `(0n).toString(Symbol())` / `(123).toString(2n)` → TypeError, not RangeError.
+    if jsval.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    if crate::symbol::js_is_symbol(radix_value) != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+    }
     if jsval.is_int32() {
         jsval.as_int32() as f64
     } else if jsval.is_bool() {

@@ -3400,7 +3400,9 @@ fn install_number_static_data_properties(ctor: *mut crate::closure::ClosureHeade
         ("POSITIVE_INFINITY", f64::INFINITY),
         ("NEGATIVE_INFINITY", f64::NEG_INFINITY),
         ("MAX_VALUE", f64::MAX),
-        ("MIN_VALUE", f64::MIN_POSITIVE),
+        // ECMAScript Number.MIN_VALUE is the smallest *denormal* (5e-324 =
+        // 2^-1074 = bit pattern 1), NOT f64::MIN_POSITIVE (smallest *normal*).
+        ("MIN_VALUE", f64::from_bits(1)),
         ("EPSILON", f64::EPSILON),
         ("MAX_SAFE_INTEGER", 9007199254740991.0),
         ("MIN_SAFE_INTEGER", -9007199254740991.0),
