@@ -114,7 +114,7 @@ pub(super) fn install_collection_proto_methods(
             );
             ipm(proto_obj, "clear", map_proto_clear_thunk as *const u8, 0);
             ipm(proto_obj, "delete", map_proto_delete_thunk as *const u8, 1);
-            ipm(
+            let entries_value = ipm(
                 proto_obj,
                 "entries",
                 map_proto_entries_thunk as *const u8,
@@ -131,6 +131,7 @@ pub(super) fn install_collection_proto_methods(
             ipm(proto_obj, "keys", map_proto_keys_thunk as *const u8, 0);
             let set_value = ipm(proto_obj, "set", map_proto_set_thunk as *const u8, 2);
             ipm(proto_obj, "values", map_proto_values_thunk as *const u8, 0);
+            install_collection_iterator_symbol(proto_obj, entries_value);
             remember_builtin_collection_method(
                 proto_obj,
                 "set",
@@ -162,7 +163,8 @@ pub(super) fn install_collection_proto_methods(
             );
             ipm(proto_obj, "has", set_proto_has_thunk as *const u8, 1);
             ipm(proto_obj, "keys", set_proto_keys_thunk as *const u8, 0);
-            ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
+            let values_value = ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
+            install_collection_iterator_symbol(proto_obj, values_value);
             remember_builtin_collection_method(
                 proto_obj,
                 "add",
@@ -194,6 +196,28 @@ pub(super) fn install_collection_proto_methods(
         _ => return false,
     }
     true
+}
+
+fn install_collection_iterator_symbol(proto_obj: *mut ObjectHeader, method_value: f64) {
+    if proto_obj.is_null() || method_value.to_bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    let iter = crate::symbol::well_known_symbol("iterator");
+    if iter.is_null() {
+        return;
+    }
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            crate::value::js_nanbox_pointer(proto_obj as i64),
+            f64::from_bits(crate::value::JSValue::pointer(iter as *const u8).bits()),
+            method_value,
+        );
+    }
+    crate::symbol::set_symbol_property_attrs(
+        proto_obj as usize,
+        iter as usize,
+        super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 fn install_collection_size_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
