@@ -38,6 +38,13 @@ pub(super) fn is_http_client_request_method_name(name: &str) -> bool {
     )
 }
 
+pub(super) fn is_http_agent_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "keepSocketAlive" | "reuseSocket" | "getName" | "destroy"
+    )
+}
+
 fn is_net_socket_method_name(name: &str) -> bool {
     matches!(
         name,

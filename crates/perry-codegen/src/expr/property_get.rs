@@ -34,8 +34,8 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::property_get_names::{
-    is_headers_method_name, is_http_client_request_method_name, is_net_native_method_value,
-    is_url_pattern_data_property,
+    is_headers_method_name, is_http_agent_method_name, is_http_client_request_method_name,
+    is_net_native_method_value, is_url_pattern_data_property,
 };
 #[allow(unused_imports)]
 use super::{
@@ -1418,6 +1418,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_class_method_bind",
                         &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
                     ));
+                }
+                if class_name == "Agent" && is_http_agent_method_name(property) {
+                    return lower_class_method_bind(ctx, object, property);
                 }
                 if is_net_native_method_value(&class_name, property) {
                     return lower_class_method_bind(ctx, object, property);

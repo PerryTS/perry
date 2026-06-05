@@ -248,7 +248,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         if matches!(
             method_name,
-            "getName" | "destroy" | "close" | "keepSocketAlive" | "reuseSocket"
+            "getName" | "destroy" | "keepSocketAlive" | "reuseSocket"
         ) && js_ext_http_agent_is_handle(handle) != 0
         {
             let args_ptr = if args.is_empty() {
@@ -1789,7 +1789,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "reuseSocket"
                 | "getName"
                 | "destroy"
-                | "close"
         ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
         {
             return unsafe {

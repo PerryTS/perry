@@ -1768,8 +1768,8 @@ unsafe fn append_https_agent_name_fields(name: &mut String, options_f64: f64) {
     push_truthy_string(name, "privateKeyEngine");
 }
 
-/// `agent.destroy()` / `.close()` — release pooled sockets. Perry doesn't
-/// pool today, so it's a no-op that returns the receiver for chainability.
+/// `agent.destroy()` — release pooled sockets. Perry doesn't pool today, so
+/// it's a no-op that returns the receiver for chainability.
 #[no_mangle]
 pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
     handle

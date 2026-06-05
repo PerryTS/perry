@@ -31,7 +31,6 @@ pub(crate) fn dispatch_agent_property(handle: Handle, property: &str) -> Option<
         "createSocket" => pointer_value(js_http_agent_create_socket(handle)),
         "getName" => bind_agent_method_value(handle, b"getName"),
         "destroy" => bind_agent_method_value(handle, b"destroy"),
-        "close" => bind_agent_method_value(handle, b"close"),
         "keepSocketAlive" => bind_agent_method_value(handle, b"keepSocketAlive"),
         "reuseSocket" => bind_agent_method_value(handle, b"reuseSocket"),
         _ => return None,
@@ -54,9 +53,7 @@ pub(crate) unsafe fn dispatch_agent_method(
             f64::from_bits(JSValue::string_ptr(ptr).bits())
         }
         "destroy" => pointer_value(js_http_agent_destroy(handle)),
-        "close" | "keepSocketAlive" | "reuseSocket" => {
-            pointer_value(js_http_agent_noop_self(handle))
-        }
+        "keepSocketAlive" | "reuseSocket" => pointer_value(js_http_agent_noop_self(handle)),
         _ => return None,
     })
 }

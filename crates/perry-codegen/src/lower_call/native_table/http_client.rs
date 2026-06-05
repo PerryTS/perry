@@ -390,15 +390,6 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "http",
         has_receiver: true,
-        method: "close",
-        class_filter: Some("Agent"),
-        runtime: "js_http_agent_noop_self",
-        args: &[],
-        ret: NR_PTR,
-    },
-    NativeModSig {
-        module: "http",
-        has_receiver: true,
         method: "keepSocketAlive",
         class_filter: Some("Agent"),
         runtime: "js_http_agent_noop_self",

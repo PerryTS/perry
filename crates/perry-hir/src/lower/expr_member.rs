@@ -1247,9 +1247,14 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     });
                 } else if matches!(module_name.as_str(), "http" | "https")
                     && class_name == "Agent"
+                    && property_name == "close"
+                {
+                    return Ok(Expr::Undefined);
+                } else if matches!(module_name.as_str(), "http" | "https")
+                    && class_name == "Agent"
                     && matches!(
                         property_name.as_str(),
-                        "keepSocketAlive" | "reuseSocket" | "getName" | "destroy" | "close"
+                        "keepSocketAlive" | "reuseSocket" | "getName" | "destroy"
                     )
                 {
                     // A bare read of an Agent method (`typeof a.getName`)
