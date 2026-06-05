@@ -23,6 +23,18 @@ pub extern "C" fn js_math_to_number(value: f64) -> f64 {
 /// Math.pow(base, exponent) -> number
 #[no_mangle]
 pub extern "C" fn js_math_pow(base: f64, exp: f64) -> f64 {
+    // ECMAScript Math.pow deviates from IEEE-754 `pow` in two cases that Rust's
+    // `f64::powf` (libm pow) gets "wrong" for JS:
+    //  - a NaN exponent is always NaN (IEEE `pow(1, NaN)` = 1).
+    //  - |base| == 1 with a ±Infinity exponent is NaN (IEEE returns 1).
+    // A +0/-0 exponent still yields 1 (even for a NaN base), which `powf`
+    // already handles, so those fall through.
+    if exp.is_nan() {
+        return f64::NAN;
+    }
+    if exp.is_infinite() && base.abs() == 1.0 {
+        return f64::NAN;
+    }
     base.powf(exp)
 }
 
@@ -250,7 +262,9 @@ pub extern "C" fn js_math_min_array(arr_ptr: i64) -> f64 {
         if num.is_nan() {
             return f64::NAN;
         }
-        if num < result {
+        // ECMAScript Math.min treats -0 as smaller than +0; IEEE `<` treats
+        // them as equal, so add an explicit sign-of-zero tiebreaker.
+        if num < result || (num == 0.0 && result == 0.0 && num.is_sign_negative()) {
             result = num;
         }
     }
@@ -274,7 +288,9 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
         if num.is_nan() {
             return f64::NAN;
         }
-        if num > result {
+        // ECMAScript Math.max treats +0 as greater than -0; IEEE `>` treats
+        // them as equal, so add an explicit sign-of-zero tiebreaker.
+        if num > result || (num == 0.0 && result == 0.0 && num.is_sign_positive()) {
             result = num;
         }
     }
