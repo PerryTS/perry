@@ -18,9 +18,8 @@
 //! registered after `.write()` still fire and `.pipe()` can forward chunks.
 
 use perry_ffi::{
-    alloc_buffer, alloc_bytes, alloc_string, gc_register_mutable_root_scanner_named,
-    notify_main_thread, BufferHeader, GcRootVisitor, JsClosure, JsValue, RawClosureHeader,
-    StringHeader,
+    alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
+    BufferHeader, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -40,6 +39,8 @@ const TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
 // perry-runtime `#[no_mangle]` symbols, resolved at final link (perry-runtime
 // is always linked). Mirrors perry-ext-net's extern usage.
 extern "C" {
+    fn js_register_aux_has_active(f: extern "C" fn() -> i32);
+    fn js_register_aux_pump(f: extern "C" fn() -> i32);
     fn js_buffer_is_buffer(ptr: i64) -> i32;
     fn js_get_string_pointer_unified(value: f64) -> i64;
     // #2935: resolve + validate a `{ level }` option to a flate2 level
@@ -68,6 +69,18 @@ extern "C" {
         args_ptr: *const f64,
         args_len: usize,
     ) -> f64;
+}
+
+extern "C" fn process_pending_aux() -> i32 {
+    unsafe { js_ext_zlib_process_pending() }
+}
+
+fn ensure_aux_pump_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| unsafe {
+        js_register_aux_pump(process_pending_aux);
+        js_register_aux_has_active(js_ext_zlib_has_active_handles);
+    });
 }
 
 // ── Brotli one-shots (#1843 cluster 2) ───────────────────────────────────────
@@ -139,10 +152,10 @@ pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
 /// # Safety
 /// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut BufferHeader {
     js_zlib_validate_buffer_arg(data_bits);
     match read_input_from_bits(data_bits) {
-        Some(d) => alloc_bytes(&brotli_compress_bytes(&d)).as_raw(),
+        Some(d) => alloc_buffer(&brotli_compress_bytes(&d)),
         None => std::ptr::null_mut(),
     }
 }
@@ -152,55 +165,34 @@ pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut St
 /// # Safety
 /// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut StringHeader {
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut BufferHeader {
     js_zlib_validate_buffer_arg(data_bits);
     match read_input_from_bits(data_bits).map(|d| brotli_decompress_bytes(&d)) {
-        Some(Ok(out)) => alloc_bytes(&out).as_raw(),
+        Some(Ok(out)) => alloc_buffer(&out),
         _ => std::ptr::null_mut(),
     }
 }
 
-/// `zlib.brotliCompress(data)` -> Promise<Buffer>.
+/// `zlib.brotliCompress(data, callback)` -> undefined.
 ///
 /// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress(
-    data_ptr: *const StringHeader,
-) -> *mut perry_ffi::Promise {
-    brotli_async(data_ptr, "BrotliCompress", |b| Ok(brotli_compress_bytes(b)))
-}
-
-/// `zlib.brotliDecompress(data)` -> Promise<Buffer>.
-///
-/// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
-#[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress(
-    data_ptr: *const StringHeader,
-) -> *mut perry_ffi::Promise {
-    brotli_async(data_ptr, "BrotliDecompress", |b| brotli_decompress_bytes(b))
-}
-
-unsafe fn brotli_async<F>(
-    data_ptr: *const StringHeader,
-    label: &'static str,
-    op: F,
-) -> *mut perry_ffi::Promise
-where
-    F: FnOnce(&[u8]) -> std::io::Result<Vec<u8>> + Send + 'static,
-{
-    let promise = perry_ffi::JsPromise::new();
-    let raw = promise.as_raw();
-    let Some(data) = read_input_bytes(data_ptr) else {
-        promise.reject_string("Invalid input data");
-        return raw;
-    };
-    perry_ffi::spawn_blocking(move || match op(&data) {
-        Ok(out) => promise.resolve(JsValue::from_object_ptr(alloc_bytes(&out).as_raw())),
-        Err(e) => promise.reject_string(&format!("{} error: {}", label, e)),
+pub unsafe extern "C" fn js_zlib_brotli_compress(data_value: f64, callback_value: f64) {
+    queue_one_shot_callback(data_value, callback_value, "BrotliCompress", |b| {
+        Ok(brotli_compress_bytes(b))
     });
-    raw
+}
+
+/// `zlib.brotliDecompress(data, callback)` -> undefined.
+///
+/// # Safety
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_value: f64) {
+    queue_one_shot_callback(data_value, callback_value, "BrotliDecompress", |b| {
+        brotli_decompress_bytes(b)
+    });
 }
 
 // ── stream codec ─────────────────────────────────────────────────────────────
@@ -384,6 +376,8 @@ enum ZlibEvent {
     /// `.flush(cb)` completion callback — invoked (0 args) after its flushed
     /// 'data' is delivered.
     Callback(i64),
+    /// `zlib.gzip(data, cb)` style one-shot completion callback.
+    OneShotCallback(i64, Result<Vec<u8>, String>),
 }
 
 struct Statics {
@@ -425,11 +419,14 @@ fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
                 }
             }
         }
-        // `.flush(cb)` callbacks queued but not yet drained are referenced only
-        // here — root them too, same hazard as listeners.
+        // Queued callbacks are referenced only here — root them too, same
+        // hazard as listeners.
         for ev in s.pending.iter_mut() {
-            if let ZlibEvent::Callback(cb) = ev {
-                visitor.visit_i64_slot(cb);
+            match ev {
+                ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _) => {
+                    visitor.visit_i64_slot(cb);
+                }
+                _ => {}
             }
         }
     }
@@ -523,6 +520,61 @@ unsafe fn make_buffer_f64(bytes: &[u8]) -> Option<f64> {
         return None;
     }
     Some(f64::from_bits(POINTER_TAG | (buf as u64 & POINTER_MASK)))
+}
+
+fn callback_ptr(value: f64) -> i64 {
+    let bits = value.to_bits();
+    if JsValue::from_bits(bits).is_pointer() {
+        (bits & POINTER_MASK) as i64
+    } else {
+        0
+    }
+}
+
+unsafe fn call_one_shot_callback(callback: i64, result: Result<Vec<u8>, String>) {
+    if callback == 0 {
+        return;
+    }
+    match result {
+        Ok(bytes) => {
+            let err = f64::from_bits(JsValue::NULL.bits());
+            let out = make_buffer_f64(&bytes)
+                .unwrap_or_else(|| f64::from_bits(JsValue::UNDEFINED.bits()));
+            let _ = JsClosure::from_raw(callback as *const RawClosureHeader).call2(err, out);
+        }
+        Err(msg) => {
+            let err = build_error_object(&msg);
+            let _ = JsClosure::from_raw(callback as *const RawClosureHeader)
+                .call2(err, f64::from_bits(JsValue::UNDEFINED.bits()));
+        }
+    }
+}
+
+pub(crate) unsafe fn queue_one_shot_callback<F>(
+    data_value: f64,
+    callback_value: f64,
+    label: &'static str,
+    op: F,
+) where
+    F: FnOnce(&[u8]) -> std::io::Result<Vec<u8>>,
+{
+    let data_bits = data_value.to_bits() as i64;
+    js_zlib_validate_buffer_arg(data_bits);
+    let result = match read_input_from_bits(data_bits) {
+        Some(data) => op(&data).map_err(|e| format!("{} error: {}", label, e)),
+        None => Err("Invalid input data".to_string()),
+    };
+    ensure_aux_pump_registered();
+    ensure_gc_scanner_registered();
+    statics()
+        .lock()
+        .unwrap()
+        .pending
+        .push(ZlibEvent::OneShotCallback(
+            callback_ptr(callback_value),
+            result,
+        ));
+    notify_main_thread();
 }
 
 unsafe fn event_name(value: f64) -> Option<String> {
@@ -888,6 +940,9 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 if cb != 0 {
                     let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                 }
+            }
+            ZlibEvent::OneShotCallback(cb, result) => {
+                call_one_shot_callback(cb, result);
             }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_error_object(&msg);
