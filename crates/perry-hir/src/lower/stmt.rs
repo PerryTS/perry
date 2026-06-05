@@ -1003,6 +1003,16 @@ pub(crate) fn lower_stmt(
                 }
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, false)?;
+                    let enum_local = ctx
+                        .lookup_local(&en.name)
+                        .unwrap_or_else(|| ctx.define_local(en.name.clone(), Type::Any));
+                    module.init.push(Stmt::Let {
+                        id: enum_local,
+                        name: en.name.clone(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(enum_runtime_object_expr(&en)),
+                    });
                     module.enums.push(en);
                 }
                 ast::Decl::TsInterface(iface_decl) => {

@@ -1,0 +1,3 @@
+string fwd: B
+numeric fwd: C
+direct: C 1

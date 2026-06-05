@@ -1239,6 +1239,16 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, true)?;
                     let enum_name = en.name.clone();
+                    let enum_local = ctx
+                        .lookup_local(&enum_name)
+                        .unwrap_or_else(|| ctx.define_local(enum_name.clone(), Type::Any));
+                    module.init.push(Stmt::Let {
+                        id: enum_local,
+                        name: enum_name.clone(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(enum_runtime_object_expr(&en)),
+                    });
                     module.enums.push(en);
                     module.exported_objects.push(enum_name.clone());
                     module.exports.push(Export::Named {

@@ -1,0 +1,5 @@
+forward: 5 reverse: Blue
+red reverse: Red green reverse: Green missing: undefined
+string key: 5
+mixed number: 0 No
+mixed string: YES undefined

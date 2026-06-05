@@ -13,14 +13,8 @@ use crate::lower_types::*;
 
 use super::*;
 
-pub fn lower_enum_decl(
-    ctx: &mut LoweringContext,
-    enum_decl: &ast::TsEnumDecl,
-    is_exported: bool,
-) -> Result<Enum> {
+fn collect_enum_members(enum_decl: &ast::TsEnumDecl) -> (String, Vec<EnumMember>) {
     let name = enum_decl.id.sym.to_string();
-    let enum_id = ctx.fresh_enum();
-
     let mut members = Vec::new();
     let mut next_value: i64 = 0;
 
@@ -75,12 +69,74 @@ pub fn lower_enum_decl(
         });
     }
 
-    // Register the enum in the context for later lookups
+    (name, members)
+}
+
+pub(crate) fn pre_register_enum_decl(
+    ctx: &mut LoweringContext,
+    enum_decl: &ast::TsEnumDecl,
+) -> Result<()> {
+    let (name, members) = collect_enum_members(enum_decl);
+    if ctx.lookup_enum(&name).is_some() {
+        return Ok(());
+    }
+
+    let enum_id = ctx.fresh_enum();
     let member_values: Vec<(String, EnumValue)> = members
         .iter()
         .map(|m| (m.name.clone(), m.value.clone()))
         .collect();
     ctx.define_enum(name.clone(), enum_id, member_values);
+    if ctx.lookup_local(&name).is_none() {
+        ctx.define_local(name, Type::Any);
+    }
+    Ok(())
+}
+
+fn push_or_replace_prop(props: &mut Vec<(String, Expr)>, key: String, value: Expr) {
+    if let Some((_, existing)) = props
+        .iter_mut()
+        .find(|(existing_key, _)| existing_key == &key)
+    {
+        *existing = value;
+    } else {
+        props.push((key, value));
+    }
+}
+
+pub(crate) fn enum_runtime_object_expr(en: &Enum) -> Expr {
+    let mut props = Vec::new();
+    for member in &en.members {
+        match &member.value {
+            EnumValue::Number(n) => {
+                push_or_replace_prop(&mut props, member.name.clone(), Expr::Number(*n as f64));
+                push_or_replace_prop(&mut props, n.to_string(), Expr::String(member.name.clone()));
+            }
+            EnumValue::String(s) => {
+                push_or_replace_prop(&mut props, member.name.clone(), Expr::String(s.clone()));
+            }
+        }
+    }
+    Expr::Object(props)
+}
+
+pub fn lower_enum_decl(
+    ctx: &mut LoweringContext,
+    enum_decl: &ast::TsEnumDecl,
+    is_exported: bool,
+) -> Result<Enum> {
+    pre_register_enum_decl(ctx, enum_decl)?;
+    let name = enum_decl.id.sym.to_string();
+    let (enum_id, member_values) = ctx
+        .lookup_enum(&name)
+        .ok_or_else(|| anyhow!("enum '{}' was not registered", name))?;
+    let members = member_values
+        .iter()
+        .map(|(name, value)| EnumMember {
+            name: name.clone(),
+            value: value.clone(),
+        })
+        .collect();
 
     Ok(Enum {
         id: enum_id,

@@ -573,6 +573,26 @@ pub fn lower_module_full(
         }
     }
 
+    // Pre-register enum declarations so function bodies declared before the
+    // enum can still fold `Enum.Member` and capture the runtime enum object
+    // used by dynamic reverse-map reads.
+    for item in &ast_module.body {
+        let enum_decl = match item {
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsEnum(enum_decl))) => Some(enum_decl),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
+                if let ast::Decl::TsEnum(enum_decl) = &export_decl.decl {
+                    Some(enum_decl)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(enum_decl) = enum_decl {
+            pre_register_enum_decl(&mut ctx, enum_decl)?;
+        }
+    }
+
     // Main pass: lower everything
     for item in &ast_module.body {
         match item {
