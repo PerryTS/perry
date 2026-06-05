@@ -4169,11 +4169,11 @@ declare module "zlib" {
   /** stdlib */
   export function brotliCompress(buffer: any, callback: any): void;
   /** stdlib */
-  export function brotliCompressSync(p0: string): string;
+  export function brotliCompressSync(p0: string): Buffer;
   /** stdlib */
   export function brotliDecompress(buffer: any, callback: any): void;
   /** stdlib */
-  export function brotliDecompressSync(p0: string): string;
+  export function brotliDecompressSync(p0: string): Buffer;
   /** stdlib */
   export function crc32(p0: string, seed?: number): number;
   /** stdlib */
@@ -4203,35 +4203,35 @@ declare module "zlib" {
   /** stdlib */
   export function deflateRaw(buffer: any, callback: any): void;
   /** stdlib */
-  export function deflateRawSync(p0: string): any;
+  export function deflateRawSync(p0: string): Buffer;
   /** stdlib */
-  export function deflateSync(p0: any, options?: any): string;
+  export function deflateSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function gunzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gunzipSync(p0: any): string;
+  export function gunzipSync(p0: any): Buffer;
   /** stdlib */
   export function gzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gzipSync(p0: any, options?: any): string;
+  export function gzipSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function inflate(buffer: any, callback: any): void;
   /** stdlib */
   export function inflateRaw(buffer: any, callback: any): void;
   /** stdlib */
-  export function inflateRawSync(p0: string): any;
+  export function inflateRawSync(p0: string): Buffer;
   /** stdlib */
-  export function inflateSync(p0: any): string;
+  export function inflateSync(p0: any): Buffer;
   /** stdlib */
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function unzipSync(p0: string): any;
+  export function unzipSync(p0: string): Buffer;
   /** stdlib */
   export function zstdCompress(buffer: any, callback: any): void;
   /** stdlib */
-  export function zstdCompressSync(p0: any, options?: any): string;
+  export function zstdCompressSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function zstdDecompress(buffer: any, callback: any): void;
   /** stdlib */
-  export function zstdDecompressSync(p0: any, options?: any): string;
+  export function zstdDecompressSync(p0: any, options?: any): Buffer;
 }
