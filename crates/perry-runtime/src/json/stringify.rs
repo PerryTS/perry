@@ -201,13 +201,21 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     // `stringify_value`/`stringify_value_depth` before this numeric funnel —
     // so no Date detection is needed here anymore.
     if value.is_nan() || value.is_infinite() {
+        // JSON has no NaN/Infinity literal; the spec serializes them as null.
         buf.push_str("null");
     } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+        // Fast path for in-range integers (the overwhelming majority of JSON
+        // numbers); identical to ECMAScript NumberToString over this range.
         let mut itoa_buf = itoa::Buffer::new();
         buf.push_str(itoa_buf.format(value as i64));
     } else {
-        let mut ryu_buf = ryu::Buffer::new();
-        buf.push_str(ryu_buf.format(value));
+        // ECMAScript Number::toString (spec 6.1.6.1.20): fixed notation for an
+        // exponent in -6..=20, else exponential with an `e+`/`e-` sign. `ryu`
+        // emits shortest round-trip digits but its own notation (`1e20`,
+        // `1e-6`, `1e21`), so JSON.stringify diverged from `String(n)` and
+        // Node. Reuse the shared JS formatter so `JSON.stringify(1e20)` is
+        // `100000000000000000000` (not `1e20`) and `1e21` is `1e+21`.
+        buf.push_str(&crate::string::js_format_f64(value));
     }
 }
 
