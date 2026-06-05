@@ -2,6 +2,48 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1124 — fix(runtime): array boundary-index, sparse length, and non-integer keys
+
+Closes #4557 and #4543; supersedes #4585 and #4559 by combining both into one branch.
+
+**Symptom.** `const a=[0,1,2]; a[4294967295]='x'` produced a deterministically-bogus
+`length` of 193 and an unreadable element. `b[4294967294]='y'` (the max valid index)
+could not be represented at all by the dense model. `a[1.5]='z'` truncated to `a[1]`,
+clobbering an existing element instead of creating the `"1.5"` string property.
+
+**Root cause.** Two orthogonal gaps sharing the boundary: (1) the computed-member
+fast path narrowed numeric/computed keys through `i32` before the runtime could
+classify them, so `2**32-1` and non-integer keys never reached
+`js_array_set_index_or_string`; (2) the dense array model assumed
+`length <= capacity`, so a far-but-valid index (`2**32-2`) had no representation.
+
+**Fix.**
+- **Codegen** (`expr/index_get.rs`, `expr/index_set.rs`): `numeric_index_needs_runtime_key`
+  now routes any literal that is not a clean array index in `0..=i32::MAX` — negatives,
+  out-of-range integers (`a[2**32-1]`), non-integer floats (`a[1.5]`), and non-finite
+  values (`a[NaN]`/`a[Infinity]`) — through `js_array_get/set_index_or_string` instead
+  of the truncating i32 path.
+- **Runtime sparse storage** (`array/indexing.rs`, `array/header.rs`): far writes beyond
+  `MAX_DENSE_ARRAY_GROW_LENGTH` (1M) and writes at/above the dense capacity store into
+  the array's `ARRAY_NAMED_PROPS` side table while `length` is tracked separately, so
+  `b[2**32-2]='y'` yields `length === 4294967295` with one stored element instead of a
+  ~32 GB allocation. `clean_arr_ptr` admits the `length > capacity` sparse shape (gated
+  on `GC_TYPE_ARRAY` + `capacity <= 1M`). New `js_array_get_index_or_string` mirrors the
+  set helper for reads.
+- **Non-integer keys** (`array/indexing.rs`): `js_array_set_index_or_string` now
+  stringifies any non-canonical number (`2**32-1`+, negatives, `1.5`) via
+  `js_jsvalue_to_string` and stores it as an ordinary `"…"` property, instead of the old
+  `format!("{:.0}")` integer path that dropped/mis-parsed non-integer floats.
+
+**Verification.** Byte-identical to `node --experimental-strip-types` for `a[2**32-1]`,
+`a[2**32-2]`, `a[1.5]`, `a[-1]`, string-key reads, `a[10n]` canonical index, and
+delete/hasOwnProperty/in. test262-equivalent of `built-ins/Array/15.4.5.1-5-1.js` /
+`-5-2.js`: 10/10. node-suite fixtures `array-index-boundary.ts` and
+`array-property-keys.ts` identical to node in both auto-optimize and
+`PERRY_NO_AUTO_OPTIMIZE=1` paths. Dense-array regression sweep
+(map/filter/reduce/for-of/forEach/JSON/push/pop/slice/spread/Object.keys/1000-element
+grow) unaffected. `cargo test -p perry-runtime --lib array::` 57/0.
+
 ## v0.5.1123 — fix(json): internalize JSON.parse reviver via the spec InternalizeJSONProperty walk (#4588)
 
 `JSON.parse(text, reviver)` previously walked the parsed value's raw object/array storage slots in place — it never went through `[[Get]]`/`[[Delete]]`/`CreateDataProperty`, so spec-mandated behaviours were invisible: deleting the property when the reviver returns `undefined`, re-reading a value the reviver mutated, holder `this` binding, the root `{ "": rootValue }` wrapper, and `Object.keys`/array-length snapshots taken before iteration.
