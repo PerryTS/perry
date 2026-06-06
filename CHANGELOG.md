@@ -38,6 +38,20 @@ Adds `test-files/test_gap_temporal_*.ts` covering every shipped type (constructi
 round-trips, `toString`/`toJSON`, `compare`/`equals`, DST). Byte-for-byte comparison expects Temporal-enabled
 Node (`node --harmony-temporal` / Node ≥ 24).
 
+### Constructor overflow correctness (post-review)
+The `Temporal.PlainX` constructors must reject out-of-range fields (overflow `"reject"`), not silently
+constrain them. Two bugs were fixed:
+- `PlainDate`/`PlainDateTime`/`PlainYearMonth` were calling `temporal_rs`'s `::new` (overflow `Constrain`)
+  and `PlainMonthDay` `new_with_overflow(..., Overflow::default())` — so `new Temporal.PlainDate(2021, 13, 1)`
+  returned `2021-12-01` and `new Temporal.PlainMonthDay(2, 30)` returned Feb 29 instead of throwing
+  `RangeError`. Switched the constructors to `try_new` / `Overflow::Reject`. The `.from()` fields path
+  (`coerce_*`) keeps the spec's `"constrain"` default.
+- `PlainTime`/`PlainDateTime` time fields were cast from the raw `i64` arg with `as u8`/`as u16`, which
+  *wraps*: `new Temporal.PlainTime(256)` produced `00:00` (256 → 0) and was accepted, and negatives slipped
+  through. Added saturating `field_u8`/`field_u16` helpers (out-of-range → `u8::MAX`/`u16::MAX`, which
+  `temporal_rs`'s range check then rejects), so out-of-range fields throw. Covered by
+  `test-files/test_gap_temporal_construct_overflow.ts`. Also ran `cargo fmt` to clear the lint gate.
+
 ### Deferred (clear RangeError stubs, follow-ups)
 Options-object-heavy methods — `round`/`total`, `with`/`withCalendar`/`withPlainTime`/`withTimeZone`,
 `PlainYearMonth`/`PlainMonthDay` `toPlainDate`, `Instant.toZonedDateTimeISO`,

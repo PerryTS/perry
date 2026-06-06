@@ -3,7 +3,7 @@
 //! Wall-clock time with no date or timezone. No calendar, so the plainest of
 //! the plain types.
 
-use super::dispatch::{self, int_arg, ok_or_throw, raw_arg, string};
+use super::dispatch::{self, field_u16, field_u8, int_arg, ok_or_throw, raw_arg, string};
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
 use temporal_rs::options::{DifferenceSettings, ToStringRoundingOptions};
@@ -15,21 +15,17 @@ fn wrap(t: PlainTime) -> f64 {
     alloc_temporal_cell(TemporalValue::PlainTime(t))
 }
 
-/// Clamp a JS integer arg to the `u8`/`u16` range a time field expects
-/// (`temporal_rs` itself range-checks, so out-of-range throws a RangeError).
-fn u_arg(args: &[f64], i: usize) -> i64 {
-    int_arg(args, i)
-}
-
-/// `new Temporal.PlainTime(hour?, minute?, second?, ms?, µs?, ns?)`.
+/// `new Temporal.PlainTime(hour?, minute?, second?, ms?, µs?, ns?)`. Out-of-range
+/// fields saturate via `field_u8`/`field_u16` so `try_new` rejects them (an `as
+/// u8` cast on the raw i64 would *wrap* `256` back to `0` and accept it).
 pub fn construct(args: &[f64]) -> f64 {
     wrap(ok_or_throw(PlainTime::try_new(
-        u_arg(args, 0) as u8,
-        u_arg(args, 1) as u8,
-        u_arg(args, 2) as u8,
-        u_arg(args, 3) as u16,
-        u_arg(args, 4) as u16,
-        u_arg(args, 5) as u16,
+        field_u8(int_arg(args, 0)),
+        field_u8(int_arg(args, 1)),
+        field_u8(int_arg(args, 2)),
+        field_u16(int_arg(args, 3)),
+        field_u16(int_arg(args, 4)),
+        field_u16(int_arg(args, 5)),
     )))
 }
 
@@ -56,12 +52,12 @@ fn coerce_time(v: f64) -> PlainTime {
                 }
             };
             return ok_or_throw(PlainTime::try_new(
-                f("hour") as u8,
-                f("minute") as u8,
-                f("second") as u8,
-                f("millisecond") as u16,
-                f("microsecond") as u16,
-                f("nanosecond") as u16,
+                field_u8(f("hour")),
+                field_u8(f("minute")),
+                field_u8(f("second")),
+                field_u16(f("millisecond")),
+                field_u16(f("microsecond")),
+                field_u16(f("nanosecond")),
             ));
         }
     }
@@ -102,12 +98,14 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
         "subtract" => wrap(ok_or_throw(
             t.subtract(&super::duration::coerce_duration(raw_arg(args, 0))),
         )),
-        "until" => super::duration::wrap(ok_or_throw(
-            t.until(&coerce_time(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
-        "since" => super::duration::wrap(ok_or_throw(
-            t.since(&coerce_time(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
+        "until" => super::duration::wrap(ok_or_throw(t.until(
+            &coerce_time(raw_arg(args, 0)),
+            DifferenceSettings::default(),
+        ))),
+        "since" => super::duration::wrap(ok_or_throw(t.since(
+            &coerce_time(raw_arg(args, 0)),
+            DifferenceSettings::default(),
+        ))),
         "equals" => dispatch::boolean(*t == coerce_time(raw_arg(args, 0))),
         "toString" | "toJSON" | "toLocaleString" => string(
             &t.to_ixdtf_string(ToStringRoundingOptions::default())

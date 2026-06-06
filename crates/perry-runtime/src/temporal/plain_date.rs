@@ -35,7 +35,9 @@ pub fn construct(args: &[f64]) -> f64 {
     let month = dispatch::num_arg(args, 1);
     let day = dispatch::num_arg(args, 2);
     let cal = calendar_arg(raw_arg(args, 3));
-    wrap(ok_or_throw(PlainDate::new(
+    // `try_new` = overflow "reject": the constructor throws on out-of-range
+    // fields (e.g. month 13) rather than silently constraining to 2021-12-01.
+    wrap(ok_or_throw(PlainDate::try_new(
         year as i32,
         month as u8,
         day as u8,
@@ -62,12 +64,7 @@ fn coerce_date(v: f64) -> PlainDate {
             };
             let cal_key = crate::string::js_string_from_bytes(b"calendar".as_ptr(), 8);
             let cal_raw = crate::object::js_object_get_field_by_name_f64(obj, cal_key);
-            return wrap_inner(
-                f("year"),
-                f("month"),
-                f("day"),
-                calendar_arg(cal_raw),
-            );
+            return wrap_inner(f("year"), f("month"), f("day"), calendar_arg(cal_raw));
         }
     }
     crate::fs::validate::throw_range_error_with_code("Cannot convert value to a Temporal.PlainDate")
@@ -129,12 +126,14 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
         "subtract" => wrap(ok_or_throw(
             d.subtract(&super::duration::coerce_duration(raw_arg(args, 0)), None),
         )),
-        "until" => super::duration::wrap(ok_or_throw(
-            d.until(&coerce_date(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
-        "since" => super::duration::wrap(ok_or_throw(
-            d.since(&coerce_date(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
+        "until" => super::duration::wrap(ok_or_throw(d.until(
+            &coerce_date(raw_arg(args, 0)),
+            DifferenceSettings::default(),
+        ))),
+        "since" => super::duration::wrap(ok_or_throw(d.since(
+            &coerce_date(raw_arg(args, 0)),
+            DifferenceSettings::default(),
+        ))),
         "equals" => {
             let other = coerce_date(raw_arg(args, 0));
             dispatch::boolean(

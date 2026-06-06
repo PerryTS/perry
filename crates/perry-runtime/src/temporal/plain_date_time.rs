@@ -3,7 +3,9 @@
 //! Calendar date + wall-clock time, no timezone. Composes the PlainDate and
 //! PlainTime field sets.
 
-use super::dispatch::{self, boolean, num_arg, ok_or_throw, raw_arg, string, undefined};
+use super::dispatch::{
+    self, boolean, field_u16, field_u8, int_arg, num_arg, ok_or_throw, raw_arg, string, undefined,
+};
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
 use temporal_rs::options::DifferenceSettings;
@@ -28,28 +30,21 @@ fn calendar_arg(v: f64) -> Calendar {
 
 /// `new Temporal.PlainDateTime(year, month, day, hour?, …, nanosecond?, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
-    wrap(ok_or_throw(PlainDateTime::new(
-        num_arg(args, 0) as i32, // year
-        num_arg(args, 1) as u8,  // month
-        num_arg(args, 2) as u8,  // day
-        z(args, 3) as u8,        // hour
-        z(args, 4) as u8,        // minute
-        z(args, 5) as u8,        // second
-        z(args, 6) as u16,       // ms
-        z(args, 7) as u16,       // us
-        z(args, 8) as u16,       // ns
+    // `try_new` = overflow "reject": throw on out-of-range fields instead of
+    // constraining. Time fields saturate via `field_u8`/`field_u16` so a wrapping
+    // `as u8` cast can't slip e.g. `256` (hour) through as `0`.
+    wrap(ok_or_throw(PlainDateTime::try_new(
+        num_arg(args, 0) as i32,     // year
+        num_arg(args, 1) as u8,      // month
+        num_arg(args, 2) as u8,      // day
+        field_u8(int_arg(args, 3)),  // hour
+        field_u8(int_arg(args, 4)),  // minute
+        field_u8(int_arg(args, 5)),  // second
+        field_u16(int_arg(args, 6)), // ms
+        field_u16(int_arg(args, 7)), // us
+        field_u16(int_arg(args, 8)), // ns
         calendar_arg(raw_arg(args, 9)),
     )))
-}
-
-/// A numeric arg that defaults to 0 when absent (the optional time fields).
-fn z(args: &[f64], i: usize) -> f64 {
-    let n = num_arg(args, i);
-    if n.is_finite() {
-        n
-    } else {
-        0.0
-    }
 }
 
 fn coerce_dt(v: f64) -> PlainDateTime {

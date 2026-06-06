@@ -4,9 +4,7 @@
 //! count is a `bigint` on the JS side (it exceeds `2^53`), so construction and
 //! the `epochNanoseconds` getter go through the BigInt marshalling helpers.
 
-use super::dispatch::{
-    self, bigint_from_i128, ok_or_throw, raw_arg, read_bigint_i128, string,
-};
+use super::dispatch::{self, bigint_from_i128, ok_or_throw, raw_arg, read_bigint_i128, string};
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
 use temporal_rs::options::{DifferenceSettings, ToStringRoundingOptions};

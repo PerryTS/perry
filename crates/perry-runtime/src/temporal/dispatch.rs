@@ -34,6 +34,31 @@ pub(crate) fn int_arg(args: &[f64], i: usize) -> i64 {
     }
 }
 
+/// Saturate an integer Temporal time field into a `u8` slot: any value outside
+/// `0..=u8::MAX` maps to `u8::MAX`. Every `u8` time field's valid maximum is
+/// below 255, so `temporal_rs`'s range check then rejects it with a RangeError —
+/// rather than an `as u8` cast silently *wrapping* a too-large value back into
+/// range (e.g. `256 as u8 == 0`, which would be accepted as midnight).
+#[inline]
+pub(crate) fn field_u8(v: i64) -> u8 {
+    if (0..=u8::MAX as i64).contains(&v) {
+        v as u8
+    } else {
+        u8::MAX
+    }
+}
+
+/// Sub-second (`u16`) counterpart of [`field_u8`]. Every `u16` time field caps
+/// at 999, well under `u16::MAX`, so out-of-range values still reject.
+#[inline]
+pub(crate) fn field_u16(v: i64) -> u16 {
+    if (0..=u16::MAX as i64).contains(&v) {
+        v as u16
+    } else {
+        u16::MAX
+    }
+}
+
 /// Raw argument value (NaN-boxed) at `i`, or `undefined`.
 #[inline]
 pub(crate) fn raw_arg(args: &[f64], i: usize) -> f64 {
@@ -50,7 +75,8 @@ pub(crate) fn is_undefined(v: f64) -> bool {
 /// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
 /// `String`.
 pub(crate) fn read_string(value: f64) -> String {
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader;
+    let ptr =
+        crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader;
     if ptr.is_null() {
         return String::new();
     }
@@ -209,9 +235,7 @@ pub fn call_method(recv: f64, name: &str, args: &[f64]) -> f64 {
         Some(TemporalValue::PlainMonthDay(md)) => {
             super::plain_month_day::call(recv, md, name, args)
         }
-        Some(TemporalValue::ZonedDateTime(z)) => {
-            super::zoned_date_time::call(recv, z, name, args)
-        }
+        Some(TemporalValue::ZonedDateTime(z)) => super::zoned_date_time::call(recv, z, name, args),
         None => undefined(),
     }
 }

@@ -97,9 +97,7 @@ pub(crate) fn coerce_duration(v: f64) -> Duration {
             ));
         }
     }
-    crate::fs::validate::throw_range_error_with_code(
-        "Cannot convert value to a Temporal.Duration",
-    )
+    crate::fs::validate::throw_range_error_with_code("Cannot convert value to a Temporal.Duration")
 }
 
 // ---- statics (installed on the constructor) -------------------------------
@@ -177,9 +175,9 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
         "add" => wrap(ok_or_throw(d.add(&coerce_duration(raw_arg(args, 0))))),
         "subtract" => wrap(ok_or_throw(d.subtract(&coerce_duration(raw_arg(args, 0))))),
         "with" => with(d, raw_arg(args, 0)),
-        "toString" | "toJSON" | "toLocaleString" => {
-            string(&super::temporal_value_iso_string(&TemporalValue::Duration(*d)))
-        }
+        "toString" | "toJSON" | "toLocaleString" => string(&super::temporal_value_iso_string(
+            &TemporalValue::Duration(*d),
+        )),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         // round / total need RoundingOptions + (for calendar units) a
         // relativeTo reference — deferred (#4688 follow-up).

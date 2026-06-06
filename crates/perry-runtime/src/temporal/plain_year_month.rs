@@ -35,7 +35,9 @@ pub fn construct(args: &[f64]) -> f64 {
             None
         }
     };
-    wrap(ok_or_throw(PlainYearMonth::new(
+    // `try_new` = overflow "reject": throw on an out-of-range month (e.g. 13)
+    // rather than constraining it to December.
+    wrap(ok_or_throw(PlainYearMonth::try_new(
         num_arg(args, 0) as i32,
         num_arg(args, 1) as u8,
         ref_day,

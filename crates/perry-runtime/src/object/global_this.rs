@@ -2638,8 +2638,12 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
         return;
     }
     // Temporal.Duration (#4688)
-    let duration =
-        install_temporal_constructor(ns_obj, "Duration", temporal_duration_ctor_thunk as *const u8, 0);
+    let duration = install_temporal_constructor(
+        ns_obj,
+        "Duration",
+        temporal_duration_ctor_thunk as *const u8,
+        0,
+    );
     if !duration.is_null() {
         install_constructor_static_with_call_arity(
             duration,

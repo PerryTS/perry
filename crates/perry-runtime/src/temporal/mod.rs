@@ -222,7 +222,10 @@ pub fn temporal_value_iso_string(v: &TemporalValue) -> String {
         // Instant / PlainTime don't impl Display; their canonical string comes
         // from `to_ixdtf_string` with spec-default rounding (auto precision).
         TemporalValue::Instant(i) => i
-            .to_ixdtf_string(None, temporal_rs::options::ToStringRoundingOptions::default())
+            .to_ixdtf_string(
+                None,
+                temporal_rs::options::ToStringRoundingOptions::default(),
+            )
             .unwrap_or_default(),
         TemporalValue::PlainDate(d) => d.to_string(),
         TemporalValue::PlainTime(t) => t

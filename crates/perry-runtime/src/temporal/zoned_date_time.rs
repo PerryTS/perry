@@ -9,7 +9,7 @@ use super::dispatch::{
 };
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
-use temporal_rs::options::{Disambiguation, DifferenceSettings, OffsetDisambiguation};
+use temporal_rs::options::{DifferenceSettings, Disambiguation, OffsetDisambiguation};
 use temporal_rs::{Calendar, TimeZone, ZonedDateTime};
 
 const TYPE_NAME: &str = "Temporal.ZonedDateTime";
@@ -138,8 +138,13 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
         }
         "toString" | "toJSON" | "toLocaleString" => string(&z.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        "with" | "withPlainTime" | "withTimeZone" | "withCalendar" | "round"
-        | "getTimeZoneTransition" | "startOfDay" => crate::fs::validate::throw_range_error_with_code(
+        "with"
+        | "withPlainTime"
+        | "withTimeZone"
+        | "withCalendar"
+        | "round"
+        | "getTimeZoneTransition"
+        | "startOfDay" => crate::fs::validate::throw_range_error_with_code(
             "Temporal.ZonedDateTime.prototype.with*/round/getTimeZoneTransition/startOfDay is not \
              yet implemented in Perry",
         ),

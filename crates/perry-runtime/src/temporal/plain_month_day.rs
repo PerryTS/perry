@@ -35,11 +35,14 @@ pub fn construct(args: &[f64]) -> f64 {
             None
         }
     };
+    // Overflow "reject": the constructor throws on an invalid month/day (e.g.
+    // Feb 30) instead of constraining it to Feb 29. The `.from()` fields path
+    // (`coerce_md`) keeps the spec's "constrain" default.
     wrap(ok_or_throw(PlainMonthDay::new_with_overflow(
         num_arg(args, 0) as u8,
         num_arg(args, 1) as u8,
         calendar_arg(raw_arg(args, 2)),
-        Overflow::default(),
+        Overflow::Reject,
         ref_year,
     )))
 }
