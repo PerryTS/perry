@@ -158,30 +158,21 @@ pub(crate) struct FnCtx<'a> {
     /// LlModule that `func` was derived from. See `crate::strings` for the
     /// design rationale.
     pub strings: &'a mut StringPool,
-    /// Stack of loop targets for `break` / `continue` lowering. Each entry
-    /// is `(continue_label, break_label, try_depth_at_entry)`. Pushed when
-    /// entering a loop, popped on exit. The innermost loop is at the top of
-    /// the stack.
+    /// Stack of loop targets for `break` / `continue` lowering. Each entry is
+    /// `(continue_label, break_label, try_depth_at_entry)`, pushed on loop
+    /// entry, popped on exit; innermost loop on top. `for`: continue → update
+    /// block, break → exit; `while`/`do-while`: continue → cond, break → exit.
     ///
-    /// For `for`-loops: continue → update block (so the update runs before
-    /// the next iteration); break → exit block.
-    /// For `while`/`do-while`: continue → cond block; break → exit block.
-    ///
-    /// The third
-    /// field records `ctx.try_depth` at the point the loop was entered, so
-    /// a `break`/`continue` that jumps OUT of one or more open `try` frames
-    /// can emit a matching `js_try_end` per exited frame and keep the
-    /// runtime's TRY_DEPTH counter balanced (same reason `Stmt::Return`
-    /// pops open try frames before `ret`). Without this, a state-machine
-    /// suspend — lowered to a `break` out of the dispatch-loop's real
-    /// `try { ... }` — leaked one slot per awaited try/catch and panicked
-    /// at MAX_TRY_DEPTH=128.
+    /// The third field is `ctx.try_depth` at loop entry, so a `break`/`continue`
+    /// out of open `try` frames emits a matching `js_try_end` per exited frame
+    /// (like `Stmt::Return`), keeping the runtime TRY_DEPTH balanced. Without
+    /// it, a state-machine suspend (lowered to a `break` out of the dispatch
+    /// loop's real `try`) leaked a slot per awaited try/catch (panic at 128).
     pub loop_targets: Vec<(String, String, usize)>,
     /// Map from label name → (continue_label, break_label, try_depth_at_entry).
-    /// Populated by `Stmt::Labeled { label, body }` when the body is a loop.
-    /// Looked up by `Stmt::LabeledBreak(label)` / `Stmt::LabeledContinue(label)`.
-    /// The `try_depth_at_entry` field serves the same balancing role as in
-    /// `loop_targets` above.
+    /// Populated by `Stmt::Labeled` when the body is a loop; read by
+    /// `Stmt::LabeledBreak`/`LabeledContinue`. Third field balances try frames
+    /// as in `loop_targets`.
     pub label_targets: std::collections::HashMap<String, (String, String, usize)>,
     /// Pending label set by `Stmt::Labeled` just before lowering the body.
     /// The next loop that runs (`for`/`while`/`do-while`) consumes it and
