@@ -396,6 +396,7 @@ impl SH for Expr {
             Expr::ArrayEntries(e) => { tag(h, 279); e.as_ref().hash(h); }
             Expr::ArrayKeys(e) => { tag(h, 280); e.as_ref().hash(h); }
             Expr::ArrayValues(e) => { tag(h, 281); e.as_ref().hash(h); }
+            Expr::ArrayLikeMethod { method, receiver, args } => { tag(h, 12500); method.hash(h); receiver.as_ref().hash(h); args.hash(h); }
             Expr::StringSplit(a, b) => { tag(h, 282); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::StringFromCharCode(e) => { tag(h, 283); e.as_ref().hash(h); }
             Expr::StringFromCharCodeSpread(e) => { tag(h, 12045); e.as_ref().hash(h); }

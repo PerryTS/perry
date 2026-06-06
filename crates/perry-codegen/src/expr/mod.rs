@@ -1482,6 +1482,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::BooleanCoerce(..)
         | Expr::ArraySlice { .. }
         | Expr::ArrayShift(..)
+        | Expr::ArrayLikeMethod { .. }
         | Expr::SetNew
         | Expr::In { .. }
         | Expr::PrivateBrandCheck { .. }

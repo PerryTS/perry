@@ -186,6 +186,140 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &result))
         }
 
+        // -------- Array.prototype.<m>.call/apply(arrayLike, ...) (#4597) --------
+        // Generic over an array-like receiver: the runtime `js_arraylike_*`
+        // entry points take the *original* receiver value (NaN-boxed `f64`) so
+        // they apply ToObject + LengthOfArrayLike + indexed Get/HasProperty and
+        // pass the original receiver as the callback's 3rd argument. The result
+        // is already a NaN-boxed JS value (number / boolean / pointer / string),
+        // so it is returned directly with no re-boxing.
+        Expr::ArrayLikeMethod {
+            method,
+            receiver,
+            args,
+        } => {
+            let recv_box = lower_expr(ctx, receiver)?;
+            let mut arg_boxes: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                arg_boxes.push(lower_expr(ctx, a)?);
+            }
+            let undef = || double_literal(f64::from_bits(TAG_UNDEFINED));
+            let nth = |i: usize| arg_boxes.get(i).cloned();
+            let blk = ctx.block();
+            let result = match method.as_str() {
+                // Callback iterators: (recv, callback, thisArg).
+                "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex"
+                | "findLast" | "findLastIndex" => {
+                    let cb = nth(0).unwrap_or_else(undef);
+                    let this_arg = nth(1).unwrap_or_else(undef);
+                    let fname = match method.as_str() {
+                        "forEach" => "js_arraylike_forEach",
+                        "map" => "js_arraylike_map",
+                        "filter" => "js_arraylike_filter",
+                        "some" => "js_arraylike_some",
+                        "every" => "js_arraylike_every",
+                        "find" => "js_arraylike_find",
+                        "findIndex" => "js_arraylike_findIndex",
+                        "findLast" => "js_arraylike_findLast",
+                        _ => "js_arraylike_findLastIndex",
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[(DOUBLE, &recv_box), (DOUBLE, &cb), (DOUBLE, &this_arg)],
+                    )
+                }
+                // Reducers: (recv, callback, has_init, init).
+                "reduce" | "reduceRight" => {
+                    let cb = nth(0).unwrap_or_else(undef);
+                    let (has_init, init) = match nth(1) {
+                        Some(i) => ("1".to_string(), i),
+                        None => ("0".to_string(), undef()),
+                    };
+                    let fname = if method == "reduce" {
+                        "js_arraylike_reduce"
+                    } else {
+                        "js_arraylike_reduceRight"
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[
+                            (DOUBLE, &recv_box),
+                            (DOUBLE, &cb),
+                            (I32, &has_init),
+                            (DOUBLE, &init),
+                        ],
+                    )
+                }
+                // Search: (recv, value, fromIndex, has_from).
+                "indexOf" | "lastIndexOf" | "includes" => {
+                    let value = nth(0).unwrap_or_else(undef);
+                    let (has_from, from) = match nth(1) {
+                        Some(f) => ("1".to_string(), f),
+                        None => ("0".to_string(), undef()),
+                    };
+                    let fname = match method.as_str() {
+                        "indexOf" => "js_arraylike_indexOf",
+                        "lastIndexOf" => "js_arraylike_lastIndexOf",
+                        _ => "js_arraylike_includes",
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[
+                            (DOUBLE, &recv_box),
+                            (DOUBLE, &value),
+                            (DOUBLE, &from),
+                            (I32, &has_from),
+                        ],
+                    )
+                }
+                // at(index): ToIntegerOrInfinity(undefined) === 0 when omitted.
+                "at" => {
+                    let idx = nth(0).unwrap_or_else(undef);
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_at",
+                        &[(DOUBLE, &recv_box), (DOUBLE, &idx)],
+                    )
+                }
+                // join(separator?): undefined separator → comma.
+                "join" => {
+                    let sep = nth(0).unwrap_or_else(undef);
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_join",
+                        &[(DOUBLE, &recv_box), (DOUBLE, &sep)],
+                    )
+                }
+                // slice(start?, end?): has-flags distinguish omitted from undefined.
+                "slice" => {
+                    let (has_start, start) = match nth(0) {
+                        Some(s) => ("1".to_string(), s),
+                        None => ("0".to_string(), undef()),
+                    };
+                    let (has_end, end) = match nth(1) {
+                        Some(e) => ("1".to_string(), e),
+                        None => ("0".to_string(), undef()),
+                    };
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_slice",
+                        &[
+                            (DOUBLE, &recv_box),
+                            (DOUBLE, &start),
+                            (I32, &has_start),
+                            (DOUBLE, &end),
+                            (I32, &has_end),
+                        ],
+                    )
+                }
+                other => bail!("unsupported generic array-like method '{other}'"),
+            };
+            Ok(result)
+        }
+
         // -------- map.delete(key) -> boolean --------
         Expr::MapDelete { map, key } => {
             let m_box = lower_expr(ctx, map)?;

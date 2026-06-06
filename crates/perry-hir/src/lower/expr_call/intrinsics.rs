@@ -1279,6 +1279,8 @@ fn try_arraylike_receiver_method(
     if rest_args.iter().any(|a| a.spread.is_some()) {
         return Ok(None);
     }
+    // `copyWithin` mutates in place but is generic over an array-like receiver;
+    // keep the dedicated value-receiver lowering.
     if method == "copyWithin" {
         let receiver = Box::new(lower_expr(ctx, receiver)?);
         let arg = |ctx: &mut LoweringContext, i: usize| -> Result<Option<Box<Expr>>> {
@@ -1303,10 +1305,16 @@ fn try_arraylike_receiver_method(
             end,
         }));
     }
-    // Only fold the read-only/returning methods. Bail early for everything else
-    // (mutators, flat, etc.) BEFORE lowering the receiver, so unrelated shapes
-    // keep the existing member-call behavior with no side effects.
-    let supported = matches!(
+    // The read-only/returning methods the runtime generic engine implements
+    // directly over an array-like receiver (`js_arraylike_*`, #4597). Unlike
+    // the old materialize-then-call fold, these preserve the original receiver
+    // identity (passed as the callback's 3rd argument) and read live via
+    // `Get(O, k)` / `HasProperty(O, k)` — so they also work on plain objects,
+    // functions (`obj.length`/expando indices), strings, and bare primitives,
+    // and pass the receiver-identity test262 cases that a materialised clone
+    // fails. The hot `arr.<m>(…)` member-call paths are untouched — only the
+    // explicit `.call`/`.apply`/bound-local forms route here.
+    let generic = matches!(
         method,
         "map"
             | "filter"
@@ -1317,7 +1325,6 @@ fn try_arraylike_receiver_method(
             | "findLastIndex"
             | "some"
             | "every"
-            | "flatMap"
             | "reduce"
             | "reduceRight"
             | "indexOf"
@@ -1327,124 +1334,37 @@ fn try_arraylike_receiver_method(
             | "at"
             | "join"
     );
-    if !supported {
+    if generic {
+        // Receiver lowers before the positional args, matching source order.
+        let receiver = Box::new(lower_expr(ctx, receiver)?);
+        let mut args = Vec::with_capacity(rest_args.len());
+        for a in rest_args {
+            args.push(lower_expr(ctx, &a.expr)?);
+        }
+        return Ok(Some(Expr::ArrayLikeMethod {
+            method: method.to_string(),
+            receiver,
+            args,
+        }));
+    }
+
+    // `flatMap` has no generic runtime entry yet; keep the holey
+    // materialize-then-call behavior. `Expr::ArrayFromArrayLikeHoley` keeps
+    // absent indexed keys as holes (vs `Array.from({ length })` creating
+    // present undefined slots), so the flatMap callback doesn't visit holes.
+    // Everything else (mutators, flat, etc.) bails BEFORE lowering the receiver
+    // so unrelated shapes keep the existing member-call behavior.
+    if method != "flatMap" {
         return Ok(None);
     }
-    // Materialize the array-like receiver into a REAL array up front, but keep
-    // absent indexed keys as holes. These Array.prototype algorithms use
-    // HasProperty/Get on the receiver; `Array.from({ length: 2 })` would create
-    // present undefined slots, making `indexOf(undefined)` and callback methods
-    // visit holes incorrectly.
-    let array_src = lower_expr(ctx, receiver)?;
-    let array = Box::new(Expr::ArrayFromArrayLikeHoley(Box::new(array_src)));
-    // Lower a positional argument by index, if present.
-    let mut arg = |ctx: &mut LoweringContext, i: usize| -> Result<Option<Box<Expr>>> {
-        match rest_args.get(i) {
-            Some(a) => Ok(Some(Box::new(lower_expr(ctx, &a.expr)?))),
-            None => Ok(None),
-        }
+    let Some(cb) = rest_args.first() else {
+        return Ok(None);
     };
-    // Callback-taking methods require the callback argument to be present.
-    macro_rules! cb_method {
-        ($variant:ident) => {{
-            let Some(cb) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            Ok(Some(Expr::$variant {
-                array,
-                callback: cb,
-            }))
-        }};
-    }
-    match method {
-        "map" => cb_method!(ArrayMap),
-        "filter" => cb_method!(ArrayFilter),
-        "forEach" => cb_method!(ArrayForEach),
-        "find" => cb_method!(ArrayFind),
-        "findIndex" => cb_method!(ArrayFindIndex),
-        "findLast" => cb_method!(ArrayFindLast),
-        "findLastIndex" => cb_method!(ArrayFindLastIndex),
-        "some" => cb_method!(ArraySome),
-        "every" => cb_method!(ArrayEvery),
-        "flatMap" => cb_method!(ArrayFlatMap),
-        "reduce" => {
-            let Some(cb) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let initial = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayReduce {
-                array,
-                callback: cb,
-                initial,
-            }))
-        }
-        "reduceRight" => {
-            let Some(cb) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let initial = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayReduceRight {
-                array,
-                callback: cb,
-                initial,
-            }))
-        }
-        "indexOf" => {
-            let Some(value) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let from_index = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayIndexOf {
-                array,
-                value,
-                from_index,
-            }))
-        }
-        "lastIndexOf" => {
-            let Some(value) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let from_index = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayLastIndexOf {
-                array,
-                value,
-                from_index,
-            }))
-        }
-        "includes" => {
-            let Some(value) = arg(ctx, 0)? else {
-                return Ok(None);
-            };
-            let from_index = arg(ctx, 1)?;
-            Ok(Some(Expr::ArrayIncludes {
-                array,
-                value,
-                from_index,
-            }))
-        }
-        "slice" => {
-            // `slice()` with no args copies from index 0.
-            let start = match arg(ctx, 0)? {
-                Some(s) => s,
-                None => Box::new(Expr::Integer(0)),
-            };
-            let end = arg(ctx, 1)?;
-            Ok(Some(Expr::ArraySlice { array, start, end }))
-        }
-        "at" => {
-            let index = match arg(ctx, 0)? {
-                Some(i) => i,
-                None => Box::new(Expr::Integer(0)),
-            };
-            Ok(Some(Expr::ArrayAt { array, index }))
-        }
-        "join" => {
-            let separator = arg(ctx, 0)?;
-            Ok(Some(Expr::ArrayJoin { array, separator }))
-        }
-        // Unreachable: `supported` gate above filters to exactly these arms.
-        _ => Ok(None),
-    }
+    let array = Box::new(Expr::ArrayFromArrayLikeHoley(Box::new(lower_expr(
+        ctx, receiver,
+    )?)));
+    let callback = Box::new(lower_expr(ctx, &cb.expr)?);
+    Ok(Some(Expr::ArrayFlatMap { array, callback }))
 }
 
 /// #3144: if `init` is a value-read of a builtin prototype method whose

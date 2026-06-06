@@ -596,6 +596,18 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|s| Box::new(substitute_expr(s, substitutions))),
         },
+        Expr::ArrayLikeMethod {
+            method,
+            receiver,
+            args,
+        } => Expr::ArrayLikeMethod {
+            method: method.clone(),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+        },
         Expr::ArrayFlat { array } => Expr::ArrayFlat {
             array: Box::new(substitute_expr(array, substitutions)),
         },

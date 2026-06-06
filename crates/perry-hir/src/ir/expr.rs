@@ -1508,6 +1508,21 @@ pub enum Expr {
     ArrayKeys(Box<Expr>),    // arr.keys() -> Array<index>
     ArrayValues(Box<Expr>),  // arr.values() -> Array<value> (essentially clone)
 
+    /// `Array.prototype.<method>.call/apply(receiver, ...args)` (and the
+    /// bound-local form `const m = [].map; m.call(receiver, ...)`) dispatched
+    /// generically over an *array-like* receiver per ECMA-262 §23.1.3 (#4597).
+    /// Unlike the specialised `Array*` variants above — which require a genuine
+    /// array receiver — this carries the receiver as a raw value so the runtime
+    /// applies `ToObject` + `LengthOfArrayLike` + indexed `Get`/`HasProperty`,
+    /// preserving receiver identity for the callback's 3rd argument.
+    /// `method` is the resolved Array method name; `args` are the post-receiver
+    /// positional arguments (already expanded from `.apply`).
+    ArrayLikeMethod {
+        method: String,
+        receiver: Box<Expr>,
+        args: Vec<Expr>,
+    },
+
     // String methods
     StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
     StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string

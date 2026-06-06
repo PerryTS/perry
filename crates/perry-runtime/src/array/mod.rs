@@ -3,6 +3,7 @@ mod alloc;
 mod concat_reverse;
 mod flat_clone;
 mod from_concat;
+mod generic;
 mod header;
 mod immutable;
 mod indexing;
@@ -33,6 +34,13 @@ pub use self::flat_clone::{
     js_array_values,
 };
 pub use self::from_concat::{js_array_concat_variadic, js_array_from_mapped, js_array_from_value};
+pub use self::generic::{
+    js_arraylike_at, js_arraylike_every, js_arraylike_filter, js_arraylike_find,
+    js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,
+    js_arraylike_forEach, js_arraylike_includes, js_arraylike_indexOf, js_arraylike_join,
+    js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce, js_arraylike_reduceRight,
+    js_arraylike_slice, js_arraylike_some,
+};
 pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,

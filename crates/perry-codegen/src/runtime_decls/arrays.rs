@@ -137,6 +137,54 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // #2805: Array.prototype.concat(...args) — non-mutating, variadic, with
     // Symbol.isConcatSpreadable handling. (recv_handle, args_ptr, count).
     module.declare_function("js_array_concat_variadic", I64, &[I64, PTR, I32]);
+    // #4597: generic `Array.prototype.<m>.call/apply(arrayLike, …)` — operate on
+    // the original receiver value (ToObject + LengthOfArrayLike + indexed
+    // Get/HasProperty). All take/return NaN-boxed DOUBLE values.
+    for f in [
+        "js_arraylike_forEach",
+        "js_arraylike_map",
+        "js_arraylike_filter",
+        "js_arraylike_some",
+        "js_arraylike_every",
+        "js_arraylike_find",
+        "js_arraylike_findIndex",
+        "js_arraylike_findLast",
+        "js_arraylike_findLastIndex",
+    ] {
+        module.declare_function(f, DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    }
+    module.declare_function(
+        "js_arraylike_reduce",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, DOUBLE],
+    );
+    module.declare_function(
+        "js_arraylike_reduceRight",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, DOUBLE],
+    );
+    module.declare_function(
+        "js_arraylike_indexOf",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_arraylike_lastIndexOf",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_arraylike_includes",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function("js_arraylike_at", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_arraylike_join", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_arraylike_slice",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, DOUBLE, I32],
+    );
     // Spread `[...x]` — strict GetIterator/materialization.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);

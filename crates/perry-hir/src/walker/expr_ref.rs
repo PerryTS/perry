@@ -1542,6 +1542,16 @@ where
                 f(s);
             }
         }
+        Expr::ArrayLikeMethod {
+            method: _,
+            receiver,
+            args,
+        } => {
+            f(receiver);
+            for a in args {
+                f(a);
+            }
+        }
         Expr::ArrayToSorted { array, comparator } => {
             f(array);
             if let Some(c) = comparator {
