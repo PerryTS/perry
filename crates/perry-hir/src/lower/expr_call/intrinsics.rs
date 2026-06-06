@@ -1553,7 +1553,16 @@ fn match_namespace_static_member(
     // `Promise.all.call(C, …)` / `.apply` / `.bind` must NOT drop the
     // thisArg — let them fall through to the generic reified-static dispatch
     // (which preserves `this` via the implicit-this mechanism).
-    if ns == "Promise" && matches!(name, "all" | "race" | "allSettled" | "any") {
+    // `resolve` / `reject` are likewise `this`-sensitive: `Promise.{resolve,
+    // reject}.call(C, x)` go through `NewPromiseCapability(C)` (a non-ctor /
+    // non-object `this` throws; a custom constructor's executor runs), so they
+    // must keep their receiver too.
+    if ns == "Promise"
+        && matches!(
+            name,
+            "all" | "race" | "allSettled" | "any" | "resolve" | "reject"
+        )
+    {
         return None;
     }
     // `Array.from` is `this`-sensitive: per ECMA-262 §23.1.2.1 it constructs
