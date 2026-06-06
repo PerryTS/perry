@@ -1212,14 +1212,20 @@ pub extern "C" fn js_object_define_property(
             }
             return obj_value;
         }
-        if let Some(result) = super::define_array_property(
+        if let Some(ok) = super::define_array_property(
             obj,
             obj_value,
             key_str,
             key_rust.as_deref(),
             descriptor_value,
         ) {
-            return result;
+            if ok {
+                return obj_value;
+            }
+            // A rejected array `[[DefineOwnProperty]]` (e.g. redefining the
+            // non-configurable / non-writable `length`) throws under
+            // `Object.defineProperty`.
+            throw_object_type_error(b"Cannot redefine property: length");
         }
         // #2843: enforce frozen / sealed / non-extensible invariants BEFORE any
         // mutation, so a rejected definition leaves the object untouched and the

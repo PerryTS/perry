@@ -119,6 +119,13 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
         super::TypedArrayDefineOutcome::Rejected => return reflect_bool(false),
         super::TypedArrayDefineOutcome::NotTypedArray => {}
     }
+    // The array exotic `[[DefineOwnProperty]]` for `length` (ArraySetLength)
+    // reports success/failure as a boolean here rather than throwing — bypass
+    // the generic non-configurable pre-check below, which would mishandle the
+    // (non-configurable but writable) `length` property.
+    if let Some(ok) = unsafe { super::array_length_reflect_define(obj, key, descriptor) } {
+        return reflect_bool(ok);
+    }
     let has_own = obj_value_has_own_key(obj, key);
     // Redefining a non-configurable existing property fails.
     if has_own {
