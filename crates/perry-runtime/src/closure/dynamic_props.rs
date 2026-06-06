@@ -274,6 +274,9 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     if ptr < 0x10000 {
         return false;
     }
+    if (0xF0000..0x100000).contains(&ptr) {
+        eprintln!("PROBE is_closure_ptr proxy-band ptr={:#x}", ptr);
+    }
     if ptr % std::mem::align_of::<ClosureHeader>() != 0 {
         return false;
     }

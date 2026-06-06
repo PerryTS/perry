@@ -256,6 +256,9 @@ pub(crate) fn reset_throw_not_callable_counter() {
 pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHeader {
     for _ in 0..64 {
         let addr = closure as u64;
+        if (0xF0000..0x100000).contains(&addr) {
+            eprintln!("PROBE clean_closure_ptr proxy-band addr={:#x}", addr);
+        }
         if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
             return closure;
         }
@@ -302,6 +305,9 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
 #[inline(always)]
 pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     let addr = closure as u64;
+    if (0xF0000..0x100000).contains(&addr) {
+        eprintln!("PROBE get_valid_func_ptr proxy-band addr={:#x}", addr);
+    }
     if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
         return std::ptr::null();
     }
