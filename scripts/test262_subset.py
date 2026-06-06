@@ -65,6 +65,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -327,7 +328,23 @@ def main() -> int:
     ap.add_argument("--sample-cap", type=int, default=8,
                     help="failing-test samples recorded per bucket")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="parallel workers (each test is an independent "
+                         "compile+run; ~8x on an 8-core box)")
+    ap.add_argument("--shard", type=str, default=None,
+                    help="run only shard i of N as 'i/N' (0-based, strided over "
+                         "the sorted case list) — for splitting across machines")
     args = ap.parse_args()
+
+    shard_i = shard_n = None
+    if args.shard:
+        try:
+            shard_i, shard_n = (int(x) for x in args.shard.split("/"))
+            assert 0 <= shard_i < shard_n
+        except (ValueError, AssertionError):
+            print(f"error: --shard must be 'i/N' with 0<=i<N (got {args.shard!r})",
+                  file=sys.stderr)
+            return 2
 
     root = args.root.resolve()
     harness = root / "harness"
@@ -354,89 +371,81 @@ def main() -> int:
     per_dir: dict[str, dict[str, int]] = {}
     neg_pass = 0  # negative cases where both runtimes correctly rejected
     judged_n = 0
+    all_failures: list[dict] = []  # every non-pass case, uncapped
 
     stage = Path(tempfile.mkdtemp(prefix="test262-"))
-    src_dir = stage / "src"
-    bin_dir = stage / "bin"
-    src_dir.mkdir()
-    bin_dir.mkdir()
-    try:
-        for rel, src, meta in discover(root, args.dir, applicable,
-                                       args.all_features):
-            if args.max and judged_n >= args.max:
-                break
-            cat = top_dir(rel)
-            counts = per_dir.setdefault(
-                cat, {k: 0 for k in buckets})
 
-            # Assemble (skip the case if an include is missing).
-            try:
-                program = assemble(src, meta, harness, preamble_text)
-            except OSError as e:
-                buckets["skip"].add(rel, f"assemble: {e}", args.sample_cap)
-                counts["skip"] += 1
-                continue
+    # Materialize the case list so we can shard / cap deterministically. The
+    # shard is strided over the sorted list so each shard spans the whole
+    # alphabet (avoids one shard getting all of the slow `built-ins/...`).
+    cases = list(discover(root, args.dir, applicable, args.all_features))
+    if shard_n:
+        cases = cases[shard_i::shard_n]
+    if args.max:
+        cases = cases[:args.max]
 
-            staged = src_dir / "case.js"
+    def judge_one(case):
+        """Compile+run one case under its own temp dir (so workers don't clash)
+        and return (rel, cat, bucket_key, reason, is_negative)."""
+        rel, src, meta = case
+        cat = top_dir(rel)
+        try:
+            program = assemble(src, meta, harness, preamble_text)
+        except OSError as e:
+            return (rel, cat, "skip", f"assemble: {e}", False)
+        workdir = Path(tempfile.mkdtemp(dir=stage))
+        staged = workdir / "case.js"
+        try:
             staged.write_text(program)
-
             # 1) Node is the oracle (negative cases legitimately exit != 0).
             n_exit, n_out = run(["node", str(staged)], base_env, args.timeout)
             node_clean = n_exit == 0
-
-            # 2) Perry: compile (permissive — unimplemented surfaces as gap).
-            out_bin = bin_dir / "case.out"
+            # 2) Perry compile (permissive — unimplemented surfaces as a gap).
+            out_bin = workdir / "case.out"
             c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
                          PERRY_NO_AUTO_OPTIMIZE="1")
             c_exit, c_out = run(
-                [str(args.perry_bin), "compile", str(staged), "-o", str(out_bin)],
-                c_env, args.timeout, cwd=str(bin_dir))
-            judged_n += 1
-
+                [str(args.perry_bin), "compile", str(staged), "-o",
+                 str(out_bin)], c_env, args.timeout, cwd=str(workdir))
             if c_exit != 0:
-                # Perry rejected at compile time.
                 if node_clean:
-                    buckets["compile-fail"].add(rel, error_line(c_out),
-                                                args.sample_cap)
-                    counts["compile-fail"] += 1
-                else:
-                    # Negative case, parse/early phase — both reject. Correct.
-                    buckets["pass"].add(rel, "", args.sample_cap)
-                    counts["pass"] += 1
-                    neg_pass += 1
-                continue
-
+                    return (rel, cat, "compile-fail", error_line(c_out), False)
+                return (rel, cat, "pass", "", True)  # both reject (negative)
             # 3) Run the Perry binary.
             p_exit, p_out = run([str(out_bin)], base_env, args.timeout)
-            try:
-                out_bin.unlink()
-            except OSError:
-                pass
             perry_clean = p_exit == 0
-
             if node_clean and perry_clean:
                 if normalize(p_out) == normalize(n_out):
-                    buckets["pass"].add(rel, "", args.sample_cap)
-                    counts["pass"] += 1
-                else:
-                    buckets["diff"].add(rel, first_line(p_out), args.sample_cap)
-                    counts["diff"] += 1
-            elif node_clean and not perry_clean:
-                buckets["runtime-fail"].add(rel, first_line(p_out),
-                                            args.sample_cap)
-                counts["runtime-fail"] += 1
-            elif not node_clean and not perry_clean:
-                # Negative case, runtime phase — both reject. Correct.
-                buckets["pass"].add(rel, "", args.sample_cap)
-                counts["pass"] += 1
-                neg_pass += 1
-            else:  # Node rejected, Perry ran clean — a missed negative.
-                buckets["runtime-fail"].add(
-                    rel, "Perry ran clean; Node rejected (missed negative)",
-                    args.sample_cap)
-                counts["runtime-fail"] += 1
+                    return (rel, cat, "pass", "", False)
+                return (rel, cat, "diff", first_line(p_out), False)
+            if node_clean and not perry_clean:
+                return (rel, cat, "runtime-fail", first_line(p_out), False)
+            if not node_clean and not perry_clean:
+                return (rel, cat, "pass", "", True)  # both reject (negative)
+            return (rel, cat, "runtime-fail",
+                    "Perry ran clean; Node rejected (missed negative)", False)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
+            futures = [ex.submit(judge_one, c) for c in cases]
+            for fut in as_completed(futures):
+                rel, cat, key, reason, is_neg = fut.result()
+                counts = per_dir.setdefault(cat, {k: 0 for k in buckets})
+                buckets[key].add(rel, reason, args.sample_cap)
+                counts[key] += 1
+                if is_neg:
+                    neg_pass += 1
+                if key in ("diff", "runtime-fail", "compile-fail"):
+                    all_failures.append({"test": rel, "bucket": key,
+                                         "reason": reason})
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+
+    # Every failing test, uncapped (the capped `samples` above is just for the
+    # console). Sorted for stable diffs between runs.
+    all_failures.sort(key=lambda f: (f["bucket"], f["test"]))
 
     if not args.quiet:
         for cat in sorted(per_dir):
@@ -468,8 +477,16 @@ def main() -> int:
             k: [s.__dict__ for s in buckets[k].samples]
             for k in ("diff", "runtime-fail", "compile-fail", "skip")
         },
+        "failures": all_failures,
     }
     args.report.write_text(json.dumps(report, indent=2) + "\n")
+
+    # Plain-text sidecar: every failing test path + bucket + reason, one per
+    # line — so you never have to guess which tests are red.
+    fail_txt = args.report.with_suffix(".failures.txt")
+    fail_txt.write_text(
+        "".join(f"{f['bucket']:<13} {f['test']}\t{f['reason']}\n"
+                for f in all_failures))
 
     print()
     print("=" * 60)
