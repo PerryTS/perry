@@ -915,11 +915,20 @@ pub extern "C" fn js_typed_array_new_from_array(
     }
     unsafe {
         let len = (*arr).length;
-        // Snapshot source values via the canonical accessor BEFORE allocating:
-        // `typed_array_alloc` may GC and free/move an unrooted cloned source
-        // (`.of/.from` path), and the raw inline read mis-read it (#871).
-        let vals: Vec<f64> = (0..len)
-            .map(|i| bigint::coerce_for_kind(kind, crate::array::js_array_get_f64(arr, i)))
+        // Snapshot the raw source values BEFORE any coercion. Per spec the
+        // source list is fully collected first and only THEN are the elements
+        // converted (`ToNumber`/`ToBigInt`) and stored. A converting element can
+        // run user code (`valueOf`/`Symbol.toPrimitive`) that mutates the source
+        // array — `Int32Array.from([0, { valueOf() { src.length = 0; return 100 }}, 2])`
+        // must still yield `[0, 100, 2]`, not lose the trailing element. Reading
+        // raw values first also keeps the snapshot ahead of the `typed_array_alloc`
+        // GC point (#871).
+        let raw: Vec<f64> = (0..len)
+            .map(|i| crate::array::js_array_get_f64(arr, i))
+            .collect();
+        let vals: Vec<f64> = raw
+            .into_iter()
+            .map(|v| bigint::coerce_for_kind(kind, v))
             .collect();
         let ta = typed_array_alloc(kind, len);
         for (i, v) in vals.iter().enumerate() {
