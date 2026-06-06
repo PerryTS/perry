@@ -3388,13 +3388,25 @@ extern "C" fn typed_array_from_thunk(
     map_fn: f64,
     this_arg: f64,
 ) -> f64 {
-    let kind = require_typed_array_constructor_this();
+    // Spec order (§%TypedArray%.from): the source is read — its `@@iterator`
+    // invoked, or its `length` getter + indexed elements evaluated — BEFORE the
+    // typed array is constructed. A throwing user iterator / length getter must
+    // therefore propagate, not be pre-empted by Perry's own "needs a concrete
+    // typed array constructor" `TypeError`. Resolve the kind lazily and only
+    // demand a concrete constructor AFTER the source has been materialized (and
+    // the map callback validated, which `js_array_from_mapped` does up front).
+    let kind_opt = typed_array_constructor_this_kind();
     let mapped = map_fn.to_bits() != crate::value::TAG_UNDEFINED;
     let arr = if mapped {
         crate::array::js_array_from_mapped(source, map_fn, this_arg)
     } else {
         crate::array::js_array_from_value(source)
     };
+    let kind = kind_opt.unwrap_or_else(|| {
+        super::object_ops::throw_object_type_error(
+            b"%TypedArray%.from/of requires a concrete typed array constructor",
+        )
+    });
     let ta = crate::typedarray::js_typed_array_new_from_array(kind as i32, arr);
     crate::value::js_nanbox_pointer(ta as i64)
 }

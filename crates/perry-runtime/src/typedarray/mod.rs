@@ -915,11 +915,20 @@ pub extern "C" fn js_typed_array_new_from_array(
     }
     unsafe {
         let len = (*arr).length;
-        // Snapshot source values via the canonical accessor BEFORE allocating:
-        // `typed_array_alloc` may GC and free/move an unrooted cloned source
-        // (`.of/.from` path), and the raw inline read mis-read it (#871).
-        let vals: Vec<f64> = (0..len)
-            .map(|i| bigint::coerce_for_kind(kind, crate::array::js_array_get_f64(arr, i)))
+        // Snapshot the raw source values BEFORE any coercion. Per spec the
+        // source list is fully collected first and only THEN are the elements
+        // converted (`ToNumber`/`ToBigInt`) and stored. A converting element can
+        // run user code (`valueOf`/`Symbol.toPrimitive`) that mutates the source
+        // array — `Int32Array.from([0, { valueOf() { src.length = 0; return 100 }}, 2])`
+        // must still yield `[0, 100, 2]`, not lose the trailing element. Reading
+        // raw values first also keeps the snapshot ahead of the `typed_array_alloc`
+        // GC point (#871).
+        let raw: Vec<f64> = (0..len)
+            .map(|i| crate::array::js_array_get_f64(arr, i))
+            .collect();
+        let vals: Vec<f64> = raw
+            .into_iter()
+            .map(|v| bigint::coerce_for_kind(kind, v))
             .collect();
         let ta = typed_array_alloc(kind, len);
         for (i, v) in vals.iter().enumerate() {
@@ -1942,16 +1951,42 @@ pub extern "C" fn js_typed_array_fill(
     }
     unsafe {
         let len = (*ta).length as isize;
+        // Spec order: convert `value` first (its `valueOf`/`ToBigInt` runs before
+        // the index args are coerced), then `ToIntegerOrInfinity` each index.
         let v = bigint::coerce_for_kind((*ta).kind, value);
-        let norm = |x: f64, default: isize| -> isize {
-            let mut n = if x.is_nan() { default } else { x as isize };
-            if n < 0 {
-                n += len;
+        // `ToIntegerOrInfinity` + RelativeIndex clamp. `jsvalue_to_f64` performs
+        // `ToNumber` (so `null` → 0, `true` → 1, an object → its `valueOf`, a
+        // numeric string → its value); `NaN`/`undefined` → 0, ±Infinity saturate
+        // to the array bounds. The previous `x.is_nan() ? default : x as isize`
+        // mis-handled every NaN-boxed non-number: `null`/`false`/`undefined` all
+        // looked like `NaN` and fell back to the *default* (so a `null` end
+        // became `len` instead of 0).
+        let rel = |x: f64| -> isize {
+            let n = jsvalue_to_f64(x);
+            let n = if n.is_nan() { 0.0 } else { n };
+            let mut idx = if !n.is_finite() {
+                if n > 0.0 {
+                    len
+                } else {
+                    0
+                }
+            } else {
+                n.trunc() as isize
+            };
+            if idx < 0 {
+                idx += len;
             }
-            n.clamp(0, len)
+            idx.clamp(0, len)
         };
-        let s = if has_start != 0 { norm(start, 0) } else { 0 };
-        let e = if has_end != 0 { norm(end, len) } else { len };
+        let is_undef = |x: f64| crate::value::JSValue::from_bits(x.to_bits()).is_undefined();
+        let s = if has_start != 0 { rel(start) } else { 0 };
+        // An explicit `undefined` end defaults to `len` (spec step 8a), unlike a
+        // `null`/absent-coerced end which is `ToIntegerOrInfinity(null)` = 0.
+        let e = if has_end != 0 && !is_undef(end) {
+            rel(end)
+        } else {
+            len
+        };
         let mut i = s;
         while i < e {
             store_at(ta, i as usize, v);
