@@ -17,12 +17,13 @@ const nextMatching = async (iterator, predicate) => {
 };
 
 const recursive = watch(ROOT, { recursive: true });
-await new Promise((resolve) => setTimeout(resolve, 80));
-fs.writeFileSync(ROOT + "/sub/nested.txt", "x");
-const recursiveResult = await nextMatching(
+const recursivePending = nextMatching(
   recursive,
   (event) => normalize(event.filename) === "sub/nested.txt",
 );
+await new Promise((resolve) => setTimeout(resolve, 80));
+fs.writeFileSync(ROOT + "/sub/nested.txt", "x");
+const recursiveResult = await recursivePending;
 await recursive.return();
 
 const abortRoot = ROOT + "/abort";
