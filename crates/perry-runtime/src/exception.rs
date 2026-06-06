@@ -92,7 +92,6 @@ pub extern "C" fn js_try_push() -> *mut i32 {
             panic!("Try block nesting too deep");
         }
         let depth = (*s).try_depth;
-        eprintln!("[TRYDEPTH] push -> {}", depth + 1);
         // Capture the shadow-stack depth now, before the protected region
         // can push any callee frames, so the unwind path can restore to
         // exactly this point and drop the frames `longjmp` orphans (#1830).
@@ -108,7 +107,6 @@ pub extern "C" fn js_try_push() -> *mut i32 {
 pub extern "C" fn js_try_end() {
     with_exception_state(|s| unsafe {
         (*s).try_depth = (*s).try_depth.saturating_sub(1);
-        eprintln!("[TRYDEPTH] end  -> {}", (*s).try_depth);
     });
 }
 
