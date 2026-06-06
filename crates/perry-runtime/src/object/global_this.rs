@@ -3052,16 +3052,13 @@ extern "C" fn array_from_thunk(_closure: *const crate::closure::ClosureHeader, v
 }
 
 extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+    // Reflective `Array.of.call(C, ...items)` binds `C` as the implicit `this`.
+    // Read it FIRST (before any nested call can overwrite it); when `C
+    // IsConstructor` the result is built via `Construct(C, «len»)`, otherwise the
+    // default `%Array%` path is taken. See `array_of_full` (ECMA-262 §23.1.2.3).
+    let c = crate::object::js_implicit_this_get();
     let vals = global_this_rest_array_values(rest);
-    let len = vals.len() as u32;
-    let arr = crate::array::js_array_alloc(len);
-    unsafe {
-        (*arr).length = len;
-        for (i, &v) in vals.iter().enumerate() {
-            crate::array::js_array_set_f64(arr, i as u32, v);
-        }
-    }
-    crate::value::js_nanbox_pointer(arr as i64)
+    crate::array::array_of_full(c, &vals)
 }
 
 extern "C" fn number_is_nan_thunk(
