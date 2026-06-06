@@ -977,7 +977,12 @@ pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64
         || unsafe { value_is_object_like(proto_value) }
         || super::class_ref_id(proto_value).is_some();
     if !proto_ok {
-        throw_object_type_error(b"Object prototype may only be an Object or null");
+        // V8 renders the offending value: `... an Object or null: 5`.
+        let rendered = unsafe { describe_value_for_type_error(proto_value) };
+        throw_object_type_error_with_suffix(
+            "Object prototype may only be an Object or null: ",
+            &rendered,
+        );
     }
 
     let result = js_object_create(proto_value);

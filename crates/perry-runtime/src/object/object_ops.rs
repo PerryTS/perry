@@ -19,7 +19,7 @@ pub(crate) fn throw_object_type_error(message: &[u8]) -> ! {
 /// Throw `TypeError: <prefix><suffix>` where `suffix` is a runtime-built
 /// string (e.g. the offending descriptor value rendered with the same
 /// formatting Node uses in its messages). #2817.
-fn throw_object_type_error_with_suffix(prefix: &str, suffix: &str) -> ! {
+pub(crate) fn throw_object_type_error_with_suffix(prefix: &str, suffix: &str) -> ! {
     let full = format!("{prefix}{suffix}");
     let msg = crate::string::js_string_from_bytes(full.as_ptr(), full.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
@@ -32,7 +32,7 @@ fn throw_object_type_error_with_suffix(prefix: &str, suffix: &str) -> ! {
 /// Primitives render via their natural string form; objects render as
 /// `[object Object]` etc. — but in practice these error paths only fire on
 /// primitives, so a simple coercion suffices.
-unsafe fn describe_value_for_type_error(value: f64) -> String {
+pub(crate) unsafe fn describe_value_for_type_error(value: f64) -> String {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
         return "undefined".to_string();
@@ -169,7 +169,8 @@ unsafe fn validate_property_descriptor(descriptor_value: f64) {
     }
 }
 
-/// #2843: enforce frozen / sealed / non-extensible invariants for
+/// #2843: enforce the ordinary `[[DefineOwnProperty]]` invariants
+/// (ECMA-262 10.1.6.3 `ValidateAndApplyPropertyDescriptor`) for
 /// `Object.defineProperty`. `obj` is the resolved heap object, `key` the
 /// coerced key string. Throws the Node `TypeError` when the definition would
 /// violate an invariant; returns normally when the definition is permitted.
@@ -177,11 +178,18 @@ unsafe fn validate_property_descriptor(descriptor_value: f64) {
 /// Rules (matching Node v25):
 ///   - Adding a NEW key to a non-extensible object:
 ///       `Cannot define property <k>, object is not extensible`
-///   - Redefining an EXISTING non-configurable key (frozen, or sealed when
-///     the descriptor changes more than a writable data value):
+///   - Redefining an EXISTING **non-configurable** key in a way the spec
+///     forbids (make it configurable, flip enumerable, switch data↔accessor,
+///     re-enable writability, or change the value of a non-writable data
+///     property to a different value):
 ///       `Cannot redefine property: <k>`
-///   - A sealed (but not frozen) object still allows rewriting an existing
-///     writable data property's value, so that case is permitted.
+///
+/// A property is non-configurable either object-wide (the object was frozen or
+/// sealed — both drop `configurable` on every existing key) OR individually
+/// (`Object.defineProperty(obj, k, { configurable: false })`). Both surface
+/// through the per-key descriptor side table, so this validation no longer
+/// gates on the object-level flags — an individually non-configurable property
+/// on an otherwise-extensible object is validated the same way.
 unsafe fn enforce_define_property_invariants(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
@@ -192,13 +200,7 @@ unsafe fn enforce_define_property_invariants(
         return;
     }
     let gc = gc_header_for(obj);
-    let flags = (*gc)._reserved;
-    let frozen = flags & crate::gc::OBJ_FLAG_FROZEN != 0;
-    let sealed = flags & crate::gc::OBJ_FLAG_SEALED != 0;
-    let no_extend = flags & crate::gc::OBJ_FLAG_NO_EXTEND != 0;
-    if !frozen && !sealed && !no_extend {
-        return;
-    }
+    let no_extend = (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0;
 
     let exists = own_key_present(obj, key);
 
@@ -213,60 +215,188 @@ unsafe fn enforce_define_property_invariants(
         return;
     }
 
-    // Redefining an existing property. The property is non-configurable iff
-    // the object is frozen or sealed (both drop `configurable` on every key).
-    let attrs =
-        get_property_attrs(obj as usize, key_name).unwrap_or(PropertyAttrs::new(true, true, true));
+    // Existing own property. Its configurability comes from the per-key
+    // descriptor side table: no entry ⇒ the default `{configurable: true}`
+    // applies ⇒ any redefinition is permitted. Frozen/sealed objects and
+    // explicit `{configurable: false}` defines both populate the table.
+    let Some(attrs) = get_property_attrs(obj as usize, key_name) else {
+        return;
+    };
     if attrs.configurable() {
         return; // still configurable — redefinition allowed
     }
 
-    // Non-configurable existing property. Node permits exactly one mutation:
-    // changing the *value* of a still-writable data property (sealed-but-not-
-    // frozen objects keep `writable`). Any attempt to change configurability,
-    // enumerability, writability (to true), turn it into an accessor, or
-    // write to a non-writable property is rejected with "Cannot redefine".
-    let desc_ptr = extract_obj_ptr(descriptor_value);
-    let is_accessor_desc = if desc_ptr.is_null() {
-        false
+    // --- ValidateAndApplyPropertyDescriptor: current is non-configurable. ---
+    let cur_accessor = get_accessor_descriptor(obj as usize, key_name);
+    let cur_value = if cur_accessor.is_none() {
+        f64::from_bits(js_object_get_field_by_name(obj as *const ObjectHeader, key).bits())
     } else {
-        let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
-        let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
-        own_key_present(desc_ptr, get_key) || own_key_present(desc_ptr, set_key)
+        f64::from_bits(crate::value::TAG_UNDEFINED)
     };
+    validate_nonconfigurable_redefine(
+        key_name,
+        attrs,
+        cur_accessor,
+        cur_value,
+        descriptor_value,
+    );
+}
 
-    let read_desc_bool = |name: &[u8]| -> Option<bool> {
-        if desc_ptr.is_null() {
+/// The non-configurable branch of `ValidateAndApplyPropertyDescriptor`, factored
+/// so the plain-object, function-object (closure), and symbol-keyed define paths
+/// share one spec implementation. `cur_attrs` is the existing property's
+/// attributes (already known non-configurable). `cur_accessor` is `Some(_)` for
+/// an accessor property (carrying its get/set closure bits) or `None` for a data
+/// property whose current value is `cur_value`. Throws `TypeError: Cannot
+/// redefine property: <k>` when the redefinition violates an invariant.
+pub(crate) unsafe fn validate_nonconfigurable_redefine(
+    key_name: &str,
+    cur_attrs: PropertyAttrs,
+    cur_accessor: Option<AccessorDescriptor>,
+    cur_value: f64,
+    descriptor_value: f64,
+) {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    let desc_ptr = extract_obj_ptr(descriptor_value);
+    if desc_ptr.is_null() {
+        return;
+    }
+    let reject = || throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
+
+    let has_field = |name: &[u8]| -> bool {
+        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        own_key_present(desc_ptr, k)
+    };
+    let read = |name: &[u8]| -> crate::value::JSValue {
+        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k)
+    };
+    let read_bool = |name: &[u8]| -> Option<bool> {
+        if !has_field(name) {
             return None;
         }
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        if !own_key_present(desc_ptr, key) {
-            return None;
-        }
-        let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, key);
-        Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+        Some(crate::value::js_is_truthy(f64::from_bits(read(name).bits())) != 0)
     };
 
-    let wants_configurable = read_desc_bool(b"configurable").unwrap_or(false);
-    let wants_writable = read_desc_bool(b"writable");
-    let wants_enumerable = read_desc_bool(b"enumerable");
+    let desc_has_get = has_field(b"get");
+    let desc_has_set = has_field(b"set");
+    let desc_has_value = has_field(b"value");
+    let desc_has_writable = has_field(b"writable");
+    let desc_is_accessor = desc_has_get || desc_has_set;
+    let desc_is_data = desc_has_value || desc_has_writable;
 
-    // A bare value-only redefinition of a still-writable data property is the
-    // only allowed mutation on a non-configurable property.
-    let only_value_change = !is_accessor_desc
-        && !wants_configurable
-        && wants_enumerable
-            .map(|e| e == attrs.enumerable())
-            .unwrap_or(true)
-        && wants_writable
-            .map(|w| w == attrs.writable())
-            .unwrap_or(true)
-        && attrs.writable();
-    if only_value_change {
+    // Step 4: a non-configurable property cannot be made configurable, and its
+    // enumerability cannot change.
+    if read_bool(b"configurable") == Some(true) {
+        reject();
+    }
+    if let Some(want_enum) = read_bool(b"enumerable") {
+        if want_enum != cur_attrs.enumerable() {
+            reject();
+        }
+    }
+
+    // A generic descriptor (only enumerable/configurable) imposes no further
+    // constraints once the two checks above pass.
+    if !desc_is_accessor && !desc_is_data {
         return;
     }
 
-    throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
+    // Step: a non-configurable property cannot switch between data and accessor.
+    let cur_is_accessor = cur_accessor.is_some();
+    if desc_is_accessor != cur_is_accessor {
+        reject();
+    }
+
+    if let Some(acc) = cur_accessor {
+        // Both accessor: `get`/`set` may not change. The stored closures are
+        // clones rebound to the receiver (`clone_closure_rebind_this`) but keep
+        // the original `func_ptr`, so compare by underlying function pointer.
+        let closure_func_ptr = |bits: u64| -> usize {
+            let p = (bits & crate::value::POINTER_MASK) as usize;
+            if p >= 0x1000 && crate::closure::is_closure_ptr(p) {
+                (*(p as *const crate::closure::ClosureHeader)).func_ptr as usize
+            } else {
+                0
+            }
+        };
+        if desc_has_get {
+            let want = read(b"get");
+            let want_fp = if want.is_undefined() {
+                0
+            } else {
+                closure_func_ptr(want.bits())
+            };
+            if want_fp != closure_func_ptr(acc.get) {
+                reject();
+            }
+        }
+        if desc_has_set {
+            let want = read(b"set");
+            let want_fp = if want.is_undefined() {
+                0
+            } else {
+                closure_func_ptr(want.bits())
+            };
+            if want_fp != closure_func_ptr(acc.set) {
+                reject();
+            }
+        }
+        return;
+    }
+
+    // Both data. A non-writable data property cannot be made writable, and its
+    // value cannot change to a different value (SameValue). A still-writable
+    // data property allows any value/writable change.
+    if !cur_attrs.writable() {
+        if read_bool(b"writable") == Some(true) {
+            reject();
+        }
+        if desc_has_value {
+            let new_value = f64::from_bits(read(b"value").bits());
+            if js_object_is(new_value, cur_value).to_bits() != TAG_TRUE {
+                reject();
+            }
+        }
+    }
+}
+
+/// Store a data-property value for `Object.defineProperty`, bypassing the
+/// ordinary `[[Set]]` writability / frozen / sealed guards. The spec writes the
+/// value via `[[DefineOwnProperty]]`, which is NOT subject to the `[[Set]]`
+/// writability check — so redefining a configurable-but-non-writable property's
+/// value, or performing a (validation-approved) same-value redefine on a frozen
+/// object, must store the value rather than throw `Cannot assign to read only`.
+///
+/// The object's immutability flags are lifted only across the store. `obj` is
+/// rooted so a GC evacuation during the store leaves the flag restore landing
+/// on the relocated header. Callers must clear any stale per-key `writable`
+/// descriptor first (it is re-applied with the final attributes afterward).
+unsafe fn define_property_force_store_value(
+    obj: *mut ObjectHeader,
+    key_str: *const crate::StringHeader,
+    value: f64,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_string_ptr(key_str);
+    let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    if obj.is_null() || (obj as usize) <= 0x10000 {
+        return;
+    }
+    let immutability =
+        crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+    let gc = gc_header_for(obj);
+    let saved = (*gc)._reserved;
+    (*gc)._reserved &= !immutability;
+    let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    js_object_set_field_by_name(obj, key_str, value);
+    // Re-fetch after a possible evacuation, then restore the immutability bits.
+    obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    if !obj.is_null() && (obj as usize) > 0x10000 {
+        let gc = gc_header_for(obj);
+        (*gc)._reserved = ((*gc)._reserved & !immutability) | (saved & immutability);
+    }
 }
 
 fn throw_from_entries_not_iterable() -> ! {
@@ -1081,6 +1211,29 @@ pub extern "C" fn js_object_define_property(
                     None
                 };
 
+            // ValidateAndApplyPropertyDescriptor: a non-configurable existing own
+            // property of a function object can only be redefined within the
+            // spec-permitted bounds (#2843). The built-in `name`/`length` slots
+            // are configurable per spec, so a redefine of those still flows
+            // through unguarded. The shared core mirrors the plain-object path.
+            if let Some(cur_attrs) = existing_attrs {
+                if !cur_attrs.configurable() {
+                    let cur_accessor = super::get_accessor_descriptor(closure_ptr, &key_rust);
+                    let cur_value = if cur_accessor.is_none() {
+                        crate::closure::closure_get_dynamic_prop(closure_ptr, &key_rust)
+                    } else {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    };
+                    validate_nonconfigurable_redefine(
+                        &key_rust,
+                        cur_attrs,
+                        cur_accessor,
+                        cur_value,
+                        descriptor_value,
+                    );
+                }
+            }
+
             let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
             let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
             let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
@@ -1366,20 +1519,30 @@ pub extern "C" fn js_object_define_property(
             let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
             let value_field =
                 js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
-            // Clear any existing accessor for this key so the write doesn't fire the setter.
+            // Clear any existing accessor for this key so the write doesn't fire
+            // the setter, and clear any stale per-key descriptor so a prior
+            // `writable: false` doesn't reject the forced store below. The final
+            // attributes are (re)applied a few lines down.
             if let Some(ref k) = key_rust {
                 ACCESSOR_DESCRIPTORS.with(|m| {
                     m.borrow_mut().remove(&(obj as usize, k.clone()));
                 });
+                clear_property_attrs(obj as usize, k);
             }
             // Ensure the key exists even if the descriptor's value is undefined —
             // the property still "exists" per JS semantics.
             if value_field.is_undefined() {
                 ensure_key_in_keys_array(obj, key_str);
             } else {
-                // Store via runtime path. Any existing descriptor attrs are NOT yet set,
-                // so writability defaults to true and the write goes through.
-                js_object_set_field_by_name(obj, key_str, f64::from_bits(value_field.bits()));
+                // `Object.defineProperty` stores the value via
+                // `[[DefineOwnProperty]]`, bypassing the `[[Set]]` writability /
+                // frozen guard (the spec invariants were already enforced by
+                // `enforce_define_property_invariants`).
+                define_property_force_store_value(
+                    obj,
+                    key_str,
+                    f64::from_bits(value_field.bits()),
+                );
             }
         }
 
@@ -2256,7 +2419,12 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         || unsafe { value_is_object_like(proto) }
         || super::class_ref_id(proto).is_some();
     if !proto_ok {
-        throw_object_type_error(b"Object prototype may only be an Object or null");
+        // V8 renders the offending value: `... an Object or null: 5`.
+        let rendered = unsafe { describe_value_for_type_error(proto) };
+        throw_object_type_error_with_suffix(
+            "Object prototype may only be an Object or null: ",
+            &rendered,
+        );
     }
 
     // #2820: setting the prototype of a primitive target is a spec no-op that
