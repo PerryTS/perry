@@ -227,6 +227,11 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             // Attach any pending menu bar now that the window exists
             crate::menu::attach_pending_menubar(hwnd);
 
+            // Apply modern Win11 chrome by default (rounded corners +
+            // theme-aware title bar) before the window is shown — issue #4681.
+            // No-op / ignored on Windows 10 and earlier.
+            crate::dwm::apply_default_window_chrome(hwnd);
+
             APPS.with(|apps| {
                 let mut apps = apps.borrow_mut();
                 apps.push(AppEntry {
@@ -718,23 +723,8 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
                     );
 
-                    // Request rounded corners on Windows 11+ via DWM
-                    // DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
-                    extern "system" {
-                        fn DwmSetWindowAttribute(
-                            hwnd: isize,
-                            attr: u32,
-                            value: *const i32,
-                            size: u32,
-                        ) -> i32;
-                    }
-                    let corner_pref: i32 = 2; // DWMWCP_ROUND
-                    let _ = DwmSetWindowAttribute(
-                        hwnd.0 as isize,
-                        33, // DWMWA_WINDOW_CORNER_PREFERENCE
-                        &corner_pref,
-                        std::mem::size_of::<i32>() as u32,
-                    );
+                    // Request rounded corners on Windows 11+ via DWM.
+                    crate::dwm::apply_rounded_corners(hwnd);
                 }
             }
         });
@@ -830,30 +820,10 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
                         _ => 3, // Acrylic default
                     };
 
-                    // DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof)
-                    extern "system" {
-                        fn DwmSetWindowAttribute(
-                            hwnd: isize,
-                            attr: u32,
-                            value: *const i32,
-                            size: u32,
-                        ) -> i32;
-                    }
-                    let _ = DwmSetWindowAttribute(
-                        hwnd.0 as isize,
-                        38, // DWMWA_SYSTEMBACKDROP_TYPE
-                        &backdrop_type,
-                        std::mem::size_of::<i32>() as u32,
-                    );
+                    crate::dwm::set_backdrop(hwnd, backdrop_type);
 
                     // Also enable dark mode title bar for better blending
-                    let use_dark: i32 = 1;
-                    let _ = DwmSetWindowAttribute(
-                        hwnd.0 as isize,
-                        20, // DWMWA_USE_IMMERSIVE_DARK_MODE
-                        &use_dark,
-                        std::mem::size_of::<i32>() as u32,
-                    );
+                    crate::dwm::set_attr_i32(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, 1);
 
                     // Extend client area into frame for borderless mica/acrylic
                     extern "system" {

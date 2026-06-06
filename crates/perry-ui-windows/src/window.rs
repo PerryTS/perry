@@ -148,6 +148,11 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             )
             .unwrap();
 
+            // Modern Win11 chrome by default (rounded corners + theme-aware
+            // title bar) to match the main app window — issue #4681. Ignored
+            // on Windows 10 and earlier.
+            crate::dwm::apply_default_window_chrome(hwnd);
+
             HWND_TO_WINDOW.with(|m| m.borrow_mut().insert(hwnd.0 as isize, id));
             WINDOWS.with(|w| w.borrow_mut().insert(id, hwnd));
         }
