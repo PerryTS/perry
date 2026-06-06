@@ -321,6 +321,8 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
         let escape = match b {
             b'"' => Some("\\\""),
             b'\\' => Some("\\\\"),
+            0x08 => Some("\\b"),
+            0x0c => Some("\\f"),
             b'\n' => Some("\\n"),
             b'\r' => Some("\\r"),
             b'\t' => Some("\\t"),
@@ -348,6 +350,91 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
         buf_vec.extend_from_slice(&bytes[start..]);
     }
     buf_vec.push(b'"');
+}
+
+/// Throw the spec `TypeError` for a BigInt that reaches JSON serialization
+/// without being converted by `toJSON`/replacer (ECMA-262 25.5.2 step 11 of
+/// SerializeJSONProperty). Diverges via `js_throw` (longjmp); the `-> ()` return
+/// type is never reached.
+#[inline]
+pub(crate) unsafe fn throw_bigint_json_error() {
+    let msg = "Do not know how to serialize a BigInt";
+    let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+    crate::exception::js_throw(f64::from_bits(
+        POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+    ));
+}
+
+/// Apply `BigInt.prototype.toJSON` to a BigInt primitive if a callable `toJSON`
+/// is resolved on the prototype (SerializeJSONProperty step 2 — `toJSON` applies
+/// to BigInt values too, via their prototype). Returns `Some(result)` after
+/// calling `toJSON(key)` with `this` bound to the BigInt; `None` when there is
+/// no callable `toJSON` (the caller then throws the BigInt `TypeError`).
+pub(crate) unsafe fn bigint_resolve_to_json(value: f64, key_f64: f64) -> Option<f64> {
+    // Resolve the *raw* `toJSON` data property off `BigInt.prototype` (not the
+    // receiver-bound form — binding a BigInt receiver mis-dispatches `this`).
+    // Then call it with `this` set to the BigInt via the implicit-this channel,
+    // mirroring `object_get_to_json`, so `this.toString()` sees the BigInt.
+    let ctor = crate::object::js_get_global_this_builtin_value(b"BigInt".as_ptr(), 6);
+    let ctor_bits = ctor.to_bits();
+    if (ctor_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let proto =
+        crate::closure::closure_get_dynamic_prop((ctor_bits & POINTER_MASK) as usize, "prototype");
+    let proto_bits = proto.to_bits();
+    if (proto_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let proto_ptr = (proto_bits & POINTER_MASK) as *const crate::ObjectHeader;
+    let key = js_string_from_bytes(b"toJSON".as_ptr(), 6);
+    let method = crate::object::js_object_get_field_by_name(proto_ptr, key);
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG
+        || !crate::closure::is_closure_ptr((method_bits & POINTER_MASK) as usize)
+    {
+        return None;
+    }
+    let prev = crate::object::js_implicit_this_set(value);
+    let result = crate::closure::js_native_call_value(f64::from_bits(method_bits), &key_f64, 1);
+    crate::object::js_implicit_this_set(prev);
+    Some(result)
+}
+
+/// The empty-string key passed to `toJSON` on the non-replacer path (the key is
+/// only observable by user `toJSON`, which the BigInt tests don't inspect).
+#[inline]
+pub(crate) unsafe fn json_empty_key() -> f64 {
+    let s = js_string_from_bytes(b"".as_ptr(), 0);
+    f64::from_bits(STRING_TAG | (s as u64 & POINTER_MASK))
+}
+
+/// Serialize a BigInt primitive per spec: apply `toJSON` if present (serialize
+/// its result), else throw the BigInt `TypeError`. `key_f64` is the property key
+/// passed to `toJSON`.
+#[inline]
+pub(crate) unsafe fn serialize_bigint_value(
+    value: f64,
+    key_f64: f64,
+    buf: &mut String,
+    depth: u32,
+) {
+    match bigint_resolve_to_json(value, key_f64) {
+        Some(result) => stringify_value_depth(result, TYPE_UNKNOWN, buf, depth),
+        None => throw_bigint_json_error(),
+    }
+}
+
+/// Check if a NaN-boxed value is a Symbol. JSON.stringify omits Symbol-valued
+/// properties from objects, renders Symbol array elements as `null`, and yields
+/// `undefined` for a top-level Symbol (ECMA-262 25.5.2 — SerializeJSONProperty
+/// has no Symbol arm, so the value flows out as undefined). Gated on POINTER_TAG
+/// so non-pointer scalars pay only a tag compare.
+#[inline]
+pub(crate) unsafe fn is_symbol_bits(bits: u64) -> bool {
+    (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+        && crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0
 }
 
 /// Check if a NaN-boxed value is a closure (function).
@@ -510,15 +597,10 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         return;
     }
 
-    // BigInt: serialize as quoted string (matching JSON.stringify with BigInt replacer behavior)
+    // BigInt: apply `BigInt.prototype.toJSON` if present, else throw a TypeError
+    // (ECMA-262 25.5.2 — a raw BigInt is not JSON-serializable).
     if tag == BIGINT_TAG {
-        let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
-            buf.push_str("null");
-        }
+        serialize_bigint_value(value, json_empty_key(), buf, 0);
         return;
     }
 
@@ -528,6 +610,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         // of an object holding e.g. an `http.Agent` emits `null` instead of
         // segfaulting on a low-memory deref.
         if (ptr as usize) < 0x1000 {
+            buf.push_str("null");
+            return;
+        }
+        // A Symbol or function reaching a value dispatcher (array element /
+        // fallback) serializes as `null`; object-field omission happens at the
+        // loop. Closures must be caught here too — gc_obj_type misroutes them.
+        if is_symbol_bits(bits) || is_closure_value(bits) {
             buf.push_str("null");
             return;
         }
@@ -729,13 +818,7 @@ pub(crate) unsafe fn stringify_value_depth(
     }
 
     if tag == BIGINT_TAG {
-        let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
-            buf.push_str("null");
-        }
+        serialize_bigint_value(value, json_empty_key(), buf, depth);
         return;
     }
 
@@ -747,6 +830,12 @@ pub(crate) unsafe fn stringify_value_depth(
         // segfaults. Emit `null`, the same way closures are dropped. Real heap
         // objects live far above this low-memory guard (matches gc_obj_type).
         if (ptr as usize) < 0x1000 {
+            buf.push_str("null");
+            return;
+        }
+        // A Symbol or function reaching a value dispatcher serializes as `null`
+        // (see the matching branch in `stringify_value`).
+        if is_symbol_bits(bits) || is_closure_value(bits) {
             buf.push_str("null");
             return;
         }
@@ -1088,6 +1177,11 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         if has_closure_field && is_closure_value(field_bits) {
             continue;
         }
+        // Skip Symbol-valued properties (ECMA-262: SerializeJSONProperty yields
+        // undefined for a Symbol, so an object property is omitted).
+        if is_symbol_bits(field_bits) {
+            continue;
+        }
 
         if !first {
             buf.push(',');
@@ -1103,9 +1197,10 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             key_bits as *const StringHeader
         };
         if let Some(key_str) = str_from_header(key_ptr) {
-            buf.push('"');
-            buf.push_str(key_str);
-            buf.push_str("\":");
+            // Property names are JSON strings too — escape quotes/backslash/
+            // control chars (value-string-escape-ascii).
+            write_escaped_string(buf, key_str);
+            buf.push(':');
         } else {
             let _ = write!(buf, "\"field{}\":", f);
         }
@@ -1138,6 +1233,9 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         } else if val_tag == POINTER_TAG || is_raw_pointer(field_bits) {
             // Nested object/array — recurse with depth
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
+        } else if val_tag == BIGINT_TAG {
+            // A BigInt field: apply toJSON or throw (not the old null fallback).
+            serialize_bigint_value(field_val, json_empty_key(), buf, depth + 1);
         } else {
             // Number (most common for data objects) — or Date, handled
             // centrally by `write_number` via DATE_REGISTRY lookup.
@@ -1365,9 +1463,10 @@ pub(crate) unsafe fn try_emit_shape_element(
         for f in 0..shape_fields as usize {
             let field_val = *fields_ptr.add(f);
             let fb = field_val.to_bits();
-            // UNDEFINED desyncs comma placement → roll back and let the
-            // slow object path emit this element correctly.
-            if fb == TAG_UNDEFINED {
+            // UNDEFINED / closure / Symbol values are omitted from an object
+            // (not emitted as the template assumes), which desyncs comma
+            // placement → roll back and let the slow object path handle it.
+            if fb == TAG_UNDEFINED || is_closure_value(fb) || is_symbol_bits(fb) {
                 buf.truncate(save_pos);
                 return false;
             }
@@ -1397,6 +1496,8 @@ pub(crate) unsafe fn try_emit_shape_element(
                 }
             } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
                 stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
+            } else if vtag == BIGINT_TAG {
+                serialize_bigint_value(field_val, json_empty_key(), buf, depth + 1);
             } else {
                 write_number(buf, field_val);
             }
@@ -1416,7 +1517,7 @@ pub(crate) unsafe fn try_emit_shape_element(
         }
         if (fb & 0xFFFF_0000_0000_0000) == POINTER_TAG {
             has_pointer_fields = true;
-            if is_closure_value(fb) {
+            if is_closure_value(fb) || is_symbol_bits(fb) {
                 return false;
             }
         }
@@ -1458,6 +1559,8 @@ pub(crate) unsafe fn try_emit_shape_element(
             }
         } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
+        } else if vtag == BIGINT_TAG {
+            serialize_bigint_value(field_val, json_empty_key(), buf, depth + 1);
         } else {
             write_number(buf, field_val);
         }
@@ -1484,6 +1587,22 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     if arr.is_null() {
         buf.push_str("[]");
         return;
+    }
+    // Circular-reference detection (bounded like the object path): only past
+    // MAX_FAST_DEPTH do we pay the stack borrow, so the common shallow array
+    // walk is unaffected. A self-referential array (`a[0] = a`) recurses to the
+    // threshold and then throws a TypeError instead of overflowing the stack.
+    let track_circular = depth > MAX_FAST_DEPTH;
+    if track_circular {
+        if STRINGIFY_STACK.with(|s| s.borrow().contains(&(arr as usize))) {
+            let msg = "Converting circular structure to JSON";
+            let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+            let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+            crate::exception::js_throw(f64::from_bits(
+                POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+            ));
+        }
+        STRINGIFY_STACK.with(|s| s.borrow_mut().push(arr as usize));
     }
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
@@ -1532,11 +1651,13 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             let elem = *elements.add(i as usize);
             let elem_bits = elem.to_bits();
             if !try_emit_shape_element(elem_bits, tmpl, buf, depth) {
-                // Match the slow path: array descent does not bump depth.
-                stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth);
+                stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth + 1);
             }
         }
         buf.push(']');
+        if track_circular {
+            STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        }
         return;
     }
 
@@ -1574,19 +1695,19 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         } else if elem_bits == TAG_FALSE {
             buf.push_str("false");
         } else if elem_tag == BIGINT_TAG {
-            let bigint_ptr = (elem_bits & POINTER_MASK) as *const crate::BigIntHeader;
-            let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-            if let Some(s) = str_from_header(str_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
+            serialize_bigint_value(elem, json_empty_key(), buf, depth);
         } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
             let elem_ptr = if elem_tag == POINTER_TAG {
                 (elem_bits & POINTER_MASK) as *const u8
             } else {
                 elem_bits as *const u8
             };
+            // A function or Symbol array element serializes as `null` per spec
+            // (SerializeJSONProperty yields undefined → array slot becomes null).
+            if is_closure_value(elem_bits) || is_symbol_bits(elem_bits) {
+                buf.push_str("null");
+                continue;
+            }
             // #3857: a boxed primitive wrapper element serializes as its
             // underlying primitive, not the empty wrapper object.
             if let Some(prim) = crate::builtins::boxed_primitive_json_value(elem) {
@@ -1616,8 +1737,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 continue;
             }
             match gc_obj_type(elem_ptr) {
-                crate::gc::GC_TYPE_OBJECT => stringify_object_inner(elem_ptr, buf, depth),
-                crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth),
+                // Bump depth on descent so the circular-reference guard (gated
+                // at MAX_FAST_DEPTH) eventually fires for nested-array cycles
+                // (`a[0] = a`), which would otherwise recurse at a fixed depth.
+                crate::gc::GC_TYPE_OBJECT => stringify_object_inner(elem_ptr, buf, depth + 1),
+                crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_STRING => {
                     let str_ptr = elem_ptr as *const StringHeader;
                     if let Some(s) = str_from_header(str_ptr) {
@@ -1633,13 +1757,13 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 }
                 _ => {
                     if is_object_pointer(elem_ptr) {
-                        stringify_object_inner(elem_ptr, buf, depth);
+                        stringify_object_inner(elem_ptr, buf, depth + 1);
                     } else {
                         let arr_elem = elem_ptr as *const crate::ArrayHeader;
                         let arr_len = (*arr_elem).length;
                         let arr_cap = (*arr_elem).capacity;
                         if arr_len <= arr_cap && arr_cap > 0 && arr_cap < 10000 {
-                            stringify_array_depth(elem_ptr, buf, depth);
+                            stringify_array_depth(elem_ptr, buf, depth + 1);
                         } else {
                             let str_ptr = elem_ptr as *const StringHeader;
                             if let Some(s) = str_from_header(str_ptr) {
@@ -1658,6 +1782,9 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         }
     }
     buf.push(']');
+    if track_circular {
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+    }
 }
 
 #[inline]
