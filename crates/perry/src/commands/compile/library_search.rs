@@ -352,6 +352,20 @@ pub(super) fn find_perry_windows_sdk() -> Option<PathBuf> {
 /// on this version" — the binary still has to actually avoid calling APIs
 /// newer than that version. Perry's UI runtime handles the API side via
 /// `crates/perry-ui-windows/src/dpi_compat.rs` (issue #303).
+/// Fold the resolved `--windows-subsystem` / `[windows] subsystem` override
+/// (`ctx.windows_subsystem`) into the auto-detected `needs_ui` to get the
+/// effective "is this a GUI app?" bool that `windows_pe_subsystem_flag`
+/// consumes. `"windows"` forces GUI (`/SUBSYSTEM:WINDOWS`, no console window),
+/// `"console"` forces a console, `"auto"` (and any unrecognized value — the
+/// caller validates) defers to the import-driven heuristic.
+pub(super) fn windows_subsystem_needs_ui(subsystem: &str, needs_ui: bool) -> bool {
+    match subsystem {
+        "windows" => true,
+        "console" => false,
+        _ => needs_ui,
+    }
+}
+
 pub(super) fn windows_pe_subsystem_flag(needs_ui: bool, min_windows_version: &str) -> String {
     let base = if needs_ui {
         "/SUBSYSTEM:WINDOWS"

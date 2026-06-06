@@ -193,7 +193,7 @@ pub(super) unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> 
         return false;
     }
     let size = (*header).size as usize;
-    if size < GC_HEADER_SIZE || size > (1usize << 34) {
+    if size < GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
         return false;
     }
     let is_arena = (*header).gc_flags & GC_FLAG_ARENA != 0;

@@ -371,7 +371,7 @@ unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -> bool {
         return false;
     }
     let size = (*header).size as usize;
-    if size < crate::gc::GC_HEADER_SIZE || size > (1usize << 34) {
+    if size < crate::gc::GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
         return false;
     }
     if (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0 {

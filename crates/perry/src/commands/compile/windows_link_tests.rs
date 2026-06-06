@@ -3,6 +3,7 @@
 //! `#[cfg(test)] mod windows_link_tests;` in compile.rs.
 
 use super::windows_pe_subsystem_flag;
+use super::windows_subsystem_needs_ui;
 
 // Regression guard for issue #120: without an explicit subsystem flag the
 // MSVC linker historically defaulted to WINDOWS (2), silently detaching
@@ -52,4 +53,38 @@ fn min_windows_8_appends_6_02_suffix() {
 fn unknown_min_windows_falls_through_to_default() {
     assert_eq!(windows_pe_subsystem_flag(false, "11"), "/SUBSYSTEM:CONSOLE");
     assert_eq!(windows_pe_subsystem_flag(true, ""), "/SUBSYSTEM:WINDOWS");
+}
+
+// --windows-subsystem / [windows] subsystem override (resolved into
+// ctx.windows_subsystem) folds into needs_ui before the flag is built.
+
+// "auto" defers to the import-driven heuristic — both polarities pass through.
+#[test]
+fn subsystem_auto_defers_to_needs_ui() {
+    assert!(!windows_subsystem_needs_ui("auto", false));
+    assert!(windows_subsystem_needs_ui("auto", true));
+}
+
+// "windows" forces GUI even when nothing imported perry/ui — this is the
+// Bloom-Engine-game case: no console window pops up alongside the game.
+#[test]
+fn subsystem_windows_forces_gui() {
+    assert!(windows_subsystem_needs_ui("windows", false));
+    let flag = windows_pe_subsystem_flag(windows_subsystem_needs_ui("windows", false), "10");
+    assert_eq!(flag, "/SUBSYSTEM:WINDOWS");
+}
+
+// "console" forces a console even for a UI program that would auto-detect GUI.
+#[test]
+fn subsystem_console_forces_console() {
+    assert!(!windows_subsystem_needs_ui("console", true));
+    let flag = windows_pe_subsystem_flag(windows_subsystem_needs_ui("console", true), "10");
+    assert_eq!(flag, "/SUBSYSTEM:CONSOLE");
+}
+
+// The override composes with the min-windows-version suffix.
+#[test]
+fn subsystem_override_composes_with_min_version_suffix() {
+    let flag = windows_pe_subsystem_flag(windows_subsystem_needs_ui("windows", false), "7");
+    assert_eq!(flag, "/SUBSYSTEM:WINDOWS,5.1");
 }
