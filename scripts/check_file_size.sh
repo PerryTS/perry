@@ -244,6 +244,11 @@ crates/perry-runtime/src/node_stream_constructors.rs
 # LOC) on main after recent dispatch-arm additions. Splitting per receiver-type
 # family is tracked under #1435.
 crates/perry-codegen/src/expr/property_get.rs
+# Codegen method-call dispatch tower (string/array/class/Map/Set/Promise/fetch/
+# static/instance + the toString radix/brand fast paths). Crossed the 2000-line
+# gate after the BigInt.prototype brand-check guard. Splitting the per-receiver
+# fast paths from the generic dispatch is tracked under #1435.
+crates/perry-codegen/src/lower_call/property_get.rs
 # Regex engine wrapper (compile/exec/replace + named-group + lookahead handling).
 # Crossed the 2000-line gate (2026 LOC) after the replace-lookahead additions.
 # Splitting the matcher from the replace machinery is tracked under #1435.

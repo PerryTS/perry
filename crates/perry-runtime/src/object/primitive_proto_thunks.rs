@@ -86,12 +86,17 @@ pub(super) fn install_primitive_proto_methods(
             );
         }
         "BigInt" => {
-            ipm(
+            // Calling arity stays 1 so the radix argument is passed to the
+            // thunk, but spec `BigInt.prototype.toString.length` is 0 (the radix
+            // is optional) — override the reported length on the closure.
+            let to_string = ipm(
                 proto_obj,
                 "toString",
                 bigint_proto_to_string_thunk as *const u8,
                 1,
             );
+            let to_string_closure = (to_string.to_bits() & crate::value::POINTER_MASK) as usize;
+            super::native_module::set_builtin_closure_length(to_string_closure, 0);
             ipm(
                 proto_obj,
                 "valueOf",
@@ -120,21 +125,35 @@ pub(crate) fn primitive_proto_method_value(builtin_name: &str, method_name: &str
         ("BigInt", "valueOf") => (bigint_proto_value_of_thunk as *const u8, 0),
         _ => return None,
     };
+    // Spec `.length` matches the calling arity for every method here EXCEPT
+    // `BigInt.prototype.toString`, whose optional radix gives it length 0 even
+    // though the thunk takes the radix as its one formal parameter (so the
+    // dispatch arity must remain 1).
+    let length = match (builtin_name, method_name) {
+        ("BigInt", "toString") => 0,
+        _ => arity,
+    };
     Some(primitive_proto_method_closure_value(
         method_name,
         func_ptr,
         arity,
+        length,
     ))
 }
 
-fn primitive_proto_method_closure_value(method_name: &str, func_ptr: *const u8, arity: u32) -> f64 {
+fn primitive_proto_method_closure_value(
+    method_name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+    length: u32,
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
     super::native_module::set_bound_native_closure_name(closure, method_name);
-    super::native_module::set_builtin_closure_length(closure as usize, arity);
+    super::native_module::set_builtin_closure_length(closure as usize, length);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
     super::set_builtin_property_attrs(
         closure as usize,

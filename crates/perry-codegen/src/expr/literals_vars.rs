@@ -662,6 +662,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // module globals.
         Expr::Update { id, op, prefix } => {
             super::invalidate_local_write_facts(ctx, *id);
+            // Only a BigInt-typed local needs the runtime `js_value_inc` /
+            // `js_value_dec` step: a bare `fadd(v, 1.0)` on a NaN-boxed BigInt
+            // propagates the BigInt's NaN payload unchanged (so `i++` is a
+            // no-op / infinite loop). Numeric locals keep the inline `fadd` /
+            // `fsub` so hot integer/float loops — and the native-region /
+            // vectorization compiler-output gates that prove those loops emit
+            // call-free arithmetic — are byte-for-byte unaffected.
+            let value_could_be_bigint = matches!(ctx.local_types.get(id), Some(HirType::BigInt));
             // Closure capture path: runtime get + add/sub + runtime set.
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
                 let closure_ptr = ctx
@@ -679,9 +687,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
                     let old = blk.call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]);
-                    let new = match op {
-                        UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                        UpdateOp::Decrement => blk.fsub(&old, "1.0"),
+                    let new = match (value_could_be_bigint, op) {
+                        (true, UpdateOp::Increment) => {
+                            blk.call(DOUBLE, "js_value_inc", &[(DOUBLE, &old)])
+                        }
+                        (true, UpdateOp::Decrement) => {
+                            blk.call(DOUBLE, "js_value_dec", &[(DOUBLE, &old)])
+                        }
+                        (false, UpdateOp::Increment) => blk.fadd(&old, "1.0"),
+                        (false, UpdateOp::Decrement) => blk.fsub(&old, "1.0"),
                     };
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new)]);
                     return Ok(if *prefix { new } else { old });
@@ -692,9 +706,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(I64, &closure_ptr), (I32, &idx_str)],
                 );
                 let blk = ctx.block();
-                let new = match op {
-                    UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                    UpdateOp::Decrement => blk.fsub(&old, "1.0"),
+                let new = match (value_could_be_bigint, op) {
+                    (true, UpdateOp::Increment) => {
+                        blk.call(DOUBLE, "js_value_inc", &[(DOUBLE, &old)])
+                    }
+                    (true, UpdateOp::Decrement) => {
+                        blk.call(DOUBLE, "js_value_dec", &[(DOUBLE, &old)])
+                    }
+                    (false, UpdateOp::Increment) => blk.fadd(&old, "1.0"),
+                    (false, UpdateOp::Decrement) => blk.fsub(&old, "1.0"),
                 };
                 blk.call_void(
                     "js_closure_set_capture_f64",
@@ -711,9 +731,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let box_dbl = blk.load(DOUBLE, &slot);
                     let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
                     let old = blk.call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]);
-                    let new = match op {
-                        UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                        UpdateOp::Decrement => blk.fsub(&old, "1.0"),
+                    let new = match (value_could_be_bigint, op) {
+                        (true, UpdateOp::Increment) => {
+                            blk.call(DOUBLE, "js_value_inc", &[(DOUBLE, &old)])
+                        }
+                        (true, UpdateOp::Decrement) => {
+                            blk.call(DOUBLE, "js_value_dec", &[(DOUBLE, &old)])
+                        }
+                        (false, UpdateOp::Increment) => blk.fadd(&old, "1.0"),
+                        (false, UpdateOp::Decrement) => blk.fsub(&old, "1.0"),
                     };
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new)]);
                     return Ok(if *prefix { new } else { old });
@@ -729,9 +755,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let blk = ctx.block();
             let old = blk.load(DOUBLE, &storage);
-            let new = match op {
-                UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                UpdateOp::Decrement => blk.fsub(&old, "1.0"),
+            let new = match (value_could_be_bigint, op) {
+                (true, UpdateOp::Increment) => blk.call(DOUBLE, "js_value_inc", &[(DOUBLE, &old)]),
+                (true, UpdateOp::Decrement) => blk.call(DOUBLE, "js_value_dec", &[(DOUBLE, &old)]),
+                (false, UpdateOp::Increment) => blk.fadd(&old, "1.0"),
+                (false, UpdateOp::Decrement) => blk.fsub(&old, "1.0"),
             };
             if storage_is_root {
                 // Module globals are registered mutable GC roots and route

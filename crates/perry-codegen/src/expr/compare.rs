@@ -54,6 +54,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // always returns false. Route through js_bigint_cmp which
             // returns -1/0/1 for the three bigint ordering outcomes.
             if is_bigint_expr(ctx, left) || is_bigint_expr(ctx, right) {
+                // Relational compares (`<` `<=` `>` `>=`) may be MIXED
+                // BigInt/Number (`10n < 11`). `js_bigint_cmp` dereferences both
+                // operands as BigInt pointers, so a Number operand's NaN-boxed
+                // bits become a bogus pointer (wrong result + SIGSEGV). Route
+                // relational compares through `js_bigint_relational`, which
+                // inspects each operand's runtime tag and compares mathematical
+                // values. Equality (`==`/`===`/`!=`/`!==`) keeps the existing
+                // exact BigInt-vs-BigInt path below.
+                let rel_op = match op {
+                    CompareOp::Lt => Some(0),
+                    CompareOp::Le => Some(1),
+                    CompareOp::Gt => Some(2),
+                    CompareOp::Ge => Some(3),
+                    _ => None,
+                };
+                if let Some(rel_op) = rel_op {
+                    let l = lower_expr(ctx, left)?;
+                    let r = lower_expr(ctx, right)?;
+                    let blk = ctx.block();
+                    let op_str = rel_op.to_string();
+                    let tagged = blk.call(
+                        DOUBLE,
+                        "js_bigint_relational",
+                        &[(DOUBLE, &l), (DOUBLE, &r), (I32, &op_str)],
+                    );
+                    return Ok(tagged);
+                }
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
                 let blk = ctx.block();
@@ -61,12 +88,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let r_handle = unbox_to_i64(blk, &r);
                 let cmp = blk.call(I32, "js_bigint_cmp", &[(I64, &l_handle), (I64, &r_handle)]);
                 let bit = match op {
-                    CompareOp::Lt => blk.icmp_slt(I32, &cmp, "0"),
-                    CompareOp::Le => blk.icmp_sle(I32, &cmp, "0"),
-                    CompareOp::Gt => blk.icmp_sgt(I32, &cmp, "0"),
-                    CompareOp::Ge => blk.icmp_sge(I32, &cmp, "0"),
                     CompareOp::Eq | CompareOp::LooseEq => blk.icmp_eq(I32, &cmp, "0"),
                     CompareOp::Ne | CompareOp::LooseNe => blk.icmp_ne(I32, &cmp, "0"),
+                    // Relational ops handled by js_bigint_relational above.
+                    _ => unreachable!("relational bigint compare routed above"),
                 };
                 let tagged = blk.select(
                     crate::types::I1,

@@ -53,6 +53,37 @@ fn is_inherited_object_prototype_method(name: &str) -> bool {
     )
 }
 
+/// Detects `BigInt.prototype` as a receiver expression: `PropertyGet { object:
+/// PropertyGet { GlobalGet(0), "BigInt" }, property: "prototype" }`. A
+/// `.toString(radix)` call on the BigInt prototype must NOT take the numeric /
+/// BigInt radix fast path — the prototype object has no `[[BigIntData]]` slot,
+/// so the spec brand check (`thisBigIntValue`) has to run and throw a
+/// `TypeError` (`BigInt.prototype.toString(1)` is a TypeError, not the radix
+/// `RangeError`). Skipping the fast paths routes the call through
+/// `js_native_call_method`, which invokes the installed brand-checking thunk.
+///
+/// Note this deliberately does NOT match `Number.prototype`: that object *is* a
+/// Number object (`[[NumberData]]` = +0), so `Number.prototype.toString()`
+/// returns `"0"` and must keep its existing fast-path lowering.
+fn is_primitive_wrapper_prototype(object: &Expr) -> bool {
+    if let Expr::PropertyGet {
+        object: inner,
+        property,
+    } = object
+    {
+        if property == "prototype" {
+            if let Expr::PropertyGet {
+                object: base,
+                property: ctor,
+            } = inner.as_ref()
+            {
+                return matches!(base.as_ref(), Expr::GlobalGet(0)) && ctor == "BigInt";
+            }
+        }
+    }
+    false
+}
+
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
 pub fn try_lower_property_get_method_call(
@@ -200,6 +231,7 @@ pub fn try_lower_property_get_method_call(
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_date_receiver(ctx, object)
+        && !is_primitive_wrapper_prototype(object)
     {
         // Only treat as radix call if class doesn't have toString.
         let has_user_to_string = receiver_class_name(ctx, object)
@@ -245,6 +277,7 @@ pub fn try_lower_property_get_method_call(
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_date_receiver(ctx, object)
+        && !is_primitive_wrapper_prototype(object)
     {
         // Check whether the receiver class (if any) defines
         // toString itself or via inheritance.
