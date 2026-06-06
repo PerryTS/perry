@@ -33,7 +33,9 @@ pub use self::flat_clone::{
     js_array_clone, js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys,
     js_array_values,
 };
-pub use self::from_concat::{js_array_concat_variadic, js_array_from_mapped, js_array_from_value};
+pub use self::from_concat::{
+    array_from_full, js_array_concat_variadic, js_array_from_mapped, js_array_from_value,
+};
 pub use self::generic::{
     js_arraylike_at, js_arraylike_every, js_arraylike_filter, js_arraylike_find,
     js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,

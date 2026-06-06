@@ -3040,7 +3040,15 @@ extern "C" fn array_is_array_thunk(
 }
 
 extern "C" fn array_from_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
-    nanbox_array_or_undef(crate::array::js_array_from_value(value))
+    // Reflective `Array.from.call(C, items)` / `Array.from.apply(C, [items])`
+    // binds `C` as the implicit `this`. Read it FIRST (before any nested call
+    // can overwrite it) and run the spec algorithm — when `C IsConstructor`,
+    // the result is built via `Construct(C)`. A plain reflective call (no
+    // explicit receiver) leaves `this` as undefined / a non-constructor, so
+    // the default `%Array%` path is taken.
+    let c = crate::object::js_implicit_this_get();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    crate::array::array_from_full(c, value, undefined, undefined)
 }
 
 extern "C" fn array_of_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
