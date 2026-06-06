@@ -1424,12 +1424,19 @@ pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg:
     let this_handle = scope.root_nanbox_f64(this_arg);
     unsafe {
         let map = map_handle.get_raw_const_ptr::<MapHeader>();
-        let size = (*map).size as usize;
         // The collection itself is the third callback argument and the
         // identity user code compares `self === m` against.
         let map_value = crate::value::js_nanbox_pointer(map as i64);
 
-        for i in 0..size {
+        // ECMA-262 24.1.3.5: forEach iterates [[MapData]] in insertion order,
+        // re-reading the live entry count each step. Entries appended during
+        // the callback (`map.set` inside the callback) MUST be visited, so the
+        // loop bound is re-evaluated against `(*map).size` every iteration
+        // rather than snapshotting the initial size — see the
+        // `iterates-values-added-after-foreach-begins` / `deleted-values`
+        // Test262 cases.
+        let mut i = 0usize;
+        loop {
             let map = map_handle.get_raw_const_ptr::<MapHeader>();
             if i >= (*map).size as usize {
                 break;
@@ -1446,6 +1453,7 @@ pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg:
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
+            i += 1;
         }
     }
 }

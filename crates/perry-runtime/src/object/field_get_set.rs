@@ -3698,6 +3698,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     let m = obj as *const crate::map::MapHeader;
                     return JSValue::number(crate::map::js_map_size(m) as f64);
                 }
+                // Inherited `Map.prototype` members read off a Map *instance*
+                // (`m.set`, `m.get`, `m.constructor`, …) resolve through the
+                // prototype chain. The MapHeader isn't a plain object, so walk
+                // to `%Map.prototype%` and return its own data field — this is
+                // what makes `m.set.call(m, k, v)` (reflective dispatch) and
+                // `(new Map()).constructor === Map` work.
+                let proto = crate::object::builtin_prototype_value("Map");
+                let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
+                if !proto_ptr.is_null() {
+                    if let Some(v) = own_data_field_by_name(proto_ptr, key) {
+                        return v;
+                    }
+                }
             }
             return JSValue::undefined();
         }
