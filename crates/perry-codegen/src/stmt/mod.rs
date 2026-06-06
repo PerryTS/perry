@@ -293,11 +293,18 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // current block becomes terminated; subsequent statements in
         // the same scope are dead code and `lower_stmts` skips them.
         Stmt::Break => {
-            let break_label = ctx
+            let (break_label, target_depth) = ctx
                 .loop_targets
                 .last()
-                .map(|(_c, b)| b.clone())
+                .map(|(_c, b, d)| (b.clone(), *d))
                 .ok_or_else(|| anyhow!("break statement outside any loop"))?;
+            // Pop any `try` frames this break jumps OUT of so the runtime's
+            // TRY_DEPTH stays balanced. The loop recorded the try_depth at
+            // its entry; any frames opened since (the difference) are escaped
+            // by the branch and must be closed first (mirrors Stmt::Return).
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
+            }
             ctx.block().br(&break_label);
             Ok(())
         }
@@ -306,11 +313,16 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // (which is the update block for `for`, the cond block for
         // `while`/`do-while`).
         Stmt::Continue => {
-            let cont_label = ctx
+            let (cont_label, target_depth) = ctx
                 .loop_targets
                 .last()
-                .map(|(c, _b)| c.clone())
+                .map(|(c, _b, d)| (c.clone(), *d))
                 .ok_or_else(|| anyhow!("continue statement outside any loop"))?;
+            // Pop try frames escaped by jumping back to the loop header
+            // (see Stmt::Break / Stmt::Return for the balancing rationale).
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
+            }
             ctx.block().br(&cont_label);
             Ok(())
         }
@@ -367,31 +379,41 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
         Stmt::LabeledBreak(label) => {
-            if let Some((_cont, brk)) = ctx.label_targets.get(label).cloned() {
-                ctx.block().br(&brk);
-            } else {
-                // Fallback: use innermost loop (for unresolved labels).
-                let target = ctx
-                    .loop_targets
-                    .last()
-                    .map(|(_c, b)| b.clone())
-                    .ok_or_else(|| anyhow!("labeled break '{}' outside any loop", label))?;
-                ctx.block().br(&target);
+            let (target, target_depth) =
+                if let Some((_cont, brk, depth)) = ctx.label_targets.get(label).cloned() {
+                    (brk, depth)
+                } else {
+                    // Fallback: use innermost loop (for unresolved labels).
+                    ctx.loop_targets
+                        .last()
+                        .map(|(_c, b, d)| (b.clone(), *d))
+                        .ok_or_else(|| anyhow!("labeled break '{}' outside any loop", label))?
+                };
+            // Pop any try frames escaped by this labeled break (the target
+            // loop/label may sit outside one or more open `try` frames —
+            // e.g. a state-machine suspend `break`s out of the dispatch
+            // loop's real try). See Stmt::Break for the rationale.
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
             }
+            ctx.block().br(&target);
             Ok(())
         }
         Stmt::LabeledContinue(label) => {
-            if let Some((cont, _brk)) = ctx.label_targets.get(label).cloned() {
-                ctx.block().br(&cont);
-            } else {
-                // Fallback: use innermost loop.
-                let target = ctx
-                    .loop_targets
-                    .last()
-                    .map(|(c, _b)| c.clone())
-                    .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?;
-                ctx.block().br(&target);
+            let (target, target_depth) =
+                if let Some((cont, _brk, depth)) = ctx.label_targets.get(label).cloned() {
+                    (cont, depth)
+                } else {
+                    // Fallback: use innermost loop.
+                    ctx.loop_targets
+                        .last()
+                        .map(|(c, _b, d)| (c.clone(), *d))
+                        .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?
+                };
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
             }
+            ctx.block().br(&target);
             Ok(())
         }
 

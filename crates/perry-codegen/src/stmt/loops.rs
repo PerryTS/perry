@@ -324,7 +324,7 @@ pub(crate) fn lower_for(
     // Push break/continue targets so nested `break`/`continue` know where
     // to jump. For for-loops, continue runs the update step.
     ctx.loop_targets
-        .push((update_label.clone(), exit_label.clone()));
+        .push((update_label.clone(), exit_label.clone(), ctx.try_depth));
 
     // If this for-loop has a pending label (from an enclosing Stmt::Labeled),
     // register it so `break label;` / `continue label;` resolve here.
@@ -332,7 +332,7 @@ pub(crate) fn lower_for(
     let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
         ctx.label_targets
-            .insert(lbl.clone(), (update_label.clone(), exit_label.clone()));
+            .insert(lbl.clone(), (update_label.clone(), exit_label.clone(), ctx.try_depth));
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
@@ -1030,7 +1030,7 @@ pub(crate) fn lower_while(
 
     // For while-loops, continue jumps back to the cond block.
     ctx.loop_targets
-        .push((cond_label.clone(), exit_label.clone()));
+        .push((cond_label.clone(), exit_label.clone(), ctx.try_depth));
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
     // Consume pending label (from enclosing Stmt::Labeled).
@@ -1038,7 +1038,7 @@ pub(crate) fn lower_while(
     let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
         ctx.label_targets
-            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
+            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone(), ctx.try_depth));
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
@@ -1093,14 +1093,14 @@ pub(crate) fn lower_do_while(
     // Push break/continue targets BEFORE compiling the body so nested
     // break/continue see them.
     ctx.loop_targets
-        .push((cond_label.clone(), exit_label.clone()));
+        .push((cond_label.clone(), exit_label.clone(), ctx.try_depth));
 
     // Consume pending label (from enclosing Stmt::Labeled).
     let consumed_label = ctx.pending_label.take();
     let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
         ctx.label_targets
-            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone()));
+            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone(), ctx.try_depth));
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 

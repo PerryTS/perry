@@ -59,7 +59,7 @@ pub(crate) fn lower_switch(
 
     // Push break target. Switch has no continue, so we use exit for both.
     ctx.loop_targets
-        .push((exit_label.clone(), exit_label.clone()));
+        .push((exit_label.clone(), exit_label.clone(), ctx.try_depth));
 
     // Compile each test block. Each test compares dv against the case
     // expression with fcmp oeq, jumps to the body on match, otherwise
