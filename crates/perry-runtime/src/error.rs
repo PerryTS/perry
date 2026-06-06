@@ -261,28 +261,27 @@ fn intern_error_code(code: &str) -> &'static str {
     })
 }
 
-/// Generic "throw a JS Error subclass carrying a Node `.code`" FFI entry
-/// point for out-of-crate callers (e.g. `perry-ext-http-server`'s http2
-/// settings helpers) that have no direct access to `perry-runtime`'s Rust
-/// API. Building + registering + throwing in this single extern symbol
-/// guarantees the message→code registration and the later `.code` read
-/// resolve through the same runtime copy, avoiding the staticlib
-/// thread-local divergence that split registration/read paths hit.
+/// Generic "build a JS Error subclass carrying a Node `.code`" FFI entry
+/// point for out-of-crate callers that have no direct access to
+/// `perry-runtime`'s Rust API. Building + registering in this single extern
+/// symbol guarantees the message→code registration and the later `.code` read
+/// resolve through the same runtime copy, avoiding the staticlib thread-local
+/// divergence that split registration/read paths hit.
 ///
 /// `kind`: 0 = Error, 1 = TypeError, 2 = RangeError. The message and code
-/// are UTF-8 byte slices. Diverges via `js_throw`.
+/// are UTF-8 byte slices. Returns a NaN-boxed Error value.
 ///
 /// # Safety
 /// `msg_ptr` must point to `msg_len` valid bytes; `code_ptr` must point to
 /// `code_len` valid bytes or be null with `code_len == 0`.
 #[no_mangle]
-pub unsafe extern "C" fn js_throw_error_with_code(
+pub unsafe extern "C" fn js_error_value_with_code(
     msg_ptr: *const u8,
     msg_len: usize,
     code_ptr: *const u8,
     code_len: usize,
     kind: i32,
-) -> ! {
+) -> f64 {
     let msg = js_string_from_bytes(msg_ptr, msg_len as u32);
     if !code_ptr.is_null() && code_len > 0 {
         let code_bytes = std::slice::from_raw_parts(code_ptr, code_len);
@@ -296,13 +295,42 @@ pub unsafe extern "C" fn js_throw_error_with_code(
         2 => js_rangeerror_new(msg),
         _ => js_error_new_with_message(msg),
     };
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
-// `js_throw_error_with_code` is referenced only from the prebuilt
-// `perry-ext-http-server` archive (linked after the runtime's bitcode is
-// optimized), so the auto-optimize LTO pass would otherwise dead-strip it
-// (see project_auto_optimize_keepalive_3320). The `#[used]` anchor pins it.
+/// Generic "throw a JS Error subclass carrying a Node `.code`" FFI entry
+/// point for out-of-crate callers (e.g. `perry-ext-http-server`'s http2
+/// settings helpers) that have no direct access to `perry-runtime`'s Rust
+/// API. Diverges via `js_throw`.
+///
+/// # Safety
+/// Same pointer validity requirements as [`js_error_value_with_code`].
+#[no_mangle]
+pub unsafe extern "C" fn js_throw_error_with_code(
+    msg_ptr: *const u8,
+    msg_len: usize,
+    code_ptr: *const u8,
+    code_len: usize,
+    kind: i32,
+) -> ! {
+    crate::exception::js_throw(js_error_value_with_code(
+        msg_ptr, msg_len, code_ptr, code_len, kind,
+    ))
+}
+
+// These FFI entries are referenced only from extension archives (linked after
+// the runtime's bitcode is optimized), so the auto-optimize LTO pass would
+// otherwise dead-strip them (see project_auto_optimize_keepalive_3320). The
+// `#[used]` anchors pin them.
+#[used]
+static KEEP_JS_ERROR_VALUE_WITH_CODE: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    i32,
+) -> f64 = js_error_value_with_code;
+
 #[used]
 static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
     *const u8,

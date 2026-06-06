@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::messages::describe_received;
+
 fn format_max_listeners_received(n: f64) -> String {
     if n.is_nan() {
         return "NaN".to_string();

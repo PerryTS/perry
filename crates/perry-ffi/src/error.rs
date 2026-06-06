@@ -16,6 +16,16 @@
 use crate::JsValue;
 
 extern "C" {
+    /// Runtime entry: build an Error subclass with a `.code`.
+    /// `kind`: 0 = Error, 1 = TypeError, 2 = RangeError.
+    fn js_error_value_with_code(
+        msg_ptr: *const u8,
+        msg_len: usize,
+        code_ptr: *const u8,
+        code_len: usize,
+        kind: i32,
+    ) -> f64;
+
     /// Runtime entry: build an Error subclass with a `.code`, then throw.
     /// `kind`: 0 = Error, 1 = TypeError, 2 = RangeError. Diverges.
     fn js_throw_error_with_code(
@@ -60,6 +70,25 @@ pub fn throw_with_code(msg: &str, code: &str, kind: ErrorKind) -> ! {
     // SAFETY: both slices are valid for their lengths; the runtime copies
     // the bytes into arena-owned storage before diverging.
     unsafe { js_throw_error_with_code(msg.as_ptr(), msg.len(), code.as_ptr(), code.len(), k) }
+}
+
+/// Build a JS Error subclass whose `.message` is `msg` and whose `.code` is
+/// `code` (a Node `ERR_*` string), without throwing it.
+///
+/// This is the non-throwing twin of [`throw_with_code`], used by APIs such as
+/// `events.once()` that must return a Promise and reject it with a coded error
+/// instead of throwing synchronously.
+pub fn error_value_with_code(msg: &str, code: &str, kind: ErrorKind) -> JsValue {
+    let k = match kind {
+        ErrorKind::Error => 0,
+        ErrorKind::TypeError => 1,
+        ErrorKind::RangeError => 2,
+    };
+    // SAFETY: both slices are valid for their lengths; the runtime copies
+    // the bytes into arena-owned storage before returning the error value.
+    let value =
+        unsafe { js_error_value_with_code(msg.as_ptr(), msg.len(), code.as_ptr(), code.len(), k) };
+    JsValue::from_bits(value.to_bits())
 }
 
 /// Borrow the raw bytes of a `Buffer` or `TypedArray` value. Returns
