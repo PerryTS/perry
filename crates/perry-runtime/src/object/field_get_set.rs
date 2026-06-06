@@ -473,6 +473,30 @@ unsafe fn builtin_reflection_accessor_read(
     Some(invoke_accessor_getter(acc.get, receiver))
 }
 
+/// True when `addr` is the shared `%TypedArray%.prototype` intrinsic or one of
+/// the per-kind typed-array prototypes (`Int8Array.prototype`, …). These objects
+/// host the `%TypedArray%.prototype` methods/getters but are NOT themselves
+/// typed arrays, so a method invoked directly on them (e.g.
+/// `Int8Array.prototype.entries()`) must fail `ValidateTypedArray` and throw a
+/// `TypeError`. Mirrors the per-kind/intrinsic detection in
+/// `builtin_reflection_accessor_read`.
+pub(crate) unsafe fn is_typed_array_prototype(addr: usize) -> bool {
+    if addr == 0 || (addr as u64) >> 48 != 0 || !super::is_valid_obj_ptr(addr as *const u8) {
+        return false;
+    }
+    let intrinsic_proto =
+        super::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Relaxed);
+    if intrinsic_proto != 0 && addr as i64 == intrinsic_proto {
+        return true;
+    }
+    // Per-kind protos are plain `GC_TYPE_OBJECT`s carrying the proto flag in the
+    // shared `_reserved` word; gate the flag read on the object type so a
+    // regular array whose `_reserved` happens to collide isn't misclassified.
+    let gc = (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+        && ((*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO) != 0
+}
+
 unsafe fn primitive_object_prototype_accessor(name: &str, receiver: f64) -> Option<JSValue> {
     if !ACCESSORS_IN_USE.with(|c| c.get()) {
         return None;

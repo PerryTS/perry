@@ -176,19 +176,47 @@ fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
     }
 }
 
+/// `%TypedArray%.prototype.values/keys/entries` begin with `ValidateTypedArray`
+/// (spec step 1). When the receiver is a `%TypedArray%.prototype` object itself
+/// — `Int8Array.prototype.entries()` / `TypedArray.prototype.values()` — it is
+/// NOT a real typed array, so the call must throw a `TypeError`. Codegen lowers
+/// `recv.entries()` to the eager `Expr::ArrayEntries` fast path (these C-ABI
+/// helpers) regardless of the receiver's static type, so the brand check has to
+/// live here rather than in the dynamic dispatch tower.
+#[cold]
+unsafe fn throw_if_typed_array_proto(arr: *const ArrayHeader, method: &str) {
+    if crate::object::is_typed_array_prototype(arr as usize) {
+        let msg = format!("Method %TypedArray%.prototype.{method} called on incompatible receiver");
+        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(s);
+        crate::exception::js_throw(f64::from_bits(
+            crate::value::JSValue::pointer(err as *const u8).bits(),
+        ));
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
-    unsafe { array_iter_obj_raw(typed_array_iter_arr(arr), KIND_VALUES) }
+    unsafe {
+        throw_if_typed_array_proto(arr, "values");
+        array_iter_obj_raw(typed_array_iter_arr(arr), KIND_VALUES)
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
-    unsafe { array_iter_obj_raw(typed_array_iter_arr(arr), KIND_KEYS) }
+    unsafe {
+        throw_if_typed_array_proto(arr, "keys");
+        array_iter_obj_raw(typed_array_iter_arr(arr), KIND_KEYS)
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
-    unsafe { array_iter_obj_raw(typed_array_iter_arr(arr), KIND_ENTRIES) }
+    unsafe {
+        throw_if_typed_array_proto(arr, "entries");
+        array_iter_obj_raw(typed_array_iter_arr(arr), KIND_ENTRIES)
+    }
 }
 
 /// Build the `{ value, done }` iterator-result object. `value` arrives as

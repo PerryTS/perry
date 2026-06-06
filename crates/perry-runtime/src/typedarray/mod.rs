@@ -605,6 +605,16 @@ fn jsvalue_to_f64(v: f64) -> f64 {
         }
         return f64::NAN;
     }
+    // POINTER_TAG object (Symbols already threw above; BigInt handled above):
+    // a non-bigint view performs `ToNumber(value)`, which for an object runs
+    // `ToPrimitive(value, "number")` (its `Symbol.toPrimitive` / `valueOf` /
+    // `toString`). Previously this fell through to `NaN`, so
+    // `new Int32Array([{ valueOf() { return 5 } }])` stored 0 and
+    // `TypedArray.from`'s ToNumber side effects never fired. Delegate to the
+    // shared ToNumber so the user coercion hook runs.
+    if top16 == 0x7FFD {
+        return crate::builtins::js_number_coerce(v);
+    }
     f64::NAN
 }
 
@@ -798,6 +808,23 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
                 kind as u8,
                 raw_addr as *const crate::buffer::BufferHeader,
             );
+        }
+        // A plain object that is neither a typed array nor a buffer is consumed
+        // per the spec's `new TypedArray(object)` path: if it exposes
+        // `@@iterator` it is iterated (InitializeTypedArrayFromList), otherwise
+        // it is read as an array-like (`ToLength(obj.length)` then each indexed
+        // element). Previously the object pointer was reinterpreted as an
+        // `ArrayHeader`, so `obj.length` was read from the wrong header (garbage,
+        // usually 1) and the elements were raw bytes. Route through the shared
+        // `Array.from` materialization (which performs exactly this dual
+        // iterator/array-like resolution and propagates any user getter/iterator
+        // exceptions), then coerce each element to the per-kind numeric type.
+        if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_OBJECT {
+                let materialized = crate::array::js_array_from_value(val);
+                return js_typed_array_new_from_array(kind, materialized);
+            }
         }
         return js_typed_array_new_from_array(kind, arr);
     }
