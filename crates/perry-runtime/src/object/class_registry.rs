@@ -1959,6 +1959,30 @@ fn constructor_class_ref_id(value: f64) -> Option<u32> {
     super::class_ref_id(value)
 }
 
+/// Spec `IsConstructor(value)` — used by `NewPromiseCapability` (the Promise
+/// combinators) to validate the `this` constructor argument. Returns true for
+/// registered class constructors, the reified builtin constructors, and plain
+/// (non-arrow, non-builtin-method) function closures; false for primitives,
+/// arrow functions, and non-constructable builtin functions (e.g. `eval`).
+pub(crate) fn js_value_is_constructor(value: f64) -> bool {
+    if constructor_class_ref_id(value).is_some() {
+        return true;
+    }
+    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+        return true;
+    }
+    if !is_callable_function_value(value) {
+        return false;
+    }
+    if is_arrow_function_value(value) {
+        return false;
+    }
+    if is_non_constructable_builtin_function_value(value) {
+        return false;
+    }
+    true
+}
+
 fn class_object_class_id(value: f64) -> Option<u32> {
     if !is_class_object_value(value) {
         return None;
@@ -2105,7 +2129,12 @@ fn constructor_return_overrides_this(value: f64) -> bool {
             (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         matches!(
             (*gc_header).obj_type,
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ERROR
+            // Per spec, a constructor returning ANY Object overrides the
+            // implicit `this`. Promises are objects — a user constructor like
+            // `function P(exec){ return new Promise(...) }` (the
+            // `NewPromiseCapability` shape exercised by the Promise-combinator
+            // test262 cases) must yield that Promise, not the empty default.
+            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ERROR | crate::gc::GC_TYPE_PROMISE
         )
     }
 }

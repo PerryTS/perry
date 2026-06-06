@@ -1548,6 +1548,14 @@ fn match_namespace_static_member(
     if !is_known_namespace_static_function(ns, name) {
         return None;
     }
+    // #4521: the Promise combinators read the `this` constructor
+    // (`NewPromiseCapability(this)` / `GetPromiseResolve(this)`), so
+    // `Promise.all.call(C, …)` / `.apply` / `.bind` must NOT drop the
+    // thisArg — let them fall through to the generic reified-static dispatch
+    // (which preserves `this` via the implicit-this mechanism).
+    if ns == "Promise" && matches!(name, "all" | "race" | "allSettled" | "any") {
+        return None;
+    }
     Some(m.clone())
 }
 

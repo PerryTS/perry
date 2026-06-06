@@ -3302,32 +3302,32 @@ extern "C" fn promise_all_static(
     _closure: *const crate::closure::ClosureHeader,
     iterable: f64,
 ) -> f64 {
-    let p = crate::promise::combinators::js_promise_all_iterable(iterable);
-    crate::value::js_nanbox_pointer(p as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_all_spec(this_ctor, iterable)
 }
 
 extern "C" fn promise_race_static(
     _closure: *const crate::closure::ClosureHeader,
     iterable: f64,
 ) -> f64 {
-    let p = crate::promise::combinators::js_promise_race_iterable(iterable);
-    crate::value::js_nanbox_pointer(p as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_race_spec(this_ctor, iterable)
 }
 
 extern "C" fn promise_all_settled_static(
     _closure: *const crate::closure::ClosureHeader,
     iterable: f64,
 ) -> f64 {
-    let p = crate::promise::combinators::js_promise_all_settled_iterable(iterable);
-    crate::value::js_nanbox_pointer(p as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_all_settled_spec(this_ctor, iterable)
 }
 
 extern "C" fn promise_any_static(
     _closure: *const crate::closure::ClosureHeader,
     iterable: f64,
 ) -> f64 {
-    let p = crate::promise::combinators::js_promise_any_iterable(iterable);
-    crate::value::js_nanbox_pointer(p as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_any_spec(this_ctor, iterable)
 }
 
 extern "C" fn promise_with_resolvers_static(_closure: *const crate::closure::ClosureHeader) -> f64 {
