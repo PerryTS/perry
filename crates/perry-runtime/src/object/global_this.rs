@@ -3294,16 +3294,16 @@ extern "C" fn promise_resolve_static(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
-    let p = crate::promise::js_promise_resolved(value);
-    crate::value::js_nanbox_pointer(p as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_resolve_spec(this_ctor, value)
 }
 
 extern "C" fn promise_reject_static(
     _closure: *const crate::closure::ClosureHeader,
     reason: f64,
 ) -> f64 {
-    let p = crate::promise::js_promise_rejected(reason);
-    crate::value::js_nanbox_pointer(p as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_reject_spec(this_ctor, reason)
 }
 
 extern "C" fn promise_all_static(

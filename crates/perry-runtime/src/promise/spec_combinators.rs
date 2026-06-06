@@ -643,3 +643,69 @@ pub extern "C" fn js_promise_race_spec(this_ctor: f64, iterable: f64) -> f64 {
 pub extern "C" fn js_promise_any_spec(this_ctor: f64, iterable: f64) -> f64 {
     run_combinator(CombinatorKind::Any, this_ctor, iterable)
 }
+
+/// Spec `IsObject` — true only for heap object/function values, NOT primitives.
+/// Symbols are NaN-boxed pointers but are primitives, so exclude them.
+fn is_object_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return false;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if raw < 0x100000 {
+        return false;
+    }
+    !crate::symbol::is_registered_symbol(raw)
+}
+
+/// `Promise.reject(r)` (ECMA-262 27.2.4.6) with `this` = C: build the result
+/// capability via `NewPromiseCapability(C)` (so a custom/subclass constructor's
+/// executor runs and a non-constructor `this` throws), then
+/// `Call(capability.[[Reject]], undefined, «r»)`.
+#[no_mangle]
+pub extern "C" fn js_promise_reject_spec(this_ctor: f64, reason: f64) -> f64 {
+    ensure_arity_registered();
+    // Default `Promise`: the optimized native rejected-promise path.
+    if is_default_promise_constructor(this_ctor) {
+        let p = crate::promise::js_promise_rejected(reason);
+        return js_nanbox_pointer(p as i64);
+    }
+    let cap = new_promise_capability(this_ctor);
+    let _ = call_with_this(cap.reject, undef(), &[reason]);
+    cap.promise
+}
+
+/// `Promise.resolve(x)` (ECMA-262 27.2.4.7 → PromiseResolve) with `this` = C:
+/// require C to be an Object, short-circuit when `x` is already a promise whose
+/// `constructor` is C, else `NewPromiseCapability(C)` +
+/// `Call(capability.[[Resolve]], undefined, «x»)`.
+#[no_mangle]
+pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
+    ensure_arity_registered();
+    if !is_object_value(this_ctor) {
+        throw_type_error("Promise.resolve called on non-object");
+    }
+    // Default `Promise`: keep the optimized native path — it preserves promise
+    // identity AND assimilates thenables (object-literal `then`), which the
+    // generic capability path below would not (its resolve just stores the
+    // value). The per-element resolve of the combinators routes through here.
+    if is_default_promise_constructor(this_ctor) {
+        let p = crate::promise::js_promise_resolved(value);
+        return js_nanbox_pointer(p as i64);
+    }
+    if crate::promise::js_value_is_promise(value) != 0 {
+        let xctor = unsafe {
+            crate::value::js_dynamic_object_get_property(
+                value,
+                b"constructor".as_ptr() as *const i8,
+                11,
+            )
+        };
+        if xctor.to_bits() == this_ctor.to_bits() {
+            return value;
+        }
+    }
+    let cap = new_promise_capability(this_ctor);
+    let _ = call_with_this(cap.resolve, undef(), &[value]);
+    cap.promise
+}

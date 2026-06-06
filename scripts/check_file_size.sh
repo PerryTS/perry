@@ -248,6 +248,11 @@ crates/perry-codegen/src/expr/property_get.rs
 # Crossed the 2000-line gate (2026 LOC) after the replace-lookahead additions.
 # Splitting the matcher from the replace machinery is tracked under #1435.
 crates/perry-runtime/src/regex.rs
+# TypedArray root — constructor/view-metadata/element load-store/iterator tower.
+# Crossed the 2000-line gate (2062 LOC) on current main after the #4702
+# %TypedArray%.prototype iterator brand-check + array-like/iterable constructor
+# additions. Splitting per concern is tracked under #1435.
+crates/perry-runtime/src/typedarray/mod.rs
 EOF
 )
 
