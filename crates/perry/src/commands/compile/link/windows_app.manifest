@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Perry.App" version="1.0.0.0" processorArchitecture="*"/>
+  <!--
+    comctl32 v6 dependency. Without this side-by-side assembly reference the
+    process loads comctl32 v5 and every common control (buttons, list views,
+    edit boxes, etc.) renders in the unthemed Win95/classic style regardless
+    of the OS theme. Activating v6 is what gives the Fluent/visual-styles look
+    on Windows 10/11. See issue #4681 / discussion #3486.
+  -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"/>
+    </dependentAssembly>
+  </dependency>
+  <!--
+    Run with the invoking user's token. Declaring asInvoker explicitly opts the
+    binary out of the installer-detection heuristic that would otherwise show a
+    UAC prompt for executables whose name contains "setup"/"install"/"update".
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

@@ -46,6 +46,13 @@ use link_cache::prepare_link_cache_status;
 pub(super) use link_cache::{write_link_cache_manifest, LinkCacheStatus};
 pub use platform_cmd::select_linker_command;
 
+/// Win32 application manifest embedded into UI executables. Declares the
+/// comctl32 v6 (`Microsoft.Windows.Common-Controls`) side-by-side dependency
+/// so common controls render with visual styles instead of the unthemed
+/// classic style, plus an `asInvoker` execution level. See issue #4681 /
+/// discussion #3486, and the embed site in the `is_windows` link branch.
+pub(super) const WINDOWS_APP_MANIFEST: &str = include_str!("windows_app.manifest");
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeBackendLinkMetadata {
     backend: super::NativeBackend,
@@ -919,6 +926,40 @@ pub(super) fn build_and_run_link(
             // through perry-ui-windows's `staticlib` crate-type to perry's final
             // link line. Closes #732.
             .arg("winhttp.lib");
+
+        // Embed a comctl32 v6 application manifest into UI executables so
+        // common controls render with visual styles (Fluent look) instead of
+        // the unthemed Win95/classic style. Without the side-by-side
+        // `Microsoft.Windows.Common-Controls` v6 dependency the process binds
+        // comctl32 v5 and every button/list/edit box looks decades old —
+        // issue #4681 / discussion #3486. Gated on `needs_ui` so console-only
+        // binaries stay manifest-free.
+        //
+        // Both link.exe and lld-link embed `/MANIFESTINPUT:` content via
+        // `/MANIFEST:EMBED` with no external `mt.exe`/`rc.exe`. `/MANIFESTUAC:NO`
+        // suppresses the linker's auto-generated UAC fragment so it can't
+        // produce a second `trustInfo` element alongside the one in our input
+        // manifest (which already declares `asInvoker`).
+        if ctx.needs_ui {
+            let manifest_path = std::env::temp_dir().join(format!(
+                "perry_app_manifest_{}.manifest",
+                std::process::id()
+            ));
+            match std::fs::write(&manifest_path, WINDOWS_APP_MANIFEST) {
+                Ok(()) => {
+                    cmd.arg("/MANIFEST:EMBED")
+                        .arg("/MANIFESTUAC:NO")
+                        .arg(format!("/MANIFESTINPUT:{}", manifest_path.display()));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not write Windows application manifest to {} ({e}); \
+                         common controls will render in the unthemed classic style.",
+                        manifest_path.display()
+                    );
+                }
+            }
+        }
     } else {
         // macOS frameworks for runtime (sysinfo, etc.) and V8.
         // Gate on `!is_harmonyos` so the macOS host doesn't leak its
