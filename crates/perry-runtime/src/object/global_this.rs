@@ -2740,6 +2740,16 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         js_object_set_field_by_name(singleton, name_key, fn_value);
     }
+    // ECMA-262 21.1.2.12 / 21.1.2.13: `Number.parseFloat` and `Number.parseInt`
+    // are the SAME function objects as the global `parseFloat` / `parseInt`
+    // (`Number.parseFloat === parseFloat`). The Number constructor statics were
+    // installed above with fresh thunks — before the global helpers existed —
+    // so re-point them now at the global closures we just created on the
+    // singleton. A value-read of `Number.parseFloat` resolves to the Number
+    // constructor's own `parseFloat` field (see expr_member.rs reroute-undo),
+    // which now holds the identical closure the bare `parseFloat` resolves to.
+    alias_number_static_to_global_function(singleton, "parseFloat");
+    alias_number_static_to_global_function(singleton, "parseInt");
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
         let name_bytes = name.as_bytes();
@@ -2844,6 +2854,34 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
         js_object_set_field_by_name(singleton, nkey, nval);
     }
+}
+
+/// Re-point a `Number.<name>` static at the global function of the same name so
+/// the two are the identical object (`Number.parseFloat === parseFloat`). Both
+/// the global helper and the `Number` constructor are already installed on the
+/// `singleton` by the time this runs. No-op if either lookup fails.
+fn alias_number_static_to_global_function(singleton: *mut ObjectHeader, name: &str) {
+    let global_key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let global_fn = js_object_get_field_by_name(singleton, global_key);
+    if (global_fn.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let number_key = crate::string::js_string_from_bytes(b"Number".as_ptr(), 6);
+    let number_ctor = js_object_get_field_by_name(singleton, number_key);
+    if (number_ctor.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let ctor_ptr = (number_ctor.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if ctor_ptr.is_null() {
+        return;
+    }
+    let static_key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(ctor_ptr, static_key, f64::from_bits(global_fn.bits()));
+    super::set_builtin_property_attrs(
+        ctor_ptr as usize,
+        name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {

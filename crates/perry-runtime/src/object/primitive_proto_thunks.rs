@@ -177,6 +177,15 @@ fn number_receiver_or_throw(method: &str) -> f64 {
     if jv.is_number() {
         return receiver;
     }
+    // ECMA-262 21.1.3: `Number.prototype` is itself a Number object whose
+    // [[NumberData]] is +0. A method invoked with `this === Number.prototype`
+    // (e.g. `Number.prototype == 0` coercing via `valueOf`, or
+    // `Number.prototype.toString()`) must therefore see +0, not throw an
+    // incompatible-receiver TypeError (test262 prototype/S15.7.3.1_A3.js,
+    // S15.7.4_A1.js).
+    if receiver.to_bits() == super::global_this::builtin_prototype_value("Number").to_bits() {
+        return 0.0;
+    }
     throw_incompatible_receiver("Number.prototype", method)
 }
 

@@ -982,33 +982,28 @@ pub(super) fn try_module_static_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
+                        // A missing argument is `undefined` (Type ≠ Number), so
+                        // each predicate is `false`. Fold the no-arg form to the
+                        // same HIR node with an `Undefined` operand — otherwise a
+                        // zero-arg call fell through to the generic dispatch where
+                        // the missing `f64` parameter defaulted to a real NaN,
+                        // making `Number.isNaN()` wrongly return `true`
+                        // (built-ins/Number/isNaN/arg-is-not-number.js "no arg").
                         "isNaN" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsNaN(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsNaN(Box::new(arg))));
                         }
                         "isFinite" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsFinite(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsFinite(Box::new(arg))));
                         }
                         "isInteger" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsInteger(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsInteger(Box::new(arg))));
                         }
                         "isSafeInteger" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsSafeInteger(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsSafeInteger(Box::new(arg))));
                         }
                         "parseFloat" => {
                             // Number.parseFloat is the same as global parseFloat
