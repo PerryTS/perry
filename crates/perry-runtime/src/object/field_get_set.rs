@@ -4508,6 +4508,27 @@ pub extern "C" fn js_object_get_field_ic_miss(
     if obj.is_null() || key.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // A Proxy value may reach the inline-cache miss handler when a fused
+    // property read `proxy.col` misses its monomorphic shape check (a Proxy
+    // has no stable `keys_array`, so every read is a miss). Proxies are encoded
+    // as small fake pointers in the band [0xF0000, 0x100000); deref-ing one as
+    // an ObjectHeader — or passing it to `closure_dynamic_prop_by_key`, which
+    // reads `CLOSURE_MAGIC` at offset 12 via `is_closure_ptr` — reads unmapped
+    // memory and SIGSEGVs (drizzle's aliased-column Proxy in `findMany`). Route
+    // to the proxy get dispatch first, exactly like `js_object_get_field_by_name`
+    // (#2846). `js_proxy_is_proxy` validates the value is a *registered* proxy so
+    // a real heap object whose address happens to be small isn't misrouted.
+    {
+        let addr = obj as u64;
+        if (0xF0000..0x100000).contains(&addr) {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                return crate::proxy::js_proxy_get(boxed, key_f64);
+            }
+        }
+    }
     unsafe {
         if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
             return val;
