@@ -16,6 +16,10 @@ fn is_fs_promises_module(module: &str) -> bool {
     module.strip_prefix("node:").unwrap_or(module) == "fs/promises"
 }
 
+fn is_fs_module(module: &str) -> bool {
+    module.strip_prefix("node:").unwrap_or(module) == "fs"
+}
+
 fn filehandle_type() -> Type {
     Type::Named("FileHandle".to_string())
 }
@@ -921,6 +925,12 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
             ) {
                 return Type::Promise(Box::new(dir_type()));
             }
+            if matches!(
+                ctx.lookup_builtin_named_import(name),
+                Some((module, "opendirSync")) if is_fs_module(module)
+            ) {
+                return dir_type();
+            }
             // Check user-defined function return types
             if let Some(ty) = ctx.lookup_func_return_type(name) {
                 return ty.clone();
@@ -962,6 +972,19 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                             .is_some_and(is_fs_promises_module);
                         if namespace_is_fs_promises {
                             return Type::Promise(Box::new(dir_type()));
+                        }
+                    }
+                }
+                if method_name == "opendirSync" {
+                    if let ast::Expr::Ident(obj) = member.obj.as_ref() {
+                        let namespace_is_fs = matches!(
+                            ctx.lookup_native_module(obj.sym.as_ref()),
+                            Some((module, None)) if is_fs_module(module)
+                        ) || ctx
+                            .lookup_builtin_module_alias(obj.sym.as_ref())
+                            .is_some_and(is_fs_module);
+                        if namespace_is_fs {
+                            return dir_type();
                         }
                     }
                 }
