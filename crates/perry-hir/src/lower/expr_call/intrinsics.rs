@@ -1548,6 +1548,23 @@ fn match_namespace_static_member(
     if !is_known_namespace_static_function(ns, name) {
         return None;
     }
+    // #4521: the Promise combinators read the `this` constructor
+    // (`NewPromiseCapability(this)` / `GetPromiseResolve(this)`), so
+    // `Promise.all.call(C, …)` / `.apply` / `.bind` must NOT drop the
+    // thisArg — let them fall through to the generic reified-static dispatch
+    // (which preserves `this` via the implicit-this mechanism).
+    if ns == "Promise" && matches!(name, "all" | "race" | "allSettled" | "any") {
+        return None;
+    }
+    // `Array.from` is `this`-sensitive: per ECMA-262 §23.1.2.1 it constructs
+    // the result via its `this` value when that is a constructor
+    // (`Array.from.call(C, items)` builds an instance of `C`). The
+    // `this`-dropping fold below would discard the receiver, so route these
+    // through the dynamic dispatch path (the runtime `Array.from` thunk reads
+    // the implicit `this` and runs the full algorithm).
+    if ns == "Array" && name == "from" {
+        return None;
+    }
     Some(m.clone())
 }
 

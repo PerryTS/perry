@@ -882,7 +882,7 @@ fn raw_closure_pointer(bits: u64) -> Option<usize> {
             return None;
         }
         let size = (*header).size as usize;
-        if size < crate::gc::GC_HEADER_SIZE || size > (1usize << 34) {
+        if size < crate::gc::GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
             return None;
         }
         let is_arena = (*header).gc_flags & crate::gc::GC_FLAG_ARENA != 0;

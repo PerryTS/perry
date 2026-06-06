@@ -263,7 +263,7 @@ fn not_iterable_prefix(value: f64) -> String {
     "object".to_string()
 }
 
-fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
+pub(super) fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
     let env = crate::exception::js_try_push();
     let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
     if jumped == 0 {
@@ -281,7 +281,7 @@ fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
 /// Build the `TypeError: <prefix> is not iterable (cannot read property
 /// Symbol(Symbol.iterator))` value — Node's exact message for a non-iterable
 /// Promise-combinator argument (issue #2822).
-fn not_iterable_error_value(value: f64) -> f64 {
+pub(super) fn not_iterable_error_value(value: f64) -> f64 {
     let msg = format!(
         "{} is not iterable (cannot read property Symbol(Symbol.iterator))",
         not_iterable_prefix(value)
@@ -385,7 +385,9 @@ pub(crate) fn combinator_iterable_to_array(
     Err(not_iterable_error_value(value))
 }
 
-fn combinator_iterable_to_array_caught(value: f64) -> Result<*mut crate::array::ArrayHeader, f64> {
+pub(super) fn combinator_iterable_to_array_caught(
+    value: f64,
+) -> Result<*mut crate::array::ArrayHeader, f64> {
     let mut out = std::ptr::null_mut();
     let result = combinator_catch_js(|| match combinator_iterable_to_array(value) {
         Ok(arr) => {
@@ -400,58 +402,45 @@ fn combinator_iterable_to_array_caught(value: f64) -> Result<*mut crate::array::
     }
 }
 
-/// Iterable-accepting entry for `Promise.all` (issue #2822). Coerces any
-/// iterable to an array (rejecting non-iterables with a `TypeError`) before
-/// delegating to the array-shaped `js_promise_all`.
+/// Unwrap a spec-combinator result (NaN-boxed native Promise pointer, since the
+/// codegen direct-call path always uses the intrinsic `Promise` as `this`) back
+/// to a `*mut Promise` for the codegen ABI.
+#[inline]
+fn spec_result_to_promise(result: f64) -> *mut Promise {
+    crate::value::js_nanbox_get_pointer(result) as *mut Promise
+}
+
+/// Iterable-accepting entry for `Promise.all` (issue #2822 / #4521). Codegen's
+/// direct-call path (`Promise.all([...])`) lands here with `this` = intrinsic
+/// `Promise`; supply that constructor explicitly and delegate to the
+/// spec-compliant combinator.
 #[no_mangle]
 pub extern "C" fn js_promise_all_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_all(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_all_spec(c, value))
 }
 
-/// Iterable-accepting entry for `Promise.race` (issue #2822).
+/// Iterable-accepting entry for `Promise.race` (issue #2822 / #4521).
 #[no_mangle]
 pub extern "C" fn js_promise_race_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_race(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_race_spec(c, value))
 }
 
-/// Iterable-accepting entry for `Promise.allSettled` (issue #2822).
+/// Iterable-accepting entry for `Promise.allSettled` (issue #2822 / #4521).
 #[no_mangle]
 pub extern "C" fn js_promise_all_settled_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_all_settled(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_all_settled_spec(
+        c, value,
+    ))
 }
 
-/// Iterable-accepting entry for `Promise.any` (issue #2822).
+/// Iterable-accepting entry for `Promise.any` (issue #2822 / #4521).
 #[no_mangle]
 pub extern "C" fn js_promise_any_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_any(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_any_spec(c, value))
 }
 
 /// #2822/#3320: keepalive anchors so the whole-program LLVM (auto-optimize)
@@ -532,7 +521,10 @@ pub extern "C" fn js_promise_new_with_executor(
 
 /// Internal resolve function for Promise executor callbacks.
 /// Called when user calls resolve(value) inside the executor.
-extern "C" fn promise_resolve_fn(closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+pub(super) extern "C" fn promise_resolve_fn(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
 
     let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -542,7 +534,10 @@ extern "C" fn promise_resolve_fn(closure: *const crate::closure::ClosureHeader, 
 
 /// Internal reject function for Promise executor callbacks.
 /// Called when user calls reject(reason) inside the executor.
-extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, reason: f64) -> f64 {
+pub(super) extern "C" fn promise_reject_fn(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
 
     let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -551,7 +546,7 @@ extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, r
 }
 
 #[inline]
-fn callable_closure_value(value: f64) -> Option<*const crate::closure::ClosureHeader> {
+pub(super) fn callable_closure_value(value: f64) -> Option<*const crate::closure::ClosureHeader> {
     let bits = value.to_bits();
     let tag = bits & crate::value::TAG_MASK;
     let raw = if tag == crate::value::POINTER_TAG || tag == crate::value::STRING_TAG {

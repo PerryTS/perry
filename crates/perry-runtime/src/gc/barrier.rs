@@ -787,7 +787,7 @@ pub(super) unsafe fn plausible_arena_user_ptr_header(
     let size = (*header).size as usize;
     if gc_type_info(obj_type).is_none()
         || size < GC_HEADER_SIZE
-        || size > (1usize << 34)
+        || size as u64 > (1u64 << 34)
         || (*header).gc_flags & GC_FLAG_ARENA == 0
         || (*header).gc_flags & GC_FLAG_FORWARDED != 0
     {
@@ -1048,7 +1048,7 @@ pub(super) fn malloc_gc_parent_addr(parent_addr: usize) -> bool {
         let size = (*header).size as usize;
         gc_type_info(obj_type).is_some()
             && size >= GC_HEADER_SIZE
-            && size <= (1usize << 34)
+            && size as u64 <= (1u64 << 34)
             && (*header).gc_flags & GC_FLAG_ARENA == 0
             && (*header).gc_flags & GC_FLAG_FORWARDED == 0
     }

@@ -1172,18 +1172,13 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ReflectGetPrototypeOf(Box::new(target))));
                         }
                         "getOwnPropertyDescriptor" => {
-                            // `Reflect.getOwnPropertyDescriptor(target, key)` is the
-                            // ordinary `[[GetOwnProperty]]` — identical to
-                            // `Object.getOwnPropertyDescriptor` for non-Proxy targets.
-                            // Without this arm it fell through to a generic call that
-                            // wasn't callable ("value is not a function").
                             let mut it = args.into_iter();
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let key = it.next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::ObjectGetOwnPropertyDescriptor(
-                                Box::new(target),
-                                Box::new(key),
-                            )));
+                            return Ok(Ok(Expr::ReflectGetOwnPropertyDescriptor {
+                                target: Box::new(target),
+                                key: Box::new(key),
+                            }));
                         }
                         "defineMetadata" => {
                             let (key, value, target, property_key) = take_reflect_kvtp_args(args);

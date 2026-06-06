@@ -2349,6 +2349,10 @@ pub enum Expr {
         key: Box<Expr>,
         descriptor: Box<Expr>,
     },
+    ReflectGetOwnPropertyDescriptor {
+        target: Box<Expr>,
+        key: Box<Expr>,
+    },
     ReflectGetPrototypeOf(Box<Expr>),
     /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
     /// (false when rejected), unlike `Object.setPrototypeOf` which returns the

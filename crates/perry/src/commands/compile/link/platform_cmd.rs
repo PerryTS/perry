@@ -602,8 +602,10 @@ pub fn select_linker_command(
         // /ENTRY:mainCRTStartup works for both subsystems: Perry emits
         // `int main()` and the MSVC CRT invokes it regardless of subsystem.
         // See windows_pe_subsystem_flag() for subsystem selection rationale.
+        // The `--windows-subsystem` / `[windows] subsystem` override (resolved
+        // into ctx.windows_subsystem) can force GUI/console past the heuristic.
         c.arg(windows_pe_subsystem_flag(
-            ctx.needs_ui,
+            windows_subsystem_needs_ui(&ctx.windows_subsystem, ctx.needs_ui),
             &ctx.min_windows_version,
         ))
         .arg("/ENTRY:mainCRTStartup")

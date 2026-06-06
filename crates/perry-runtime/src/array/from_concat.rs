@@ -116,23 +116,13 @@ pub extern "C" fn js_array_from_mapped(
     map_fn: f64,
     this_arg: f64,
 ) -> *mut ArrayHeader {
-    // Nullish source → TypeError (before validating mapFn, matching Node).
-    let bits = src_boxed.to_bits();
-    if bits == TAG_UNDEFINED {
-        throw_not_iterable("undefined");
-    }
-    if bits == TAG_NULL {
-        throw_not_iterable("object null");
-    }
-    let cb = resolve_callable(map_fn);
-    // Materialize the source (arrays, strings, iterables, array-likes, ...).
-    let ptr_bits = if (bits >> 48) >= 0x7FF8 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        bits as usize
-    };
-    let src = js_array_clone(ptr_bits as *const ArrayHeader);
-    map_with_this(src, cb, this_arg)
+    // The `this` value for a direct `Array.from(items, mapFn)` call is the
+    // `%Array%` intrinsic, so the result is always a plain Array — drive the
+    // spec algorithm with no constructor and unbox the array pointer.
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let result = array_from_full(undefined, src_boxed, map_fn, this_arg);
+    clean_arr_ptr(crate::value::js_nanbox_get_pointer(result) as *const ArrayHeader)
+        as *mut ArrayHeader
 }
 
 #[used]
@@ -150,36 +140,6 @@ fn resolve_callable(map_fn: f64) -> *const ClosureHeader {
         }
     }
     throw_map_fn_not_callable(map_fn);
-}
-
-/// Map `src` into a fresh array by calling `cb(value, index)` for each element
-/// with `this_arg` bound as the callback's `this`. Per ECMA-262 the mapFn
-/// receives exactly `(value, index)` (no array argument).
-fn map_with_this(
-    src: *mut ArrayHeader,
-    cb: *const ClosureHeader,
-    this_arg: f64,
-) -> *mut ArrayHeader {
-    let src = clean_arr_ptr(src);
-    if src.is_null() {
-        return js_array_alloc(0);
-    }
-    let prev_this = crate::object::js_implicit_this_set(this_arg);
-    let result = unsafe {
-        let length = (*src).length;
-        let src_elements = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        let result = js_array_alloc(length);
-        for i in 0..length as usize {
-            let element = *src_elements.add(i);
-            // mapFn receives (value, index) only.
-            let mapped = crate::closure::js_closure_call2(cb, element, i as f64);
-            js_array_set_f64_extend(result, i as u32, mapped);
-        }
-        (*result).length = length;
-        result
-    };
-    crate::object::js_implicit_this_set(prev_this);
-    result
 }
 
 /// `Array.prototype.concat(...args)` — spec-complete, non-mutating.
@@ -269,6 +229,381 @@ fn read_concat_spreadable(value: f64) -> Option<bool> {
         return None;
     }
     Some(crate::value::js_is_truthy(flag) != 0)
+}
+
+const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+
+#[inline]
+fn jsv_is_array(value: f64) -> bool {
+    js_array_is_array(value).to_bits() == TAG_TRUE
+}
+
+/// `IsConstructor(value)` — true for any callable that is not a built-in
+/// non-constructable function (arrow/method semantics are not tracked for
+/// user closures, so a plain `function` declaration reads as a constructor,
+/// matching how Perry models user functions).
+fn is_constructor_value(value: f64) -> bool {
+    // A user `class` is an INT32-tagged class reference, not a closure pointer,
+    // so `is_callable` misses it; recognize it directly.
+    if crate::object::class_ref_id(value).is_some() {
+        return true;
+    }
+    crate::collection_iter::is_callable(value)
+        && !crate::object::builtin_closure_is_non_constructable_value(value)
+}
+
+/// Build a fresh `{value, writable, enumerable, configurable}` (all true)
+/// data descriptor object, returned NaN-boxed — the shape
+/// `CreateDataProperty` hands to `[[DefineOwnProperty]]`.
+unsafe fn data_property_descriptor(value: f64) -> f64 {
+    let desc = crate::object::js_object_alloc(0, 4);
+    let mut set = |name: &[u8], v: f64| {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(desc, key, v);
+    };
+    set(b"value", value);
+    set(b"writable", f64::from_bits(TAG_TRUE));
+    set(b"enumerable", f64::from_bits(TAG_TRUE));
+    set(b"configurable", f64::from_bits(TAG_TRUE));
+    f64::from_bits(JSValue::pointer(desc as *const u8).bits())
+}
+
+/// `CreateDataPropertyOrThrow(A, index, value)` — returns `true` on success.
+/// A freshly-`ArrayCreate`d result takes the fast array-set path (never
+/// fails); a `Construct`-produced object routes through `[[DefineOwnProperty]]`
+/// (`Reflect.defineProperty` semantics), which reports `false` for a
+/// non-extensible target or a non-configurable existing index.
+unsafe fn create_index_data_property(result: f64, index: usize, value: f64) -> bool {
+    if jsv_is_array(result) {
+        let arr = crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+        js_array_set_f64_extend(arr, index as u32, value);
+        return true;
+    }
+    let key_str = index.to_string();
+    let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);
+    let key_f64 = f64::from_bits(JSValue::string_ptr(key).bits());
+    // `CreateDataProperty` installs a *fresh* fully-defaulted data property,
+    // fully replacing a configurable existing one (even a non-writable one).
+    // Perry's ordinary `[[DefineOwnProperty]]` merges rather than replaces, so
+    // drop a configurable-but-non-writable existing descriptor first; the new
+    // definition then lands writable. A non-configurable existing property is
+    // left in place so the define correctly reports failure.
+    let obj_addr = crate::value::js_nanbox_get_pointer(result) as usize;
+    if let Some(attrs) = crate::object::get_property_attrs(obj_addr, &key_str) {
+        if !attrs.writable() && attrs.configurable() {
+            // Reset the existing (configurable) descriptor to a fully-default
+            // writable data property so the subsequent define overwrites both
+            // its value and attributes — Perry's `[[DefineOwnProperty]]` merges
+            // onto an existing property and would otherwise keep `writable:false`
+            // and the stale value.
+            crate::object::set_property_attrs(
+                obj_addr,
+                key_str.clone(),
+                crate::object::PropertyAttrs::new(true, true, true),
+            );
+        }
+    }
+    let desc = data_property_descriptor(value);
+    crate::proxy::js_reflect_define_property(result, key_f64, desc).to_bits() == TAG_TRUE
+}
+
+/// `Set(A, "length", len, true)`. Arrays take the fast length set; a
+/// `Construct`-produced object goes through `OrdinarySet` (honoring an
+/// inherited `length` accessor — a poisoned setter throws and propagates,
+/// a failed write throws in the strict path).
+unsafe fn set_result_length(result: f64, len: usize) {
+    if jsv_is_array(result) {
+        let arr = crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+        crate::array::js_array_set_length(arr, len as f64);
+        return;
+    }
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let key_f64 = f64::from_bits(JSValue::string_ptr(key).bits());
+    crate::proxy::js_put_value_set(result, key_f64, len as f64, result, 1);
+}
+
+#[cold]
+fn throw_cannot_define_property(index: usize) -> ! {
+    let msg = format!("Cannot define property {}, object is not extensible", index);
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_str);
+    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value));
+}
+
+/// Call `mapfn(value, index)` with `this_arg` bound. Restores the implicit
+/// `this` even on a thrown completion (then re-throws). Used by the
+/// array-like / snapshot branches where there is no live iterator to close.
+fn call_map_fn(mapfn: f64, this_arg: f64, value: f64, index: usize) -> f64 {
+    match crate::collection_iter::call_with_this_capturing_throw(
+        mapfn,
+        this_arg,
+        &[value, index as f64],
+    ) {
+        Ok(v) => v,
+        Err(e) => crate::exception::js_throw(e),
+    }
+}
+
+/// `ToLength(? Get(arrayLike, "length"))` for the array-like branch.
+fn array_like_length(items: f64) -> usize {
+    let raw = crate::value::js_nanbox_get_pointer(items);
+    if raw == 0 {
+        return 0;
+    }
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let length_val = crate::object::js_object_get_field_by_name_f64(
+        raw as *const crate::object::ObjectHeader,
+        key,
+    );
+    let n = crate::builtins::js_number_coerce(length_val);
+    if n.is_nan() || n <= 0.0 {
+        return 0;
+    }
+    let n = n.floor();
+    let max = (1u64 << 53) as f64 - 1.0;
+    if n > max {
+        return (1usize << 53) - 1;
+    }
+    n as usize
+}
+
+enum IterSourceKind {
+    /// A plain Array — iterate by live index read so a `mapfn` that mutates
+    /// the source mid-iteration observes the updated elements (spec array
+    /// iterator semantics).
+    LiveArray,
+    /// Strings / Sets / Maps / typed-arrays / buffers / `arguments` — no
+    /// abrupt-close or live-mutation test exercises these, so materialize a
+    /// snapshot (matches the pre-existing `js_array_clone` behavior).
+    Snapshot,
+    /// A generic object iterator — drive the iterator protocol element by
+    /// element so a `mapfn` throw (or a failed `CreateDataProperty`) triggers
+    /// `IteratorClose`.
+    Generic,
+}
+
+/// `GetMethod(items, @@iterator) is not undefined` — the branch test for
+/// ECMA-262 §23.1.2.1 step 5. Beyond `collection_iter::is_iterable` (which
+/// keys on a side-table `@@iterator`), this also catches built-in iterator
+/// objects and bare iterators/generators, whose `@@iterator` dispatches via
+/// class id (so a direct symbol read returns `undefined`) but which still
+/// drive `.next()`. Mirrors the iterable detection in `js_array_clone`.
+fn items_is_iterable(items: f64) -> bool {
+    if crate::collection_iter::is_iterable(items) {
+        return true;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(items) as usize;
+    if raw == 0 {
+        return false;
+    }
+    if crate::array::is_builtin_iterator_class_id(raw) {
+        return true;
+    }
+    // A bare iterator / generator object exposes a callable `next`.
+    let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+    let next_val = unsafe {
+        crate::object::js_object_get_field_by_name(
+            raw as *const crate::object::ObjectHeader,
+            next_key,
+        )
+    };
+    if next_val.is_undefined() {
+        return false;
+    }
+    let next_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(next_val.bits())) as usize;
+    crate::closure::is_closure_ptr(next_ptr)
+}
+
+fn classify_iter_source(items: f64) -> IterSourceKind {
+    if jsv_is_array(items) {
+        return IterSourceKind::LiveArray;
+    }
+    let jv = JSValue::from_bits(items.to_bits());
+    if jv.is_any_string() {
+        return IterSourceKind::Snapshot;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(items) as usize;
+    if raw != 0 {
+        if crate::set::is_registered_set(raw)
+            || crate::map::is_registered_map(raw)
+            || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+            || crate::buffer::is_registered_buffer(raw)
+        {
+            return IterSourceKind::Snapshot;
+        }
+        if crate::object::is_arguments_object(raw as *const crate::object::ObjectHeader) {
+            return IterSourceKind::Snapshot;
+        }
+    }
+    IterSourceKind::Generic
+}
+
+/// Populate `result` from an iterable `items`, applying `mapfn` when
+/// `mapping`. Implements the iterator branch of ECMA-262 §23.1.2.1 step 6
+/// (including `IteratorClose` on an abrupt `mapfn` / `CreateDataProperty`).
+unsafe fn populate_from_iterable(
+    result: f64,
+    items: f64,
+    mapping: bool,
+    mapfn: f64,
+    this_arg: f64,
+) {
+    match classify_iter_source(items) {
+        IterSourceKind::LiveArray => {
+            let arr = crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader;
+            let mut k = 0usize;
+            loop {
+                let live = clean_arr_ptr(arr);
+                if live.is_null() || k >= (*live).length as usize {
+                    break;
+                }
+                let value = crate::array::js_array_get_f64(live, k as u32);
+                let mapped = if mapping {
+                    call_map_fn(mapfn, this_arg, value, k)
+                } else {
+                    value
+                };
+                if !create_index_data_property(result, k, mapped) {
+                    throw_cannot_define_property(k);
+                }
+                k += 1;
+            }
+            set_result_length(result, k);
+        }
+        IterSourceKind::Snapshot => {
+            let snapshot = clean_arr_ptr(js_array_clone(
+                crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader,
+            ));
+            let len = if snapshot.is_null() {
+                0
+            } else {
+                (*snapshot).length as usize
+            };
+            for k in 0..len {
+                let value = crate::array::js_array_get_f64(snapshot, k as u32);
+                let mapped = if mapping {
+                    call_map_fn(mapfn, this_arg, value, k)
+                } else {
+                    value
+                };
+                if !create_index_data_property(result, k, mapped) {
+                    throw_cannot_define_property(k);
+                }
+            }
+            set_result_length(result, len);
+        }
+        IterSourceKind::Generic => {
+            let iter = crate::symbol::js_get_iterator(items);
+            let mut k = 0usize;
+            loop {
+                match crate::collection_iter::iterator_next_value(iter) {
+                    None => {
+                        set_result_length(result, k);
+                        break;
+                    }
+                    Some(value) => {
+                        let mapped = if mapping {
+                            match crate::collection_iter::call_with_this_capturing_throw(
+                                mapfn,
+                                this_arg,
+                                &[value, k as f64],
+                            ) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    crate::collection_iter::iterator_close(iter);
+                                    crate::exception::js_throw(e);
+                                }
+                            }
+                        } else {
+                            value
+                        };
+                        if !create_index_data_property(result, k, mapped) {
+                            crate::collection_iter::iterator_close(iter);
+                            throw_cannot_define_property(k);
+                        }
+                        k += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Spec-complete `Array.from ( items [ , mapfn [ , thisArg ] ] )`
+/// (ECMA-262 §23.1.2.1), returning a NaN-boxed result value. `c` is the
+/// `this` value: when it `IsConstructor`, the result is `Construct(C)` (the
+/// iterator branch) or `Construct(C, «len»)` (the array-like branch);
+/// otherwise a plain Array is created. Abrupt completions everywhere
+/// propagate, and the iterator branch closes the iterator on an abrupt
+/// `mapfn` / `CreateDataProperty`.
+pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
+    // Steps 1-3: validate `mapfn`.
+    // Only `undefined` means "no mapfn"; any other value (including `null`)
+    // must be callable or it is a TypeError.
+    let mapping = if mapfn.to_bits() == TAG_UNDEFINED {
+        false
+    } else {
+        resolve_callable(mapfn);
+        true
+    };
+
+    // Nullish sources have no `@@iterator` and throw before anything else.
+    let item_bits = items.to_bits();
+    if item_bits == TAG_UNDEFINED {
+        throw_not_iterable("undefined");
+    }
+    if item_bits == TAG_NULL {
+        throw_not_iterable("object null");
+    }
+
+    let is_ctor = is_constructor_value(c);
+
+    if items_is_iterable(items) {
+        // Step 5: iterable. Construct the result BEFORE creating the iterator
+        // (Construct can throw, e.g. a custom constructor) so the throw
+        // propagates without a dangling open iterator.
+        let result = if is_ctor {
+            unsafe { crate::object::js_new_function_construct(c, std::ptr::null(), 0) }
+        } else {
+            let arr = js_array_alloc(0);
+            f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+        };
+        unsafe {
+            populate_from_iterable(result, items, mapping, mapfn, this_arg);
+        }
+        result
+    } else {
+        // Step 6+: array-like.
+        let len = array_like_length(items);
+        let result = if is_ctor {
+            let len_arg = [len as f64];
+            unsafe { crate::object::js_new_function_construct(c, len_arg.as_ptr(), 1) }
+        } else {
+            let arr = js_array_alloc(len as u32);
+            unsafe {
+                (*arr).length = 0;
+            }
+            f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+        };
+        let mut k = 0usize;
+        while k < len {
+            let kvalue = crate::object::js_object_get_index_polymorphic(item_bits as i64, k as f64);
+            let mapped = if mapping {
+                call_map_fn(mapfn, this_arg, kvalue, k)
+            } else {
+                kvalue
+            };
+            if !unsafe { create_index_data_property(result, k, mapped) } {
+                throw_cannot_define_property(k);
+            }
+            k += 1;
+        }
+        unsafe {
+            set_result_length(result, len);
+        }
+        result
+    }
 }
 
 /// Append every element of the (already-materializable) source array `src`

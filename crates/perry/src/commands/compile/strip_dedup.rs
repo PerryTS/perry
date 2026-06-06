@@ -28,6 +28,15 @@ const RUST_ALLOCATOR_SYMBOL_PARTS: &[&str] = &[
     "__rdl_realloc",
     "__rdl_alloc_zeroed",
     "__rdl_alloc_error_handler",
+    // Panic / unwind runtime shims. On tier-3 targets (tvOS/watchOS) with no
+    // prebuilt std, perry-runtime and perry-stdlib are each built with
+    // -Zbuild-std, so both bundle std's single-definition panic runtime →
+    // `ld64.lld: duplicate symbol` for these. Localize them like the allocator
+    // shims so only one staticlib provides them.
+    "__rust_drop_panic",
+    "__rust_foreign_exception",
+    "rust_begin_unwind",
+    "rust_eh_personality",
 ];
 
 fn force_localize_symbol(symbol: &str) -> bool {
@@ -669,6 +678,50 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
     );
     let _ = std::fs::remove_dir_all(&extract_dir);
     Ok(trimmed_lib)
+}
+
+/// Tier-3 (tvOS/watchOS, no prebuilt std): perry-stdlib is built with
+/// `-Zbuild-std` and bundles its own copy of std's allocator/panic runtime
+/// shims, which duplicate the ones in runtime_lib (the canonical provider) →
+/// `ld64.lld: duplicate symbol`. Localize those shims in the stdlib copy.
+/// No-op (clone) on every other target; a strip failure is non-fatal and
+/// falls back to the original archive.
+pub(super) fn dedup_stdlib_for_tier3(target: Option<&str>, stdlib: &PathBuf) -> PathBuf {
+    if matches!(target, Some("tvos") | Some("watchos")) {
+        match strip_duplicate_objects_from_well_known_lib(stdlib) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[strip-dedup] skipped for stdlib (non-fatal): {e}");
+                stdlib.clone()
+            }
+        }
+    } else {
+        stdlib.clone()
+    }
+}
+
+/// Tier-3 Apple (tvOS/watchOS) dedup for a per-crate native binding staticlib.
+/// Same `-Zbuild-std` std-duplication as [`dedup_stdlib_for_tier3`] (alloc/
+/// panic/eh runtime: `__rust_drop_panic`, `__rdl_alloc`, …) colliding with
+/// perry-runtime's std at the final link. Skips shared libs (`.so`, Android)
+/// and every non-tier-3 target (ios/macos use prebuilt std and don't hit this).
+/// A strip failure is non-fatal and falls back to the original lib.
+pub(super) fn dedup_native_lib_for_tier3(
+    target: Option<&str>,
+    lib_name: &str,
+    lib: PathBuf,
+) -> PathBuf {
+    if matches!(target, Some("tvos") | Some("watchos")) && !lib_name.ends_with(".so") {
+        match strip_duplicate_objects_from_lib(&lib) {
+            Ok(trimmed) => trimmed,
+            Err(e) => {
+                eprintln!("[strip-dedup] skipped for native lib {lib_name} (non-fatal): {e}");
+                lib
+            }
+        }
+    } else {
+        lib
+    }
 }
 
 #[cfg(test)]
