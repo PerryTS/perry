@@ -134,6 +134,9 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "btoa"
             | "BigInt"
             | "WebAssembly"
+            // TC39 Temporal namespace (#4686) — a bare `Temporal` resolves to
+            // `globalThis.Temporal`.
+            | "Temporal"
     ) || is_builtin_global_value_name(name)
 }
 

@@ -1192,6 +1192,15 @@ pub unsafe extern "C" fn js_native_call_method(
         return result;
     }
 
+    // Temporal cell (#4686): `duration.add(x)`, `instant.toString()`, etc. A
+    // `Temporal.*` value is a NaN-boxed pointer to a custom cell with no
+    // codegen fast-path, so every method call funnels through here. The router
+    // throws `TypeError` for an unknown method name on a real Temporal receiver.
+    if crate::temporal::is_temporal_value(object) {
+        let args = refreshed_args();
+        return crate::temporal::dispatch::call_method(object, method_name, &args);
+    }
+
     if (object.to_bits() >> 48) == 0x7FFE {
         let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
         if crate::object::class_prototype_ref_id(object).is_some() {

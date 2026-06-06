@@ -62,6 +62,13 @@ hostname = { version = "0.4", optional = true }
 dirs = { version = "6", optional = true }
 lazy_static = "1.4"
 
+# TC39 Temporal API (#4686). Pure-Rust date/time engine (the same one V8
+# uses). We write no calendar/duration/timezone math — temporal_rs owns it;
+# our code is binding glue per type. `compiled_data` vendors the IANA tz DB
+# hermetically (needed by ZonedDateTime / Now), `sys-local` adds the
+# current-system-zone lookup used by Temporal.Now.*ISO() with no argument.
+temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data", "sys-local"] }
+
 serde_json = "1"
 unicode-normalization = "0.1"
 idna = "1"

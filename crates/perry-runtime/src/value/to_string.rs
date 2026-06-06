@@ -537,6 +537,15 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             if crate::date::is_date_cell_addr(ptr as usize) {
                 return crate::date::js_date_to_string(value);
             }
+            // Temporal (#4686): `String(temporal)`, `` `${temporal}` ``, and
+            // `temporal.toString()` produce the value's canonical ISO-8601 /
+            // IXDTF string, not "[object Object]". Detected here for the same
+            // reason as Date — the cell is smaller than an ObjectHeader.
+            if crate::temporal::is_temporal_cell_addr(ptr as usize) {
+                if let Some(s) = crate::temporal::temporal_iso_string(value) {
+                    return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                }
+            }
             // A RegExp stringifies to `/source/flags` (RegExp.prototype.toString),
             // not "[object Object]" — covers `String(re)` and `` `${re}` ``.
             if crate::regex::is_regex_pointer(ptr) {

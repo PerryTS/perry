@@ -93,6 +93,9 @@ pub mod safe_area;
 pub mod set;
 pub mod string;
 pub mod symbol;
+/// TC39 Temporal API (#4686): `Temporal.Duration`, `Temporal.Instant`,
+/// `Temporal.PlainDate`, … wrapping the pure-Rust `temporal_rs` engine.
+pub mod temporal;
 pub mod text;
 pub mod timer;
 pub mod typed_feedback;

@@ -173,6 +173,10 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
     "Atomics",
     "Intl",
     "WebAssembly",
+    // TC39 Temporal (#4686): typeof Temporal === "object". The constructors
+    // (Temporal.Duration, …) and the Temporal.Now sub-namespace are hung off it
+    // by `install_temporal_namespace`.
+    "Temporal",
 ];
 
 /// JS global built-in functions exposed as function-valued properties on

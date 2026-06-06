@@ -129,6 +129,10 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "print"
             | "crypto"
             | "WebAssembly"
+            // TC39 Temporal namespace (#4686): a bare `Temporal` (and the
+            // member-access base in `Temporal.Duration`) resolves to the
+            // installed `globalThis.Temporal` namespace object.
+            | "Temporal"
             // #3579: `var myEval = eval; myEval(...)` needs the same callable
             // globalThis function value as direct `globalThis.eval` reads.
             | "eval"

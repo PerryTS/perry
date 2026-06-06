@@ -817,6 +817,12 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // `Invalid Date`). Handle before the GC-header object dispatch
                 // below, which would deref the 8-byte cell as an ObjectHeader.
                 date_inspect_string(value)
+            } else if crate::temporal::is_temporal_cell_addr(ptr as usize) {
+                // Temporal (#4686): `util.inspect` prints `Temporal.Duration
+                // <P1Y…>`. Handle before the GC-header object dispatch (the cell
+                // is smaller than an ObjectHeader).
+                crate::temporal::temporal_inspect_string(value)
+                    .unwrap_or_else(|| "[object Object]".to_string())
             } else if (ptr as usize) < 0x100000 {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
                 // POINTER_TAG values whose payload is a small registry id, NOT
@@ -1518,6 +1524,10 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     // unquoted (or `Invalid Date`), not the 8-byte cell deref'd
                     // as an object.
                     date_inspect_string(value)
+                } else if crate::temporal::is_temporal_cell_addr(ptr as usize) {
+                    // Temporal value inside an inspected object → `Temporal.X <iso>`.
+                    crate::temporal::temporal_inspect_string(value)
+                        .unwrap_or_else(|| "[object Object]".to_string())
                 } else if (ptr as usize) < 0x100000 {
                     "[object Object]".to_string()
                 } else if crate::symbol::is_registered_symbol(ptr as usize)

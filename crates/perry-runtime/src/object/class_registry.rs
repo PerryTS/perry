@@ -2134,7 +2134,14 @@ fn constructor_return_overrides_this(value: f64) -> bool {
             // `function P(exec){ return new Promise(...) }` (the
             // `NewPromiseCapability` shape exercised by the Promise-combinator
             // test262 cases) must yield that Promise, not the empty default.
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ERROR | crate::gc::GC_TYPE_PROMISE
+            // GC_TYPE_TEMPORAL: `new Temporal.Duration(...)` (and every other
+            // Temporal constructor) is dispatched through this generic path —
+            // the constructor thunk allocates a Temporal cell and returns it, so
+            // that cell must override the empty default `this` (#4687).
+            crate::gc::GC_TYPE_OBJECT
+                | crate::gc::GC_TYPE_ERROR
+                | crate::gc::GC_TYPE_PROMISE
+                | crate::gc::GC_TYPE_TEMPORAL
         )
     }
 }

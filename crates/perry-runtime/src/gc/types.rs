@@ -45,7 +45,16 @@ pub const GC_TYPE_NATIVE_POD_VIEW: u8 = 16;
 /// setter mutations propagate through aliasing / function / closure
 /// boundaries (#2089).
 pub const GC_TYPE_DATE_CELL: u8 = 17;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_DATE_CELL;
+/// A `Temporal.*` cell (`TemporalCell { kind, value }`) wrapping a `temporal_rs`
+/// value (Duration / Instant / PlainDate / …). One shared tag with an internal
+/// `TemporalKind` discriminator rather than 9 separate tags (#4687).
+/// Arena-allocated, non-movable (a NaN-boxed pointer held in a plain f64/DOUBLE
+/// local stays valid across GC), and `pointer_free` from the GC's view — the
+/// embedded `temporal_rs` value holds plain integers/`'static` calendar data,
+/// never a JSValue. Heap-owning variants (a `ZonedDateTime`'s IANA timezone
+/// string) are released by the `TemporalCleanup` finalize hook on sweep.
+pub const GC_TYPE_TEMPORAL: u8 = 18;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_TEMPORAL;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -135,6 +144,10 @@ pub(crate) enum GcFinalizeHookKind {
     NativeTypedView,
     NativeHandle,
     NativePodView,
+    /// Drop the embedded `temporal_rs` value in a `GC_TYPE_TEMPORAL` cell so a
+    /// heap-owning variant (e.g. a `ZonedDateTime` IANA timezone string) is
+    /// released when the cell is swept. POD variants drop to a no-op.
+    TemporalCleanup,
 }
 
 #[allow(dead_code)]
@@ -449,6 +462,28 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_TEMPORAL,
+        "temporal",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        // Non-movable: like Date, a Temporal value is referenced by a NaN-boxed
+        // pointer kept in a plain f64/DOUBLE local that codegen does NOT
+        // shadow-root. The conservative stack scan keeps it alive; a stable
+        // address means that un-rooted pointer never goes stale across a GC.
+        false,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        // pointer_free: the embedded `temporal_rs` value is plain integers +
+        // `'static` calendar data, never a JSValue. Any Rust-heap it owns is
+        // released by the TemporalCleanup finalize hook, not GC tracing.
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::TemporalCleanup,
+    )),
 ];
 
 #[inline]
@@ -578,6 +613,11 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         GcFinalizeHookKind::NativePodView => {
             crate::native_arena::finalize_native_pod_view_for_gc(
                 user_ptr as *mut crate::native_arena::NativePodViewHeader,
+            );
+        }
+        GcFinalizeHookKind::TemporalCleanup => {
+            crate::temporal::finalize_temporal_cell_for_gc(
+                user_ptr as *mut crate::temporal::TemporalCell,
             );
         }
     }

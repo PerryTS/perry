@@ -2475,6 +2475,40 @@ pub extern "C" fn js_object_get_field_by_name(
             return JSValue::undefined();
         }
     }
+    // Temporal cell (#4686): like Date, a `Temporal.*` value is a NaN-boxed
+    // pointer to a small cell that must NOT fall through to the object-deref
+    // path. Resolve its getters (`duration.years`, `plainDate.month`, …) here
+    // and return `undefined` for anything else (a Temporal method read as a
+    // bare value is rare; the `value.method()` call form is handled in
+    // `js_native_call_method`). `obj` may be NaN-boxed (top16 0x7FFD) or a
+    // raw-I64 pointer (top16 0).
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::temporal::is_temporal_cell_addr(addr) {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    let name = String::from_utf8_lossy(key_bytes);
+                    let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+                    if let Some(v) = crate::temporal::dispatch::get_property(boxed, &name) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
     // Issue #818 (Effect class-instance pattern): a V8 handle (JS_HANDLE_TAG
     // = 0x7FFB) reaches here when codegen routes a generic `PropertyGet`
     // through this slow path — e.g. `Effect.succeed(42).value` where the

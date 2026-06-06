@@ -2,6 +2,48 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1126 — feat(temporal): native TC39 Temporal API via temporal_rs (8 types + Temporal.Now)
+
+Implements the TC39 **Temporal** API natively (umbrella #4686), wrapping the pure-Rust
+[`temporal_rs`](https://github.com/boa-dev/temporal) `0.2.3` engine (the same one V8 uses) so Perry writes no
+date/calendar/duration/timezone math itself. Ships all reference types plus the `Temporal.Now` namespace.
+
+### Types (each: constructor, `from`/`compare` statics, getters, core arithmetic, `toString`/`toJSON`/`toLocaleString`, `valueOf` throws per spec)
+- **Foundation (#4687)** — `temporal_rs` dep with the vendored IANA tz DB (`compiled_data` + `sys-local`,
+  confirmed building on Windows); a single `GC_TYPE_TEMPORAL` cell with an internal `TemporalValue` enum
+  (boxed so the `i128`-bearing values get the 16-byte alignment the 8-byte-`GcHeader`-prefixed arena can't
+  give inline); a `TemporalCleanup` finalize hook; the `Temporal` global namespace; and ISO-string routing
+  through `String()`, `JSON.stringify`, and `console.log` (`Temporal.X <iso>`).
+- **Duration (#4688)** — all 12 getters; `with`/`add`/`subtract`/`negated`/`abs`.
+- **Instant (#4690)** — `bigint` epoch nanoseconds (round-tripped through the BigInt marshalling path);
+  `fromEpochMilliseconds`/`fromEpochNanoseconds`; `add`/`subtract`/`until`/`since`/`equals`.
+- **PlainDate / PlainTime / PlainDateTime (#4691/#4692/#4693)** — full calendar + clock getter sets,
+  `add`/`subtract`/`until`/`since`/`equals`, and `PlainDateTime` → `toPlainDate`/`toPlainTime`.
+- **PlainYearMonth / PlainMonthDay (#4694)** — partial-date types sharing the calendar-field machinery.
+- **ZonedDateTime (#4695)** — timezone-aware moments backed by the IANA tz DB; offset/DST resolution
+  (`hoursInDay` correctly returns 23 on a spring-forward day), `toInstant`/`toPlainDate`/`toPlainTime`/
+  `toPlainDateTime`, and arithmetic.
+- **Now (#4689)** — `instant`/`timeZoneId`/`plainDateISO`/`plainTimeISO`/`plainDateTimeISO`/`zonedDateTimeISO`
+  off the host clock via `Temporal::local_now()`.
+
+### Architecture
+Lives entirely in `perry-runtime` (`crates/perry-runtime/src/temporal/`) — no per-method HIR/codegen surgery.
+`new Temporal.X(...)` flows through the existing generic-construct path (taught to honor a returned
+`GC_TYPE_TEMPORAL` cell in `constructor_return_overrides_this`); instance getters/methods route through one
+brand arm each in `js_object_get_field_by_name` and `js_native_call_method` into a central
+`temporal::dispatch` router. `Temporal` is registered as a global identifier in the HIR + codegen builtin lists.
+
+### Tests / parity (#4696)
+Adds `test-files/test_gap_temporal_*.ts` covering every shipped type (construction, getters, arithmetic
+round-trips, `toString`/`toJSON`, `compare`/`equals`, DST). Byte-for-byte comparison expects Temporal-enabled
+Node (`node --harmony-temporal` / Node ≥ 24).
+
+### Deferred (clear RangeError stubs, follow-ups)
+Options-object-heavy methods — `round`/`total`, `with`/`withCalendar`/`withPlainTime`/`withTimeZone`,
+`PlainYearMonth`/`PlainMonthDay` `toPlainDate`, `Instant.toZonedDateTimeISO`,
+`ZonedDateTime.getTimeZoneTransition`/`startOfDay` — throw a "not yet implemented" `RangeError` pending the
+RoundingOptions / fields-object marshalling work.
+
 ## v0.5.1125 — feat(compile): --windows-subsystem override + tier-3 Apple link dedup + pointer-width portability
 
 Three related cross-compile / link improvements, bundled because they share the
