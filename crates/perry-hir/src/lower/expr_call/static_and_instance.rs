@@ -31,6 +31,33 @@ fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
+fn is_node_stream_iterator_helper_instance_method(
+    module_name: &str,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    matches!(module_name, "stream" | "node:stream")
+        && matches!(
+            class_name,
+            "Readable" | "Duplex" | "Transform" | "PassThrough"
+        )
+        && matches!(
+            method_name,
+            "toArray"
+                | "map"
+                | "filter"
+                | "reduce"
+                | "forEach"
+                | "find"
+                | "some"
+                | "every"
+                | "flatMap"
+                | "take"
+                | "drop"
+                | "iterator"
+        )
+}
+
 pub(super) fn try_static_method_and_instance(
     ctx: &mut LoweringContext,
     // #854: kept for the uniform `try_*` dispatch-helper signature; this arm
@@ -184,11 +211,21 @@ pub(super) fn try_static_method_and_instance(
                                 | "addEventListener"
                                 | "removeEventListener"
                         );
-                    if is_util_mime_instance || is_worker_messaging_instance {
+                    let is_node_stream_iterator_helper =
+                        is_node_stream_iterator_helper_instance_method(
+                            &module_name,
+                            &class_name,
+                            &method_name,
+                        );
+                    if is_util_mime_instance
+                        || is_worker_messaging_instance
+                        || is_node_stream_iterator_helper
+                    {
                         // MIMEType/MIMEParams methods are ordinary object
                         // prototype methods registered in the runtime class
-                        // vtable; let the generic property-call path bind
-                        // `this` dynamically.
+                        // vtable; node:stream iterator helpers are also only
+                        // installed on the runtime object method table. Let the
+                        // generic property-call path bind `this` dynamically.
                     } else if is_stream_module && !is_stream_api_method(&module_name, &method_name)
                     {
                         // Fall through — let the regular method-call

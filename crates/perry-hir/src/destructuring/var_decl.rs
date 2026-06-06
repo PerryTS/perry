@@ -63,13 +63,7 @@ fn destructure_builtin_module_source(ctx: &LoweringContext, init: &ast::Expr) ->
     None
 }
 
-/// #3663: register destructured `node:stream` constructor bindings as
-/// native-module member aliases, mirroring `import { Readable } from 'stream'`.
-/// Without this, `const { Readable } = require('stream')` leaves `Readable` as a
-/// plain local, so the later `const r = new Readable(...)` binding is never
-/// tagged as a stream instance — and `r.on()/.write()/.pipe()` then fall through
-/// to no-op stub closures instead of routing to the real stream pump (the
-/// `NativeMethodCall` path the named-import form already takes).
+/// #3663: register destructured stream constructors as native-module aliases.
 fn register_destructured_stream_ctors(ctx: &mut LoweringContext, decl: &ast::VarDeclarator) {
     let ast::Pat::Object(obj_pat) = &decl.name else {
         return;
@@ -994,6 +988,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         }
                     }
                     None
+                }
+
+                if crate::lower_types::is_node_readable_static_factory_call(ctx, init_expr) {
+                    let readable = "Readable".to_string();
+                    ty = Type::Named(readable.clone());
+                    ctx.register_native_instance(name.clone(), "stream".to_string(), readable);
                 }
 
                 // Check for: const response = fetch(url) / fetchWithAuth(url, auth) / fetchPostWithAuth(url, auth, body)

@@ -117,6 +117,14 @@ pub(super) fn try_local_array_methods(
                     Some(Type::Named(n))
                         if n == "Uint8Array" || n == "Buffer" || n == "Uint8ClampedArray"
                 );
+                let is_node_stream_readable_type = matches!(
+                    type_info,
+                    Some(Type::Named(n))
+                        if matches!(
+                            n.as_str(),
+                            "Readable" | "Duplex" | "Transform" | "PassThrough"
+                        )
+                );
                 let is_ambiguous_method = matches!(
                     method_name,
                     "indexOf" | "includes" | "slice" | "lastIndexOf"
@@ -129,6 +137,8 @@ pub(super) fn try_local_array_methods(
                     false // object type literal — dispatch via method call, not array ops
                 } else if is_buffer_type {
                     false // Buffer/Uint8Array — runtime dispatch handles byte-level methods
+                } else if is_node_stream_readable_type {
+                    false // Node streams expose iterator helpers with Array-like names
                 } else if is_known_not_string {
                     true // definitely not a string, enter array block
                 } else if is_ambiguous_method {

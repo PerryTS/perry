@@ -841,6 +841,64 @@ fn ident_has_known_static_method_return(
     false
 }
 
+fn is_node_stream_module_alias(ctx: &LoweringContext, name: &str) -> bool {
+    matches!(
+        ctx.lookup_builtin_module_alias(name),
+        Some("stream" | "node:stream")
+    ) || matches!(
+        ctx.lookup_native_module(name),
+        Some(("stream" | "node:stream", None))
+    )
+}
+
+pub(crate) fn is_node_readable_constructor_ref(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Ident(ident) => {
+            let name = ident.sym.as_ref();
+            name == "Readable"
+                || matches!(
+                    ctx.lookup_native_module(name),
+                    Some(("stream" | "node:stream", Some("Readable")))
+                )
+        }
+        ast::Expr::Member(member) => {
+            let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                (member.obj.as_ref(), &member.prop)
+            else {
+                return false;
+            };
+            prop.sym.as_ref() == "Readable" && is_node_stream_module_alias(ctx, obj.sym.as_ref())
+        }
+        ast::Expr::Paren(paren) => is_node_readable_constructor_ref(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => is_node_readable_constructor_ref(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            is_node_readable_constructor_ref(ctx, &ts_assert.expr)
+        }
+        ast::Expr::TsNonNull(non_null) => is_node_readable_constructor_ref(ctx, &non_null.expr),
+        ast::Expr::TsConstAssertion(const_assert) => {
+            is_node_readable_constructor_ref(ctx, &const_assert.expr)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn is_node_readable_static_factory_call(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+) -> bool {
+    let ast::Expr::Call(call) = expr else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = callee.as_ref() else {
+        return false;
+    };
+    matches!(&member.prop, ast::MemberProp::Ident(prop) if matches!(prop.sym.as_ref(), "from" | "of"))
+        && is_node_readable_constructor_ref(ctx, member.obj.as_ref())
+}
+
 fn expr_may_have_typed_receiver(expr: &ast::Expr, ctx: &LoweringContext) -> bool {
     match expr {
         ast::Expr::Lit(ast::Lit::Str(_)) => true,
@@ -939,6 +997,11 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
         ast::Expr::Member(member) => {
             if let ast::MemberProp::Ident(method) = &member.prop {
                 let method_name = method.sym.as_ref();
+                if matches!(method_name, "from" | "of")
+                    && is_node_readable_constructor_ref(ctx, &member.obj)
+                {
+                    return Type::Named("Readable".to_string());
+                }
                 if method_name == "open" {
                     if let ast::Expr::Ident(obj) = member.obj.as_ref() {
                         let namespace_is_fs_promises = matches!(

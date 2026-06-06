@@ -40,6 +40,31 @@ fn is_stream_class_ref(expr: &ast::Expr) -> bool {
     matches!(name, "Readable" | "Duplex" | "Transform" | "PassThrough")
 }
 
+fn is_node_readable_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Ident(ident) = unwrap_transparent_expr(expr) else {
+        return false;
+    };
+    let name = ident.sym.as_ref();
+    ctx.lookup_native_instance(name)
+        .is_some_and(|(module, class_name)| {
+            matches!(module, "stream" | "node:stream")
+                && matches!(
+                    class_name,
+                    "Readable" | "Duplex" | "Transform" | "PassThrough"
+                )
+        })
+        || ctx.lookup_local_type(name).is_some_and(|ty| {
+            matches!(
+                ty,
+                Type::Named(class_name)
+                    if matches!(
+                        class_name.as_str(),
+                        "Readable" | "Duplex" | "Transform" | "PassThrough"
+                    )
+            )
+        })
+}
+
 fn is_module_builtin_modules_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     let ast::Expr::Member(member) = unwrap_transparent_expr(expr) else {
         return false;
@@ -139,21 +164,23 @@ fn is_fs_dir_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
 }
 
 /// Does this expression's method chain originate from a node:stream
-/// source — `Readable.from(...)` / `Readable.of(...)`, `new Transform()`,
-/// or a chain of lazy iterator helpers (`map`/`filter`/`flatMap`/`take`/
-/// `drop`) on top of one? (#1558)
+/// source — `Readable.from(...)` / `Readable.of(...)`, a local already tagged
+/// as a readable stream, `new Transform()`, or a chain of lazy iterator helpers
+/// (`map`/`filter`/`flatMap`/`take`/`drop`) on top of one? (#1558)
 ///
 /// The lazy stream helpers return another Readable, not an array, so a
 /// chain like `Readable.from(x).map(f).filter(g)` must NOT be folded
 /// into `Expr::Array<Method>` ops — `js_array_map` would read garbage
 /// out of the stream object's header. Detecting the stream root here
 /// keeps such chains on dynamic dispatch so the runtime's stream
-/// iterator-helper stubs run. AST-only (no type info) so it catches the
-/// common inline-chain form without depending on receiver inference.
-fn chain_roots_at_stream(expr: &ast::Expr) -> bool {
+/// iterator-helper stubs run.
+fn chain_roots_at_stream(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     let expr = unwrap_transparent_expr(expr);
+    if is_node_readable_receiver(ctx, expr) {
+        return true;
+    }
     match expr {
-        ast::Expr::Await(a) => chain_roots_at_stream(&a.arg),
+        ast::Expr::Await(a) => chain_roots_at_stream(ctx, &a.arg),
         ast::Expr::New(new) => is_stream_class_ref(&new.callee),
         ast::Expr::Call(call) => {
             let ast::Callee::Expr(callee) = &call.callee else {
@@ -169,7 +196,9 @@ fn chain_roots_at_stream(expr: &ast::Expr) -> bool {
                 // Static factories that produce a Readable.
                 "from" | "of" => is_stream_class_ref(&m.obj),
                 // Lazy helpers preserve the stream — recurse into the receiver.
-                "map" | "filter" | "flatMap" | "take" | "drop" => chain_roots_at_stream(&m.obj),
+                "map" | "filter" | "flatMap" | "take" | "drop" => {
+                    chain_roots_at_stream(ctx, &m.obj)
+                }
                 _ => false,
             }
         }
@@ -474,7 +503,7 @@ pub(super) fn try_array_only_methods(
                 // would read garbage out of the stream object's header. Bail to
                 // dynamic dispatch so the runtime's iterator-helper stubs run.
                 let recv_is_class = recv_is_class
-                    || chain_roots_at_stream(member_obj)
+                    || chain_roots_at_stream(ctx, member_obj)
                     || chain_roots_at_iterator_from(member_obj)
                     || is_util_mime_params_receiver(ctx, member_obj);
                 match method_name {

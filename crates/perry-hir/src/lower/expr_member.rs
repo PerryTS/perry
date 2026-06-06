@@ -1147,7 +1147,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
-                } else if module_name == "stream" && is_classic_stream_method_name(&property_name) {
+                } else if matches!(module_name.as_str(), "stream" | "node:stream")
+                    && is_classic_stream_method_name(&property_name)
+                {
                     // Classic Node streams materialize core stream and
                     // EventEmitter methods as closure-valued fields on the
                     // stream object. A bare method read (`r.read`, `r.on`)
@@ -2534,6 +2536,18 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "uncork"
             | "setDefaultEncoding"
             | "compose"
+            | "iterator"
+            | "toArray"
+            | "map"
+            | "filter"
+            | "reduce"
+            | "forEach"
+            | "find"
+            | "some"
+            | "every"
+            | "flatMap"
+            | "take"
+            | "drop"
             | "on"
             | "addListener"
             | "once"

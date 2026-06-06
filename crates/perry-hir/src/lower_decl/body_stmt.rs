@@ -136,14 +136,35 @@ fn is_node_readable_static_factory(expr: &ast::Expr) -> bool {
     matches!(prop.sym.as_ref(), "from" | "of") && is_node_readable_class_ref(&member.obj)
 }
 
-fn is_node_readable_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
-    if is_node_readable_static_factory(expr) {
-        return true;
+fn is_node_readable_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    is_node_readable_static_factory(expr)
+        || is_node_readable_helper_chain(ctx, expr)
+        || matches!(
+            crate::lower_types::infer_type_from_expr(strip_for_of_expr_wrappers(expr), ctx),
+            Type::Named(name) if name == "Readable"
+        )
+}
+
+fn is_node_readable_helper_chain(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Call(call) = strip_for_of_expr_wrappers(expr) else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = strip_for_of_expr_wrappers(callee.as_ref()) else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    match prop.sym.as_ref() {
+        "from" | "of" => is_node_readable_class_ref(&member.obj),
+        "map" | "filter" | "flatMap" | "take" | "drop" | "compose" => {
+            is_node_readable_expr(ctx, &member.obj)
+        }
+        _ => false,
     }
-    matches!(
-        crate::lower_types::infer_type_from_expr(strip_for_of_expr_wrappers(expr), ctx),
-        Type::Named(name) if name == "Readable"
-    )
 }
 
 /// `for await (const line of rl)` where `rl = readline.createInterface(...)`.
@@ -1030,7 +1051,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 };
 
             let is_node_readable_for_await =
-                for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
+                for_of_stmt.is_await && is_node_readable_expr(ctx, &for_of_stmt.right);
             let is_filehandle_readlines_for_await = for_of_stmt.is_await
                 && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
             let is_fs_dir_for_await =
