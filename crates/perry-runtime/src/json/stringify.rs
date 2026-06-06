@@ -978,6 +978,11 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     let actual_fields = keys_len;
 
+    // Class instances store private fields (`#x`) in `keys_array`, but `JSON.
+    // stringify` must skip them (Node does). Plain object literals (class_id 0)
+    // keep any real `#`-prefixed string key.
+    let hide_private = (*obj).class_id != 0;
+
     // #2438: enumerate own keys in ECMA-262 OrdinaryOwnPropertyKeys order —
     // array-index keys first (ascending numeric), then string keys in
     // insertion order. `None` means no array-index keys, so insertion order
@@ -1060,6 +1065,14 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     for j in 0..actual_fields {
         let f = pos(j);
+        // Skip class-instance private fields (`#x`).
+        if hide_private
+            && crate::object::private_member_key_value(crate::JSValue::from_bits(
+                (*keys_elements.add(f as usize)).to_bits(),
+            ))
+        {
+            continue;
+        }
         // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
         if filter_non_enum && json_key_non_enumerable(obj, *keys_elements.add(f as usize)) {

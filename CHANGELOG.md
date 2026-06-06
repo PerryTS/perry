@@ -2,6 +2,66 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1126 — fix(class): hide private members from reflection + unblock exotic-private-name compilation
+
+Two fixes for class **private members** (`#x` fields, `#m()` methods, `get/set #a`
+accessors, and their `static` forms), targeting the largest test262 class cluster.
+On `language/expressions/class/elements` this moved the radar from **pass=415 /
+parity 30.4%** to **pass=497 / parity 36.4%** (+82 tests, 0 regressions), with the
+`compile-fail` bucket dropping 430→5.
+
+**1. Private names are no longer observable as own string properties.** Perry
+stores a class instance's private fields in the object's `keys_array` under their
+`#`-prefixed source name, and private methods/accessors in the class vtable /
+static tables under `#name` keys. These leaked into every reflection and
+enumeration surface — `Object.getOwnPropertyNames(c)` returned `["#x"]`,
+`c.hasOwnProperty("#x")` / `"#x" in c` returned `true`, and `#m` showed up on the
+prototype's own-property list — none of which Node does. Per ECMA-262 a private
+name is never an own string property.
+
+Added `private_member_key_bytes` / `private_member_key_value` helpers
+(`object/field_get_set.rs`) and filtered `#`-prefixed keys from: `Object.keys` /
+`values` / `entries`, `Object.getOwnPropertyNames` (both the class-ref
+prototype/constructor path and the instance `keys_array` path),
+`getOwnPropertyDescriptor` (both paths → `undefined`), `hasOwnProperty` (instance
+*and* class-ref, so `static #gen` no longer appears on the constructor),
+`propertyIsEnumerable`, the `in` operator, `JSON.stringify`, object spread
+(`{...c}`), and `Object.assign`. `Reflect.ownKeys` is covered transitively.
+
+The instance-side filters are gated on `class_id != 0` (i.e. the receiver is a
+class instance), so a plain object literal that legitimately uses a `#`-prefixed
+*string* key — e.g. a hex-color map `{ "#fff": "white" }` created via
+`obj["#fff"] = …` — keeps that key visible. The class-ref (prototype/constructor)
+paths filter unconditionally, since a `#`-name there is always a private member.
+
+**2. Exotic private names no longer collide into one LLVM symbol.** The codegen
+symbol sanitizer (`codegen/helpers.rs::sanitize`) replaced every character outside
+`[A-Za-z0-9_]` with a single `_`, so distinct private methods like `#$`, `#_`, and
+`#℘` all mangled to the same `perry_method_…__C____` symbol and clang aborted the
+whole module with `invalid redefinition of function`. This failed ~425 procedurally
+generated `*-private*` cases (which exercise private names built from `$`, unicode,
+and zero-width joiners) at compile time.
+
+The fix adds a new injective `sanitize_member` (escapes each non-alnum char to
+`_<hex-codepoint>_`) and applies it to the **member-name component** of method /
+getter / setter / static-method symbols (`perry_method_…` / `perry_static_…__c<id>__…`).
+Member symbols are module-local — instance methods/accessors dispatch through the
+runtime vtable by source name, not by cross-module LLVM symbol — so the encoding
+only has to be self-consistent within one codegen pass. `sanitize` itself is left
+unchanged (single-`_` collapse): it is also used for the **module-symbol prefix**
+(`perry_fn_<prefix>__<name>`, `native_region_slug`), which must stay byte-compatible
+with the driver's `compute_module_prefix`, or cross-module function references go
+unresolved at link time. Names made only of `[A-Za-z0-9_]` (essentially all ordinary
+identifiers) are returned unchanged by both, so existing symbols are unperturbed.
+
+Not yet covered (follow-ups): the private **brand check on access** — reading
+`other.#x` on a receiver that lacks the brand must throw `TypeError`, but Perry
+currently returns `undefined`; a correct fix needs lexical resolution of the
+private name's *declaring* class (it is not always the innermost class), so it is
+deferred to avoid regressing nested-class private access. Many of the now-compiling
+tests also depend on unrelated **public** static-method descriptor support
+(`verifyProperty(C, "m", …)` on `static *m()`), which is tracked separately.
+
 ## v0.5.1125 — feat(compile): --windows-subsystem override + tier-3 Apple link dedup + pointer-width portability
 
 Three related cross-compile / link improvements, bundled because they share the
