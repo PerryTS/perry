@@ -6,6 +6,7 @@ const READABLE_ITERATOR_INDEX_KEY: &[u8] = b"__perryReadableIteratorIndex";
 const READABLE_ITERATOR_DONE_KEY: &[u8] = b"__perryReadableIteratorDone";
 const READABLE_ITERATOR_DESTROY_ON_RETURN_KEY: &[u8] = b"__perryReadableIteratorDestroyOnReturn";
 const READABLE_ITERATOR_STREAM_INDEX_KEY: &[u8] = b"__perryReadableIteratorStreamIndex";
+const READABLE_ITERATOR_CHUNKS_KEY: &[u8] = b"__perryReadableIteratorChunks";
 
 fn iterator_result(value: f64, done: bool) -> f64 {
     let obj = crate::object::js_object_alloc(0, 2);
@@ -102,6 +103,33 @@ fn set_stream_consume_index(stream: f64, index: u32) {
     );
 }
 
+fn iterator_snapshot_array(iterator: f64) -> *const crate::array::ArrayHeader {
+    let Some(chunks) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_CHUNKS_KEY)) else {
+        return std::ptr::null();
+    };
+    if !is_array_like_value(chunks) {
+        return std::ptr::null();
+    }
+    raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader
+}
+
+fn readable_data_listener_snapshot(stream: f64) -> Option<f64> {
+    if stream_listener_count_for_event(stream, string_value(b"data")) == 0 {
+        return None;
+    }
+    let chunks = readable_hidden_chunks(stream)?;
+    let mut values = Vec::new();
+    push_chunk_values(chunks, &mut values, 0);
+    if values.is_empty() {
+        return None;
+    }
+    let mut arr = crate::array::js_array_alloc(0);
+    for value in values {
+        arr = crate::array::js_array_push_f64(arr, value);
+    }
+    Some(box_pointer(arr as *const u8))
+}
+
 fn settle_iterator_return_value(value: f64) {
     if crate::promise::js_value_is_promise(value) == 0 {
         return;
@@ -148,6 +176,27 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
         return readable_iterator_done();
     };
     prepare_readable_for_iteration(stream);
+
+    let snapshot = iterator_snapshot_array(iterator);
+    if !snapshot.is_null() {
+        let index = iterator_local_index(iterator);
+        if index < crate::array::js_array_length(snapshot) {
+            let value = crate::array::js_array_get_f64(snapshot, index);
+            set_hidden_value(
+                iterator,
+                hidden_key(READABLE_ITERATOR_INDEX_KEY),
+                (index + 1) as f64,
+            );
+            mark_disturbed(stream);
+            return readable_iterator_chunk_result(value);
+        }
+        set_hidden_value(
+            iterator,
+            hidden_key(READABLE_ITERATOR_DONE_KEY),
+            f64::from_bits(TAG_TRUE),
+        );
+        return readable_iterator_done();
+    }
 
     if !readable_object_mode(stream) {
         let value = read_stream_available_default(stream);
@@ -270,6 +319,9 @@ fn build_readable_async_iterator(stream: f64, destroy_on_return: bool) -> f64 {
             TAG_FALSE
         }),
     );
+    if let Some(chunks) = readable_data_listener_snapshot(stream) {
+        set_hidden_value(iterator, hidden_key(READABLE_ITERATOR_CHUNKS_KEY), chunks);
+    }
     install_async_iterator_symbol(iterator, ns_readable_iterator_self);
     iterator
 }
