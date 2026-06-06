@@ -1343,6 +1343,13 @@ pub unsafe extern "C" fn js_new_function_construct(
             super::object_ops::throw_object_type_error(b"is not a constructor");
         }
     }
+    // `new (new String(""))` / `new (new Number(1))` — a boxed primitive WRAPPER
+    // object is an ordinary object, never a constructor, so `new` on it throws
+    // `TypeError` (Test262 `S15.5.5_A2`). Without this it fell through to the
+    // empty-object construction fallback and silently produced `{}`.
+    if crate::builtins::boxed_primitive_payload(func_value).is_some() {
+        super::object_ops::throw_object_type_error(b"is not a constructor");
+    }
     // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
@@ -2190,6 +2197,14 @@ fn is_arrow_function_value(value: f64) -> bool {
 
 pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Option<f64> {
     if !is_callable_function_value(func_value) || is_arrow_function_value(func_value) {
+        return None;
+    }
+    // Built-in methods (`String.prototype.charAt`, `Array.prototype.map`, …) are
+    // not constructors and have NO `prototype` own property — `String.prototype.
+    // charAt.prototype === undefined` (ECMA-262: built-in non-constructor
+    // functions don't get the auto-created `.prototype`). Don't lazily synthesize
+    // one for them.
+    if super::native_module::builtin_closure_is_non_constructable_value(func_value) {
         return None;
     }
     let cid = synthetic_class_id_for_function(func_value);

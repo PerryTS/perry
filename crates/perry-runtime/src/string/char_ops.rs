@@ -4,18 +4,33 @@
 use super::*;
 
 /// JS index coercion for the String character-access methods (#2787).
-/// Applies `ToIntegerOrInfinity`: `undefined`, `null`, and `NaN` are all NaN /
-/// non-numeric bit patterns that map to `0`; finite values truncate toward
-/// zero; the result is clamped into `i32` so the integer-index helpers below
-/// see a safe value (a far-out-of-range magnitude clamps to a still-OOB index,
-/// which the helpers already handle). Codegen routes the raw NaN-boxed index
-/// through here instead of `fptosi`, which is undefined behavior on a NaN.
+/// Applies `ToIntegerOrInfinity`: a non-numeric argument is first run through
+/// the full `ToNumber` (`js_number_coerce`) so an object index with a custom
+/// `valueOf`/`toString` (`"lego".charAt({toString:()=>1})` → `"e"`), a numeric
+/// string (`"1"`), a boolean, `null`, etc. coerce per spec — and a `Symbol`
+/// index throws `TypeError` (ToNumber(Symbol)). `undefined`/`NaN` map to `0`;
+/// finite values truncate toward zero; the result is clamped into `i32` so the
+/// integer-index helpers below see a safe value (a far-out-of-range magnitude
+/// clamps to a still-OOB index, which the helpers already handle). Codegen
+/// routes the raw NaN-boxed index through here instead of `fptosi`, which is
+/// undefined behavior on a NaN.
 #[no_mangle]
 pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
-    if index.is_nan() {
+    let jsval = crate::value::JSValue::from_bits(index.to_bits());
+    // Fast path: a real number / int32 needs no ToNumber. Anything else
+    // (object, string, bool, null, undefined, bigint, symbol) goes through
+    // `ToNumber` first (may throw on Symbol, may run user `valueOf`/`toString`).
+    let n = if jsval.is_int32() {
+        jsval.as_int32() as f64
+    } else if jsval.is_number() {
+        index
+    } else {
+        crate::builtins::js_number_coerce(index)
+    };
+    if n.is_nan() {
         return 0;
     }
-    let truncated = index.trunc();
+    let truncated = n.trunc();
     if truncated <= i32::MIN as f64 {
         i32::MIN
     } else if truncated >= i32::MAX as f64 {
@@ -210,13 +225,34 @@ fn to_uint16(code: f64) -> u16 {
     code.trunc().rem_euclid(65536.0) as u16
 }
 
+/// `String.fromCharCode` per-argument coercion (ECMA-262 §22.1.2.1):
+/// `nextCU = ToUint16(next)`, where `ToUint16` first applies the abstract
+/// `ToNumber`. A bare numeric value short-circuits; everything else is run
+/// through the full `ToNumber` so a boxed `new Boolean(true)` / a `{ valueOf }`
+/// object coerce (→ 1 / their numeric value) instead of mapping to `0`. A
+/// `BigInt` throws `TypeError` (abstract `ToNumber(BigInt)`, unlike the lenient
+/// `Number(bigint)`); a `Symbol` throws via `js_number_coerce`.
+fn fromcharcode_arg_to_uint16(code: f64) -> u16 {
+    let jv = crate::value::JSValue::from_bits(code.to_bits());
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else if jv.is_number() {
+        code
+    } else if jv.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    } else {
+        crate::builtins::js_number_coerce(code)
+    };
+    to_uint16(n)
+}
+
 /// Create a string from a character code (String.fromCharCode).
 /// The argument is coerced with `ToUint16` (#2788), so out-of-range and
 /// negative values wrap modulo 65536 rather than returning `""`. Codegen
 /// passes the raw NaN-boxed `f64` (not `fptosi`, which is UB on a NaN).
 #[no_mangle]
 pub extern "C" fn js_string_from_char_code(code: f64) -> *mut StringHeader {
-    let unit = to_uint16(code);
+    let unit = fromcharcode_arg_to_uint16(code);
 
     // For ASCII characters, create a simple 1-byte string.
     if unit < 128 {
@@ -249,7 +285,7 @@ pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeade
 
     let mut out = String::with_capacity(len);
     for i in 0..len {
-        let unit = to_uint16(crate::array::js_array_get_f64(arr, i as u32));
+        let unit = fromcharcode_arg_to_uint16(crate::array::js_array_get_f64(arr, i as u32));
         match char::from_u32(unit as u32) {
             Some(ch) => out.push(ch),
             None => out.push('\u{FFFD}'),

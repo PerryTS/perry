@@ -78,6 +78,21 @@ pub(crate) fn lower_string_method(
     args: &[Expr],
 ) -> Result<String> {
     let recv_box = lower_expr(ctx, object)?;
+    // Optimistic any-typed path: `property_get` routes `(x: any).charAt(i)` /
+    // `.split(…)` here even when `x` is not statically a string, because most
+    // such receivers ARE strings (e.g. `readFileSync(p).split('\n')`). But a
+    // boxed/object receiver — `new Boolean().charAt = String.prototype.charAt;
+    // …charAt(i)`, a `{ toString }` object — must have `ToString(this)` applied
+    // (ECMA-262 §22.1.3) before the inline string helpers run, or they would
+    // bit-cast the object pointer as a string and read garbage. A statically
+    // string-typed receiver skips this (fast path, no coercion).
+    let recv_box = if is_string_expr(ctx, object) {
+        recv_box
+    } else {
+        let blk = ctx.block();
+        let coerced = blk.call(I64, "js_string_coerce", &[(DOUBLE, &recv_box)]);
+        nanbox_string_inline(blk, &coerced)
+    };
 
     match property {
         "indexOf" => {

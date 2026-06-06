@@ -49,7 +49,8 @@ pub use base64_codec::{js_atob, js_btoa};
 pub use char_ops::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
     js_string_from_char_code, js_string_from_char_code_array, js_string_from_code_point,
-    js_string_from_code_point_array, js_string_index_get, js_string_to_char_array,
+    js_string_from_code_point_array, js_string_index_get, js_string_index_to_i32,
+    js_string_to_char_array,
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,

@@ -4393,13 +4393,15 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_function_has_instance_symbol(proto_obj);
         }
         "String" => {
+            // #4576-style: generic-`this` char-access methods + `Symbol.iterator`
+            // get real reflective thunks (RequireObjectCoercible + ToString) so
+            // `String.prototype.charAt.call(receiver, i)` works on a boxed/object
+            // receiver. The remaining methods stay no-op-backed (value-introspect
+            // only); their direct/dispatch paths are handled elsewhere.
+            string_proto_thunks::install_string_proto_methods("String", proto_obj);
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("at", 1),
-                    ("charAt", 1),
-                    ("charCodeAt", 1),
-                    ("codePointAt", 1),
                     ("concat", 1),
                     ("endsWith", 1),
                     ("includes", 1),

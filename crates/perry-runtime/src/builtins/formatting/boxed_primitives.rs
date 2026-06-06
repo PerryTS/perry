@@ -121,6 +121,38 @@ fn install_string_wrapper_length(
     );
 }
 
+/// String exotic objects (ECMA-262 §10.4.3) expose each UTF-16 code unit as an
+/// integer-indexed own property `"0".."len-1"` with the descriptor
+/// `{ value: <char>, writable: false, enumerable: true, configurable: false }`.
+/// `new String("abc")` therefore reports `getOwnPropertyDescriptor(s, "0")`,
+/// `s.hasOwnProperty("0")`, and `Object.keys(s)`/enumeration over the indices.
+/// Installed eagerly at construction (typical `new String` receivers are
+/// short); the wrapper's `length` is installed separately and stays last.
+fn install_string_wrapper_indices(
+    obj: *mut crate::object::ObjectHeader,
+    string_ptr: *const crate::string::StringHeader,
+) {
+    if obj.is_null() || string_ptr.is_null() {
+        return;
+    }
+    let len = crate::string::js_string_length(string_ptr);
+    for i in 0..len {
+        let ch = crate::string::js_string_char_at(string_ptr, i as i32);
+        if ch.is_null() {
+            continue;
+        }
+        let name = i.to_string();
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let ch_value = f64::from_bits(crate::value::JSValue::string_ptr(ch).bits());
+        crate::object::js_object_set_field_by_name(obj, key, ch_value);
+        crate::object::set_builtin_property_attrs(
+            obj as usize,
+            name,
+            crate::object::PropertyAttrs::new(false, true, false),
+        );
+    }
+}
+
 pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut moved = Vec::new();
     BOXED_PRIMITIVE_PAYLOADS.with(|m| {
@@ -221,6 +253,7 @@ pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
     };
     let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
     register_boxed_primitive_payload(obj, boxed);
+    install_string_wrapper_indices(obj, ptr);
     install_string_wrapper_length(obj, ptr);
     attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_STRING);
     crate::value::js_nanbox_pointer(obj as i64)
