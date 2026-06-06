@@ -32,6 +32,7 @@ use crate::OutputFormat;
 use super::audit_manifest::write_audit_manifest_logging_failures;
 use super::collect_modules::collect_modules;
 use super::resolve::discover_extension_entries;
+use super::resources::find_project_root_for_resources;
 use crate::commands::progress::VerboseProgress;
 
 use super::{CompilationContext, CompileArgs, ParseCache};
@@ -656,6 +657,56 @@ pub(super) fn validate_min_windows_version(
     Ok(())
 }
 
+/// Resolve the Windows PE subsystem override into `ctx.windows_subsystem`.
+///
+/// Precedence:
+///   1. `--windows-subsystem` when set to `console`/`windows` (explicit
+///      CLI intent wins).
+///   2. `perry.toml [windows] subsystem` — the source that survives the
+///      `perry publish` worker round-trip, since the dev shell's flags don't
+///      transfer but perry.toml is uploaded with `--project` (mirrors
+///      `resolve_optional_framework_dir`'s env→toml fallback).
+///   3. `auto` — defer to the `needs_ui` import heuristic at link time.
+///
+/// Unknown values from either source are a hard error so typos fail loudly
+/// instead of silently linking a console window onto a GUI game.
+pub(super) fn validate_windows_subsystem(
+    args: &CompileArgs,
+    ctx: &mut CompilationContext,
+) -> Result<()> {
+    fn check(value: &str, source: &str) -> Result<()> {
+        match value {
+            "auto" | "console" | "windows" => Ok(()),
+            other => {
+                anyhow::bail!("{source}: expected 'auto', 'console', or 'windows', got '{other}'.")
+            }
+        }
+    }
+
+    check(&args.windows_subsystem, "--windows-subsystem")?;
+
+    // 1. Explicit CLI override wins.
+    if args.windows_subsystem != "auto" {
+        ctx.windows_subsystem = args.windows_subsystem.clone();
+        return Ok(());
+    }
+
+    // 2. CLI left at default — consult perry.toml [windows] subsystem.
+    let project_root = find_project_root_for_resources(&args.input, true);
+    if let Ok(content) = std::fs::read_to_string(project_root.join("perry.toml")) {
+        if let Ok(doc) = content.parse::<toml::Table>() {
+            if let Some(sub) = super::app_metadata::toml_string(&doc, "windows", "subsystem") {
+                check(&sub, "perry.toml [windows] subsystem")?;
+                ctx.windows_subsystem = sub;
+                return Ok(());
+            }
+        }
+    }
+
+    // 3. Stays "auto" (ctx default) — import heuristic decides.
+    Ok(())
+}
+
 /// Run the full post-collect preflight chain (capability / egress /
 /// lockdown / SBOM / geisterhand / windows-version / project_root
 /// recompute / module-count print). All gates collected here so the
@@ -697,6 +748,7 @@ pub(super) fn run_post_collect_preflight(
 
     apply_geisterhand_args(args, ctx);
     validate_min_windows_version(args, ctx)?;
+    validate_windows_subsystem(args, ctx)?;
     Ok(())
 }
 

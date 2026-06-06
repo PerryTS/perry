@@ -191,7 +191,7 @@ fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i6
         let hour = tm.tm_hour as u32;
         let minute = tm.tm_min as u32;
         let second = tm.tm_sec as u32;
-        let tz_offset = tm.tm_gmtoff;
+        let tz_offset = tm.tm_gmtoff as i64;
         (year, month, day, hour, minute, second, tz_offset)
     }
 }

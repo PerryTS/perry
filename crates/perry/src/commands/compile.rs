@@ -71,7 +71,7 @@ use library_search::{
     find_geisterhand_stdlib, find_geisterhand_ui, find_harmonyos_sdk, find_lld_link,
     find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
     find_runtime_library, find_stdlib_library, find_ui_library, find_wasm_host_library,
-    windows_pe_subsystem_flag,
+    windows_pe_subsystem_flag, windows_subsystem_needs_ui,
 };
 use link::{build_and_run_link, write_link_cache_manifest};
 pub use lock_scan::collect_native_archives_for_lock;
@@ -93,7 +93,10 @@ use resolve::{
     is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
     parse_package_specifier, resolve_import,
 };
-use strip_dedup::{strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib};
+use strip_dedup::{
+    dedup_native_lib_for_tier3, dedup_stdlib_for_tier3, strip_duplicate_objects_from_lib,
+    strip_duplicate_objects_from_well_known_lib,
+};
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
     compile_for_watchos_widget, compile_for_wearos_tile, find_visionos_swift_runtime,
