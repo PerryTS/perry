@@ -1101,12 +1101,18 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         return value;
     }
 
-    // Probe the vtable chain for `then`. Bail out on plain objects (no class
-    // method) so the await passes the original value through unchanged.
+    // Probe the vtable chain for `then` (a class *method*). If that fails, fall
+    // back to reading `then` as an own/inherited DATA property — object-literal
+    // thenables (`{ then(resolve, reject) { … } }`, the common test262 and real-
+    // world shape) carry `then` as a plain property, not a class method, so the
+    // vtable probe alone never assimilates them. Per ECMA-262 PromiseResolve /
+    // PromiseResolveThenableJob: `thenAction = Get(value, "then")`; if callable,
+    // run `Call(thenAction, value, «resolve, reject»)`. Otherwise resolve plain
+    // (return the value unchanged).
     let (then_func_ptr, then_param_count, _then_has_synthetic_arguments, _then_has_rest) =
         match crate::object::lookup_class_method_in_chain(class_id, "then") {
             Some(p) => p,
-            None => return value,
+            None => return assimilate_via_then_property(value),
         };
 
     // Allocate the wrapper promise plus resolve/reject closures pointing at it.
@@ -1145,6 +1151,45 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
             }
         }
     }
+
+    crate::value::js_nanbox_pointer(new_promise as i64)
+}
+
+/// Assimilate an object-literal thenable whose `then` is an own/inherited DATA
+/// property (not a class method). Reads `Get(value, "then")`; if it is callable,
+/// allocates a wrapper promise and runs `value.then(resolve, reject)` to follow
+/// its eventual state. Returns the wrapper promise, or — when `then` is absent
+/// or not callable — the original `value` unchanged (resolve-plain).
+fn assimilate_via_then_property(value: f64) -> f64 {
+    let then_val = unsafe {
+        crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
+    };
+    if callable_closure_value(then_val).is_none() {
+        return value;
+    }
+
+    let new_promise = js_promise_new();
+    let promise_i64 = new_promise as i64;
+
+    let resolve_closure = crate::closure::js_closure_alloc(promise_resolve_fn as *const u8, 1);
+    crate::closure::js_closure_set_capture_ptr(resolve_closure, 0, promise_i64);
+    let reject_closure = crate::closure::js_closure_alloc(promise_reject_fn as *const u8, 1);
+    crate::closure::js_closure_set_capture_ptr(reject_closure, 0, promise_i64);
+
+    // The user's `then(onFulfilled, onRejected)` receives each resolving function
+    // as a raw closure-pointer f64 — the same convention `js_promise_new_with_
+    // executor` uses for `executor(resolve, reject)` (user JS calls these fine).
+    let resolve_f64 = f64::from_bits(resolve_closure as u64);
+    let reject_f64 = f64::from_bits(reject_closure as u64);
+    let args = [resolve_f64, reject_f64];
+
+    // Bind `this` to the thenable so a non-arrow `then` body reads the right
+    // receiver, then call `Get(value, "then")` as a value (own data property).
+    let prev = crate::object::js_implicit_this_set(value);
+    unsafe {
+        crate::closure::js_native_call_value(then_val, args.as_ptr(), args.len());
+    }
+    crate::object::js_implicit_this_set(prev);
 
     crate::value::js_nanbox_pointer(new_promise as i64)
 }
