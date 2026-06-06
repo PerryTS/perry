@@ -16,17 +16,21 @@
 //! HIR lowering time, which route through the entry points here.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
 mod json;
+mod metadata;
 mod reflect;
 
 pub(crate) use json::{
     js_proxy_checked_target, js_proxy_checked_target_for_is_array, js_proxy_own_keys_for_json,
 };
-pub use reflect::{js_reflect_delete, js_reflect_get, js_reflect_has, js_reflect_set};
+pub use reflect::{
+    js_reflect_delete, js_reflect_get, js_reflect_get_own_property_descriptor, js_reflect_has,
+    js_reflect_set,
+};
 
 /// A single Proxy registry entry.
 #[repr(C)]
@@ -304,17 +308,35 @@ fn throw_type_error(msg: &str) -> f64 {
     crate::exception::js_throw(boxed)
 }
 
+fn reflect_value_is_symbol(value: f64) -> bool {
+    let bits = value.to_bits();
+    (bits >> 48) == (POINTER_TAG >> 48)
+        && (bits & POINTER_MASK) >= 0x1_0000_0000
+        && unsafe { crate::symbol::js_is_symbol(value) != 0 }
+}
+
 /// Is `value` a Reflect-acceptable object? Heap objects, class refs (callable
 /// constructors), and proxies all count. Primitives / null / undefined do not.
 fn reflect_value_is_object(value: f64) -> bool {
     if lookup(value).is_some() {
         return true;
     }
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    if top16 == (POINTER_TAG >> 48) {
+        let lower48 = bits & POINTER_MASK;
+        if lower48 < 0x1_0000_0000 {
+            return false;
+        }
+        if reflect_value_is_symbol(value) {
+            return false;
+        }
+    }
     if crate::object::js_value_is_heap_object(value) {
         return true;
     }
     // Class refs (INT32-tagged constructors) are callable objects.
-    (value.to_bits() >> 48) == 0x7FFE
+    top16 == 0x7FFE
 }
 
 /// `CreateListFromArrayLike(value)` — collect indexed `0..length` properties of
@@ -808,6 +830,10 @@ fn prototype_of_for_set(value: f64) -> Option<f64> {
     } else {
         Some(proto)
     }
+}
+
+fn reflect_target_get_prototype_of(value: f64) -> f64 {
+    prototype_of_for_set(value).unwrap_or_else(|| crate::object::js_object_get_prototype_of(value))
 }
 
 fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> bool {
@@ -1337,9 +1363,7 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
     let result = js_closure_call3(closure, target, args_array, nt);
     crate::object::js_implicit_this_set(prev);
     // [[Construct]] must return an Object (spec step 9 of the construct trap).
-    // Symbols are primitives despite being pointer-backed, so exclude them.
-    let is_symbol = unsafe { crate::symbol::js_is_symbol(result) != 0 };
-    if is_symbol || !reflect_value_is_object(result) {
+    if !reflect_value_is_object(result) {
         return throw_type_error("proxy [[Construct]] trap returned a non-object value");
     }
     result
@@ -1528,7 +1552,50 @@ pub extern "C" fn js_reflect_get_prototype_of(obj: f64) -> f64 {
     // step 1). Note `Object.getPrototypeOf` is more lenient (ToObject-coerces
     // primitives), so guard here before delegating. Proxies have a registered
     // entry and are objects, so they pass this check and dispatch below.
-    if lookup(obj).is_none() && !reflect_value_is_object(obj) {
+    if let Some(id) = lookup(obj) {
+        let (target, handler, revoked) = PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|o| o.as_ref())
+                .map(|e| (e.target, e.handler, e.revoked))
+                .unwrap_or((
+                    f64::from_bits(TAG_UNDEFINED),
+                    f64::from_bits(TAG_UNDEFINED),
+                    false,
+                ))
+        });
+        if revoked {
+            return revoked_return();
+        }
+        let trap = handler_trap(handler, "getPrototypeOf");
+        let trap_bits = trap.to_bits();
+        if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
+            return reflect_target_get_prototype_of(target);
+        }
+        if !is_callable_function(trap) {
+            return throw_type_error("proxy getPrototypeOf trap is not a function");
+        }
+        let rebound = crate::closure::clone_closure_rebind_this(trap_bits, handler);
+        let closure = closure_from(f64::from_bits(rebound));
+        if closure.is_null() {
+            return throw_type_error("proxy getPrototypeOf trap is not a function");
+        }
+        let prev = crate::object::js_implicit_this_set(handler);
+        let result = js_closure_call1(closure, target);
+        crate::object::js_implicit_this_set(prev);
+        let result_bits = result.to_bits();
+        if result_bits != TAG_NULL && !reflect_value_is_object(result) {
+            return throw_type_error("proxy getPrototypeOf trap returned non-object");
+        }
+        if crate::object::obj_value_no_extend(target) {
+            let actual = reflect_target_get_prototype_of(target);
+            if actual.to_bits() != result_bits {
+                return throw_type_error("proxy getPrototypeOf trap violates target invariant");
+            }
+        }
+        return result;
+    }
+    if !reflect_value_is_object(obj) {
         return reflect_non_object_typeerror("getPrototypeOf");
     }
     if lookup(obj).is_some() {
@@ -1657,243 +1724,6 @@ pub extern "C" fn js_reflect_set_prototype_of(target: f64, proto: f64) -> f64 {
     nanbox_bool(true)
 }
 
-#[no_mangle]
-pub extern "C" fn js_reflect_define_metadata(
-    key: f64,
-    value: f64,
-    target: f64,
-    property_key: f64,
-) -> f64 {
-    if let Some(metadata_key) = make_metadata_key(key, target, property_key) {
-        REFLECT_METADATA.with(|store| {
-            store.borrow_mut().insert(metadata_key, value);
-        });
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-#[no_mangle]
-pub extern "C" fn js_reflect_get_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(key_part) = metadata_key_part(key) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    let Some(property_key_part) = metadata_property_key_part(property_key) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    get_metadata_in_prototype_chain(&key_part, target, property_key_part.as_ref())
-}
-
-fn get_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    REFLECT_METADATA.with(|store| {
-        store
-            .borrow()
-            .get(&metadata_key)
-            .copied()
-            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn js_reflect_get_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    get_own_metadata(key, target, property_key)
-}
-
-#[no_mangle]
-pub extern "C" fn js_reflect_has_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(key_part) = metadata_key_part(key) else {
-        return f64::from_bits(TAG_FALSE);
-    };
-    let Some(property_key_part) = metadata_property_key_part(property_key) else {
-        return f64::from_bits(TAG_FALSE);
-    };
-    let found = get_metadata_in_prototype_chain(&key_part, target, property_key_part.as_ref())
-        .to_bits()
-        != TAG_UNDEFINED;
-    f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
-}
-
-#[no_mangle]
-pub extern "C" fn js_reflect_has_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
-        return f64::from_bits(TAG_FALSE);
-    };
-    let found = REFLECT_METADATA.with(|store| store.borrow().contains_key(&metadata_key));
-    f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
-}
-
-#[no_mangle]
-pub extern "C" fn js_reflect_get_metadata_keys(target: f64, property_key: f64) -> f64 {
-    metadata_keys_for(target, property_key, true)
-}
-
-#[no_mangle]
-pub extern "C" fn js_reflect_get_own_metadata_keys(target: f64, property_key: f64) -> f64 {
-    metadata_keys_for(target, property_key, false)
-}
-
-#[no_mangle]
-pub extern "C" fn js_reflect_delete_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
-        return f64::from_bits(TAG_FALSE);
-    };
-    let deleted = REFLECT_METADATA.with(|store| store.borrow_mut().remove(&metadata_key).is_some());
-    f64::from_bits(if deleted { TAG_TRUE } else { TAG_FALSE })
-}
-
-fn make_metadata_key(key: f64, target: f64, property_key: f64) -> Option<MetadataKey> {
-    Some(MetadataKey {
-        target_bits: target.to_bits(),
-        key: metadata_key_part(key)?,
-        property_key: metadata_property_key_part(property_key)?,
-    })
-}
-
-/// Resolve the `propertyKey` argument of a `Reflect.*Metadata(…)` call.
-///
-/// Returns:
-/// - `Some(None)` when the argument is `undefined` — class-level metadata.
-/// - `Some(Some(s))` for any value that coerces to a string.
-/// - `None` for values we explicitly refuse to key on (e.g. Symbols). The
-///   caller treats this as "skip the operation" so we never silently store
-///   metadata under an unstable bit-pattern key (#754 review).
-fn metadata_property_key_part(property_key: f64) -> Option<Option<String>> {
-    if property_key.to_bits() == TAG_UNDEFINED {
-        return Some(None);
-    }
-    metadata_key_part(property_key).map(Some)
-}
-
-/// Coerce a metadata key to a stable owned String, or return None if the
-/// value cannot be represented as a string key. Returning None makes the
-/// caller treat the op as a no-op rather than fabricating a fake key.
-///
-/// Symbol-keyed metadata is explicitly unsupported (see
-/// docs/src/language/decorators.md) — Symbols flow through here and return
-/// None rather than colliding on `toString()`'s `"Symbol()"` rendering.
-fn metadata_key_part(value: f64) -> Option<String> {
-    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
-        if ptr.is_null() {
-            return None;
-        }
-        if len == 0 {
-            return Some(String::new());
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-        return Some(String::from_utf8_lossy(bytes).into_owned());
-    }
-    if crate::value::is_js_handle(value) {
-        let str_ptr = crate::value::js_jsvalue_to_string(value);
-        if !str_ptr.is_null() {
-            let nb =
-                f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & 0x0000_FFFF_FFFF_FFFF));
-            if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(nb, &mut scratch) {
-                if !ptr.is_null() {
-                    if len == 0 {
-                        return Some(String::new());
-                    }
-                    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-                    return Some(String::from_utf8_lossy(bytes).into_owned());
-                }
-            }
-        }
-    }
-    // Numbers, booleans, null — coerce through the standard JS path so
-    // e.g. `0`, `true`, etc. produce deterministic string keys.
-    let coerced = crate::builtins::js_string_coerce(value);
-    if !coerced.is_null() {
-        let name_ptr =
-            unsafe { (coerced as *const u8).add(std::mem::size_of::<crate::StringHeader>()) };
-        let name_len = unsafe { (*coerced).byte_len as usize };
-        if let Ok(s) =
-            std::str::from_utf8(unsafe { std::slice::from_raw_parts(name_ptr, name_len) })
-        {
-            return Some(s.to_string());
-        }
-    }
-    None
-}
-
-fn get_metadata_in_prototype_chain(key: &str, target: f64, property_key: Option<&String>) -> f64 {
-    let mut current = target;
-    loop {
-        let current_bits = current.to_bits();
-        let found = REFLECT_METADATA.with(|store| {
-            store
-                .borrow()
-                .get(&MetadataKey {
-                    target_bits: current_bits,
-                    key: key.to_string(),
-                    property_key: property_key.cloned(),
-                })
-                .copied()
-        });
-        if let Some(value) = found {
-            return value;
-        }
-
-        let next = crate::object::js_object_get_prototype_of(current);
-        let next_bits = next.to_bits();
-        if next_bits == TAG_NULL || next_bits == TAG_UNDEFINED || next_bits == current_bits {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        current = next;
-    }
-}
-
-fn metadata_keys_for(target: f64, property_key: f64, include_prototypes: bool) -> f64 {
-    let Some(wanted_property_key) = metadata_property_key_part(property_key) else {
-        let empty = crate::array::js_array_alloc(0);
-        return f64::from_bits(POINTER_TAG | ((empty as u64) & POINTER_MASK));
-    };
-
-    let keys = REFLECT_METADATA.with(|store| {
-        let mut seen = HashSet::new();
-        let mut keys = Vec::new();
-        let store = store.borrow();
-        let mut current = target;
-
-        loop {
-            let current_bits = current.to_bits();
-            for metadata_key in store.keys() {
-                if metadata_key.target_bits == current_bits
-                    && metadata_key.property_key == wanted_property_key
-                    && seen.insert(metadata_key.key.clone())
-                {
-                    keys.push(metadata_key.key.clone());
-                }
-            }
-
-            if !include_prototypes {
-                break;
-            }
-
-            let next = crate::object::js_object_get_prototype_of(current);
-            let next_bits = next.to_bits();
-            if next_bits == TAG_NULL || next_bits == TAG_UNDEFINED || next_bits == current_bits {
-                break;
-            }
-            current = next;
-        }
-
-        keys
-    });
-
-    let mut values = Vec::with_capacity(keys.len());
-    for key in keys {
-        values.push(crate::string::js_string_new_sso(
-            key.as_ptr(),
-            key.len() as u32,
-        ));
-    }
-
-    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
-    f64::from_bits(POINTER_TAG | ((arr as u64) & POINTER_MASK))
-}
-
 /// Native trampoline backing the `revoke` function returned by
 /// `Proxy.revocable`. The closure captures the proxy value in capture slot 0;
 /// invoking it revokes that specific proxy. Idempotent — revoking an
@@ -1967,6 +1797,9 @@ static KEEP_REFLECT_SET_PROTOTYPE_OF: extern "C" fn(f64, f64) -> f64 = js_reflec
 // `receiver` arg (#2766) and must keep its new signature retained.
 #[used]
 static KEEP_REFLECT_GET: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_get;
+#[used]
+static KEEP_REFLECT_GET_OWN_PROPERTY_DESCRIPTOR: extern "C" fn(f64, f64) -> f64 =
+    js_reflect_get_own_property_descriptor;
 #[used]
 static KEEP_REFLECT_HAS: extern "C" fn(f64, f64) -> f64 = js_reflect_has;
 #[used]

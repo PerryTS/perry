@@ -2,6 +2,47 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1125 — feat(compile): --windows-subsystem override + tier-3 Apple link dedup + pointer-width portability
+
+Three related cross-compile / link improvements, bundled because they share the
+Windows/tvOS/watchOS build paths.
+
+**1. `--windows-subsystem` override (PE subsystem control).** `--target windows`
+previously always derived the PE subsystem from an import heuristic: a program that
+imports `perry/ui` links `/SUBSYSTEM:WINDOWS` (GUI), everything else links
+`/SUBSYSTEM:CONSOLE` so `console.log` reaches the terminal (the issue #120 regression
+guard). That left no way to ship a GUI app that renders its own window without importing
+`perry/ui` (e.g. a Bloom Engine game) — Windows would allocate a console window alongside
+it. New `--windows-subsystem auto|console|windows` flag plus a `perry.toml [windows]
+subsystem` fallback (the source that survives the `perry publish` worker round-trip, since
+the dev shell's flags don't transfer but perry.toml is uploaded with `--project`).
+Precedence: explicit CLI `console`/`windows` wins → else perry.toml → else the import
+heuristic. Unknown values are a hard error so a typo fails loudly instead of silently
+linking the wrong subsystem.
+
+- `types.rs`: new `CompileArgs.windows_subsystem` flag + `CompilationContext.windows_subsystem`.
+- `bootstrap.rs`: `validate_windows_subsystem` resolves CLI → perry.toml → `auto` in the
+  post-collect preflight chain.
+- `library_search.rs`: `windows_subsystem_needs_ui` folds the override into the
+  auto-detected `needs_ui` bool that `windows_pe_subsystem_flag` consumes.
+- `platform_cmd.rs`: link command threads the resolved override through.
+- `windows_link_tests.rs`: regression guards for auto/console/windows polarities and
+  composition with the min-windows-version suffix.
+
+**2. Tier-3 Apple (tvOS/watchOS) link dedup.** Those targets have no prebuilt std, so
+perry-runtime and perry-stdlib are each built with `-Zbuild-std` and each bundle their own
+copy of std's panic/unwind runtime (`__rust_drop_panic`, `__rust_foreign_exception`,
+`rust_begin_unwind`, `rust_eh_personality`) → `ld64.lld: duplicate symbol` at the final
+link. `strip_dedup.rs` now localizes those shims alongside the allocator shims, and
+`link/mod.rs` runs the strip over the stdlib archive and tier-3 native libs (gated to
+tvOS/watchOS; ios/macos use prebuilt std and never hit this).
+
+**3. Pointer-width portability.** Several GC/timer/typedarray plausibility checks compared
+allocation size against `1usize << 34`, which overflows on 32-bit targets (arm64_32 watchOS,
+wasm32). Switched the comparisons to `size as u64 > (1u64 << 34)` in `gc/barrier.rs`,
+`gc/copying.rs`, `timer.rs`, `typedarray/mod.rs`, and widened a `tm_gmtoff` cast to `i64`
+in `date.rs`.
+
 ## v0.5.1124 — fix(runtime): array boundary-index, sparse length, and non-integer keys
 
 Closes #4557 and #4543; supersedes #4585 and #4559 by combining both into one branch.

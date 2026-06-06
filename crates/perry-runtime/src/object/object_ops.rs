@@ -1009,6 +1009,18 @@ pub extern "C" fn js_object_define_property(
                 return obj_value;
             }
 
+            // Spec retention: redefining an existing own property keeps the
+            // attributes the descriptor omits (see the object-path comment).
+            let existing_attrs: Option<PropertyAttrs> =
+                if super::has_own_helpers::closure_own_key_present(closure_ptr, &key_rust) {
+                    Some(
+                        super::get_property_attrs(closure_ptr, &key_rust)
+                            .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
+                    )
+                } else {
+                    None
+                };
+
             let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
             let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
             let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
@@ -1059,9 +1071,12 @@ pub extern "C" fn js_object_define_property(
                     Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
                 }
             };
-            let writable = read_bool(b"writable").unwrap_or(has_accessor);
-            let enumerable = read_bool(b"enumerable").unwrap_or(false);
-            let configurable = read_bool(b"configurable").unwrap_or(false);
+            let writable = read_bool(b"writable")
+                .unwrap_or_else(|| existing_attrs.map(|a| a.writable()).unwrap_or(has_accessor));
+            let enumerable = read_bool(b"enumerable")
+                .unwrap_or_else(|| existing_attrs.map(|a| a.enumerable()).unwrap_or(false));
+            let configurable = read_bool(b"configurable")
+                .unwrap_or_else(|| existing_attrs.map(|a| a.configurable()).unwrap_or(false));
             set_property_attrs(
                 closure_ptr,
                 key_rust,
@@ -1219,6 +1234,23 @@ pub extern "C" fn js_object_define_property(
             return obj_value;
         }
 
+        // Spec (OrdinaryDefineOwnProperty / ValidateAndApplyPropertyDescriptor):
+        // when the property ALREADY EXISTS as an own property, attribute fields
+        // the descriptor omits must RETAIN the property's current values — they do
+        // NOT reset to the new-property `false` default. Capture the current
+        // attributes before any mutation below. `None` ⇒ the key is new, so the
+        // historical all-`false` (writable defaults to `has_accessor`) applies.
+        let existing_attrs: Option<PropertyAttrs> = key_rust.as_ref().and_then(|k| {
+            if super::obj_value_has_own_key(obj_value, key_value) {
+                Some(
+                    super::get_property_attrs(obj as usize, k)
+                        .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
+                )
+            } else {
+                None
+            }
+        });
+
         // Detect accessor descriptor (has `get` and/or `set`) vs. data descriptor (has `value`).
         // JS disallows mixing them, but we only check for `get`/`set` presence.
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
@@ -1296,13 +1328,18 @@ pub extern "C" fn js_object_define_property(
                 Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
             }
         };
-        // Accessor descriptors don't have `writable`; we leave it true so data
-        // lookups that happen before the accessor override don't accidentally
-        // reject a legitimate fallthrough write. Attrs default to false when
-        // omitted (JS spec).
-        let writable = read_bool(b"writable").unwrap_or(has_accessor);
-        let enumerable = read_bool(b"enumerable").unwrap_or(false);
-        let configurable = read_bool(b"configurable").unwrap_or(false);
+        // Omitted attributes default to the EXISTING property's value when
+        // redefining (spec retention, see `existing_attrs` above), else to
+        // `false` for a new property. Accessor descriptors don't carry
+        // `writable`; for a brand-new accessor we leave it `true` (via
+        // `has_accessor`) so data lookups before the accessor override don't
+        // reject a legitimate fallthrough write.
+        let writable = read_bool(b"writable")
+            .unwrap_or_else(|| existing_attrs.map(|a| a.writable()).unwrap_or(has_accessor));
+        let enumerable = read_bool(b"enumerable")
+            .unwrap_or_else(|| existing_attrs.map(|a| a.enumerable()).unwrap_or(false));
+        let configurable = read_bool(b"configurable")
+            .unwrap_or_else(|| existing_attrs.map(|a| a.configurable()).unwrap_or(false));
 
         if let Some(k) = key_rust {
             set_property_attrs(

@@ -601,6 +601,7 @@ impl SH for Expr {
             Expr::ReflectApply { func, this_arg, args, } => { tag(h, 438); func.as_ref().hash(h); this_arg.as_ref().hash(h); args.as_ref().hash(h); }
             Expr::ReflectConstruct { target, args, new_target } => { tag(h, 439); target.as_ref().hash(h); args.as_ref().hash(h); new_target.as_ref().hash(h); }
             Expr::ReflectDefineProperty { target, key, descriptor, } => { tag(h, 440); target.as_ref().hash(h); key.as_ref().hash(h); descriptor.as_ref().hash(h); }
+            Expr::ReflectGetOwnPropertyDescriptor { target, key } => { tag(h, 12505); target.as_ref().hash(h); key.as_ref().hash(h); }
             Expr::ReflectGetPrototypeOf(e) => { tag(h, 441); e.as_ref().hash(h); }
             Expr::ReflectSetPrototypeOf { target, proto } => { tag(h, 12230); target.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::ReflectIsExtensible(e) => { tag(h, 12048); e.as_ref().hash(h); }

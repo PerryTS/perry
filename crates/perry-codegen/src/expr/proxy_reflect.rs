@@ -534,6 +534,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &d)],
             ))
         }
+        Expr::ReflectGetOwnPropertyDescriptor { target, key } => {
+            let t = lower_expr(ctx, target)?;
+            let k = lower_expr(ctx, key)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_get_own_property_descriptor",
+                &[(DOUBLE, &t), (DOUBLE, &k)],
+            ))
+        }
         Expr::ReflectSetPrototypeOf { target, proto } => {
             // #2761: Reflect-specific boolean result (false on rejected change)
             // + TypeError on bad args, distinct from Object.setPrototypeOf.
