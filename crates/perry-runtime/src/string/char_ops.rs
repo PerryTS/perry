@@ -40,6 +40,19 @@ pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
     }
 }
 
+/// `end`-argument coercion for `slice`/`substring`. Per ECMA-262 §22.1.3.20 /
+/// §22.1.3.24, an `undefined` `end` (whether the arg is omitted or explicitly
+/// `undefined`) means "to the end of the string" — `len`, NOT `ToInteger(
+/// undefined) === 0`. So `"abc".substring(0, undefined)` is `"abc"`, not `""`.
+/// Any other value goes through the ordinary `ToIntegerOrInfinity`.
+#[no_mangle]
+pub extern "C" fn js_string_end_index_to_i32(value: f64, len: i32) -> i32 {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        return len;
+    }
+    js_string_index_to_i32(value)
+}
+
 /// Get character code at index (returns UTF-16 code unit, or NaN if out of bounds).
 /// Index is in UTF-16 code units (matches JS spec). For ASCII strings this is
 /// equivalent to byte indexing; for multi-byte UTF-8 we walk codepoints without

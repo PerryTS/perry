@@ -4431,48 +4431,17 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_function_has_instance_symbol(proto_obj);
         }
         "String" => {
-            // #4576-style: generic-`this` char-access methods + `Symbol.iterator`
-            // get real reflective thunks (RequireObjectCoercible + ToString) so
-            // `String.prototype.charAt.call(receiver, i)` works on a boxed/object
-            // receiver. The remaining methods stay no-op-backed (value-introspect
-            // only); their direct/dispatch paths are handled elsewhere.
+            // #4713: generic-`this` char-access methods + `Symbol.iterator`, and
+            // (this change) every other coercing method (slice/indexOf/split/
+            // replace/…) get real reflective thunks (RequireObjectCoercible +
+            // ToString) installed by `install_string_proto_methods` so
+            // `String.prototype.slice.call(receiver, …)` works on a boxed/object
+            // receiver. Only `toString` (and `valueOf`, via OBJECT_PROTO_METHODS)
+            // stay no-op-backed: they are brand-checked (must throw on a
+            // non-String `this`), not ToString-coercing, so a generic coercing
+            // thunk would be wrong.
             string_proto_thunks::install_string_proto_methods("String", proto_obj);
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("concat", 1),
-                    ("endsWith", 1),
-                    ("includes", 1),
-                    ("indexOf", 1),
-                    ("isWellFormed", 0),
-                    ("lastIndexOf", 1),
-                    ("localeCompare", 1),
-                    ("match", 1),
-                    ("matchAll", 1),
-                    ("normalize", 0),
-                    ("padEnd", 1),
-                    ("padStart", 1),
-                    ("repeat", 1),
-                    ("replace", 2),
-                    ("replaceAll", 2),
-                    ("search", 1),
-                    ("slice", 2),
-                    ("split", 2),
-                    ("startsWith", 1),
-                    ("substr", 2),
-                    ("substring", 2),
-                    ("toLocaleLowerCase", 0),
-                    ("toLocaleUpperCase", 0),
-                    ("toLowerCase", 0),
-                    ("toString", 0),
-                    ("toUpperCase", 0),
-                    ("toWellFormed", 0),
-                    ("trim", 0),
-                    ("trimEnd", 0),
-                    ("trimStart", 0),
-                    ("valueOf", 0),
-                ],
-            );
+            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Number" => {

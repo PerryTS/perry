@@ -2,6 +2,67 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1128 — fix(string): generic-`this` for all String.prototype methods + slice/substring index coercion (built-ins/String 60.2%→79.3%)
+
+Extends the generic-`this` work started in #4713 (which only covered the
+char-access methods `at`/`charAt`/`charCodeAt`/`codePointAt` +
+`[Symbol.iterator]`) to **every** coercing `String.prototype` method, and fixes
+a class of argument-coercion bugs on the slice/substring index path. Lifts the
+full `built-ins/String` test262 subset from **60.2% → 79.3%** parity
+(`pass 561→739`, `runtime-fail 343→171`), **zero regressions** (the four
+`prototype/trim/*` items flagged in the contended full sweep pass cleanly in
+isolation — transient auto-optimize/cargo contention, not real failures).
+
+Per ECMA-262 §22.1.3 each method begins with `RequireObjectCoercible(this)` then
+`ToString(this)`, so a boxed `new String("x")` / `new Boolean(false)` /
+`new Number(5)` / `{ toString }` receiver coerces, and a `null`/`undefined`/
+`Symbol` receiver throws a `TypeError`.
+
+Generic-`this` reflective methods (`crates/perry-runtime/src/object/string_proto_thunks.rs`):
+- One shared `string_proto_generic_thunk` now backs `concat`, `endsWith`,
+  `includes`, `indexOf`, `isWellFormed`, `lastIndexOf`, `localeCompare`,
+  `match`, `matchAll`, `normalize`, `padEnd`, `padStart`, `repeat`, `replace`,
+  `replaceAll`, `search`, `slice`, `split`, `startsWith`, `substr`, `substring`,
+  `toLocaleLowerCase`, `toLocaleUpperCase`, `toLowerCase`, `toUpperCase`,
+  `toWellFormed`, `trim`, `trimEnd`, `trimStart` (replacing the no-op thunks).
+  It reads its own method name off the closure, applies RequireObjectCoercible +
+  ToString to `this`, and re-dispatches to the typed string-method tower
+  (`js_native_call_method`) with the coerced string as receiver. `toString` /
+  `valueOf` stay no-op-backed — they are brand-checked, not ToString-coercing.
+- These methods are excluded from the HIR `.call`/`.apply` fold
+  (`is_string_prototype_generic_method`) so `String.prototype.slice.call(x, …)`
+  reaches the coercing thunk instead of being rewritten to `x.slice(…)` (which
+  dispatched on `x`'s own type and threw).
+
+Native dispatch arms (`crates/perry-runtime/src/object/native_call_method.rs`):
+- Added `padStart`/`padEnd`/`normalize`/`localeCompare`/`isWellFormed`/
+  `toWellFormed` arms (previously only a codegen fast path existed), so the
+  generic-`this` re-dispatch and `(s: any).<m>(…)` dynamic dispatch resolve to
+  the runtime helper instead of the TypeError catch-all.
+- `indexOf`/`lastIndexOf` now `ToString` the search argument
+  (`s.indexOf(undefined)` searches for `"undefined"`; `{toString}` objects
+  coerce) instead of returning `-1`.
+- Index/position args (`slice`/`substring`/`substr`/positions) route through
+  `js_string_index_to_i32` (full `ToIntegerOrInfinity`) instead of a raw
+  `v as i32`, so a boolean (`slice(false, true)` → `0,1`), numeric string, or
+  `{ valueOf }` index coerces per spec.
+- `split` passes a RegExp separator through as its raw pointer (so
+  `js_string_split_n` detects + delegates to the regex splitter),
+  ToString-coerces a primitive separator, and treats an `undefined`/omitted
+  separator as "whole string" (not a per-character split).
+- Receiver re-fetched (rooted) after any argument coercion that can run user
+  code, and the coerced needle is rooted, to stay GC-safe.
+
+Codegen + spec end-index fix (`crates/perry-codegen/src/lower_string_method.rs`,
+new `js_string_end_index_to_i32`):
+- `slice`/`substring` now coerce `start`/`end` via `js_string_index_to_i32`
+  rather than a raw `fptosi(DOUBLE → i32)` — `fptosi` is UB on `±Infinity`/`NaN`
+  and on x86 yields the integer-indefinite `i32::MIN`, so
+  `"abc".substring(Infinity, NaN)` wrongly clamped to `""`.
+- An `undefined` `end` (omitted **or** explicit) now means `len`, not
+  `ToInteger(undefined) === 0`, in both codegen and the runtime arm —
+  `s.substring(0, undefined) === s`.
+
 ## v0.5.1127 — fix(array): Array.prototype callback `thisArg`, array-like `ToLength`, spec op-order + 0-arg validation
 
 Closes a batch of `built-ins/Array/prototype/*` test262 gaps in the callback /

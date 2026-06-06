@@ -145,25 +145,36 @@ pub(crate) fn lower_string_method(
             } else {
                 lower_expr(ctx, &args[0])?
             };
-            // 2-arg form: explicit end. 0/1-arg form: end defaults to the
-            // string's length, computed inline (load i32 at offset 0).
+            // 2-arg form: explicit end (may be `undefined` → treated as `len`).
             let end_d = if args.len() == 2 {
-                lower_expr(ctx, &args[1])?
+                Some(lower_expr(ctx, &args[1])?)
             } else {
-                // Issue #214: route through SSO-safe unbox so the
-                // length read works for SHORT_STRING_TAG receivers.
-                // The inline `bits & POINTER_MASK_I64` would treat
-                // the SSO payload as a heap pointer.
-                let blk = ctx.block();
-                let recv_handle = unbox_str_handle(blk, &recv_box);
-                let len_ptr = blk.inttoptr(I64, &recv_handle);
-                let len_i32 = blk.load(I32, &len_ptr);
-                blk.sitofp(I32, &len_i32, DOUBLE)
+                None
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let end_i32 = blk.fptosi(DOUBLE, &end_d, I32);
+            // String length (i32 at header offset 0). Used as the default end
+            // (0/1-arg form, issue #316/#214) and the `undefined`-end fallback.
+            // Routed through SSO-safe unbox so SHORT_STRING_TAG receivers work.
+            let len_ptr = blk.inttoptr(I64, &recv_handle);
+            let len_i32 = blk.load(I32, &len_ptr);
+            // `ToIntegerOrInfinity` via the runtime helper, NOT a raw `fptosi`:
+            // `fptosi(±Infinity/NaN → i32)` is UB and on x86 yields the integer-
+            // indefinite `i32::MIN`, so `"abc".slice(Infinity)` / `.substring(
+            // Infinity, NaN)` clamped to the wrong end. The helper truncates and
+            // clamps ±Infinity to the i32 bounds (and runs ToNumber on a boxed
+            // arg), matching the char-access methods and the runtime dispatch arm.
+            let start_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &start_d)]);
+            // An explicit `undefined` end means `len` (not `ToInteger(undefined)
+            // === 0`), per spec — `s.substring(0, undefined) === s`.
+            let end_i32 = match &end_d {
+                Some(end_d) => blk.call(
+                    I32,
+                    "js_string_end_index_to_i32",
+                    &[(DOUBLE, end_d), (I32, &len_i32)],
+                ),
+                None => len_i32.clone(),
+            };
             let runtime_fn = if property == "slice" {
                 "js_string_slice"
             } else {

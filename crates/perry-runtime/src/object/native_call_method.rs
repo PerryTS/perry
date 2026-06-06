@@ -1678,15 +1678,16 @@ pub unsafe extern "C" fn js_native_call_method(
                     None
                 }
             };
+            // Index/position args follow `ToIntegerOrInfinity` (ToNumber, then
+            // truncate, clamping ±Infinity to i32 bounds) so a boolean
+            // (`slice(false, true)` → 0,1), numeric string (`"2"`), or `{ valueOf
+            // }` object coerces like Node instead of being read as NaN→0. Plain
+            // numbers/int32 take the fast path inside the helper. A missing arg
+            // is 0 (the per-method default end/length is applied by the arm).
             let arg_i32 = |i: usize| -> i32 {
-                if let Some(v) = arg_at(i) {
-                    if v.is_nan() || v.is_infinite() {
-                        0
-                    } else {
-                        v as i32
-                    }
-                } else {
-                    0
+                match arg_at(i) {
+                    Some(v) => crate::string::js_string_index_to_i32(v),
+                    None => 0,
                 }
             };
             match method_name {
@@ -1757,10 +1758,20 @@ pub unsafe extern "C" fn js_native_call_method(
                     return crate::string::js_string_char_code_at(s_ptr, arg_i32(0));
                 }
                 "slice" => {
+                    // Coerce args first (`arg_i32` may run user `valueOf` and move
+                    // the receiver under GC), then re-fetch the rooted receiver.
+                    // An `undefined` end means `len` (spec), not `ToInteger(0)`.
                     let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-                    let len_i32 = unsafe { (*s_ptr).byte_len } as i32;
-                    let end = if args_len >= 2 { arg_i32(1) } else { len_i32 };
-                    let result = crate::string::js_string_slice(s_ptr, start, end);
+                    let end_arg = match arg_at(1) {
+                        Some(v) if !JSValue::from_bits(v.to_bits()).is_undefined() => {
+                            Some(arg_i32(1))
+                        }
+                        _ => None,
+                    };
+                    let s = receiver_string();
+                    let len_i32 = unsafe { (*s).byte_len } as i32;
+                    let end = end_arg.unwrap_or(len_i32);
+                    let result = crate::string::js_string_slice(s, start, end);
                     if result.is_null() {
                         return f64::from_bits(JSValue::undefined().bits());
                     }
@@ -1844,27 +1855,38 @@ pub unsafe extern "C" fn js_native_call_method(
                     return f64::from_bits(JSValue::string_ptr(result).bits());
                 }
                 "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" => {
-                    let arg_str = |i: usize| -> *const crate::StringHeader {
-                        if i < args_len && !args_ptr.is_null() {
-                            let v = unsafe { *args_ptr.add(i) };
-                            crate::value::js_get_string_pointer_unified(v)
-                                as *const crate::StringHeader
-                        } else {
-                            std::ptr::null()
-                        }
-                    };
                     let search_arg_to_string = |method_id: i32| -> *const crate::StringHeader {
                         let value = arg_at(0)
                             .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
                         crate::string::js_string_search_value_to_string(value, method_id)
                             as *const crate::StringHeader
                     };
-                    let needle = match method_name {
+                    let needle_raw = match method_name {
                         "includes" => search_arg_to_string(0),
                         "startsWith" => search_arg_to_string(1),
                         "endsWith" => search_arg_to_string(2),
-                        _ => arg_str(0),
+                        // indexOf / lastIndexOf apply `ToString(searchString)` with
+                        // no RegExp TypeError: `s.indexOf(undefined)` searches for
+                        // "undefined", `s.indexOf({toString(){…}})` uses the result.
+                        _ => {
+                            let value = arg_at(0)
+                                .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                            crate::value::js_jsvalue_to_string(value) as *const crate::StringHeader
+                        }
                     };
+                    // ToString above may run user code (object `toString`/`valueOf`)
+                    // and move either string under GC — root the needle and re-read
+                    // the receiver before the byte-level helpers below.
+                    let needle_h = if needle_raw.is_null() {
+                        None
+                    } else {
+                        Some(root_scope.root_string_ptr(needle_raw))
+                    };
+                    let needle = needle_h
+                        .as_ref()
+                        .map(|h| h.get_raw_const_ptr::<crate::StringHeader>())
+                        .unwrap_or(std::ptr::null());
+                    let s_ptr = receiver_string();
                     // Integer-returning methods MUST return raw `i as f64` (not
                     // NaN-boxed INT32_TAG) — otherwise downstream comparisons
                     // like `idx < url.length` fail because NaN-boxed values
@@ -1940,10 +1962,18 @@ pub unsafe extern "C" fn js_native_call_method(
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 "substring" => {
-                    let len_i32 = unsafe { (*s_ptr).byte_len } as i32;
+                    // An `undefined` end means `len` (spec), not `ToInteger(0)`.
                     let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-                    let end = if args_len >= 2 { arg_i32(1) } else { len_i32 };
-                    let r = crate::string::js_string_substring(s_ptr, start, end);
+                    let end_arg = match arg_at(1) {
+                        Some(v) if !JSValue::from_bits(v.to_bits()).is_undefined() => {
+                            Some(arg_i32(1))
+                        }
+                        _ => None,
+                    };
+                    let s = receiver_string();
+                    let len_i32 = unsafe { (*s).byte_len } as i32;
+                    let end = end_arg.unwrap_or(len_i32);
+                    let r = crate::string::js_string_substring(s, start, end);
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 "substr" => {
@@ -1951,7 +1981,8 @@ pub unsafe extern "C" fn js_native_call_method(
                     // 2nd arg is a length. i32::MIN = "length omitted" (#2897).
                     let start = if args_len >= 1 { arg_i32(0) } else { 0 };
                     let length = if args_len >= 2 { arg_i32(1) } else { i32::MIN };
-                    let r = crate::string::js_string_substr(s_ptr, start, length);
+                    let s = receiver_string();
+                    let r = crate::string::js_string_substr(s, start, length);
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 "toLocaleLowerCase" => {
@@ -1975,7 +2006,6 @@ pub unsafe extern "C" fn js_native_call_method(
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 "split" => {
-                    let sep_handle = root_string_arg_handle(&root_scope, &arg_handles, 0);
                     // Issue #567: optional 2nd arg `limit`.
                     let limit = if let Some(v) = arg_at(1) {
                         let jsv = JSValue::from_bits(v.to_bits());
@@ -1999,11 +2029,46 @@ pub unsafe extern "C" fn js_native_call_method(
                     } else {
                         -1
                     };
-                    let sep = sep_handle
-                        .as_ref()
-                        .map(|handle| handle.get_raw_const_ptr::<crate::StringHeader>())
-                        .unwrap_or(std::ptr::null());
-                    let arr = crate::string::js_string_split_n(receiver_string(), sep, limit);
+                    // `split(undefined)` (or no separator) yields the whole string
+                    // as a single element — NOT a per-character split (which is what
+                    // an empty-string separator does), and NOT [] (`limit === 0`).
+                    let sep_undefined = match arg_at(0) {
+                        None => true,
+                        Some(v) => JSValue::from_bits(v.to_bits()).is_undefined(),
+                    };
+                    if sep_undefined {
+                        let s = receiver_string();
+                        let arr = if limit == 0 {
+                            crate::array::js_array_alloc(0)
+                        } else {
+                            let a = crate::array::js_array_alloc(0);
+                            crate::array::js_array_push_f64(
+                                a,
+                                f64::from_bits(
+                                    JSValue::string_ptr(s as *mut crate::StringHeader).bits(),
+                                ),
+                            )
+                        };
+                        return f64::from_bits(JSValue::pointer(arr as *mut u8).bits());
+                    }
+                    // A RegExp separator must be passed through as its raw pointer so
+                    // `js_string_split_n` detects it (by GC header) and delegates to
+                    // the regex splitter. Any other value is ToString-coerced.
+                    let v0 = arg_at(0).unwrap();
+                    let jv0 = JSValue::from_bits(v0.to_bits());
+                    let sep_is_regex =
+                        jv0.is_pointer() && crate::regex::is_regex_pointer(jv0.as_pointer::<u8>());
+                    let (sep, _sep_h) = if sep_is_regex {
+                        (jv0.as_pointer::<crate::StringHeader>(), None)
+                    } else {
+                        let coerced =
+                            crate::builtins::js_string_coerce(v0) as *const crate::StringHeader;
+                        let h = root_scope.root_string_ptr(coerced);
+                        let p = h.get_raw_const_ptr::<crate::StringHeader>();
+                        (p, Some(h))
+                    };
+                    let s = receiver_string();
+                    let arr = crate::string::js_string_split_n(s, sep, limit);
                     return f64::from_bits(JSValue::pointer(arr as *mut u8).bits());
                 }
                 "replace" | "replaceAll" => {
@@ -2109,6 +2174,66 @@ pub unsafe extern "C" fn js_native_call_method(
                             repl_str(),
                         )
                     };
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                // Methods with only a codegen fast path (no native arm) — needed
+                // so generic-`this` reflective calls (`String.prototype.padStart.
+                // call(boxed, …)`, routed through `string_proto_thunks` after
+                // coercing `this` to a string) and `(s: any).padStart(…)` dynamic
+                // dispatch resolve to the runtime helper instead of the TypeError
+                // catch-all. Argument coercion mirrors `lower_string_method.rs`.
+                "padStart" | "padEnd" => {
+                    let target_len = arg_at(0).unwrap_or(0.0);
+                    // ToString(fillString) when present and not undefined; absent /
+                    // undefined leaves a null ptr so the helper defaults to " ".
+                    let pad = match arg_at(1) {
+                        Some(v) if !JSValue::from_bits(v.to_bits()).is_undefined() => {
+                            crate::builtins::js_string_coerce(v) as *const crate::StringHeader
+                        }
+                        _ => std::ptr::null(),
+                    };
+                    let s = receiver_string();
+                    let r = if method_name == "padStart" {
+                        crate::string::js_string_pad_start(s, target_len, pad)
+                    } else {
+                        crate::string::js_string_pad_end(s, target_len, pad)
+                    };
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "normalize" => {
+                    let form =
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                    let r = crate::string::js_string_normalize(receiver_string(), form);
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                "localeCompare" => {
+                    // ToString(that) is required even for undefined ("undefined").
+                    // Root it — `js_string_validate_locales` below may allocate.
+                    let other_raw = crate::builtins::js_string_coerce(
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
+                    );
+                    let other_h = root_scope.root_string_ptr(other_raw);
+                    // `locales` (2nd arg) validated for its RangeError side effect.
+                    if let Some(loc) = arg_at(1) {
+                        let jv = JSValue::from_bits(loc.to_bits());
+                        if !jv.is_undefined() {
+                            crate::string::js_string_validate_locales(loc);
+                        }
+                    }
+                    let s = receiver_string();
+                    let other = other_h.get_raw_const_ptr::<crate::StringHeader>();
+                    // Returns a plain f64 (-1/0/1) — NOT NaN-tagged.
+                    return if let Some(opts) = arg_at(2) {
+                        crate::string::js_string_locale_compare_opts(s, other, opts)
+                    } else {
+                        crate::string::js_string_locale_compare(s, other)
+                    };
+                }
+                "isWellFormed" => {
+                    return crate::string::js_string_is_well_formed(receiver_string());
+                }
+                "toWellFormed" => {
+                    let r = crate::string::js_string_to_well_formed(receiver_string());
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 _ => {} // not a handled string method — fall through to TypeError catch-all

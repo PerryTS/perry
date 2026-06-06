@@ -1139,7 +1139,45 @@ fn is_string_prototype_generic_method(recv: &ast::Expr, method: &str) -> bool {
         return false;
     };
     base.sym.as_ref() == "String"
-        && matches!(method, "at" | "charAt" | "charCodeAt" | "codePointAt")
+        && matches!(
+            method,
+            // Char-access (dedicated thunks) + every coercing method installed
+            // as the generic `string_proto_generic_thunk`. Keep in lock-step with
+            // `string_proto_thunks::GENERIC_STRING_PROTO_METHODS`. Excluded:
+            // `toString`/`valueOf` (brand-checked, not ToString-coercing).
+            "at" | "charAt"
+                | "charCodeAt"
+                | "codePointAt"
+                | "concat"
+                | "endsWith"
+                | "includes"
+                | "indexOf"
+                | "isWellFormed"
+                | "lastIndexOf"
+                | "localeCompare"
+                | "match"
+                | "matchAll"
+                | "normalize"
+                | "padEnd"
+                | "padStart"
+                | "repeat"
+                | "replace"
+                | "replaceAll"
+                | "search"
+                | "slice"
+                | "split"
+                | "startsWith"
+                | "substr"
+                | "substring"
+                | "toLocaleLowerCase"
+                | "toLocaleUpperCase"
+                | "toLowerCase"
+                | "toUpperCase"
+                | "toWellFormed"
+                | "trim"
+                | "trimEnd"
+                | "trimStart"
+        )
 }
 
 pub(super) fn try_builtin_prototype_method_apply_call(

@@ -50,7 +50,101 @@ pub(super) fn install_string_proto_methods(
         1,
     );
     install_string_iterator_symbol(proto_obj);
+    install_generic_string_proto_methods(proto_obj);
     true
+}
+
+/// Every other `String.prototype` method that is RequireObjectCoercible +
+/// ToString on `this` (i.e. all of them except the brand-checked `toString`/
+/// `valueOf`). Each is installed as the single `string_proto_generic_thunk`,
+/// which reads its own method name off the closure and re-dispatches to the
+/// typed string-method tower after coercing `this`. The `(name, spec_length)`
+/// pairs mirror the per-method `.length` (read back by `.length` /
+/// `getOwnPropertyDescriptor`). Kept in lock-step with the HIR
+/// `.call`/`.apply` fold exclusion (`is_string_prototype_generic_method`) so
+/// the reflective path reaches the thunk instead of being folded to
+/// `receiver.<m>()` (which would dispatch on the receiver's own type).
+const GENERIC_STRING_PROTO_METHODS: &[(&str, u32)] = &[
+    ("concat", 1),
+    ("endsWith", 1),
+    ("includes", 1),
+    ("indexOf", 1),
+    ("isWellFormed", 0),
+    ("lastIndexOf", 1),
+    ("localeCompare", 1),
+    ("match", 1),
+    ("matchAll", 1),
+    ("normalize", 0),
+    ("padEnd", 1),
+    ("padStart", 1),
+    ("repeat", 1),
+    ("replace", 2),
+    ("replaceAll", 2),
+    ("search", 1),
+    ("slice", 2),
+    ("split", 2),
+    ("startsWith", 1),
+    ("substr", 2),
+    ("substring", 2),
+    ("toLocaleLowerCase", 0),
+    ("toLocaleUpperCase", 0),
+    ("toLowerCase", 0),
+    ("toUpperCase", 0),
+    ("toWellFormed", 0),
+    ("trim", 0),
+    ("trimEnd", 0),
+    ("trimStart", 0),
+];
+
+fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
+    for (name, spec_length) in GENERIC_STRING_PROTO_METHODS.iter().copied() {
+        // `call_fixed_arity = 0` → the thunk receives all args as a rest array.
+        super::global_this::install_proto_method_rest_with_length(
+            proto_obj,
+            name,
+            string_proto_generic_thunk as *const u8,
+            spec_length,
+            0,
+        );
+    }
+}
+
+/// Generic `String.prototype` method thunk. Performs `RequireObjectCoercible(
+/// this)` + `ToString(this)` then re-dispatches to the typed string-method
+/// tower (`js_native_call_method`) with the coerced string as the receiver, so
+/// a boxed `new String("x")` / `new Boolean(false)` / `{ toString }` receiver
+/// works and a `null`/`undefined`/`Symbol` receiver throws a `TypeError`. One
+/// thunk backs every method in `GENERIC_STRING_PROTO_METHODS`; it reads its
+/// own method name off the closure. Args arrive as a rest array.
+pub(super) extern "C" fn string_proto_generic_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    // Copy the method name to an owned String — `string_this_or_throw` may run
+    // user `toString`/`valueOf` (allocates, can move the closure's name string
+    // under GC), so a borrow into the header would dangle.
+    let name_val = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
+    let name_hdr = crate::builtins::js_string_coerce(name_val);
+    let name: String = unsafe { super::has_own_helpers::str_from_string_header(name_hdr) }
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let s = string_this_or_throw(&name);
+    let s_val = f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
+    let args = super::global_this::global_this_rest_array_values(rest);
+    let (args_ptr, args_len) = if args.is_empty() {
+        (std::ptr::null::<f64>(), 0)
+    } else {
+        (args.as_ptr(), args.len())
+    };
+    unsafe {
+        super::native_call_method::js_native_call_method(
+            s_val,
+            name.as_ptr() as *const i8,
+            name.len(),
+            args_ptr,
+            args_len,
+        )
+    }
 }
 
 /// Install `String.prototype[Symbol.iterator]` as a real, reflectable function
