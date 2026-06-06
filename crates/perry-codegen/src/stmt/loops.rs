@@ -331,8 +331,10 @@ pub(crate) fn lower_for(
     let consumed_label = ctx.pending_label.take();
     let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
-        ctx.label_targets
-            .insert(lbl.clone(), (update_label.clone(), exit_label.clone(), ctx.try_depth));
+        ctx.label_targets.insert(
+            lbl.clone(),
+            (update_label.clone(), exit_label.clone(), ctx.try_depth),
+        );
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
@@ -1037,8 +1039,10 @@ pub(crate) fn lower_while(
     let consumed_label = ctx.pending_label.take();
     let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
-        ctx.label_targets
-            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone(), ctx.try_depth));
+        ctx.label_targets.insert(
+            lbl.clone(),
+            (cond_label.clone(), exit_label.clone(), ctx.try_depth),
+        );
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
@@ -1099,8 +1103,10 @@ pub(crate) fn lower_do_while(
     let consumed_label = ctx.pending_label.take();
     let previous_region_id = ctx.active_region_id.clone();
     if let Some(ref lbl) = consumed_label {
-        ctx.label_targets
-            .insert(lbl.clone(), (cond_label.clone(), exit_label.clone(), ctx.try_depth));
+        ctx.label_targets.insert(
+            lbl.clone(),
+            (cond_label.clone(), exit_label.clone(), ctx.try_depth),
+        );
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
