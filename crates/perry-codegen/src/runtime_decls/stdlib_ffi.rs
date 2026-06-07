@@ -1805,6 +1805,17 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);
     // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
     module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64]);
+    // Static accessors register on the class constructor (CLASS_STATIC_ACCESSORS).
+    module.declare_function(
+        "js_register_class_static_getter",
+        VOID,
+        &[I64, I64, I64, I64],
+    );
+    module.declare_function(
+        "js_register_class_static_setter",
+        VOID,
+        &[I64, I64, I64, I64],
+    );
     module.declare_function(
         "js_register_class_method",
         VOID,

@@ -69,6 +69,16 @@ pub unsafe extern "C" fn js_object_get_property_key(obj_value: f64, key_value: f
     if key_str.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // Class constructor/prototype refs are INT32-tagged, not real
+    // `ObjectHeader`s — pass their raw bits into the by-name dispatch (which has
+    // a dedicated class-ref branch handling static accessors, static methods,
+    // prototype methods, etc.) rather than null'ing them via extract_obj_ptr.
+    // Mirrors the set side (`js_object_set_property_key`).
+    if super::class_ref_id(obj_value).is_some() {
+        return f64::from_bits(
+            js_object_get_field_by_name(obj_value.to_bits() as *const ObjectHeader, key_str).bits(),
+        );
+    }
     let obj = extract_obj_ptr(obj_value);
     if obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

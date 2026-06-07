@@ -2972,6 +2972,79 @@ pub unsafe extern "C" fn js_register_class_setter(
     VTABLE_GEN.fetch_add(1, Ordering::Release);
 }
 
+/// Register a `static get name()` accessor on the class *constructor*
+/// (`CLASS_STATIC_ACCESSORS`), not the instance vtable — a static accessor is
+/// an own property of `C`, reachable via `C.name` / `C[name]`, and must NOT
+/// appear on `C.prototype` or instances. The read/write dispatch already
+/// consults `CLASS_STATIC_ACCESSORS` (`class_static_accessor_getter_value` /
+/// `class_static_accessor_setter_apply`); this populates it.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_static_getter(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    func_ptr: i64,
+) {
+    register_class_static_accessor_half(class_id, name_ptr, name_len, func_ptr, true);
+}
+
+/// Register a `static set name(v)` accessor. See `js_register_class_static_getter`.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_static_setter(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    func_ptr: i64,
+) {
+    register_class_static_accessor_half(class_id, name_ptr, name_len, func_ptr, false);
+}
+
+// These two are only ever called from codegen-emitted module-init IR (no Rust
+// caller), so the auto-optimize whole-program-LLVM build would dead-strip them
+// without an anchor. Pin each via a `#[used]` static (mirrors node_v8.rs).
+#[used]
+static KEEP_REGISTER_STATIC_GETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
+    js_register_class_static_getter;
+#[used]
+static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
+    js_register_class_static_setter;
+
+unsafe fn register_class_static_accessor_half(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    func_ptr: i64,
+    is_getter: bool,
+) {
+    // Empty-string keys (`static get ''()`) are legal — admit `name_len == 0`
+    // as long as the pointer is non-null.
+    let name = if name_ptr.is_null() || name_len < 0 {
+        return;
+    } else {
+        match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
+            Ok(s) => s.to_string(),
+            Err(_) => return,
+        }
+    };
+    let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    let entry = guard
+        .as_mut()
+        .unwrap()
+        .entry(class_id as u32)
+        .or_default()
+        .entry(name)
+        .or_insert((0, 0));
+    if is_getter {
+        entry.0 = func_ptr as usize;
+    } else {
+        entry.1 = func_ptr as usize;
+    }
+    VTABLE_GEN.fetch_add(1, Ordering::Release);
+}
+
 // ============================================================================
 // Per-callsite-keyed inline cache for vtable method dispatch.
 //

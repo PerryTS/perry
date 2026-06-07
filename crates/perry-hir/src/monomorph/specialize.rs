@@ -217,6 +217,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                 )
             })
             .collect(),
+        static_accessor_names: class.static_accessor_names.clone(),
         static_fields: class.static_fields.clone(),
         static_methods: class.static_methods.clone(),
         computed_members: class

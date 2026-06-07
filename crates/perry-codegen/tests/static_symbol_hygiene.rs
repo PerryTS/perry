@@ -102,6 +102,7 @@ fn class_with_static(id: u32, value: f64) -> Class {
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
+        static_accessor_names: Vec::new(),
         computed_members: Vec::new(),
         static_fields: Vec::new(),
         static_methods: vec![static_method(id + 100, value)],

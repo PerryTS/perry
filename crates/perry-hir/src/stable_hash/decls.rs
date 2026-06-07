@@ -23,6 +23,7 @@ impl SH for Class {
             methods,
             getters,
             setters,
+            static_accessor_names,
             static_fields,
             static_methods,
             computed_members,
@@ -42,6 +43,7 @@ impl SH for Class {
         methods.hash(h);
         getters.hash(h);
         setters.hash(h);
+        static_accessor_names.hash(h);
         static_fields.hash(h);
         static_methods.hash(h);
         computed_members.hash(h);

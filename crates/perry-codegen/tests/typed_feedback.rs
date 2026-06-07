@@ -88,6 +88,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
+        static_accessor_names: Vec::new(),
         computed_members: Vec::new(),
         static_fields: Vec::new(),
         static_methods: Vec::new(),

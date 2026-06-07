@@ -184,10 +184,19 @@ pub struct Class {
     pub constructor: Option<Function>,
     /// Instance methods
     pub methods: Vec<Function>,
-    /// Getter methods (property_name -> function that returns the value)
+    /// Instance getter methods (property_name -> function that returns the value)
     pub getters: Vec<(String, Function)>,
-    /// Setter methods (property_name -> function that takes the value)
+    /// Instance setter methods (property_name -> function that takes the value)
     pub setters: Vec<(String, Function)>,
+    /// Property names of accessors that are `static` (`static get x()` /
+    /// `static set x(v)`). The accessor functions themselves live in `getters`
+    /// / `setters` alongside instance accessors (so every IR pass — async
+    /// lowering, finally-inline, generator id-scan, inlining — processes their
+    /// bodies uniformly); codegen consults this set to register them on the
+    /// class constructor (`CLASS_STATIC_ACCESSORS`) rather than the instance
+    /// vtable, since a static accessor is an own property of `C`, not of
+    /// `C.prototype`/instances.
+    pub static_accessor_names: Vec<String>,
     /// Static fields
     pub static_fields: Vec<ClassField>,
     /// Static methods

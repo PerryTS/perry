@@ -406,6 +406,7 @@ pub fn lower_class_decl(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    let mut static_accessor_names: Vec<String> = Vec::new();
     let mut computed_members = Vec::new();
     let mut seen_generic_computed_member = false;
 
@@ -593,6 +594,9 @@ pub fn lower_class_decl(
                                 ctx, method, &prop_name,
                             )?);
                         }
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
@@ -604,6 +608,9 @@ pub fn lower_class_decl(
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,
                             )?);
+                        }
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
                         }
                         setters.push((prop_name, func));
                     }
@@ -1046,6 +1053,7 @@ pub fn lower_class_decl(
         methods,
         getters,
         setters,
+        static_accessor_names,
         static_fields,
         static_methods,
         computed_members,
@@ -1201,6 +1209,7 @@ pub fn lower_class_from_ast(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    let mut static_accessor_names: Vec<String> = Vec::new();
     let mut computed_members = Vec::new();
     let mut seen_generic_computed_member = false;
 
@@ -1246,6 +1255,9 @@ pub fn lower_class_from_ast(
                                 ctx, method, &prop_name,
                             )?);
                         }
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
@@ -1256,6 +1268,9 @@ pub fn lower_class_from_ast(
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,
                             )?);
+                        }
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
                         }
                         setters.push((prop_name, func));
                     }
@@ -1419,6 +1434,7 @@ pub fn lower_class_from_ast(
         methods,
         getters,
         setters,
+        static_accessor_names,
         static_fields,
         static_methods,
         computed_members,

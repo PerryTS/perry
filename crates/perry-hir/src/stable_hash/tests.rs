@@ -269,6 +269,7 @@ fn module_metadata_affects_hash() {
         methods: vec![],
         getters: vec![],
         setters: vec![],
+        static_accessor_names: vec![],
         static_fields: vec![],
         static_methods: vec![],
         computed_members: vec![],

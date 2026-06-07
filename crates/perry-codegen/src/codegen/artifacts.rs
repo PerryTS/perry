@@ -226,6 +226,34 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         for (prop, getter_fn) in &class.getters {
             let mut renamed = getter_fn.clone();
             renamed.name = format!("__get_{}", prop);
+            // Static accessors compile with the static calling convention (no
+            // `this` param; `this` is the implicit-this slot the constructor-ref
+            // dispatch sets) so they match the CLASS_STATIC_ACCESSORS reader,
+            // exactly like static computed accessors below.
+            if class.static_accessor_names.iter().any(|n| n == prop) {
+                compile_static_method(
+                    llmod,
+                    class,
+                    &renamed,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_prefix,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                )
+                .with_context(|| format!("lowering static getter '{}::{}'", class.name, prop))?;
+                continue;
+            }
             compile_method(
                 llmod,
                 class,
@@ -251,6 +279,30 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         for (prop, setter_fn) in &class.setters {
             let mut renamed = setter_fn.clone();
             renamed.name = format!("__set_{}", prop);
+            if class.static_accessor_names.iter().any(|n| n == prop) {
+                compile_static_method(
+                    llmod,
+                    class,
+                    &renamed,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_prefix,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                )
+                .with_context(|| format!("lowering static setter '{}::{}'", class.name, prop))?;
+                continue;
+            }
             compile_method(
                 llmod,
                 class,
