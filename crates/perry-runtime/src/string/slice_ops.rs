@@ -165,6 +165,33 @@ pub extern "C" fn js_string_substr(
 static KEEP_SUBSTR: extern "C" fn(*const StringHeader, i32, i32) -> *mut StringHeader =
     js_string_substr;
 
+/// JS `TrimString` whitespace set (ECMA-262 §22.1.3.32, `WhiteSpace` +
+/// `LineTerminator`). Differs from Rust's `char::is_whitespace` (Unicode
+/// `White_Space`): JS *includes* U+FEFF (`<ZWNBSP>` / BOM) and *excludes*
+/// U+0085 (NEL), so `str::trim()` both under- and over-trims for JS.
+#[inline]
+pub(crate) fn is_js_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0009}'        // TAB
+        | '\u{000A}'      // LF  <LineTerminator>
+        | '\u{000B}'      // VT
+        | '\u{000C}'      // FF
+        | '\u{000D}'      // CR  <LineTerminator>
+        | '\u{0020}'      // SPACE
+        | '\u{00A0}'      // NBSP
+        | '\u{1680}'      // OGHAM SPACE MARK
+        | '\u{2000}'
+            ..='\u{200A}' // EN QUAD .. HAIR SPACE
+        | '\u{2028}'      // LINE SEPARATOR      <LineTerminator>
+        | '\u{2029}'      // PARAGRAPH SEPARATOR <LineTerminator>
+        | '\u{202F}'      // NARROW NO-BREAK SPACE
+        | '\u{205F}'      // MEDIUM MATHEMATICAL SPACE
+        | '\u{3000}'      // IDEOGRAPHIC SPACE
+        | '\u{FEFF}' // ZERO WIDTH NO-BREAK SPACE / BOM
+    )
+}
+
 /// Trim whitespace from both ends of a string
 #[no_mangle]
 pub extern "C" fn js_string_trim(s: *const StringHeader) -> *mut StringHeader {
@@ -173,7 +200,7 @@ pub extern "C" fn js_string_trim(s: *const StringHeader) -> *mut StringHeader {
     }
 
     let str_data = string_as_str(s);
-    let trimmed = str_data.trim();
+    let trimmed = str_data.trim_matches(is_js_whitespace);
     js_string_from_str(trimmed)
 }
 
@@ -184,7 +211,7 @@ pub extern "C" fn js_string_trim_start(s: *const StringHeader) -> *mut StringHea
         return js_string_from_bytes(ptr::null(), 0);
     }
     let str_data = string_as_str(s);
-    js_string_from_str(str_data.trim_start())
+    js_string_from_str(str_data.trim_start_matches(is_js_whitespace))
 }
 
 /// Trim whitespace from end of a string (trimEnd/trimRight)
@@ -194,7 +221,7 @@ pub extern "C" fn js_string_trim_end(s: *const StringHeader) -> *mut StringHeade
         return js_string_from_bytes(ptr::null(), 0);
     }
     let str_data = string_as_str(s);
-    js_string_from_str(str_data.trim_end())
+    js_string_from_str(str_data.trim_end_matches(is_js_whitespace))
 }
 
 /// Convert string to lowercase

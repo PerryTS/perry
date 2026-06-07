@@ -117,3 +117,109 @@ pub extern "C" fn js_string_split_n(
 
     arr
 }
+
+/// `ToUint32(ToNumber(value))` (ECMA-262 §7.1.7). Runs the full `ToNumber`
+/// (so a boxed `{ valueOf }` / `{ toString }` argument is coerced and may
+/// throw), then reduces mod 2^32. `NaN`/`±Infinity`/`0` → 0.
+fn split_limit_to_uint32(boxed: f64) -> u32 {
+    let n = crate::builtins::js_number_coerce(boxed);
+    if !n.is_finite() || n == 0.0 {
+        return 0;
+    }
+    n.trunc().rem_euclid(4_294_967_296.0) as u32
+}
+
+/// Build the single-element array `[S]` (the `separator === undefined` result
+/// of `String.prototype.split`).
+fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
+    const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let arr = crate::array::js_array_alloc(1);
+    unsafe {
+        (*arr).length = 1;
+        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let nanboxed = STRING_TAG | (s as u64 & POINTER_MASK);
+        // GC_STORE_AUDIT(BARRIERED): slot recorded via note_array_slot.
+        std::ptr::write(elements_ptr, f64::from_bits(nanboxed));
+        crate::array::note_array_slot(arr, 0, nanboxed);
+    }
+    arr
+}
+
+/// `String.prototype.split(separator, limit)` (ECMA-262 §22.1.3.21) with full
+/// argument coercion. `s` is the already-`ToString`-coerced `this`;
+/// `separator` and `limit` arrive as boxed `JSValue`s. The codegen fast path
+/// and the runtime dispatch arm both route here so coercion is uniform:
+///   - a RegExp separator takes over via `RegExp[Symbol.split]` (detected by
+///     the regex-pointer registry), with `ToUint32(limit)`;
+///   - `lim = ToUint32(limit)` is computed BEFORE `ToString(separator)` (spec
+///     order — either may run user `valueOf`/`toString` and throw);
+///   - `limit === 0` ⇒ empty array;
+///   - `separator === undefined` ⇒ single-element `[S]`;
+///   - otherwise split by `ToString(separator)`, capped at `lim`.
+#[no_mangle]
+pub extern "C" fn js_string_split_value(
+    s: *const StringHeader,
+    separator: f64,
+    limit: f64,
+) -> *mut ArrayHeader {
+    use crate::value::JSValue;
+    let sep_jv = JSValue::from_bits(separator.to_bits());
+    let lim_jv = JSValue::from_bits(limit.to_bits());
+
+    // Step 2: a separator with a `[Symbol.split]` method (a RegExp) takes over.
+    if sep_jv.is_pointer() {
+        let ptr = crate::value::js_nanbox_get_pointer(separator) as *const u8;
+        if crate::regex::is_regex_pointer(ptr) {
+            let limit_i32 = if lim_jv.is_undefined() {
+                -1
+            } else {
+                let u = split_limit_to_uint32(limit);
+                if u > i32::MAX as u32 {
+                    i32::MAX
+                } else {
+                    u as i32
+                }
+            };
+            return crate::regex::js_string_split_regex_n(
+                s,
+                ptr as *const crate::regex::RegExpHeader,
+                limit_i32,
+            );
+        }
+    }
+
+    // Step 6: lim = limit===undefined ? 2^32-1 : ToUint32(limit) (may throw).
+    let lim: u32 = if lim_jv.is_undefined() {
+        u32::MAX
+    } else {
+        split_limit_to_uint32(limit)
+    };
+
+    // Step 7: R = ToString(separator) (may throw). For `undefined` the result
+    // is unused (step 9) and `ToString(undefined)` is side-effect-free, so we
+    // skip it.
+    let sep_is_undefined = sep_jv.is_undefined();
+    let r_str: *mut StringHeader = if sep_is_undefined {
+        std::ptr::null_mut()
+    } else {
+        crate::builtins::js_string_coerce(separator)
+    };
+
+    // Step 8: limit 0 → empty array.
+    if lim == 0 {
+        return crate::array::js_array_alloc(0);
+    }
+    // Step 9: undefined separator → [S].
+    if sep_is_undefined {
+        return split_single_element(s);
+    }
+
+    // `js_string_split_n` takes an i32 limit (< 0 ⇒ unbounded); cap `lim`.
+    let limit_i32 = if lim > i32::MAX as u32 {
+        i32::MAX
+    } else {
+        lim as i32
+    };
+    js_string_split_n(s, r_str, limit_i32)
+}

@@ -474,6 +474,61 @@ fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>
     }
 }
 
+/// Coerce a `String.prototype.search`/`match` argument into a RegExp
+/// (ECMA-262 §22.1.3.12 / §22.1.3.20 → `RegExpCreate`). A RegExp value passes
+/// through unchanged; anything else builds a fresh regex whose source pattern
+/// is `ToString(arg)` (running user `toString`/`valueOf`, which may throw),
+/// with `undefined` mapped to the empty pattern (the `/(?:)/` regex that
+/// matches at index 0). Flags default to none.
+fn coerce_search_arg_to_regex(arg: f64) -> *const RegExpHeader {
+    let jv = crate::value::JSValue::from_bits(arg.to_bits());
+    if jv.is_pointer() {
+        let p = crate::value::js_nanbox_get_pointer(arg) as *const u8;
+        if is_regex_pointer(p) {
+            return p as *const RegExpHeader;
+        }
+    }
+    // `undefined` → empty pattern. Build a real empty `StringHeader` (NOT a
+    // null pointer): the resulting RegExp header's `pattern_ptr` is later
+    // dereferenced by `js_string_match`'s `lookup_fancy_regex`
+    // (`string_as_str((*re).pattern_ptr)`), which would SIGSEGV on null.
+    let src: *const StringHeader = if jv.is_undefined() {
+        crate::string::js_string_from_str("") as *const StringHeader
+    } else {
+        crate::builtins::js_string_coerce(arg) as *const StringHeader
+    };
+    // `flags` may be read the same way; pass an empty header rather than null.
+    let flags = crate::string::js_string_from_str("") as *const StringHeader;
+    js_regexp_new(src, flags)
+}
+
+/// `String.prototype.search(regexp)` (ECMA-262 §22.1.3.12) with full argument
+/// coercion: a non-RegExp arg is turned into `RegExpCreate(ToString(arg))`
+/// (so `"x".search("pat")`, `.search(undefined)`, and `.search({toString})`
+/// all work). `s` is the already-`ToString`-coerced `this`.
+#[no_mangle]
+pub extern "C" fn js_string_search_value(s: *const StringHeader, arg: f64) -> i32 {
+    // Root the receiver across the (possibly allocating / GC-triggering)
+    // argument coercion so a moving collector can't dangle `s`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let re = coerce_search_arg_to_regex(arg);
+    let s = s_handle.get_raw_const_ptr::<StringHeader>();
+    js_string_search_regex(s, re)
+}
+
+/// `String.prototype.match(regexp)` (ECMA-262 §22.1.3.11) with full argument
+/// coercion (see [`js_string_search_value`]). Returns the match array pointer,
+/// or null on no match.
+#[no_mangle]
+pub extern "C" fn js_string_match_value(s: *const StringHeader, arg: f64) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let re = coerce_search_arg_to_regex(arg);
+    let s = s_handle.get_raw_const_ptr::<StringHeader>();
+    js_string_match(s, re)
+}
+
 /// Find matches in a string
 /// string.match(regex) -> string[] | null (returns array pointer, null if no match)
 #[no_mangle]

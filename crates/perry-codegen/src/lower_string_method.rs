@@ -103,6 +103,10 @@ pub(crate) fn lower_string_method(
                 );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
+            // An object `searchString` must be `ToString`-coerced (running its
+            // user `toString`/`valueOf`) BEFORE `ToNumber(position)`, per
+            // ECMA-262 §22.1.3.8. A statically string-typed arg skips this.
+            let needle_is_str = is_string_expr(ctx, &args[0]);
             // Optional fromIndex.
             let from_idx_double = if args.len() == 2 {
                 Some(lower_expr(ctx, &args[1])?)
@@ -111,9 +115,15 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let needle_handle = unbox_str_handle(blk, &needle_box);
+            let needle_handle = if needle_is_str {
+                unbox_str_handle(blk, &needle_box)
+            } else {
+                blk.call(I64, "js_string_coerce", &[(DOUBLE, &needle_box)])
+            };
             let result_i32 = if let Some(from_d) = from_idx_double {
-                let from_i32 = blk.fptosi(DOUBLE, &from_d, I32);
+                // `ToIntegerOrInfinity(position)` via the runtime helper (runs
+                // user `valueOf`, handles ±Infinity/NaN), NOT a raw `fptosi`.
+                let from_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &from_d)]);
                 blk.call(
                     I32,
                     "js_string_index_of_from",
@@ -195,33 +205,35 @@ pub(crate) fn lower_string_method(
                     args.len()
                 );
             }
-            // NOTE: we always call js_string_split here, even for regex
-            // delimiters — the runtime will detect regex pointers via
-            // their GC header and delegate to js_string_split_regex
-            // internally. This avoids needing a new LLVM runtime decl.
+            // Route through `js_string_split_value`, which takes the BOXED
+            // separator and limit and performs the full spec coercion:
+            // `ToUint32(limit)` before `ToString(separator)`, an `undefined`
+            // separator → `[S]`, `limit === 0` → `[]`, and RegExp-separator
+            // delegation (detected via the regex-pointer registry). A raw
+            // `unbox_str_handle` of an object/undefined separator would
+            // bit-cast garbage; a raw `fptosi` of a boxed limit skips its
+            // `valueOf`.
             let delim_box = lower_expr(ctx, &args[0])?;
-            let limit_d = if args.len() == 2 {
+            let limit_box = if args.len() == 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
                 None
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let delim_handle = unbox_str_handle(blk, &delim_box);
-            let result_arr = if let Some(limit_d) = limit_d {
-                let limit_i32 = blk.fptosi(DOUBLE, &limit_d, I32);
-                blk.call(
-                    I64,
-                    "js_string_split_n",
-                    &[(I64, &recv_handle), (I64, &delim_handle), (I32, &limit_i32)],
-                )
-            } else {
-                blk.call(
-                    I64,
-                    "js_string_split",
-                    &[(I64, &recv_handle), (I64, &delim_handle)],
-                )
+            let limit_box = match limit_box {
+                Some(v) => v,
+                None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
             };
+            let result_arr = blk.call(
+                I64,
+                "js_string_split_value",
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &delim_box),
+                    (DOUBLE, &limit_box),
+                ],
+            );
             // Returns an array pointer (ArrayHeader*) — NaN-box with POINTER_TAG.
             Ok(crate::expr::nanbox_pointer_inline(blk, &result_arr))
         }
@@ -479,6 +491,10 @@ pub(crate) fn lower_string_method(
                 );
             }
             let needle_box = lower_expr(ctx, &args[0])?;
+            // `ToString(searchString)` runs the arg's user `toString`/`valueOf`
+            // (ECMA-262 §22.1.3.9) before `ToNumber(position)`; static strings
+            // skip the coercion.
+            let needle_is_str = is_string_expr(ctx, &args[0]);
             // Optional `position` (2nd arg). Without it, use the plain
             // last-index-of (search to the end); with it, the position-aware
             // variant. Mirrors the `indexOf` arm.
@@ -489,15 +505,22 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let needle_handle = unbox_str_handle(blk, &needle_box);
+            let needle_handle = if needle_is_str {
+                unbox_str_handle(blk, &needle_box)
+            } else {
+                blk.call(I64, "js_string_coerce", &[(DOUBLE, &needle_box)])
+            };
             let i32_v = if let Some(pos_d) = pos_double {
+                // `ToNumber(position)` (runs user `valueOf`, preserves NaN/±Inf
+                // for the helper's clamp), NOT the raw NaN-boxed bits.
+                let pos_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &pos_d)]);
                 blk.call(
                     I32,
                     "js_string_last_index_of_from",
                     &[
                         (I64, &recv_handle),
                         (I64, &needle_handle),
-                        (DOUBLE, &pos_d),
+                        (DOUBLE, &pos_num),
                         (I32, "1"),
                     ],
                 )
@@ -621,39 +644,53 @@ pub(crate) fn lower_string_method(
             }
         }
         "search" => {
-            if args.len() != 1 {
+            if args.len() > 1 {
                 bail!(
-                    "perry-codegen: String.search expects 1 arg, got {}",
+                    "perry-codegen: String.search expects 0 or 1 arg, got {}",
                     args.len()
                 );
             }
-            // The arg is a regex (literal or local).
-            let re_box = lower_expr(ctx, &args[0])?;
+            // The arg may be a RegExp OR any value that `RegExpCreate` coerces
+            // via `ToString` (a string pattern, `undefined`, a `{ toString }`
+            // object). Pass it BOXED to `js_string_search_value`, which detects
+            // a RegExp pointer and otherwise builds `RegExpCreate(ToString(arg))`
+            // — a raw `unbox_str_handle` would bit-cast a non-regex arg as a
+            // regex header and always return -1. A missing arg is `undefined`.
+            let re_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let re_handle = unbox_str_handle(blk, &re_box);
             let i32_v = blk.call(
                 I32,
-                "js_string_search_regex",
-                &[(I64, &recv_handle), (I64, &re_handle)],
+                "js_string_search_value",
+                &[(I64, &recv_handle), (DOUBLE, &re_box)],
             );
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "match" => {
-            if args.len() != 1 {
+            if args.len() > 1 {
                 bail!(
-                    "perry-codegen: String.match expects 1 arg, got {}",
+                    "perry-codegen: String.match expects 0 or 1 arg, got {}",
                     args.len()
                 );
             }
-            let re_box = lower_expr(ctx, &args[0])?;
+            // Like `search`, coerce a non-RegExp arg via `RegExpCreate(ToString
+            // (arg))` by passing it BOXED to `js_string_match_value`. A missing
+            // arg is `undefined` → the empty `/(?:)/` regex.
+            let re_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let re_handle = unbox_str_handle(blk, &re_box);
             let result = blk.call(
                 I64,
-                "js_string_match",
-                &[(I64, &recv_handle), (I64, &re_handle)],
+                "js_string_match_value",
+                &[(I64, &recv_handle), (DOUBLE, &re_box)],
             );
             // Runtime may return null (0) on no-match. Convert that to
             // TAG_NULL so `s.match(re) !== null` behaves correctly.

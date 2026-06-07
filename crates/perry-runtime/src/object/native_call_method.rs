@@ -1797,45 +1797,31 @@ pub unsafe extern "C" fn js_native_call_method(
                 // the issue #510 catch-all (`(string).match is not a
                 // function`) because no runtime arm handled `match`.
                 "match" | "matchAll" => {
-                    if args_len >= 1 && !args_ptr.is_null() {
-                        let pattern_val = unsafe { *args_ptr };
-                        if method_name == "matchAll" {
-                            let result_ptr =
-                                crate::regex::js_string_match_all_value(s_ptr, pattern_val);
-                            if result_ptr.is_null() {
-                                return f64::from_bits(JSValue::null().bits());
-                            }
-                            return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
-                        }
-                        // Extract regex handle from the arg value. RegExp
-                        // values are NaN-boxed pointers; pass through the
-                        // pointer extraction the same way the HIR-level
-                        // StringMatch path does.
-                        let regex_jsval = JSValue::from_bits(pattern_val.to_bits());
-                        if !regex_jsval.is_pointer() {
-                            return f64::from_bits(JSValue::null().bits());
-                        }
-                        let regex_ptr = regex_jsval.as_pointer::<crate::regex::RegExpHeader>();
-                        let result_ptr = crate::regex::js_string_match(s_ptr, regex_ptr);
+                    // Missing arg ⇒ `undefined` (→ empty `/(?:)/` regex).
+                    let pattern_val =
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                    if method_name == "matchAll" {
+                        let result_ptr =
+                            crate::regex::js_string_match_all_value(s_ptr, pattern_val);
                         if result_ptr.is_null() {
                             return f64::from_bits(JSValue::null().bits());
                         }
                         return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
                     }
-                    return f64::from_bits(JSValue::null().bits());
+                    // Coerce a non-RegExp arg via `RegExpCreate(ToString(arg))`
+                    // (a string pattern / `undefined` / `{ toString }` object),
+                    // matching the codegen path.
+                    let result_ptr = crate::regex::js_string_match_value(s_ptr, pattern_val);
+                    if result_ptr.is_null() {
+                        return f64::from_bits(JSValue::null().bits());
+                    }
+                    return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
                 }
                 "search" => {
-                    if args_len >= 1 && !args_ptr.is_null() {
-                        let regex_val = unsafe { *args_ptr };
-                        let regex_jsval = JSValue::from_bits(regex_val.to_bits());
-                        if !regex_jsval.is_pointer() {
-                            return f64::from_bits(JSValue::int32(-1).bits());
-                        }
-                        let regex_ptr = regex_jsval.as_pointer::<crate::regex::RegExpHeader>();
-                        let i32_v = crate::regex::js_string_search_regex(s_ptr, regex_ptr);
-                        return f64::from_bits(JSValue::int32(i32_v).bits());
-                    }
-                    return f64::from_bits(JSValue::int32(-1).bits());
+                    let regex_val =
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+                    let i32_v = crate::regex::js_string_search_value(s_ptr, regex_val);
+                    return f64::from_bits(JSValue::int32(i32_v).bits());
                 }
                 // Refs #421 — common string methods on any-typed receivers.
                 // Hono's compiled JS (and most npm packages with stripped TS
