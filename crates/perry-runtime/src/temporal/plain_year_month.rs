@@ -137,9 +137,20 @@ pub fn call(recv: f64, ym: &PlainYearMonth, name: &str, args: &[f64]) -> f64 {
         }
         "toString" | "toJSON" | "toLocaleString" => string(&ym.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        "with" | "toPlainDate" => crate::fs::validate::throw_range_error_with_code(
-            "Temporal.PlainYearMonth.prototype.with/toPlainDate is not yet implemented in Perry",
-        ),
+        "with" => {
+            let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
+            let fields = super::options::year_month_fields(obj);
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(ym.with(fields, overflow)))
+        }
+        "toPlainDate" => {
+            let obj =
+                super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "toPlainDate");
+            let day = super::options::calendar_fields(obj);
+            alloc_temporal_cell(TemporalValue::PlainDate(ok_or_throw(
+                ym.to_plain_date(Some(day)),
+            )))
+        }
         _ => {
             let _ = recv;
             dispatch::throw_no_method(TYPE_NAME, name)

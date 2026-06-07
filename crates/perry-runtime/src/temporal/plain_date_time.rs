@@ -163,11 +163,28 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
         "toPlainTime" => alloc_temporal_cell(TemporalValue::PlainTime(dt.to_plain_time())),
         "toString" | "toJSON" | "toLocaleString" => string(&dt.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        "with" | "withPlainTime" | "withCalendar" | "round" | "toZonedDateTime" => {
-            crate::fs::validate::throw_range_error_with_code(
-                "Temporal.PlainDateTime.prototype.with/round/toZonedDateTime is not yet \
-                 implemented in Perry",
-            )
+        "with" => {
+            let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
+            let fields = super::options::datetime_fields(obj);
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(dt.with(fields, overflow)))
+        }
+        "withPlainTime" => {
+            // Combine this datetime's date with the provided time (or midnight).
+            let time = super::options::optional_plain_time(raw_arg(args, 0));
+            wrap(ok_or_throw(dt.to_plain_date().to_plain_date_time(time)))
+        }
+        "withCalendar" => wrap(dt.with_calendar(calendar_arg(raw_arg(args, 0)))),
+        "round" => wrap(ok_or_throw(
+            dt.round(super::options::rounding_options(raw_arg(args, 0))),
+        )),
+        "toZonedDateTime" => {
+            let tz = super::options::timezone(raw_arg(args, 0));
+            let disambiguation = super::options::disambiguation(raw_arg(args, 1))
+                .unwrap_or(temporal_rs::options::Disambiguation::Compatible);
+            alloc_temporal_cell(TemporalValue::ZonedDateTime(ok_or_throw(
+                dt.to_zoned_date_time(tz, disambiguation),
+            )))
         }
         _ => {
             let _ = recv;

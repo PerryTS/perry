@@ -30,6 +30,7 @@ pub mod dispatch;
 pub mod duration;
 pub mod instant;
 pub mod now;
+pub mod options;
 pub mod plain_date;
 pub mod plain_date_time;
 pub mod plain_month_day;

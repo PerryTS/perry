@@ -137,12 +137,6 @@ pub(crate) fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// A JS Number from any integer-ish value.
-#[inline]
-pub(crate) fn number<N: Into<f64>>(n: N) -> f64 {
-    n.into()
-}
-
 /// A JS Number from an `i64` / `i128` Temporal getter (e.g. `Duration.years`,
 /// `Instant.epochMilliseconds`). Values beyond 2^53 lose precision exactly as
 /// they do in Node (these getters return Number, not BigInt).

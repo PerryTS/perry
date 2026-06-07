@@ -138,16 +138,37 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
         }
         "toString" | "toJSON" | "toLocaleString" => string(&z.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        "with"
-        | "withPlainTime"
-        | "withTimeZone"
-        | "withCalendar"
-        | "round"
-        | "getTimeZoneTransition"
-        | "startOfDay" => crate::fs::validate::throw_range_error_with_code(
-            "Temporal.ZonedDateTime.prototype.with*/round/getTimeZoneTransition/startOfDay is not \
-             yet implemented in Perry",
-        ),
+        "with" => {
+            let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
+            let fields = super::options::zoned_fields(obj);
+            let opts = raw_arg(args, 1);
+            wrap(ok_or_throw(z.with(
+                fields,
+                super::options::disambiguation(opts),
+                super::options::offset_option(opts),
+                super::options::overflow(opts),
+            )))
+        }
+        "withPlainTime" => {
+            let time = super::options::optional_plain_time(raw_arg(args, 0));
+            wrap(ok_or_throw(z.with_plain_time(time)))
+        }
+        "withTimeZone" => {
+            let tz = super::options::timezone(raw_arg(args, 0));
+            wrap(ok_or_throw(z.with_timezone(tz)))
+        }
+        "withCalendar" => wrap(z.with_calendar(calendar_arg(raw_arg(args, 0)))),
+        "round" => wrap(ok_or_throw(
+            z.round(super::options::rounding_options(raw_arg(args, 0))),
+        )),
+        "startOfDay" => wrap(ok_or_throw(z.start_of_day())),
+        "getTimeZoneTransition" => {
+            let dir = super::options::transition_direction(raw_arg(args, 0));
+            match ok_or_throw(z.get_time_zone_transition(dir)) {
+                Some(next) => wrap(next),
+                None => f64::from_bits(crate::value::TAG_NULL),
+            }
+        }
         _ => {
             let _ = recv;
             dispatch::throw_no_method(TYPE_NAME, name)

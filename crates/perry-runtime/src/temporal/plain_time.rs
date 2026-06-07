@@ -112,9 +112,15 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
                 .unwrap_or_default(),
         ),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        "with" | "round" => crate::fs::validate::throw_range_error_with_code(
-            "Temporal.PlainTime.prototype.with/round is not yet implemented in Perry",
-        ),
+        "with" => {
+            let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
+            let partial = super::options::partial_time(obj);
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(t.with(partial, overflow)))
+        }
+        "round" => wrap(ok_or_throw(
+            t.round(super::options::rounding_options(raw_arg(args, 0))),
+        )),
         _ => {
             let _ = recv;
             dispatch::throw_no_method(TYPE_NAME, name)

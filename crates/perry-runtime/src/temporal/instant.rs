@@ -103,9 +103,15 @@ pub fn call(recv: f64, i: &Instant, name: &str, args: &[f64]) -> f64 {
                 .unwrap_or_default(),
         ),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        "round" | "toZonedDateTimeISO" => crate::fs::validate::throw_range_error_with_code(
-            "Temporal.Instant.prototype.round/toZonedDateTimeISO is not yet implemented in Perry",
-        ),
+        "round" => wrap(ok_or_throw(
+            i.round(super::options::rounding_options(raw_arg(args, 0))),
+        )),
+        "toZonedDateTimeISO" => {
+            let tz = super::options::timezone(raw_arg(args, 0));
+            alloc_temporal_cell(TemporalValue::ZonedDateTime(ok_or_throw(
+                i.to_zoned_date_time_iso(tz),
+            )))
+        }
         _ => {
             let _ = recv;
             dispatch::throw_no_method(TYPE_NAME, name)

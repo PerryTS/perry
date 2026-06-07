@@ -7,7 +7,7 @@ use super::dispatch::{self, boolean, ok_or_throw, raw_arg, string, undefined};
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
 use temporal_rs::options::DifferenceSettings;
-use temporal_rs::{Calendar, PlainDate};
+use temporal_rs::{Calendar, PlainDate, PlainTime, TimeZone};
 
 const TYPE_NAME: &str = "Temporal.PlainDate";
 
@@ -118,6 +118,29 @@ pub fn get(d: &PlainDate, name: &str) -> Option<f64> {
     })
 }
 
+/// Parse the `toZonedDateTime` argument: either a bare time-zone identifier
+/// string or an options object `{ timeZone, plainTime }`.
+fn to_zoned_args(v: f64) -> (TimeZone, Option<PlainTime>) {
+    if JSValue::from_bits(v.to_bits()).is_string() {
+        return (super::options::timezone(v), None);
+    }
+    let jv = JSValue::from_bits(v.to_bits());
+    if jv.is_pointer() {
+        let obj = jv.as_pointer::<crate::object::ObjectHeader>();
+        if !obj.is_null() {
+            let tz_key = crate::string::js_string_from_bytes(b"timeZone".as_ptr(), 8);
+            let tz_raw = crate::object::js_object_get_field_by_name_f64(obj, tz_key);
+            let tz = super::options::timezone(tz_raw);
+            let pt_key = crate::string::js_string_from_bytes(b"plainTime".as_ptr(), 9);
+            let pt_raw = crate::object::js_object_get_field_by_name_f64(obj, pt_key);
+            return (tz, super::options::optional_plain_time(pt_raw));
+        }
+    }
+    crate::fs::validate::throw_range_error_with_code(
+        "Temporal.PlainDate.prototype.toZonedDateTime requires a time zone",
+    )
+}
+
 pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
     match name {
         "add" => wrap(ok_or_throw(
@@ -143,10 +166,31 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
         }
         "toString" | "toJSON" | "toLocaleString" => string(&d.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        "with" | "withCalendar" | "toPlainDateTime" | "toPlainYearMonth" | "toPlainMonthDay"
-        | "toZonedDateTime" => crate::fs::validate::throw_range_error_with_code(
-            "Temporal.PlainDate.prototype.with/withCalendar/toX is not yet implemented in Perry",
-        ),
+        "with" => {
+            let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
+            let fields = super::options::calendar_fields(obj);
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(d.with(fields, overflow)))
+        }
+        "withCalendar" => wrap(d.with_calendar(calendar_arg(raw_arg(args, 0)))),
+        "toPlainDateTime" => {
+            let time = super::options::optional_plain_time(raw_arg(args, 0));
+            alloc_temporal_cell(TemporalValue::PlainDateTime(ok_or_throw(
+                d.to_plain_date_time(time),
+            )))
+        }
+        "toPlainYearMonth" => alloc_temporal_cell(TemporalValue::PlainYearMonth(ok_or_throw(
+            d.to_plain_year_month(),
+        ))),
+        "toPlainMonthDay" => alloc_temporal_cell(TemporalValue::PlainMonthDay(ok_or_throw(
+            d.to_plain_month_day(),
+        ))),
+        "toZonedDateTime" => {
+            let (tz, time) = to_zoned_args(raw_arg(args, 0));
+            alloc_temporal_cell(TemporalValue::ZonedDateTime(ok_or_throw(
+                d.to_zoned_date_time(tz, time),
+            )))
+        }
         _ => {
             let _ = recv;
             dispatch::throw_no_method(TYPE_NAME, name)

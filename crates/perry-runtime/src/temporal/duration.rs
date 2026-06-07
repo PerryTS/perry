@@ -6,7 +6,7 @@
 //! `temporal_rs`, this module is marshalling glue.
 
 use super::dispatch::{
-    self, boolean, int_arg, is_undefined, number_i128, ok_or_throw, raw_arg, string, undefined,
+    self, boolean, int_arg, is_undefined, number_i128, ok_or_throw, raw_arg, string,
 };
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
@@ -179,11 +179,15 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
             &TemporalValue::Duration(*d),
         )),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
-        // round / total need RoundingOptions + (for calendar units) a
-        // relativeTo reference — deferred (#4688 follow-up).
-        "round" | "total" => crate::fs::validate::throw_range_error_with_code(
-            "Temporal.Duration.prototype.round/total is not yet implemented in Perry",
-        ),
+        "round" => {
+            let opts = super::options::rounding_options(raw_arg(args, 0));
+            let rel = super::options::relative_to(raw_arg(args, 0));
+            wrap(ok_or_throw(d.round(opts, rel)))
+        }
+        "total" => {
+            let (unit, rel) = super::options::total_options(raw_arg(args, 0));
+            ok_or_throw(d.total(unit, rel)).as_inner()
+        }
         _ => {
             let _ = recv;
             dispatch::throw_no_method(TYPE_NAME, name)
