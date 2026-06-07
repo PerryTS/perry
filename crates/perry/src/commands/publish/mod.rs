@@ -1522,61 +1522,99 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let mut download_path: Option<String> = None;
     let mut artifact_name: Option<String> = None;
     let mut build_success = false;
+    // `done` = a terminal Complete/Error was received. Until then, a dropped or
+    // closed WebSocket (the hub drops connections while a job sits in the queue)
+    // must RECONNECT + re-subscribe rather than silently end the publish — else
+    // the command exits without ever downloading the artifact (#flaky-publish).
+    let mut done = false;
+    // `published` = the hub confirmed a server-side publish (TestFlight / App
+    // Store etc.), where no local artifact is downloaded.
+    let mut published = false;
+    // `downloaded` = a local artifact was actually written to the output dir.
+    let mut downloaded = false;
     let mut ws_retries = 0u32;
     let max_ws_retries = 60u32; // ~10 minutes with backoff
 
     use futures_util::StreamExt;
-    'ws_loop: loop {
-        while let Some(msg) = read.next().await {
-            let msg = match msg {
-                Ok(m) => m,
-                Err(e) => {
-                    // WebSocket dropped — try to reconnect and re-subscribe
-                    loop {
-                        ws_retries += 1;
-                        if ws_retries > max_ws_retries {
-                            if let Some(ref pb) = pb {
-                                pb.abandon_with_message(format!(
-                                    "WebSocket error after {max_ws_retries} retries: {e}"
-                                ));
-                            }
-                            bail!("WebSocket error after {max_ws_retries} retries: {e}");
-                        }
-                        let delay = std::cmp::min(ws_retries as u64 * 2, 30);
-                        if let OutputFormat::Text = format {
-                            if let Some(ref pb) = pb {
-                                pb.println(format!("    {} Connection lost, reconnecting in {delay}s ({ws_retries}/{max_ws_retries})...", style("!").yellow()));
-                            }
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                        match tokio_tungstenite::connect_async(&ws_url).await {
-                            Ok((new_ws, _)) => {
-                                let (mut new_write, new_read) = new_ws.split();
-                                let _ = new_write
-                                    .send(Message::Text(
-                                        format!(
-                                            r#"{{"type":"subscribe","job_id":"{}"}}"#,
-                                            build_resp.job_id
-                                        )
-                                        .into(),
-                                    ))
-                                    .await;
-                                read = new_read;
-                                ws_retries = 0; // reset on successful reconnect
-                                continue 'ws_loop;
-                            }
-                            Err(_re) => {
-                                // Keep retrying — don't bail on reconnect failure
-                                continue;
-                            }
-                        }
+
+    // Reconnect to the hub and re-subscribe to the job. Used whenever the stream
+    // errors, closes, or ends before a terminal message. Bails after exhausting
+    // retries so CI fails loudly instead of going green with no artifact.
+    macro_rules! reconnect_or_bail {
+        ($why:expr) => {{
+            loop {
+                ws_retries += 1;
+                if ws_retries > max_ws_retries {
+                    if let Some(ref pb) = pb {
+                        pb.abandon_with_message(format!(
+                            "WebSocket {} — lost after {max_ws_retries} retries",
+                            $why
+                        ));
                     }
+                    bail!(
+                        "WebSocket {} and could not be re-established after {max_ws_retries} retries (no build result received)",
+                        $why
+                    );
+                }
+                let delay = std::cmp::min(ws_retries as u64 * 2, 30);
+                if let OutputFormat::Text = format {
+                    if let Some(ref pb) = pb {
+                        pb.println(format!("    {} Connection lost ({}), reconnecting in {delay}s ({ws_retries}/{max_ws_retries})...", style("!").yellow(), $why));
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                match tokio_tungstenite::connect_async(&ws_url).await {
+                    Ok((new_ws, _)) => {
+                        let (mut new_write, new_read) = new_ws.split();
+                        let _ = new_write
+                            .send(Message::Text(
+                                format!(
+                                    r#"{{"type":"subscribe","job_id":"{}"}}"#,
+                                    build_resp.job_id
+                                )
+                                .into(),
+                            ))
+                            .await;
+                        read = new_read;
+                        ws_retries = 0; // reset on successful reconnect
+                        break;
+                    }
+                    // Keep retrying — don't bail on a single reconnect failure.
+                    Err(_re) => continue,
+                }
+            }
+        }};
+    }
+
+    'ws_loop: loop {
+        loop {
+            let msg = match read.next().await {
+                Some(Ok(m)) => m,
+                Some(Err(_e)) => {
+                    reconnect_or_bail!("errored");
+                    continue 'ws_loop;
+                }
+                None => {
+                    // Stream ended. If we already have a terminal result, proceed
+                    // to the download/finish step; otherwise the hub dropped us —
+                    // reconnect rather than exit empty-handed.
+                    if done {
+                        break;
+                    }
+                    reconnect_or_bail!("stream ended");
+                    continue 'ws_loop;
                 }
             };
 
             let text = match msg {
                 Message::Text(t) => t,
-                Message::Close(_) => break,
+                Message::Close(_) => {
+                    if done {
+                        break;
+                    }
+                    reconnect_or_bail!("closed by server");
+                    continue 'ws_loop;
+                }
                 _ => continue,
             };
 
@@ -1674,6 +1712,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     ..
                 } => {
                     build_success = success;
+                    done = true;
                     if let OutputFormat::Text = format {
                         println!();
                         if success {
@@ -1695,6 +1734,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                 ServerMessage::Published {
                     platform, message, ..
                 } => {
+                    published = true;
                     if let OutputFormat::Text = format {
                         println!(
                             "  {} Published to {} — {}",
@@ -1782,13 +1822,25 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     );
                     println!();
                 }
+
+                downloaded = true;
             }
         }
-        break; // Normal exit from while loop means stream ended
+        break; // terminal result handled above
     } // end 'ws_loop
 
     if !build_success {
         bail!("Build failed");
+    }
+
+    // The build reported success but we neither downloaded an artifact nor got a
+    // server-side publish confirmation — almost always a hub connection that
+    // dropped between the artifact notice and completion. Fail loudly so CI does
+    // not go green with an empty release; re-running the publish recovers it.
+    if !args.no_download && !downloaded && !published {
+        bail!(
+            "Build reported success but no artifact was received from the hub (connection likely interrupted). Re-run `perry publish`."
+        );
     }
 
     Ok(())
