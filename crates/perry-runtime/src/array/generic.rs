@@ -215,7 +215,11 @@ fn al_length(recv: f64) -> i64 {
                 (b & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader,
                 key,
             );
-            to_length(len_val)
+            // `LengthOfArrayLike` is `ToLength(ToNumber(Get(O, "length")))`.
+            // A non-numeric `length` (e.g. `length: true` → 1, `length: "2"` →
+            // 2) must be ToNumber-coerced first — the raw NaN-boxed bool/string
+            // bits would otherwise read as NaN → 0.
+            to_length(crate::builtins::js_number_coerce(len_val))
         }
         // Typed arrays / buffers expose a real length via the safe dispatcher.
         Some(PtrKind::IndexedNative) => to_length(crate::value::js_value_length_f64(recv)),
@@ -240,11 +244,69 @@ fn al_get(recv: f64, k: i64) -> f64 {
     match classify_pointer(recv) {
         // `js_object_get_index_polymorphic` is safe for objects/closures and
         // for typed arrays / buffers (handled at its top).
-        Some(PtrKind::Object) | Some(PtrKind::IndexedNative) => {
+        Some(PtrKind::IndexedNative) => {
             crate::object::js_object_get_index_polymorphic(b as i64, k as f64)
+        }
+        Some(PtrKind::Object) => {
+            let v = crate::object::js_object_get_index_polymorphic(b as i64, k as f64);
+            // `js_object_get_index_polymorphic` walks own + explicit-`setPrototypeOf`
+            // chains, but not the *default* `Object.prototype` for a plain `{}`
+            // object. The generic Array algorithms `Get(O, k)` per spec, so an
+            // index living on `Object.prototype[k]` must resolve. Fall back to a
+            // chain read only when the direct read missed.
+            if v.to_bits() == TAG_UNDEFINED {
+                object_get_property_chain((b & 0x0000_FFFF_FFFF_FFFF) as usize, k)
+            } else {
+                v
+            }
         }
         Some(PtrKind::Exotic) | None => undef(),
     }
+}
+
+/// `Get(O, ToString(k))` over the prototype chain, reading the first own
+/// indexed data property found. Companion to `object_has_property_chain`; used
+/// only as a fallback when the polymorphic index read misses (so the default
+/// `Object.prototype` is consulted for an inherited indexed element).
+fn object_get_property_chain(obj_ptr: usize, k: i64) -> f64 {
+    let s = k.to_string();
+    let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    let mut cur = obj_ptr;
+    for _ in 0..1000 {
+        if cur == 0 {
+            return undef();
+        }
+        let cur_val = f64::from_bits(crate::value::js_nanbox_pointer(cur as i64).to_bits());
+        let key_val = f64::from_bits(JSValue::string_ptr(key).bits());
+        if crate::object::js_object_has_own(cur_val, key_val).to_bits() == TAG_TRUE {
+            return crate::object::js_object_get_index_polymorphic(cur as i64, k as f64);
+        }
+        let proto_bits = match crate::object::prototype_chain::object_static_prototype(cur) {
+            Some(bits) => bits,
+            None => match unsafe {
+                crate::object::prototype_chain::default_object_prototype_for_owner(cur)
+            } {
+                Some(bits) => bits,
+                None => return undef(),
+            },
+        };
+        if proto_bits == TAG_NULL {
+            return undef();
+        }
+        let top16 = proto_bits >> 48;
+        let next = if top16 == 0x7FFD {
+            (proto_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 && proto_bits > 0x10000 {
+            proto_bits as usize
+        } else {
+            return undef();
+        };
+        if next == cur {
+            return undef();
+        }
+        cur = next;
+    }
+    undef()
 }
 
 /// `HasProperty(ToObject(recv), k)`.
@@ -272,12 +334,60 @@ fn al_has(recv: f64, k: i64) -> bool {
             let s = k.to_string();
             let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             let key_val = f64::from_bits(JSValue::string_ptr(key).bits());
-            crate::object::js_object_has_property(recv, key_val).to_bits() == TAG_TRUE
+            object_has_property_chain((b & 0x0000_FFFF_FFFF_FFFF) as usize, key_val)
         }
         // Typed arrays / buffers are dense over their length.
         Some(PtrKind::IndexedNative) => k < al_length(recv),
         Some(PtrKind::Exotic) | None => false,
     }
+}
+
+/// `[[HasProperty]]` (ECMA-262 §10.1.7) over the recorded prototype chain for an
+/// ordinary heap object. `js_object_has_property` (the `in` operator backend)
+/// only scans the receiver's *own* keys for the plain-object case, so the
+/// generic Array algorithms (which spec on `HasProperty`) missed inherited
+/// indexed properties — e.g. an element living on `Object.prototype[k]` or a
+/// `proto` from `Object.create(proto)`. Walk own-then-prototype here so
+/// `Array.prototype.forEach.call(obj, …)` visits inherited indices.
+fn object_has_property_chain(obj_ptr: usize, key_val: f64) -> bool {
+    let mut cur = obj_ptr;
+    // Bound the walk to guard against user-induced prototype cycles.
+    for _ in 0..1000 {
+        if cur == 0 {
+            return false;
+        }
+        let cur_val = f64::from_bits(crate::value::js_nanbox_pointer(cur as i64).to_bits());
+        if crate::object::js_object_has_own(cur_val, key_val).to_bits() == TAG_TRUE {
+            return true;
+        }
+        // Advance to the recorded [[Prototype]] (explicit `setPrototypeOf`) or
+        // the default `Object.prototype` for a plain `{}` object.
+        let proto_bits = match crate::object::prototype_chain::object_static_prototype(cur) {
+            Some(bits) => bits,
+            None => match unsafe {
+                crate::object::prototype_chain::default_object_prototype_for_owner(cur)
+            } {
+                Some(bits) => bits,
+                None => return false,
+            },
+        };
+        if proto_bits == TAG_NULL {
+            return false;
+        }
+        let top16 = proto_bits >> 48;
+        let next = if top16 == 0x7FFD {
+            (proto_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 && proto_bits > 0x10000 {
+            proto_bits as usize
+        } else {
+            return false;
+        };
+        if next == cur {
+            return false;
+        }
+        cur = next;
+    }
+    false
 }
 
 /// RAII-ish guard binding the callback `this` (the optional `thisArg`) for the
@@ -302,8 +412,11 @@ impl Drop for ThisGuard {
 #[no_mangle]
 pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         if !al_has(recv, k) {
@@ -318,8 +431,11 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
 #[no_mangle]
 pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let result = js_array_alloc_with_length(len.max(0) as u32);
     let elems = unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
     let _g = ThisGuard::new(this_arg);
@@ -340,8 +456,11 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let mut result = js_array_alloc(0);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
@@ -360,8 +479,11 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
 #[no_mangle]
 pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         if !al_has(recv, k) {
@@ -378,8 +500,11 @@ pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         if !al_has(recv, k) {
@@ -399,8 +524,11 @@ pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         let v = al_get(recv, k);
@@ -414,8 +542,11 @@ pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         let v = al_get(recv, k);
@@ -429,8 +560,11 @@ pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     let mut k = len - 1;
     while k >= 0 {
@@ -446,8 +580,11 @@ pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f6
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     let mut k = len - 1;
     while k >= 0 {
@@ -474,8 +611,11 @@ fn throw_reduce_empty() -> ! {
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let mut acc = init;
     let mut k = 0i64;
     if has_init == 0 {
@@ -505,8 +645,11 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
+    // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
+    // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
+    let cb = callable(cb);
     let mut acc = init;
     let mut k = len - 1;
     if has_init == 0 {

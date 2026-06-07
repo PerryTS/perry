@@ -935,13 +935,53 @@ pub(crate) fn lower_array_method(
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
-        // Best-effort fallback: lower args for side effects, return
-        // the receiver.
+        // Unknown method on an (statically-typed) array receiver. This is NOT
+        // a built-in array method, so it is a user-stored own property
+        // (`arr.getClass = Object.prototype.toString; arr.getClass()`,
+        // `arr.myFn = function(){…}; arr.myFn()`) or an inherited method. The
+        // old catch-all returned `recv_box` unchanged, so any such call
+        // silently evaluated to the array itself. Route through the runtime
+        // dispatch tower, which checks the ARRAY_NAMED_PROPS side table for a
+        // stored callable (invoking it with `this` = arr) before falling back.
         _ => {
+            let mut lowered_args = Vec::with_capacity(args.len());
             for a in args {
-                let _ = lower_expr(ctx, a)?;
+                lowered_args.push(lower_expr(ctx, a)?);
             }
-            Ok(recv_box)
+            let key_idx = ctx.strings.intern(property);
+            let entry = ctx.strings.entry(key_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len_str = entry.byte_len.to_string();
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a_val) in lowered_args.iter().enumerate() {
+                    let slot = ctx
+                        .block()
+                        .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    ctx.block().store(DOUBLE, a_val, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf_reg
+                ));
+                (ptr_reg, n.to_string())
+            };
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_native_call_method",
+                &[
+                    (DOUBLE, &recv_box),
+                    (PTR, &bytes_global),
+                    (I64, &name_len_str),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            );
+            Ok(result)
         }
     }
 }

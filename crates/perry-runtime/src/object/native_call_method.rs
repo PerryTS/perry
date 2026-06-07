@@ -2341,6 +2341,30 @@ pub unsafe extern "C" fn js_native_call_method(
             if arr_obj_type == crate::gc::GC_TYPE_ARRAY
                 || arr_obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             {
+                // A user-stored callable own property on the array
+                // (`arr.getClass = Object.prototype.toString; arr.getClass()`,
+                // `arr.myFn = function(){...}; arr.myFn()`) must win over the
+                // built-in array method arms below. Array named properties live
+                // in the ARRAY_NAMED_PROPS side table, NOT in `keys_array`, so
+                // the generic own-field scan further down never finds them and
+                // `arr.<name>()` wrongly fell through to a built-in (e.g.
+                // `arr.toString()` shadowed by a stored `getClass` resolved as
+                // the array's own toString). Check the side table first and, if
+                // the stored value is callable, invoke it with `this` = arr.
+                let arr = raw_ptr as *const crate::array::ArrayHeader;
+                if let Some(stored) =
+                    crate::array::array_named_property_get_by_name(arr, method_name)
+                {
+                    let stored_ptr = crate::value::js_nanbox_get_pointer(stored) as usize;
+                    if crate::closure::is_closure_ptr(stored_ptr) {
+                        let recv_bits = jsval.bits();
+                        let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                        let result =
+                            crate::closure::js_native_call_value(stored, args_ptr, args_len);
+                        IMPLICIT_THIS.with(|c| c.set(prev_this));
+                        return result;
+                    }
+                }
                 match method_name {
                     "toString" => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;
