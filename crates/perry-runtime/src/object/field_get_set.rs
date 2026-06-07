@@ -27,36 +27,6 @@ const CRYPTO_USAGE_DECAPSULATE_BITS: u32 = 1 << 9;
 const CRYPTO_USAGE_ENCAPSULATE_KEY: u32 = 1 << 10;
 const CRYPTO_USAGE_DECAPSULATE_KEY: u32 = 1 << 11;
 
-/// True when `name` is a class private-member key (`#name`).
-///
-/// Private fields are stored in a class instance's `keys_array` under their
-/// `#`-prefixed source name (the constructor sets them via PropertySet-by-name),
-/// and private methods/accessors live in the class vtable under `#name` keys.
-/// Per ECMAScript, a private name is NEVER observable as an own *string*
-/// property: `Object.keys`/`for-in`/`JSON.stringify`, `Object.getOwnProperty{
-/// Names,Descriptor}`, `hasOwnProperty`, the `in` operator, `propertyIsEnumerable`,
-/// object spread, and `Object.assign` must all skip it.
-///
-/// Callers gate this on the receiver being a class instance (`class_id != 0`) or
-/// a class ref, because a `#`-prefixed *string* key can legitimately reach a
-/// plain object literal via `obj["#fff"] = …` (e.g. a hex-color map) and must
-/// stay visible there.
-#[inline]
-pub(crate) fn private_member_key_bytes(name: &[u8]) -> bool {
-    name.first() == Some(&b'#')
-}
-
-/// [`private_member_key_bytes`] for a stored-key `JSValue` (heap or SSO string).
-/// Non-string keys are never private.
-#[inline]
-pub(crate) fn private_member_key_value(key_val: JSValue) -> bool {
-    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    matches!(
-        unsafe { crate::string::js_string_key_bytes(key_val, &mut buf) },
-        Some(b) if private_member_key_bytes(b)
-    )
-}
-
 pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
     let (algo, hash, kind, extractable, usages) = crate::buffer::crypto_key_meta(addr)?;
     match key_bytes {
@@ -1560,10 +1530,6 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // per-key descriptor check.
         let has_descriptors =
             PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == obj as usize));
-        // Class instances store private fields (`#x`) in `keys_array`, but they
-        // are not enumerable own properties — hide them. Plain object literals
-        // (class_id 0) keep any real `#`-prefixed string key.
-        let hide_private = (*obj).class_id != 0;
         let len = crate::array::js_array_length(keys) as usize;
         // #2438: enumerate in ECMA-262 OrdinaryOwnPropertyKeys order —
         // array-index keys first (ascending numeric), then string keys in
@@ -1580,9 +1546,6 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
             let out = crate::array::js_array_alloc(len as u32);
             for j in 0..len {
                 let key_val = crate::array::js_array_get(keys, pos(j));
-                if hide_private && private_member_key_value(key_val) {
-                    continue;
-                }
                 crate::array::js_array_push_f64(out, f64::from_bits(key_val.bits()));
             }
             return out;
@@ -1603,9 +1566,6 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if hide_private && private_member_key_bytes(key_str.as_bytes()) {
-                continue;
-            }
             // If a descriptor explicitly marks this key non-enumerable, skip it.
             if let Some(attrs) = get_property_attrs(obj as usize, key_str) {
                 if !attrs.enumerable() {
@@ -1708,17 +1668,8 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
                 None => j as u32,
             }
         };
-        // Hide class-instance private fields (`#x`), matching `js_object_keys`.
-        let hide_private = (*obj).class_id != 0 && !keys.is_null();
         for j in 0..count {
-            let slot = pos(j);
-            if hide_private {
-                let key_val = crate::array::js_array_get(keys, slot);
-                if private_member_key_value(key_val) {
-                    continue;
-                }
-            }
-            let value = js_object_get_field(obj as *mut ObjectHeader, slot);
+            let value = js_object_get_field(obj as *mut ObjectHeader, pos(j));
             crate::array::js_array_push_f64(result, f64::from_bits(value.bits()));
         }
 
@@ -1848,16 +1799,8 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
                 None => j as u32,
             }
         };
-        // Hide class-instance private fields (`#x`), matching `js_object_keys`.
-        let hide_private = (*obj).class_id != 0 && !keys.is_null();
         for j in 0..count {
             let i = pos(j);
-            if hide_private && i < crate::array::js_array_length(keys) {
-                let key_val = crate::array::js_array_get(keys, i);
-                if private_member_key_value(key_val) {
-                    continue;
-                }
-            }
             // Create a pair array [key, value]
             let pair = crate::array::js_array_alloc(2);
 
@@ -2179,18 +2122,6 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let key_str = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
 
     unsafe {
-        // A class instance's private members (`#x` field, `#m` method) are never
-        // reachable via `in` with a string key. `"#x" in instance` must be
-        // false even though `#x` lives in the instance keys_array. Plain object
-        // literals (class_id 0) keep real `#`-prefixed string keys visible.
-        if (*obj_ptr).class_id != 0 {
-            if let Some(qk) = super::has_own_helpers::str_from_string_header(key_str) {
-                if private_member_key_bytes(qk.as_bytes()) {
-                    return nanbox_false;
-                }
-            }
-        }
-
         let keys = (*obj_ptr).keys_array;
         if keys.is_null() {
             return nanbox_false;

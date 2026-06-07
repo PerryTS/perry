@@ -123,7 +123,7 @@ pub(super) fn scoped_static_method_name(
         module_prefix,
         sanitize(class_name),
         class_id,
-        sanitize_member(method_name)
+        sanitize(method_name)
     )
 }
 
@@ -267,7 +267,7 @@ pub(super) fn scoped_method_name(
         "perry_method_{}__{}__{}",
         module_prefix,
         sanitize(class_name),
-        sanitize_member(method_name)
+        sanitize(method_name)
     )
 }
 
@@ -275,15 +275,6 @@ pub(super) fn scoped_method_name(
 /// `[A-Za-z0-9_]` with an underscore. LLVM IR identifiers cannot start with
 /// a digit, so prefix with `_` if the first character would be one (this
 /// happens with module names like `05_fibonacci.ts`).
-///
-/// This must stay byte-compatible with the driver's `compute_module_prefix`
-/// (perry/src/commands/compile/resolve.rs): the module-symbol prefix is
-/// `sanitize(hir.name)` on the codegen side and `compute_module_prefix(path)`
-/// on the importer side, and the two have to agree or cross-module
-/// `perry_fn_<prefix>__<name>` references go unresolved at link time. It is
-/// therefore deliberately *lossy* (and not injective) — do NOT change the
-/// `_`-collapse here. For class member names, which need an injective mapping
-/// to avoid symbol collisions, use [`sanitize_member`] instead.
 pub(super) fn sanitize(name: &str) -> String {
     let mut s: String = name
         .chars()
@@ -295,40 +286,6 @@ pub(super) fn sanitize(name: &str) -> String {
             }
         })
         .collect();
-    if s.chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        s.insert(0, '_');
-    }
-    s
-}
-
-/// Sanitize a class **member** name (method / getter / setter) for use in an
-/// LLVM symbol, injectively.
-///
-/// [`sanitize`] collapses every non-`[A-Za-z0-9_]` char to a single `_`, so
-/// distinct private members like `#$`, `#_`, and `#℘` all mangle to the same
-/// `perry_method_…__C____` symbol and clang rejects the second definition with
-/// "invalid redefinition of function" — failing the whole module. Member
-/// symbols are module-local (instance methods/accessors dispatch through the
-/// runtime vtable by source name, not by cross-module LLVM symbol), so the
-/// encoding only has to be self-consistent within one codegen pass; it does
-/// NOT need to match the driver's module-prefix derivation. Escaping each
-/// non-alnum char to `_<hex-codepoint>_` keeps the mapping injective and within
-/// the legal symbol charset. Names made only of `[A-Za-z0-9_]` (essentially all
-/// ordinary identifiers) are returned byte-for-byte unchanged.
-pub(super) fn sanitize_member(name: &str) -> String {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            s.push(c);
-        } else {
-            let _ = write!(s, "_{:x}_", c as u32);
-        }
-    }
     if s.chars()
         .next()
         .map(|c| c.is_ascii_digit())

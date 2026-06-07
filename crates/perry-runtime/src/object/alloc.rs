@@ -632,9 +632,6 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     let alloc_limit = std::cmp::max(src_field_count, 8);
     let header_size = std::mem::size_of::<ObjectHeader>();
     let src_fields = (src as *const u8).add(header_size) as *const u64;
-    // Spread (`{...src}`) copies own enumerable string keys; a class instance's
-    // private fields (`#x`) are not enumerable and must not be copied.
-    let src_hide_private = (*src).class_id != 0;
 
     // Iterate up to `key_count`, not `min(key_count, src_field_count)`.
     // For objects with overflow fields (≥9 keys) `src_field_count` caps
@@ -651,9 +648,6 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         // Route SSO through `js_get_string_pointer_unified` so the
         // destination set-by-name path sees a stable heap pointer.
         if !key_val.is_any_string() {
-            continue;
-        }
-        if src_hide_private && super::field_get_set::private_member_key_value(key_val) {
             continue;
         }
         let key_f64 = f64::from_bits(key_val.bits());
@@ -839,11 +833,6 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(src_keys, i as u32);
             if !key_val.is_any_string() {
-                continue;
-            }
-            // `Object.assign` copies own enumerable string keys; a class
-            // instance's private fields (`#x`) are not enumerable.
-            if (*src).class_id != 0 && super::field_get_set::private_member_key_value(key_val) {
                 continue;
             }
             let key_f64 = f64::from_bits(key_val.bits());

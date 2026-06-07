@@ -183,11 +183,6 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if let Some(class_id) = class_ref_id(obj_value) {
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
-                // Private methods/accessors/static fields (`#m`) are not own
-                // properties of the prototype or constructor.
-                if super::field_get_set::private_member_key_bytes(method_name.as_bytes()) {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
-                }
                 if super::class_registry::class_is_key_deleted(class_id, &method_name) {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
@@ -407,21 +402,6 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
-
-        // Class-instance private fields (`#x`) are not own string properties.
-        // Guarded on the real object GC type so `class_id` isn't read off an
-        // array/other header.
-        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let gc_header =
-                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT && (*obj).class_id != 0 {
-                if let Some(ref name) = key_rust {
-                    if super::field_get_set::private_member_key_bytes(name.as_bytes()) {
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
-                    }
-                }
-            }
-        }
 
         if let Some(desc) = super::arguments_object_descriptor(obj, key_str) {
             return desc;
@@ -791,10 +771,6 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                     }
                 });
             }
-            // Private methods/accessors (`#m`) and static private fields (`#x`)
-            // live in the vtable / static tables under `#`-prefixed keys but are
-            // never own properties of the prototype or constructor.
-            names.retain(|n| !super::field_get_set::private_member_key_bytes(n.as_bytes()));
             sort_property_names_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {
@@ -925,15 +901,9 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 None => j as u32,
             }
         };
-        // Hide class-instance private fields (`#x`); plain object literals
-        // (class_id 0) keep any real `#`-prefixed string key.
-        let hide_private = (*obj).class_id != 0;
         let result = crate::array::js_array_alloc(len as u32);
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, pos(i));
-            if hide_private && super::field_get_set::private_member_key_value(key_val) {
-                continue;
-            }
             crate::array::js_array_push_f64(result, f64::from_bits(key_val.bits()));
         }
         f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000)

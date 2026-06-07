@@ -6,7 +6,7 @@ use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
-use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
+use super::helpers::{sanitize, scoped_static_method_name};
 
 /// Emit the string pool into the module: byte-array constants, handle
 /// globals, and the `__perry_init_strings_<prefix>` function that
@@ -395,7 +395,7 @@ pub(super) fn emit_string_pool(
                 "perry_method_{}__{}__{}",
                 module_prefix,
                 sanitize(class_name),
-                sanitize_member(&method.name),
+                sanitize(&method.name),
             );
             let has_synth_args = method
                 .params
@@ -643,7 +643,7 @@ pub(super) fn emit_string_pool(
                 "perry_method_{}__{}__{}",
                 module_prefix,
                 sanitize(class_name),
-                sanitize_member(&inner),
+                sanitize(&inner),
             );
             getter_pairs.push((cid, prop.clone(), llvm_name));
         }
@@ -703,7 +703,7 @@ pub(super) fn emit_string_pool(
                 "perry_method_{}__{}__{}",
                 module_prefix,
                 sanitize(class_name),
-                sanitize_member(&inner),
+                sanitize(&inner),
             );
             setter_pairs.push((cid, prop.clone(), llvm_name));
         }

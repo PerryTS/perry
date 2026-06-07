@@ -1493,6 +1493,20 @@ fn build_async_catch_route_body(
         )));
     }
 
+    // Legacy async path: a `.throw()` resumed into this catch closes the
+    // generator if the catch handler `return`s (the rewrite below turns
+    // `return X` into `return {value: X, done: true}`, which exits the closure
+    // *before* the post-catch state/`done` bookkeeping runs). Mark `done = true`
+    // up front so a subsequent `.next()` sees a completed generator; if the
+    // catch instead completes normally and falls through, the reset below
+    // restores `done = false` so the post-catch suspension stays live.
+    if !fall_through {
+        body.push(Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        )));
+    }
+
     let mut rewritten = route.body.clone();
     rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
     rewrite_yield_to_await_in_stmts(&mut rewritten);
@@ -1535,6 +1549,14 @@ fn build_async_catch_route_body(
         body.extend(rewritten);
     }
 
+    if !fall_through {
+        // Catch completed normally (no `return`): the generator is not done —
+        // undo the up-front `done = true` and suspend at the post-catch state.
+        body.push(Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(false)),
+        )));
+    }
     body.push(Stmt::Expr(Expr::LocalSet(
         state_id,
         Box::new(Expr::Number(route.post_catch_state as f64)),

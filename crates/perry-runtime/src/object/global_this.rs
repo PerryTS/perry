@@ -2025,6 +2025,15 @@ fn generator_proto_method(method: &[u8], arg: f64, is_async: bool) -> f64 {
     {
         return bad_receiver(method);
     }
+    // A sync generator instance also owns `next`/`return`/`throw`, so the
+    // structural check above can't tell it from an async generator. The
+    // `%AsyncGenerator.prototype%` methods must reject a sync-generator `this`
+    // (and vice versa): gate on the async request-queue brand.
+    if is_async
+        != super::async_generator_queue::is_async_generator_instance(this_obj as *mut ObjectHeader)
+    {
+        return bad_receiver(method);
+    }
     match own_method(method) {
         Some(own_closure) => crate::closure::js_closure_call1(own_closure, arg),
         None => bad_receiver(method),
@@ -2135,6 +2144,19 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     let closure = crate::closure::clean_closure_ptr(closure_ptr);
     if closure.is_null() || crate::closure::get_valid_func_ptr(closure).is_null() {
         return obj;
+    }
+
+    // Async-generator instances need the request-queue wrapper installed on
+    // their `next`/`return`/`throw` so same-stack follow-up calls queue (spec
+    // AsyncGeneratorEnqueue) and `.return(v)` awaits `v`. The non-closure
+    // fallback (`js_generator_attach_prototype`) does this when codegen knows
+    // the function is async; on the closure-identity path we read the async
+    // brand from the function's registration (the `async function*` wrapper
+    // symbol is recorded via `js_register_closure_async_generator_function`).
+    if crate::closure::is_registered_async_generator_function(
+        crate::closure::get_valid_func_ptr(closure),
+    ) {
+        super::async_generator_queue::wrap_async_generator_instance(obj_ptr as *mut ObjectHeader);
     }
 
     let Some(proto) = generator_function_prototype_of(closure as usize) else {

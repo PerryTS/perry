@@ -45,63 +45,63 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
         type_args: Vec::new(),
     };
     match property.as_str() {
-        "map" if args.len() == 1 => {
+        "map" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayMap {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "filter" if args.len() == 1 => {
+        "filter" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayFilter {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "forEach" if args.len() == 1 => {
+        "forEach" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayForEach {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "find" if args.len() == 1 => {
+        "find" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayFind {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "findIndex" if args.len() == 1 => {
+        "findIndex" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayFindIndex {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "findLast" if args.len() == 1 => {
+        "findLast" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayFindLast {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "findLastIndex" if args.len() == 1 => {
+        "findLastIndex" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayFindLastIndex {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "some" if args.len() == 1 => {
+        "some" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArraySome {
                 array: object,
                 callback: Box::new(cb),
             }
         }
-        "every" if args.len() == 1 => {
+        "every" if !args.is_empty() => {
             let cb = args.into_iter().next().unwrap();
             Expr::ArrayEvery {
                 array: object,

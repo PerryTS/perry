@@ -14,32 +14,14 @@ use std::fmt::Write as FmtWrite;
 
 // ─── JSON.stringify with replacer ────────────────────────────────────────────
 
-/// Call a replacer closure as `replacer.call(holder, key, value)` per spec
-/// (SerializeJSONProperty step 3) and return the result as f64. `holder_f64` is
-/// the containing object/array (or the `{"": value}` wrapper at the root), bound
-/// as the replacer's `this` (replacer-function-arguments / -wrapper).
+/// Call a replacer closure with (key, value) and return the result as f64
 #[inline]
 pub(crate) unsafe fn call_replacer(
     replacer: *const crate::ClosureHeader,
     key_f64: f64,
     value_f64: f64,
-    holder_f64: f64,
 ) -> f64 {
-    let prev = crate::object::js_implicit_this_set(holder_f64);
-    let result = crate::js_closure_call2(replacer, key_f64, value_f64);
-    crate::object::js_implicit_this_set(prev);
-    result
-}
-
-/// Build the `{"": value}` wrapper object that holds the root value for the
-/// initial `SerializeJSONProperty("", wrapper)` call — used as the replacer's
-/// `this` for the root invocation (replacer-function-wrapper).
-#[inline]
-unsafe fn make_root_wrapper(value: f64) -> f64 {
-    let wrapper = crate::object::js_object_alloc(0, 1);
-    let empty_key = js_string_from_bytes(b"".as_ptr(), 0);
-    crate::object::js_object_set_field_by_name(wrapper, empty_key, value);
-    nanbox_pointer_f64(wrapper as *const u8)
+    crate::js_closure_call2(replacer, key_f64, value_f64)
 }
 
 /// Resolve `value.toJSON(key)` if `value` is an object with a callable
@@ -50,17 +32,6 @@ unsafe fn make_root_wrapper(value: f64) -> f64 {
 #[inline]
 unsafe fn apply_to_json(value: f64) -> f64 {
     let bits = value.to_bits();
-    // A BigInt resolves `BigInt.prototype.toJSON` too (SerializeJSONProperty
-    // step 2 applies to BigInt values). If absent, the BigInt flows through
-    // unchanged and the terminal serializer throws the BigInt TypeError.
-    if (bits & 0xFFFF_0000_0000_0000) == BIGINT_TAG {
-        if let Some(r) =
-            super::stringify::bigint_resolve_to_json(value, super::stringify::json_empty_key())
-        {
-            return r;
-        }
-        return value;
-    }
     if let Some(ptr) = extract_pointer(bits) {
         // Only plain JS objects carry a `toJSON` field worth probing; arrays /
         // buffers / errors don't, and probing them would walk an unrelated
@@ -106,9 +77,14 @@ unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
     } else if replaced_bits == TAG_FALSE {
         buf.push_str("false");
     } else if replaced_tag == BIGINT_TAG {
-        // A BigInt that survived toJSON + replacer is not JSON-serializable
-        // (ECMA-262 25.5.2 step 11) — throw a TypeError (value-bigint-order).
-        super::stringify::throw_bigint_json_error();
+        let bigint_ptr = (replaced_bits & POINTER_MASK) as *const crate::BigIntHeader;
+        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
+        if let Some(s) = str_from_header(str_ptr) {
+            // BigInt toString gives a plain number string (no quotes).
+            buf.push_str(s);
+        } else {
+            buf.push_str("null");
+        }
     } else if extract_pointer(replaced_bits).is_some() {
         // Pointer — caller recurses with the replacer.
         return false;
@@ -142,14 +118,6 @@ unsafe fn dispatch_pointer_with_replacer(
     indent: &str,
     depth: usize,
 ) {
-    // A boxed primitive returned by the replacer serializes as its underlying
-    // primitive (value-boolean-object: a `new Boolean(true)` replacer result
-    // becomes `true`, not `{}`).
-    if let Some(prim) = crate::builtins::boxed_primitive_json_value(replaced) {
-        if write_replaced_scalar(buf, prim) {
-            return;
-        }
-    }
     // Buffer / Uint8Array have no GcHeader — detect before gc_obj_type so the
     // tag read doesn't deref unrelated memory (issue #639 pattern). This
     // dispatch serves both compact (indent == "") and pretty replacer walks,
@@ -289,16 +257,11 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             }
         }
         let field_after_to_json = apply_to_json_keyed(field_val, key_f64_for_replacer);
-        let holder = nanbox_pointer_f64(ptr);
-        let replaced = call_replacer(replacer, key_f64_for_replacer, field_after_to_json, holder);
+        let replaced = call_replacer(replacer, key_f64_for_replacer, field_after_to_json);
         let replaced_bits = replaced.to_bits();
 
-        // Omit the property if the replacer returns undefined, a function, or
-        // a Symbol.
-        if replaced_bits == TAG_UNDEFINED
-            || is_closure_value(replaced_bits)
-            || super::stringify::is_symbol_bits(replaced_bits)
-        {
+        // Omit the property if the replacer returns undefined or a function.
+        if replaced_bits == TAG_UNDEFINED || is_closure_value(replaced_bits) {
             continue;
         }
 
@@ -314,10 +277,11 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             }
         }
 
-        // Write the key (escaped — property names are JSON strings).
+        // Write the key
         if let Some(key_str) = key_str_opt {
-            write_escaped_string(buf, key_str);
-            buf.push_str(if use_pretty { ": " } else { ":" });
+            buf.push('"');
+            buf.push_str(key_str);
+            buf.push_str(if use_pretty { "\": " } else { "\":" });
         } else {
             let _ = write!(buf, "\"field{}\"{}", f, if use_pretty { ": " } else { ":" });
         }
@@ -389,15 +353,11 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
         let key_f64 = nanbox_string_f64(idx_ptr);
 
         let elem_after_to_json = apply_to_json_keyed(elem, key_f64);
-        let holder = nanbox_pointer_f64(ptr);
-        let replaced = call_replacer(replacer, key_f64, elem_after_to_json, holder);
+        let replaced = call_replacer(replacer, key_f64, elem_after_to_json);
         let replaced_bits = replaced.to_bits();
 
-        // Array holes / undefined / functions / Symbols become null (per spec).
-        if replaced_bits == TAG_UNDEFINED
-            || is_closure_value(replaced_bits)
-            || super::stringify::is_symbol_bits(replaced_bits)
-        {
+        // Array holes / undefined / functions become null (per JSON spec).
+        if replaced_bits == TAG_UNDEFINED || is_closure_value(replaced_bits) {
             buf.push_str("null");
             continue;
         }
@@ -439,9 +399,8 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     let empty_key_f64 = nanbox_string_f64(empty_str);
     let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
 
-    // Call replacer with ("", root_value), bound to the {"": value} wrapper.
-    let root_holder = make_root_wrapper(value);
-    let replaced_root = call_replacer(replacer, empty_key_f64, value_after_to_json, root_holder);
+    // Call replacer with ("", root_value)
+    let replaced_root = call_replacer(replacer, empty_key_f64, value_after_to_json);
     let replaced_bits = replaced_root.to_bits();
 
     // If replacer returns undefined for root, return undefined.
@@ -537,21 +496,17 @@ pub(crate) unsafe fn stringify_value_pretty(
     }
 
     if tag == BIGINT_TAG {
-        // Apply `BigInt.prototype.toJSON` or throw (see stringify.rs).
-        match super::stringify::bigint_resolve_to_json(value, super::stringify::json_empty_key()) {
-            Some(r) => stringify_value_pretty(r, TYPE_UNKNOWN, buf, indent, depth),
-            None => super::stringify::throw_bigint_json_error(),
+        let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
+        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
+        if let Some(s) = str_from_header(str_ptr) {
+            write_escaped_string(buf, s);
+        } else {
+            buf.push_str("null");
         }
         return;
     }
 
     if let Some(ptr) = extract_pointer(bits) {
-        // A Symbol or function reaching the value dispatcher serializes as
-        // `null`; object-field omission is handled at the loop.
-        if super::stringify::is_symbol_bits(bits) || is_closure_value(bits) {
-            buf.push_str("null");
-            return;
-        }
         // #3857: a boxed primitive wrapper (`new String`/`Number`/`Boolean`,
         // `Object(1n)`) serializes as its underlying primitive. Must run before
         // the `is_object_pointer` probes below, which would deref the wrapper
@@ -695,10 +650,7 @@ pub(crate) unsafe fn stringify_object_pretty(
             }
         }
         let field_bits = field_val.to_bits();
-        if field_bits == TAG_UNDEFINED
-            || is_closure_value(field_bits)
-            || super::stringify::is_symbol_bits(field_bits)
-        {
+        if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
             continue;
         }
         let key_name = if f < keys_len {
@@ -731,8 +683,9 @@ pub(crate) unsafe fn stringify_object_pretty(
         for _ in 0..inner_indent_count {
             buf.push_str(indent);
         }
-        write_escaped_string(buf, key_name);
-        buf.push_str(": ");
+        buf.push('"');
+        buf.push_str(key_name);
+        buf.push_str("\": ");
         stringify_value_pretty(*field_val, TYPE_UNKNOWN, buf, indent, inner_indent_count);
         if i + 1 < entries.len() {
             buf.push(',');
@@ -787,132 +740,6 @@ pub(crate) unsafe fn stringify_array_pretty(
 
 // ─── Array replacer (key whitelist) stringify ────────────────────────────────
 
-/// Serialize one already-resolved value (post-`toJSON`) under an array
-/// replacer. Dispatches scalars, boxed primitives, dates, buffers, raw-JSON,
-/// objects (filtered by `allowed_keys`), and arrays. The `allowed_keys`
-/// PropertyList propagates into every nested OBJECT (ECMA-262 SerializeJSONObject
-/// uses the same PropertyList at every depth) — arrays serialize all elements,
-/// but objects reached through them are still filtered.
-unsafe fn stringify_resolved_array_replacer(
-    value: f64,
-    allowed_keys: &[String],
-    buf: &mut String,
-    indent: &str,
-    depth: usize,
-    use_pretty: bool,
-) {
-    // Scalars (null/bool/string/bigint/number) emit inline.
-    if write_replaced_scalar(buf, value) {
-        return;
-    }
-    let bits = value.to_bits();
-    let ptr = match extract_pointer(bits) {
-        Some(p) => p,
-        None => {
-            buf.push_str("null");
-            return;
-        }
-    };
-    // Boxed primitive wrapper -> underlying primitive.
-    if let Some(prim) = crate::builtins::boxed_primitive_json_value(value) {
-        if write_replaced_scalar(buf, prim) {
-            return;
-        }
-    }
-    // Date -> toJSON() ISO string (or null for an Invalid Date).
-    if crate::date::is_date_cell_addr(ptr as usize) {
-        let s_ptr = crate::date::js_date_to_json(value);
-        if let Some(s) = str_from_header(s_ptr) {
-            write_escaped_string(buf, s);
-        } else {
-            buf.push_str("null");
-        }
-        return;
-    }
-    // Raw-JSON wrapper -> stored text verbatim.
-    if let Some(raw) = super::raw_json_text_bytes(ptr) {
-        buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
-        return;
-    }
-    // Buffer / Uint8Array (no GcHeader) -> dedicated serializer.
-    if crate::buffer::is_registered_buffer(ptr as usize) {
-        if use_pretty {
-            stringify_buffer_pretty(ptr, buf, indent, depth);
-        } else {
-            stringify_buffer(ptr, buf);
-        }
-        return;
-    }
-    match gc_obj_type(ptr) {
-        crate::gc::GC_TYPE_ARRAY => {
-            stringify_array_with_array_replacer(ptr, allowed_keys, buf, indent, depth, use_pretty)
-        }
-        crate::gc::GC_TYPE_OBJECT => {
-            if is_object_pointer(ptr) {
-                stringify_object_with_array_replacer(
-                    ptr,
-                    allowed_keys,
-                    buf,
-                    indent,
-                    depth,
-                    use_pretty,
-                );
-            } else if super::stringify::object_has_no_own_keys(ptr) {
-                buf.push_str("{}");
-            } else {
-                buf.push_str("null");
-            }
-        }
-        crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_ERROR => {
-            buf.push_str("{}");
-        }
-        crate::gc::GC_TYPE_STRING => {
-            let str_ptr = ptr as *const StringHeader;
-            if let Some(s) = str_from_header(str_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
-        }
-        _ => {
-            if is_object_pointer(ptr) {
-                stringify_object_with_array_replacer(
-                    ptr,
-                    allowed_keys,
-                    buf,
-                    indent,
-                    depth,
-                    use_pretty,
-                );
-            } else {
-                stringify_value(value, TYPE_UNKNOWN, buf);
-            }
-        }
-    }
-}
-
-/// SerializeJSONProperty for the array-replacer path: apply `toJSON`, then
-/// decide whether the value is serializable. Returns `false` (writing nothing)
-/// when the resolved value is undefined / a function / a Symbol — the caller
-/// omits the property (object) or emits `null` (array). Otherwise writes the
-/// serialized value to `buf` and returns `true`.
-unsafe fn serialize_property_array_replacer(
-    value: f64,
-    allowed_keys: &[String],
-    buf: &mut String,
-    indent: &str,
-    depth: usize,
-    use_pretty: bool,
-) -> bool {
-    let value = apply_to_json(value);
-    let bits = value.to_bits();
-    if bits == TAG_UNDEFINED || is_closure_value(bits) || super::stringify::is_symbol_bits(bits) {
-        return false;
-    }
-    stringify_resolved_array_replacer(value, allowed_keys, buf, indent, depth, use_pretty);
-    true
-}
-
 pub(crate) unsafe fn stringify_object_with_array_replacer(
     ptr: *const u8,
     allowed_keys: &[String],
@@ -944,65 +771,56 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     let actual_fields = std::cmp::min(num_fields, keys_len);
 
-    // Build a map of key_name -> own property VALUE. For accessor properties
-    // this invokes the getter exactly once (so a key listed twice in the
-    // replacer still only triggers a single [[Get]] — replacer-array-duplicates).
+    // Build a map of key_name -> field_value for the object
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
-        let key_f64 = *keys_elements.add(f as usize);
-        let key_bits = key_f64.to_bits();
-        let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-        let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
-            (key_bits & POINTER_MASK) as *const StringHeader
+        let field_val = *fields_ptr.add(f as usize);
+        let key_name = if f < keys_len {
+            let key_f64 = *keys_elements.add(f as usize);
+            let key_bits = key_f64.to_bits();
+            let key_tag = key_bits & 0xFFFF_0000_0000_0000;
+            let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
+                (key_bits & POINTER_MASK) as *const StringHeader
+            } else {
+                key_bits as *const StringHeader
+            };
+            str_from_header(key_ptr)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("field{}", f))
         } else {
-            key_bits as *const StringHeader
+            format!("field{}", f)
         };
-        let key_name = str_from_header(key_ptr)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("field{}", f));
-        // Invoke an own getter ([[Get]]); fall back to the stored slot.
-        let value = crate::object::json_object_getter_value(obj, key_f64)
-            .unwrap_or_else(|| *fields_ptr.add(f as usize));
-        field_map.push((key_name, value));
+        field_map.push((key_name, field_val));
     }
 
-    let inner_depth = depth + 1;
     buf.push('{');
     let mut first = true;
     for allowed_key in allowed_keys {
-        let field_val = match field_map.iter().find(|(k, _)| k == allowed_key) {
-            Some((_, v)) => *v,
-            // Property absent -> [[Get]] returns undefined -> omitted.
-            None => continue,
-        };
-        // Tentatively write the separator + key, then serialize. If the value
-        // resolves to undefined/function/Symbol, roll back the whole entry.
-        let save = buf.len();
-        if !first {
-            buf.push(',');
-        }
-        if use_pretty {
-            buf.push('\n');
-            for _ in 0..inner_depth {
-                buf.push_str(indent);
+        if let Some((_, field_val)) = field_map.iter().find(|(k, _)| k == allowed_key) {
+            let field_bits = field_val.to_bits();
+            if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
+                continue;
             }
-            write_escaped_string(buf, allowed_key);
-            buf.push_str(": ");
-        } else {
-            write_escaped_string(buf, allowed_key);
-            buf.push(':');
-        }
-        if serialize_property_array_replacer(
-            field_val,
-            allowed_keys,
-            buf,
-            indent,
-            inner_depth,
-            use_pretty,
-        ) {
+            if !first {
+                buf.push(',');
+            }
             first = false;
-        } else {
-            buf.truncate(save);
+            if use_pretty {
+                buf.push('\n');
+                let inner_indent_count = depth + 1;
+                for _ in 0..inner_indent_count {
+                    buf.push_str(indent);
+                }
+                buf.push('"');
+                buf.push_str(allowed_key);
+                buf.push_str("\": ");
+                stringify_value_pretty(*field_val, TYPE_UNKNOWN, buf, indent, inner_indent_count);
+            } else {
+                buf.push('"');
+                buf.push_str(allowed_key);
+                buf.push_str("\":");
+                stringify_value(*field_val, TYPE_UNKNOWN, buf);
+            }
         }
     }
     if use_pretty && !first {
@@ -1015,145 +833,34 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
-/// Array walk under an array replacer. Arrays ignore the PropertyList for their
-/// own indices (all elements serialize), but objects reached through them are
-/// still filtered by `allowed_keys`. undefined / function / Symbol elements
-/// serialize as `null` (spec).
-pub(crate) unsafe fn stringify_array_with_array_replacer(
-    ptr: *const u8,
-    allowed_keys: &[String],
-    buf: &mut String,
-    indent: &str,
-    depth: usize,
-    use_pretty: bool,
-) {
-    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
-        let msg = "Converting circular structure to JSON";
-        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
-    }
-    STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+// ─── Extract array of strings from a JSValue array ──────────────────────────
 
-    let arr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
-    if arr.is_null() {
-        buf.push_str("[]");
-        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
-        return;
-    }
+pub(crate) unsafe fn extract_string_array(ptr: *const u8) -> Vec<String> {
+    let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-    if len == 0 {
-        buf.push_str("[]");
-        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
-        return;
-    }
-    let inner_depth = depth + 1;
-    buf.push('[');
-    for i in 0..len {
-        if i > 0 {
-            buf.push(',');
-        }
-        if use_pretty {
-            buf.push('\n');
-            for _ in 0..inner_depth {
-                buf.push_str(indent);
-            }
-        }
-        let elem = *elements.add(i as usize);
-        if !serialize_property_array_replacer(
-            elem,
-            allowed_keys,
-            buf,
-            indent,
-            inner_depth,
-            use_pretty,
-        ) {
-            buf.push_str("null");
-        }
-    }
-    if use_pretty {
-        buf.push('\n');
-        for _ in 0..depth {
-            buf.push_str(indent);
-        }
-    }
-    buf.push(']');
-    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
-}
-
-// ─── Build the PropertyList from an array replacer ──────────────────────────
-
-/// Build the `PropertyList` from an array replacer per ECMA-262 25.5.2 step 5.b:
-///
-///   * a String entry is kept verbatim,
-///   * a Number entry is coerced via `ToString`,
-///   * a Number/String **wrapper object** (has `[[NumberData]]`/`[[StringData]]`)
-///     is coerced via `ToString` (which invokes its `toString`),
-///   * everything else (Boolean, null, undefined, Symbol, BigInt, plain object,
-///     function) is ignored,
-///
-/// and duplicate keys are dropped, preserving first-seen order.
-pub(crate) unsafe fn build_property_list(ptr: *const u8) -> Vec<String> {
-    let arr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
-    if arr.is_null() {
-        return Vec::new();
-    }
-    let len = (*arr).length;
-    let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-    let mut result: Vec<String> = Vec::new();
-    let mut push_unique = |s: String, result: &mut Vec<String>| {
-        if !result.iter().any(|k| *k == s) {
-            result.push(s);
-        }
-    };
+    let mut result = Vec::new();
     for i in 0..len {
         let elem = *elements.add(i as usize);
-        let bits = elem.to_bits();
-        let tag = bits & 0xFFFF_0000_0000_0000;
-        if tag == STRING_TAG {
-            let str_ptr = (bits & POINTER_MASK) as *const StringHeader;
+        let elem_bits = elem.to_bits();
+        let elem_tag = elem_bits & 0xFFFF_0000_0000_0000;
+        if elem_tag == STRING_TAG {
+            let str_ptr = (elem_bits & POINTER_MASK) as *const StringHeader;
             if let Some(s) = str_from_header(str_ptr) {
-                push_unique(s.to_string(), &mut result);
+                result.push(s.to_string());
             }
-        } else if tag == crate::value::SHORT_STRING_TAG {
-            let jsval = JSValue::from_bits(bits);
+        } else if elem_tag == crate::value::SHORT_STRING_TAG {
+            let jsval = JSValue::from_bits(elem_bits);
             let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
             let n = jsval.short_string_to_buf(&mut scratch);
             if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-                push_unique(s.to_string(), &mut result);
+                result.push(s.to_string());
             }
-        } else if let Some(p) = extract_pointer(bits) {
-            // GC_TYPE_STRING heap string entry.
-            if !is_object_pointer(p) && gc_obj_type(p) == crate::gc::GC_TYPE_STRING {
-                if let Some(s) = str_from_header(p as *const StringHeader) {
-                    push_unique(s.to_string(), &mut result);
-                }
-                continue;
+        } else if is_raw_pointer(elem_bits) {
+            let str_ptr = elem_bits as *const StringHeader;
+            if let Some(s) = str_from_header(str_ptr) {
+                result.push(s.to_string());
             }
-            // Number/String wrapper object -> ToString(v) (invokes toString).
-            // Boxed Boolean/BigInt/Symbol and plain objects are ignored.
-            match crate::builtins::boxed_primitive_to_string_tag(elem) {
-                Some("Number") | Some("String") => {
-                    let s_ptr = crate::value::js_jsvalue_to_string(elem);
-                    if let Some(s) = str_from_header(s_ptr) {
-                        push_unique(s.to_string(), &mut result);
-                    }
-                }
-                _ => {}
-            }
-        } else if tag == BIGINT_TAG
-            || bits == TAG_NULL
-            || bits == TAG_TRUE
-            || bits == TAG_FALSE
-            || bits == TAG_UNDEFINED
-        {
-            // Ignored entry types.
-        } else {
-            // Plain Number primitive -> ToString.
-            push_unique(crate::string::js_format_f64(elem), &mut result);
         }
     }
     result
@@ -1203,13 +910,6 @@ pub unsafe extern "C" fn js_json_stringify_full(
         return TAG_UNDEFINED as i64;
     }
 
-    // A top-level Symbol serializes to undefined unless a function replacer
-    // substitutes it (handled in the closure branch below). An array replacer
-    // never substitutes the root value, so it stays undefined there too.
-    if super::stringify::is_symbol_bits(value_bits) && !is_closure_value(replacer_f64.to_bits()) {
-        return TAG_UNDEFINED as i64;
-    }
-
     // Issue #179 Phase 4: lazy-stringify fast path for unmutated
     // lazy arrays — only when no replacer / no indent (matches the
     // output `JSON.stringify(value)` produces; replacer/indent
@@ -1232,11 +932,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
     let value = redirect_lazy_to_materialized(value);
     let value_bits = value.to_bits();
 
-    // Determine spacer/indent. A boxed Number/String wrapper space argument is
-    // first unwrapped to its primitive — spec ToNumber/ToString on an Object
-    // `space` with [[NumberData]]/[[StringData]] (space-number-object,
-    // space-string-object).
-    let spacer_f64 = crate::builtins::boxed_primitive_json_value(spacer_f64).unwrap_or(spacer_f64);
+    // Determine spacer/indent
     let indent_str: String;
     let spacer_bits = spacer_f64.to_bits();
     let spacer_tag = spacer_bits & 0xFFFF_0000_0000_0000;
@@ -1244,38 +940,22 @@ pub unsafe extern "C" fn js_json_stringify_full(
         indent_str = String::new();
     } else if spacer_tag == STRING_TAG {
         let sp_ptr = (spacer_bits & POINTER_MASK) as *const StringHeader;
-        // Spec: a string space is clamped to its first 10 code units
-        // (space-string-range).
-        indent_str = str_from_header(sp_ptr)
-            .unwrap_or("")
-            .chars()
-            .take(10)
-            .collect();
+        indent_str = str_from_header(sp_ptr).unwrap_or("").to_string();
     } else if spacer_tag == crate::value::SHORT_STRING_TAG {
         // v0.5.213 SSO: spacer passed as inline short string
         // (e.g. `JSON.stringify(obj, null, "  ")` where "  " is 2
         // bytes — fits SSO). Decode into scratch, copy into the
-        // indent_str buffer for the formatter. (SSO max is 5 bytes < 10,
-        // so the clamp is a no-op here but kept uniform.)
+        // indent_str buffer for the formatter.
         let jsval = JSValue::from_bits(spacer_bits);
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut scratch);
-        indent_str = std::str::from_utf8(&scratch[..n])
-            .unwrap_or("")
-            .chars()
-            .take(10)
-            .collect();
+        indent_str = std::str::from_utf8(&scratch[..n]).unwrap_or("").to_string();
     } else if spacer_bits == TAG_TRUE {
         indent_str = String::new();
     } else {
-        // Number — ToInteger spaces, clamped to 0..=10 (space-number-float:
-        // a non-integer / negative count truncates toward zero then clamps).
-        let n = if spacer_f64.is_nan() {
-            0.0
-        } else {
-            spacer_f64.trunc()
-        };
-        let n = n.clamp(0.0, 10.0) as usize;
+        // Number — use that many spaces (clamped to 10)
+        let n = spacer_f64 as usize;
+        let n = n.min(10);
         indent_str = " ".repeat(n);
     }
     let use_pretty = !indent_str.is_empty();
@@ -1291,7 +971,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         } else {
             replacer_bits as *const u8
         };
-        Some(build_property_list(arr_ptr))
+        Some(extract_string_array(arr_ptr))
     } else {
         None
     };
@@ -1334,33 +1014,27 @@ pub unsafe extern "C" fn js_json_stringify_full(
     let mut buf = take_stringify_buf();
 
     if let Some(ref allowed_keys) = array_replacer {
-        // SerializeJSONProperty("", {"": value}): apply toJSON to the root, then
-        // serialize. The PropertyList filters every nested OBJECT (incl. objects
-        // reached through arrays). A root that resolves to undefined / function /
-        // Symbol yields `undefined`.
-        let resolved = apply_to_json(value);
-        let rbits = resolved.to_bits();
-        if rbits == TAG_UNDEFINED
-            || is_closure_value(rbits)
-            || super::stringify::is_symbol_bits(rbits)
-        {
-            STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
-            restore_stringify_buf(buf);
-            match saved_cache {
-                Some(s) => restore_shape_cache(s),
-                None => clear_shape_cache(),
+        // Array replacer: only applies to objects at the top level
+        if let Some(ptr) = extract_pointer(value_bits) {
+            if is_object_pointer(ptr) {
+                stringify_object_with_array_replacer(
+                    ptr,
+                    allowed_keys,
+                    &mut buf,
+                    &indent_str,
+                    0,
+                    use_pretty,
+                );
+            } else if use_pretty {
+                stringify_value_pretty(value, TYPE_UNKNOWN, &mut buf, &indent_str, 0);
+            } else {
+                stringify_value(value, TYPE_UNKNOWN, &mut buf);
             }
-            STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
-            return TAG_UNDEFINED as i64;
+        } else if use_pretty {
+            stringify_value_pretty(value, TYPE_UNKNOWN, &mut buf, &indent_str, 0);
+        } else {
+            stringify_value(value, TYPE_UNKNOWN, &mut buf);
         }
-        stringify_resolved_array_replacer(
-            resolved,
-            allowed_keys,
-            &mut buf,
-            &indent_str,
-            0,
-            use_pretty,
-        );
     } else if let Some(closure_ptr) = closure_replacer {
         // Function replacer. Per spec SerializeJSONProperty: toJSON FIRST, then
         // the replacer, then serialize — threading `indent_str` so the 3-arg
@@ -1368,9 +1042,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
         let empty_key_f64 = nanbox_string_f64(empty_str);
         let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
-        let root_holder = make_root_wrapper(value);
-        let replaced_root =
-            call_replacer(closure_ptr, empty_key_f64, value_after_to_json, root_holder);
+        let replaced_root = call_replacer(closure_ptr, empty_key_f64, value_after_to_json);
         let replaced_bits = replaced_root.to_bits();
         if replaced_bits == TAG_UNDEFINED {
             STRINGIFY_STACK.with(|s| s.borrow_mut().clear());

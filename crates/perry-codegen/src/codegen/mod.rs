@@ -60,7 +60,7 @@ use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, sanitize_member, scoped_fn_name, scoped_method_name, scoped_static_method_name,
+    sanitize, scoped_fn_name, scoped_method_name, scoped_static_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
@@ -1726,7 +1726,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 "perry_method_{}__{}__{}",
                 sanitize(src),
                 sanitize(&ic.name),
-                sanitize_member(method_name),
+                sanitize(method_name),
             );
             method_names
                 .entry((effective_name.to_string(), method_name.clone()))

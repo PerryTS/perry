@@ -19,10 +19,23 @@ use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFI
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
+/// Which `AsyncGenerator.prototype` method a queued request came from. Only
+/// `return` triggers the spec's `Await` of the resume value
+/// (`AsyncGeneratorUnwrapYieldResumption` / `AsyncGeneratorAwaitReturn`): a
+/// `.return(v)` resume value is awaited (unwrapped) before being delivered as
+/// `{ value, done: true }`. `.next(v)` / `.throw(e)` deliver their argument
+/// straight through.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestKind {
+    NextOrThrow,
+    Return,
+}
+
 struct AsyncGeneratorRequest {
     original: *const ClosureHeader,
     arg: f64,
     promise: *mut Promise,
+    kind: RequestKind,
 }
 
 struct AsyncGeneratorQueueState {
@@ -167,6 +180,19 @@ fn make_drain_wrapper(state_id: usize) -> *mut ClosureHeader {
     wrapper
 }
 
+/// True if `obj` is an async-generator instance — i.e. its own `next` is one of
+/// this module's request-queue wrappers (installed by
+/// `wrap_async_generator_instance`). Sync generator instances also expose own
+/// `next`/`return`/`throw`, so a structural "has these methods" check cannot
+/// tell the two apart; the queue wrapper is the async brand. Used by the
+/// `%AsyncGenerator.prototype%` thunks to reject a sync-generator `this`.
+pub(crate) fn is_async_generator_instance(obj: *mut ObjectHeader) -> bool {
+    match own_closure(obj, b"next") {
+        Some(next) => is_queue_wrapper(next),
+        None => false,
+    }
+}
+
 fn is_queue_wrapper(closure: *const ClosureHeader) -> bool {
     if closure.is_null() {
         return false;
@@ -194,18 +220,18 @@ fn original_from_wrapper(closure: *const ClosureHeader) -> *const ClosureHeader 
 }
 
 extern "C" fn async_generator_next_wrapper(closure: *const ClosureHeader, arg: f64) -> f64 {
-    async_generator_request(closure, arg)
+    async_generator_request(closure, arg, RequestKind::NextOrThrow)
 }
 
 extern "C" fn async_generator_return_wrapper(closure: *const ClosureHeader, arg: f64) -> f64 {
-    async_generator_request(closure, arg)
+    async_generator_request(closure, arg, RequestKind::Return)
 }
 
 extern "C" fn async_generator_throw_wrapper(closure: *const ClosureHeader, arg: f64) -> f64 {
-    async_generator_request(closure, arg)
+    async_generator_request(closure, arg, RequestKind::NextOrThrow)
 }
 
-fn async_generator_request(closure: *const ClosureHeader, arg: f64) -> f64 {
+fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: RequestKind) -> f64 {
     let Some(state_id) = state_id_from_wrapper(closure) else {
         return call_original(original_from_wrapper(closure), arg);
     };
@@ -239,6 +265,7 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64) -> f64 {
                     original,
                     arg,
                     promise,
+                    kind,
                 });
             } else {
                 js_promise_reject(promise, f64::from_bits(TAG_UNDEFINED));
@@ -247,9 +274,76 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64) -> f64 {
         return boxed_promise(promise);
     }
 
+    // `.return(v)` must Await `v` before resuming/closing the generator (spec
+    // `AsyncGeneratorUnwrapYieldResumption` for suspendedYield and
+    // `AsyncGeneratorAwaitReturn` for suspendedStart/completed). Route through
+    // an explicit output promise so the unwrap happens on the microtask queue.
+    if kind == RequestKind::Return {
+        let out = js_promise_new();
+        dispatch_return_with_await(state_id, original, arg, out);
+        return boxed_promise(out);
+    }
+
     let result = call_original(original, arg);
     after_initial_result(state_id, result);
     result
+}
+
+/// Await the `.return(v)` value, then invoke the original return closure with
+/// the unwrapped value and settle `out` from its result. A rejected await
+/// reports the rejection through `out` (the generator is left closed by the
+/// fulfill path's `call_original`, never resumed).
+fn dispatch_return_with_await(
+    state_id: usize,
+    original: *const ClosureHeader,
+    arg: f64,
+    out: *mut Promise,
+) {
+    let arg_promise = crate::promise::js_promise_resolved(arg);
+    let fulfill = make_return_step_wrapper(state_id, original, out, true);
+    let reject = make_return_step_wrapper(state_id, original, out, false);
+    js_promise_attach_settle_listener(arg_promise, fulfill, reject);
+}
+
+fn make_return_step_wrapper(
+    state_id: usize,
+    original: *const ClosureHeader,
+    out: *mut Promise,
+    is_fulfilled: bool,
+) -> *mut ClosureHeader {
+    let func = if is_fulfilled {
+        async_generator_return_step_fulfill as *const u8
+    } else {
+        async_generator_return_step_reject as *const u8
+    };
+    let wrapper = js_closure_alloc(func, 3);
+    js_closure_set_capture_f64(wrapper, 0, state_id as f64);
+    js_closure_set_capture_ptr(wrapper, 1, original as i64);
+    js_closure_set_capture_ptr(wrapper, 2, out as i64);
+    wrapper
+}
+
+extern "C" fn async_generator_return_step_fulfill(closure: *const ClosureHeader, value: f64) -> f64 {
+    if let Some(state_id) = state_id_from_wrapper(closure) {
+        let original = js_closure_get_capture_ptr(closure, 1) as *const ClosureHeader;
+        let out = js_closure_get_capture_ptr(closure, 2) as *mut Promise;
+        // Resume the generator's close path with the unwrapped value: runs any
+        // pending finallys and yields `{ value, done: true }` (or a
+        // finally-overridden completion).
+        let result = call_original(original, value);
+        after_queued_result(state_id, out, result);
+    }
+    value
+}
+
+extern "C" fn async_generator_return_step_reject(closure: *const ClosureHeader, reason: f64) -> f64 {
+    if let Some(state_id) = state_id_from_wrapper(closure) {
+        let out = js_closure_get_capture_ptr(closure, 2) as *mut Promise;
+        // Await(v) threw: reject this request and resume the queue without
+        // touching the generator body (spec `AsyncGeneratorReject`).
+        finish_after_immediate_queued_result(state_id, out, false, reason);
+    }
+    reason
 }
 
 extern "C" fn async_generator_drain_wrapper(closure: *const ClosureHeader) -> f64 {
@@ -339,6 +433,12 @@ fn process_one_queued_request(state_id: usize) {
     let Some((request, original)) = request_and_original else {
         return;
     };
+    // A queued `.return(v)` awaits `v` before resuming the close path, same as
+    // the head-of-line case in `async_generator_request`.
+    if request.kind == RequestKind::Return {
+        dispatch_return_with_await(state_id, original, request.arg, request.promise);
+        return;
+    }
     let result = call_original(original, request.arg);
     after_queued_result(state_id, request.promise, result);
 }
