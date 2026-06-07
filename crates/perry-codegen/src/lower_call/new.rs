@@ -570,6 +570,23 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
         blk.store(I64, &keys_ptr, &oh_addr_3);
 
+        // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
+        // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately
+        // initializes ALL `max(field_count, 8)` slots "to prevent stale data from
+        // previously freed GC objects from bleeding through." This inline bump path
+        // wrote only the headers and left the slots uninitialized, so a field
+        // read-before-write — or a GC that scans the still-constructing instance —
+        // observed stale arena bytes. When those bytes were a previously-freed
+        // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
+        // crashed with "Cannot read properties of undefined". Slots start at
+        // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
+        for i in 0..alloc_field_count {
+            let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
+            let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
+            // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
+            blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+        }
+
         // User pointer = raw + 8 (the ObjectHeader address — what the
         // function-call path returned). Convert to i64 to match what
         // the existing nanbox_pointer_inline expects.
