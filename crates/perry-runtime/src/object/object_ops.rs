@@ -2104,6 +2104,15 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     };
     let typed_array_instance_prototype = |addr: usize| -> Option<f64> {
         let kind = crate::typedarray::lookup_typed_array_kind(addr)?;
+        // A `Reflect.construct(TA, …, newTarget)` view with a custom
+        // `[[Prototype]]` (spec `GetPrototypeFromConstructor`) resolves to the
+        // recorded prototype rather than the default per-kind prototype. The
+        // link is stored in the GC-tracked static-prototype side table.
+        if let Some(proto_bits) = super::prototype_chain::object_static_prototype(addr) {
+            if proto_bits != crate::value::TAG_NULL {
+                return Some(f64::from_bits(proto_bits));
+            }
+        }
         let proto = crate::object::builtin_prototype_value(crate::typedarray::name_for_kind(kind));
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)

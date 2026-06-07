@@ -436,11 +436,28 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
     let proto_bits = proto.to_bits();
     let proto_tag = proto_bits & 0xFFFF_0000_0000_0000;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    // Both must be heap-allocated pointers. Anything else (primitives,
-    // ClassRef, etc.) is a no-op — preserves the pre-fix baseline
-    // where `<not-a-function>.prototype = X` was just a property write
-    // on a non-function value (effectively no-op in practice).
-    if func_tag != POINTER_TAG || proto_tag != POINTER_TAG {
+    // The function must be a heap-allocated pointer. Anything else (a
+    // primitive `<not-a-function>.prototype = X`) is a no-op — preserves the
+    // pre-fix baseline where it was just a property write on a non-function.
+    if func_tag != POINTER_TAG {
+        return 0;
+    }
+    // A function may legitimately have a *primitive* (e.g. `null`) prototype:
+    // `function f() {} f.prototype = null` — it just doesn't establish an
+    // `instanceof` chain. Store it as a plain `prototype` data property so reads
+    // reflect it (test262 `GetPrototypeFromConstructor` falls back to the
+    // default when `newTarget.prototype` is not an object). Without this the
+    // write was dropped and the stale auto-created prototype object lingered.
+    if proto_tag != POINTER_TAG {
+        let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+        if func_ptr != 0 && crate::closure::is_closure_ptr(func_ptr) {
+            crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+            set_builtin_property_attrs(
+                func_ptr,
+                "prototype".to_string(),
+                PropertyAttrs::new(true, false, false),
+            );
+        }
         return 0;
     }
     // Validate the proto pointer points at a real Object. If it's a
@@ -2065,6 +2082,28 @@ unsafe fn construct_registered_class_ref(
     crate::value::js_nanbox_pointer(inst as i64)
 }
 
+/// `GetPrototypeFromConstructor(newTarget)` restricted to the "use it only when
+/// it is an object" rule: returns `newTarget.prototype`'s bits when that value
+/// is an object (so a typed-array view should adopt it as its `[[Prototype]]`),
+/// or `None` when it is a primitive (so the default per-kind prototype applies).
+fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
+    let bits = new_target.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if raw == 0 {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
+    let proto = js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+    if unsafe { super::value_is_object_like(proto) } || super::class_ref_id(proto).is_some() {
+        Some(proto.to_bits())
+    } else {
+        None
+    }
+}
+
 fn constructor_prototype_bits(new_target: f64) -> Option<u64> {
     let bits = new_target.to_bits();
     if (bits >> 48) != 0x7FFD {
@@ -2112,6 +2151,44 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     if let Some(target_cid) = constructor_class_ref_id(func_value) {
         let instance_cid = new_target_class_id(nt).unwrap_or(target_cid);
         return construct_registered_class_ref(target_cid, instance_cid, args_ptr, args_len);
+    }
+    // `Reflect.construct(Int8Array, [len], newTarget)` — a typed-array
+    // constructor invoked with a distinct newTarget. Build the typed array the
+    // normal way, then honor `GetPrototypeFromConstructor(newTarget)`: when
+    // `newTarget.prototype` is an object other than the default per-kind
+    // prototype, record it as the instance's `[[Prototype]]` so
+    // `Object.getPrototypeOf` and `.constructor` resolve through it (test262
+    // `ctors*/use-custom-proto-if-object` / `use-default-proto-if-…`).
+    if let Some(ta_name) = identify_global_builtin_constructor(func_value) {
+        if matches!(
+            ta_name,
+            "Int8Array"
+                | "Uint8Array"
+                | "Uint8ClampedArray"
+                | "Int16Array"
+                | "Uint16Array"
+                | "Int32Array"
+                | "Uint32Array"
+                | "Float16Array"
+                | "Float32Array"
+                | "Float64Array"
+                | "BigInt64Array"
+                | "BigUint64Array"
+        ) {
+            // Read `newTarget.prototype` (GetPrototypeFromConstructor) BEFORE
+            // building the view: Node evaluates the proto access as part of
+            // AllocateTypedArray, so a throwing `prototype` getter must surface
+            // here even when later steps would also throw (test262
+            // `throw-type-error-before-custom-proto-access` agreement).
+            let proto_bits = new_target_custom_object_prototype(nt);
+            let result = js_new_function_construct(func_value, args_ptr, args_len);
+            if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(result) {
+                if let Some(proto_bits) = proto_bits {
+                    super::prototype_chain::object_set_static_prototype(addr, proto_bits);
+                }
+            }
+            return result;
+        }
     }
     if !is_callable_function_value(func_value) {
         return js_new_function_construct(func_value, args_ptr, args_len);

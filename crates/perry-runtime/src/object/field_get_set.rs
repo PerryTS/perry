@@ -2424,11 +2424,35 @@ pub extern "C" fn js_object_get_field_by_name(
                             )
                         }
                         b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
+                        // `(new Int8Array(…)).constructor === Int8Array`. The
+                        // instance never carries an own `constructor`; it is
+                        // inherited from the per-kind prototype. Resolve it to
+                        // the global per-kind constructor value so identity holds
+                        // (matches the buffer branch below and the `Number`
+                        // auto-box path). Custom-prototype views (set via the
+                        // `Reflect.construct` newTarget path) record their own
+                        // prototype and resolve `.constructor` through that
+                        // chain instead — handled before this native fallback.
                         b"constructor" => {
+                            // A custom-`[[Prototype]]` view (Reflect.construct
+                            // with a newTarget whose `.prototype` is an object)
+                            // inherits `.constructor` through that prototype
+                            // chain, NOT from the per-kind constructor.
+                            if let Some(proto_bits) =
+                                super::prototype_chain::object_static_prototype(addr)
+                            {
+                                if proto_bits != crate::value::TAG_NULL {
+                                    let proto = JSValue::from_bits(proto_bits);
+                                    if proto.is_pointer() {
+                                        let p = proto.as_pointer::<ObjectHeader>();
+                                        return super::js_object_get_field_by_name(p, key);
+                                    }
+                                }
+                            }
                             let name = crate::typedarray::name_for_kind(kind);
-                            let v =
+                            let ctor =
                                 super::js_get_global_this_builtin_value(name.as_ptr(), name.len());
-                            return JSValue::from_bits(v.to_bits());
+                            return JSValue::from_bits(ctor.to_bits());
                         }
                         _ => {}
                     }

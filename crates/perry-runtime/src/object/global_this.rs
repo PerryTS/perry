@@ -1691,14 +1691,6 @@ fn typed_array_constructor_this_kind() -> Option<u8> {
     crate::typedarray::kind_for_name(&name)
 }
 
-fn require_typed_array_constructor_this() -> u8 {
-    typed_array_constructor_this_kind().unwrap_or_else(|| {
-        super::object_ops::throw_object_type_error(
-            b"%TypedArray%.from/of requires a concrete typed array constructor",
-        )
-    })
-}
-
 fn typed_array_buffer_value(ta: *const crate::typedarray::TypedArrayHeader) -> f64 {
     let buf = crate::typedarray::typed_array_to_array_buffer(ta);
     if buf.is_null() {
@@ -1920,12 +1912,27 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
     // "length")` to keep working.
     install_typed_array_proto_accessors(proto);
     install_typed_array_iterator_symbol(proto);
+    // The per-kind prototypes (`Int8Array.prototype`, …) inherit ALL of their
+    // methods from this shared `%TypedArray%.prototype` (their `[[Prototype]]`),
+    // so `Int8Array.prototype.hasOwnProperty("map") === false` and
+    // `Int8Array.prototype.map === %TypedArray%.prototype.map` (test262's
+    // `prototype/*/inherited.js`).
+    //
+    // NOTE: the generic `Object.prototype` data methods + a `toString` are
+    // intentionally NOT installed here. The intrinsic prototype is allocated
+    // with zero inline field slots and already carries ~34 own properties
+    // (accessors + `@@iterator` + the spec methods below); adding the extra ~6
+    // crosses an inline-storage boundary that trips a latent field-count
+    // overflow (a heap-layout-dependent SIGSEGV under GC pressure). They are not
+    // needed for parity — `toLocaleString` is already a brand-checking method
+    // below, and `hasOwnProperty`/`valueOf`/etc. dispatch natively on instances.
     // Install the brand-checking spec methods on the shared `%TypedArray%`
-    // intrinsic prototype as well. test262's `testTypedArray.js` harness reads
+    // intrinsic prototype. test262's `testTypedArray.js` harness reads
     // `TypedArray.prototype.<m>` (where `TypedArray ===
     // Object.getPrototypeOf(Int8Array)`), so the brand check for
-    // `%TypedArray%.prototype.<m>.call(badReceiver)` must also fire when the
-    // method is read off the intrinsic, not just off a per-kind prototype.
+    // `%TypedArray%.prototype.<m>.call(badReceiver)` must fire when the method
+    // is read off the intrinsic, and the per-kind protos resolve their reads
+    // here via the `[[Prototype]]` chain.
     typed_array_proto_thunks::install_typed_array_proto_methods(proto);
     install_constructor_static_with_call_arity(
         ctor,
@@ -3281,6 +3288,22 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                         as *mut crate::gc::GcHeader;
                     (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
                 }
+                // Record the per-kind proto's `[[Prototype]]` as the shared
+                // `%TypedArray%.prototype` so the ordinary property-get chain
+                // walk (`resolve_inherited_field`) finds the inherited methods
+                // (`map`, `filter`, `toString`, …) that no longer live on the
+                // per-kind proto as own properties. `Object.getPrototypeOf`
+                // already resolves via the flag above; this link drives value
+                // reads like `Int8Array.prototype.map`.
+                let intrinsic_proto =
+                    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+                if intrinsic_proto != 0 {
+                    let proto_bits = crate::value::js_nanbox_pointer(intrinsic_proto).to_bits();
+                    super::prototype_chain::object_set_static_prototype(
+                        proto_obj as usize,
+                        proto_bits,
+                    );
+                }
             }
             // #4140: per-kind `BYTES_PER_ELEMENT` own data property on BOTH the
             // constructor and its prototype, matching Node's descriptor
@@ -4099,34 +4122,120 @@ extern "C" fn typed_array_from_thunk(
     map_fn: f64,
     this_arg: f64,
 ) -> f64 {
-    // Spec order (§%TypedArray%.from): the source is read — its `@@iterator`
-    // invoked, or its `length` getter + indexed elements evaluated — BEFORE the
-    // typed array is constructed. A throwing user iterator / length getter must
-    // therefore propagate, not be pre-empted by Perry's own "needs a concrete
-    // typed array constructor" `TypeError`. Resolve the kind lazily and only
-    // demand a concrete constructor AFTER the source has been materialized (and
-    // the map callback validated, which `js_array_from_mapped` does up front).
+    // §%TypedArray%.from step 1-2: `C` is the `this` value; if `IsConstructor(C)`
+    // is false, throw a TypeError — BEFORE the source is read. Invoked as a plain
+    // function (`var from = TA.from; from([])`) the sloppy `this` is `globalThis`
+    // (not a constructor), so this must fire even though a source is supplied
+    // (test262 `from/invoked-as-func`). A concrete TA `this` (kind known) is a
+    // constructor by definition.
     let kind_opt = typed_array_constructor_this_kind();
+    if kind_opt.is_none() {
+        require_typed_array_from_of_constructor();
+    }
+    // Past the constructor check, the source is read — its `@@iterator` invoked,
+    // or its `length` getter + indexed elements evaluated — and any throwing
+    // user iterator/getter propagates. The map callback is validated up front by
+    // `js_array_from_mapped`.
     let mapped = map_fn.to_bits() != crate::value::TAG_UNDEFINED;
     let arr = if mapped {
         crate::array::js_array_from_mapped(source, map_fn, this_arg)
     } else {
         crate::array::js_array_from_value(source)
     };
-    let kind = kind_opt.unwrap_or_else(|| {
+    typed_array_create_from_values(kind_opt, arr)
+}
+
+/// `%TypedArray%.from`/`.of` step "If IsConstructor(`this`) is false, throw a
+/// TypeError". Only called when the `this` value is not a concrete typed-array
+/// constructor (kind unknown); a user constructor passes, anything else throws.
+fn require_typed_array_from_of_constructor() {
+    let this_ctor = crate::object::js_implicit_this_get();
+    if !value_is_constructor(this_ctor) {
         super::object_ops::throw_object_type_error(
-            b"%TypedArray%.from/of requires a concrete typed array constructor",
+            b"TypedArray.from/of called with a `this` that is not a constructor",
+        );
+    }
+}
+
+/// `IsConstructor(value)` for the typed-array `from`/`of` `this` check: a class
+/// ref, a proxy, or a non-arrow user closure that is not a flagged
+/// non-constructable builtin.
+fn value_is_constructor(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits >> 48) == 0x7FFE {
+        return true; // class-ref constructor
+    }
+    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+        return true;
+    }
+    if (bits >> 48) == 0x7FFD {
+        let raw = (bits & crate::value::POINTER_MASK) as usize;
+        if crate::closure::is_closure_ptr(raw) {
+            if crate::closure::closure_is_arrow(raw as *const crate::closure::ClosureHeader) {
+                return false;
+            }
+            return !super::native_module::builtin_closure_is_non_constructable_value(value);
+        }
+    }
+    false
+}
+
+/// Build the result of `%TypedArray%.from` / `%TypedArray%.of` from a
+/// materialized values array, honoring a custom `this` constructor.
+///
+/// When `this` is a concrete typed-array constructor (`Int8Array`, …) the
+/// fast path builds the view directly. Otherwise (`%TypedArray%.from.call(
+/// userCtor, …)`) the spec's `TypedArrayCreate(C, «len»)` is realized by
+/// `Construct(C, [len])` and the values are written into the result via the
+/// element [[Set]] path — so a user constructor that throws propagates, and one
+/// that returns an arbitrary (sufficiently long) typed array is used verbatim
+/// (test262 `from/of` `custom-ctor*`).
+fn typed_array_create_from_values(
+    kind_opt: Option<u8>,
+    arr: *mut crate::array::ArrayHeader,
+) -> f64 {
+    if let Some(kind) = kind_opt {
+        let ta = crate::typedarray::js_typed_array_new_from_array(kind as i32, arr);
+        return crate::value::js_nanbox_pointer(ta as i64);
+    }
+    let ctor = crate::object::js_implicit_this_get();
+    let len = crate::array::js_array_length(arr) as usize;
+    let len_arg = [f64::from_bits(
+        crate::value::JSValue::number(len as f64).bits(),
+    )];
+    let target = unsafe { super::js_new_function_construct(ctor, len_arg.as_ptr(), 1) };
+    // `TypedArrayCreate` requires the constructed object to be a typed array
+    // with at least `len` elements.
+    let addr = crate::typedarray_props::typed_array_addr_from_value(target).unwrap_or_else(|| {
+        super::object_ops::throw_object_type_error(
+            b"TypedArray.from/of constructor did not return a TypedArray",
         )
     });
-    let ta = crate::typedarray::js_typed_array_new_from_array(kind as i32, arr);
-    crate::value::js_nanbox_pointer(ta as i64)
+    let ta_ptr = addr as *mut crate::typedarray::TypedArrayHeader;
+    let target_len = unsafe { crate::typedarray::js_typed_array_length(ta_ptr) } as usize;
+    if target_len < len {
+        // `TypedArrayCreate(C, «len»)` throws a *TypeError* (not RangeError)
+        // when the constructed typed array is shorter than the requested length
+        // (test262 `from/of` `custom-ctor-returns-smaller-instance-throws`).
+        super::object_ops::throw_object_type_error(
+            b"Derived TypedArray constructor created an array which was too small",
+        );
+    }
+    for k in 0..len {
+        let v = crate::array::js_array_get(arr, k as u32);
+        crate::typedarray::js_typed_array_set(ta_ptr, k as i32, f64::from_bits(v.bits()));
+    }
+    target
 }
 
 extern "C" fn typed_array_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
 ) -> f64 {
-    let kind = require_typed_array_constructor_this();
+    let kind_opt = typed_array_constructor_this_kind();
+    if kind_opt.is_none() {
+        require_typed_array_from_of_constructor();
+    }
     let vals = global_this_rest_array_values(rest);
     let len = vals.len() as u32;
     let arr = crate::array::js_array_alloc(len);
@@ -4136,8 +4245,7 @@ extern "C" fn typed_array_of_thunk(
             crate::array::js_array_set_f64(arr, i as u32, v);
         }
     }
-    let ta = crate::typedarray::js_typed_array_new_from_array(kind as i32, arr);
-    crate::value::js_nanbox_pointer(ta as i64)
+    typed_array_create_from_values(kind_opt, arr)
 }
 
 fn require_promise_constructor_this() {
@@ -5716,25 +5824,17 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
         | "BigInt64Array" | "BigUint64Array" => {
-            // `toString` is generic (`%TypedArray%.prototype.toString` is just
-            // `Array.prototype.toString` in the spec — no TypedArray brand
-            // check), so keep it on the shared no-op path for value reads.
-            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
-            // Install the inherited `Object.prototype` data methods FIRST so the
-            // brand-checking typed-array thunks below override the ones that
-            // overlap (e.g. `toLocaleString`, which `%TypedArray%.prototype`
-            // defines with its own ValidateTypedArray brand check rather than
-            // the lenient `Object.prototype` no-op).
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-            // Brand-checking thunks for the spec `%TypedArray%.prototype`
-            // methods: a value-path `Int8Array.prototype.map.call(plainArray)`
-            // must throw a `TypeError` (ValidateTypedArray, spec step 1). The
-            // receiver-typed fast path `new Int8Array([…]).map(…)` is lowered
-            // directly to `js_typed_array_*` by codegen and doesn't touch these.
-            // Pre-fix these were `global_this_builtin_noop_thunk`, whose
-            // `.call` re-dispatch landed on the (now array-like-lenient) Array
-            // helper and silently succeeded. #(typedarray-branded-methods).
-            typed_array_proto_thunks::install_typed_array_proto_methods(proto_obj);
+            // Per spec the per-kind prototype is nearly empty: every method,
+            // accessor, `Symbol.iterator`, `Symbol.toStringTag`, `toString`,
+            // and `toLocaleString` lives on the shared `%TypedArray%.prototype`
+            // (this proto's `[[Prototype]]`) and is *inherited*, not own — so
+            // `Int8Array.prototype.hasOwnProperty("map") === false` and
+            // `Int8Array.prototype.map === %TypedArray%.prototype.map`
+            // (test262 `prototype/*/inherited.js`). The only own properties are
+            // `constructor` (set in the constructor-setup path) and
+            // `BYTES_PER_ELEMENT`. The static-prototype link to the intrinsic
+            // is wired alongside the `OBJ_FLAG_TYPED_ARRAY_PROTO` flag so the
+            // generic property-get chain walk resolves the inherited methods.
         }
         _ => {}
     }
