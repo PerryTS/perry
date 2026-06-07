@@ -233,13 +233,7 @@ unsafe fn enforce_define_property_invariants(
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
-    validate_nonconfigurable_redefine(
-        key_name,
-        attrs,
-        cur_accessor,
-        cur_value,
-        descriptor_value,
-    );
+    validate_nonconfigurable_redefine(key_name, attrs, cur_accessor, cur_value, descriptor_value);
 }
 
 /// The non-configurable branch of `ValidateAndApplyPropertyDescriptor`, factored
@@ -1538,11 +1532,7 @@ pub extern "C" fn js_object_define_property(
                 // `[[DefineOwnProperty]]`, bypassing the `[[Set]]` writability /
                 // frozen guard (the spec invariants were already enforced by
                 // `enforce_define_property_invariants`).
-                define_property_force_store_value(
-                    obj,
-                    key_str,
-                    f64::from_bits(value_field.bits()),
-                );
+                define_property_force_store_value(obj, key_str, f64::from_bits(value_field.bits()));
             }
         }
 
