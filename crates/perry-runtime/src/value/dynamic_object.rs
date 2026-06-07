@@ -127,11 +127,21 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             crate::gc::GC_TYPE_LAZY_ARRAY => {
                 return unsafe { *(handle as *const u32) } as f64;
             }
-            // Closures, BigInts, Promises, Errors, plain Objects, Maps:
-            // no `.length`. Return 0 to match Perry's existing
-            // fallback for missing fields (JS would produce
-            // `undefined`, but the generic PropertyGet slow path
-            // already degrades to 0 here).
+            // A closure's `.length` is its spec param count (own-property
+            // override first, then the codegen-registered length). Without
+            // this arm a `Function`-typed receiver — e.g. a folded
+            // `new Function("a,b", body)` — would read 0 here. Mirrors the
+            // generic PropertyGet reflection path.
+            crate::gc::GC_TYPE_CLOSURE => {
+                return crate::closure::closure_length(
+                    handle as *const crate::closure::ClosureHeader,
+                )
+                .unwrap_or(0) as f64;
+            }
+            // BigInts, Promises, Errors, plain Objects, Maps: no `.length`.
+            // Return 0 to match Perry's existing fallback for missing fields
+            // (JS would produce `undefined`, but the generic PropertyGet slow
+            // path already degrades to 0 here).
             _ => return 0.0,
         }
     }

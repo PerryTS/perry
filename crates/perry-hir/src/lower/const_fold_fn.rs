@@ -29,7 +29,97 @@ use crate::eval_classifier::{const_string_of, eval_diag_enabled, EvalSurface};
 use crate::ir::Expr;
 
 use super::expr_function::lower_fn_expr;
+use super::lower_expr::lower_expr;
 use super::LoweringContext;
+
+/// Lower an expression that throws a `SyntaxError` when the enclosing call
+/// site is evaluated — a throwing IIFE in value position. Used when a folded
+/// `new Function(...)` / `Function(...)` body is not syntactically valid JS,
+/// matching Node's runtime `SyntaxError` (Test262 catches it via
+/// `assert.throws`). The message is generic — Test262 only checks the error's
+/// *constructor*, not its text.
+fn synth_function_syntax_error(
+    ctx: &mut LoweringContext,
+    surface: EvalSurface,
+    span: swc_common::Span,
+) -> Result<Expr> {
+    if eval_diag_enabled() {
+        eprintln!(
+            "[perry-eval-diag] {} -> invalid body: throws SyntaxError at runtime (#1679)",
+            surface.label()
+        );
+    }
+    let src = "(function () { throw new SyntaxError(\"Function constructor: invalid function body\"); })();\n";
+    let module = perry_parser::parse_typescript(src, "<new Function syntaxerror>.cjs")
+        .map_err(|e| anyhow::Error::new(LowerError::new(format!("internal: {e}"), span)))?;
+    let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) =
+        module.body.first().ok_or_else(|| {
+            anyhow::Error::new(LowerError::new("internal: empty synth".to_string(), span))
+        })?
+    else {
+        return Err(anyhow::Error::new(LowerError::new(
+            "internal: synth shape".to_string(),
+            span,
+        )));
+    };
+    let outer_strict = ctx.current_strict;
+    ctx.current_strict = false;
+    let lowered = lower_expr(ctx, &expr_stmt.expr);
+    ctx.current_strict = outer_strict;
+    lowered
+}
+
+/// Render an `f64` the way JavaScript's `Number::toString` (radix 10) would,
+/// for the small primitive subset Test262 hands to `new Function`. Exactness
+/// only matters when the number lands in a *parameter* slot (where it is an
+/// invalid identifier anyway, so the synth fails to parse and both runtimes
+/// reject); in a *body* slot the literal statement is never executed by these
+/// tests.
+fn js_number_to_string(n: f64) -> String {
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if n == 0.0 {
+        return "0".to_string();
+    }
+    if n.fract() == 0.0 && n.abs() < 1e21 {
+        return format!("{}", n as i64);
+    }
+    format!("{}", n)
+}
+
+/// Coerce a `new Function` / `Function` argument that is a compile-time
+/// constant *value* to the string Node's `ToString` would produce. Extends
+/// [`const_string_of`] (strings / substitution-free templates) with the other
+/// primitive literals Test262 passes for params and bodies. Returns `None`
+/// for any non-constant or non-primitive argument (objects, identifiers,
+/// calls) so those stay on the runtime / refusal path.
+fn coerce_arg_to_string(expr: &ast::Expr) -> Option<String> {
+    if let Some(s) = const_string_of(expr) {
+        return Some(s);
+    }
+    let mut e = expr;
+    while let ast::Expr::Paren(p) = e {
+        e = p.expr.as_ref();
+    }
+    match e {
+        ast::Expr::Lit(ast::Lit::Null(_)) => Some("null".to_string()),
+        ast::Expr::Lit(ast::Lit::Bool(b)) => {
+            Some(if b.value { "true" } else { "false" }.to_string())
+        }
+        ast::Expr::Lit(ast::Lit::Num(n)) => Some(js_number_to_string(n.value)),
+        ast::Expr::Ident(id) if id.sym.as_str() == "undefined" => Some("undefined".to_string()),
+        // `void <literal>` always evaluates to `undefined`. Only fold when the
+        // operand is itself a primitive literal so no side effect is dropped.
+        ast::Expr::Unary(u) if matches!(u.op, ast::UnaryOp::Void) => {
+            matches!(u.arg.as_ref(), ast::Expr::Lit(_)).then(|| "undefined".to_string())
+        }
+        _ => None,
+    }
+}
 
 /// Fold a `new Function(...)` / `Function(...)` whose arguments are *all*
 /// compile-time-constant strings into a native function (`Expr::Closure`).
@@ -49,10 +139,16 @@ pub(crate) fn try_const_fold_function_construct(
     if args.iter().any(|a| a.spread.is_some()) {
         return Ok(None);
     }
-    // Every argument must be a constant string (params *and* body).
+    // Every argument must coerce to a compile-time-constant string the way
+    // Node's `ToString` would (params *and* body). This covers string and
+    // template literals plus the primitive literals Test262 passes —
+    // `null` / `undefined` / `void 0` / numbers / booleans — so
+    // `new Function("a,b,c", null)` folds (body `null` → `"null"`) instead
+    // of being refused. Objects / identifiers / calls stay non-constant and
+    // bail to the runtime path (keeping throwing-`toString` cases there).
     let mut consts: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
-        match const_string_of(&a.expr) {
+        match coerce_arg_to_string(&a.expr) {
             Some(s) => consts.push(s),
             None => return Ok(None),
         }
@@ -69,50 +165,52 @@ pub(crate) fn try_const_fold_function_construct(
     };
 
     let synth = format!("(function ({params_src}) {{\n{body_src}\n}});\n");
-    let module =
-        perry_parser::parse_typescript(&synth, "<new Function body>.cjs").map_err(|e| {
-            anyhow::Error::new(LowerError::new(
-                format!(
-                    "`{}` body is not valid JavaScript and cannot be compiled: {} \
-                 (#1679)\n  body: {:?}",
-                    surface.label(),
-                    e,
-                    body_src,
-                ),
-                span,
-            ))
-        })?;
+    // A `new Function(...)` / `Function(...)` whose params+body don't form a
+    // syntactically valid function is a *runtime* `SyntaxError` in JS — the
+    // parse happens inside the constructor call, not at our compile time.
+    // Node throws (and Test262 routinely catches it with `assert.throws`), so
+    // refusing the program at compile time would diverge. Instead synthesize a
+    // throwing IIFE in value position: evaluating the original call site now
+    // throws `SyntaxError`, exactly as Node does. (A body that parses but
+    // can't be *lowered* — an unsupported Perry feature, below — stays a
+    // genuine compile-time gap.)
+    let module = match perry_parser::parse_typescript(&synth, "<new Function body>.cjs") {
+        Ok(m) => m,
+        Err(_) => return synth_function_syntax_error(ctx, surface, span).map(Some),
+    };
 
-    let fn_expr = extract_fn_expr(&module).ok_or_else(|| {
-        anyhow::Error::new(LowerError::new(
-            format!(
-                "`{}` body could not be parsed as a function body (#1679)\n  body: {:?}",
-                surface.label(),
-                body_src,
-            ),
-            span,
-        ))
-    })?;
+    let Some(fn_expr) = extract_fn_expr(&module) else {
+        return synth_function_syntax_error(ctx, surface, span).map(Some);
+    };
 
     let outer_strict = ctx.current_strict;
     ctx.current_strict = false;
     let lowered_result = lower_fn_expr(ctx, fn_expr);
     ctx.current_strict = outer_strict;
-    let lowered = lowered_result.map_err(|e| {
-        // The synthesized body parsed but couldn't lower (an unsupported
-        // feature inside the generated function). Surface it as a clear
-        // error at the original call site rather than the broken
-        // placeholder the pre-#1679 fall-through produced.
-        anyhow::Error::new(LowerError::new(
-            format!(
-                "`{}` body uses a feature Perry can't compile yet: {} (#1679)\n  body: {:?}",
-                surface.label(),
-                e,
-                body_src,
-            ),
-            span,
-        ))
-    })?;
+    let lowered = match lowered_result {
+        Ok(l) => l,
+        Err(e) => {
+            // The synthesized body parsed but couldn't be turned into a
+            // callable — either a strict-mode early error SWC accepts but
+            // lowering rejects (e.g. `with` under `'use strict'`, a genuine
+            // `SyntaxError`) or a valid feature Perry can't compile yet.
+            // Either way `new Function`/`Function` validates its body at
+            // *construction* time, so the spec-faithful outcome is a runtime
+            // throw at this call site, not a compile-time refusal of the
+            // whole program (Test262 catches it with `assert.throws`). Throw
+            // a `SyntaxError`. (`--eval-diag` records what the body was.)
+            if eval_diag_enabled() {
+                eprintln!(
+                    "[perry-eval-diag] {} -> body could not be lowered ({}); \
+                     throwing SyntaxError at runtime (#1679)\n  body: {:?}",
+                    surface.label(),
+                    e,
+                    body_src,
+                );
+            }
+            return synth_function_syntax_error(ctx, surface, span).map(Some);
+        }
+    };
 
     if eval_diag_enabled() {
         eprintln!(

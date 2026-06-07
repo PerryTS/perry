@@ -264,10 +264,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if property == "length"
                 && (is_array_expr(ctx, object)
                     || is_string_expr(ctx, object)
-                    || matches!(
-                        crate::type_analysis::static_type_of(ctx, object),
-                        Some(HirType::Named(_)) | Some(HirType::Tuple(_))
-                    )) =>
+                    || match crate::type_analysis::static_type_of(ctx, object) {
+                        // A `Function`-typed receiver is a closure, not a
+                        // String/Array — its `.length` is the spec param
+                        // count, served by the runtime reflection path
+                        // (`closure_length` table). Loading a u32 from
+                        // payload offset 0 here would read 0. Let it fall
+                        // through to the generic property path.
+                        Some(HirType::Named(n)) => n != "Function",
+                        Some(HirType::Tuple(_)) => true,
+                        _ => false,
+                    }) =>
         {
             // Scalar-replaced array literal: length is a compile-time
             // constant — no header to load from (the heap array doesn't
