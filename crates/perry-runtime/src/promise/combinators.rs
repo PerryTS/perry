@@ -495,19 +495,14 @@ pub(super) fn process_scheduled_resolves() -> i32 {
 pub extern "C" fn js_promise_new_with_executor(
     executor: *const crate::closure::ClosureHeader,
 ) -> *mut Promise {
-    use crate::closure::{js_closure_alloc, js_closure_call2, js_closure_set_capture_ptr};
+    use crate::closure::js_closure_call2;
 
     let promise = js_promise_new();
-    let promise_i64 = promise as i64;
 
-    // Create resolve closure that captures the promise pointer
-    // The resolve function signature is: (closure: *const ClosureHeader, value: f64) -> f64
-    let resolve_closure = js_closure_alloc(promise_resolve_fn as *const u8, 1);
-    js_closure_set_capture_ptr(resolve_closure, 0, promise_i64);
-
-    // Create reject closure that captures the promise pointer
-    let reject_closure = js_closure_alloc(promise_reject_fn as *const u8, 1);
-    js_closure_set_capture_ptr(reject_closure, 0, promise_i64);
+    // Create the resolve/reject pair sharing a [[AlreadyResolved]] guard, so
+    // calling one disables the other (27.2.1.3 CreateResolvingFunctions). The
+    // resolve fn also assimilates thenables/promises and rejects self-resolution.
+    let (resolve_closure, reject_closure) = make_resolving_functions(promise);
 
     // Call the executor with (resolve_closure, reject_closure)
     // The closures are passed as f64 by bitcasting the pointer bits
@@ -519,17 +514,105 @@ pub extern "C" fn js_promise_new_with_executor(
     promise
 }
 
+/// A resolving function's shared `[[AlreadyResolved]]` record. Per ECMA-262
+/// 27.2.1.3 CreateResolvingFunctions, the resolve and reject functions handed to
+/// a Promise executor share ONE boolean: once either fires, the other is a
+/// no-op — *even while the promise itself is still pending* (e.g. `resolve` was
+/// called with an unsettled thenable, so the promise stays pending while the
+/// thenable job runs, but a later `reject(x)` must be ignored). The `state !=
+/// Pending` guard inside `js_promise_resolve`/`js_promise_reject` is NOT enough
+/// to model this; we need the explicit flag.
+///
+/// Stored as a 1-element array (slot 0: 0.0 = not resolved, 1.0 = resolved) so
+/// the resolve and reject closures can both capture the same heap cell. A NULL
+/// capture means "no shared guard" (legacy single-shot callers that rely solely
+/// on the promise-state check).
+fn alloc_already_resolved_guard() -> *mut crate::array::ArrayHeader {
+    use crate::array::{js_array_alloc, js_array_set_f64};
+    let guard = js_array_alloc(1);
+    unsafe {
+        (*guard).length = 1;
+    }
+    js_array_set_f64(guard, 0, 0.0);
+    guard
+}
+
+/// Take the shared `[[AlreadyResolved]]` flag: returns true if this resolving
+/// function may proceed (and marks it resolved), false if already consumed. A
+/// NULL guard always proceeds.
+#[inline]
+fn take_already_resolved(guard: *mut crate::array::ArrayHeader) -> bool {
+    use crate::array::{js_array_get_f64, js_array_set_f64};
+    if guard.is_null() {
+        return true;
+    }
+    if js_array_get_f64(guard, 0) != 0.0 {
+        return false;
+    }
+    js_array_set_f64(guard, 0, 1.0);
+    true
+}
+
+/// Wire a resolve/reject closure pair to a promise with a shared
+/// `[[AlreadyResolved]]` guard. Returns `(resolve_closure, reject_closure)`.
+pub(super) fn make_resolving_functions(
+    promise: *mut Promise,
+) -> (
+    *mut crate::closure::ClosureHeader,
+    *mut crate::closure::ClosureHeader,
+) {
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    let guard = alloc_already_resolved_guard();
+    let resolve = js_closure_alloc(promise_resolve_fn as *const u8, 2);
+    js_closure_set_capture_ptr(resolve, 0, promise as i64);
+    js_closure_set_capture_ptr(resolve, 1, guard as i64);
+    let reject = js_closure_alloc(promise_reject_fn as *const u8, 2);
+    js_closure_set_capture_ptr(reject, 0, promise as i64);
+    js_closure_set_capture_ptr(reject, 1, guard as i64);
+    (resolve, reject)
+}
+
 /// Internal resolve function for Promise executor callbacks.
 /// Called when user calls resolve(value) inside the executor.
+///
+/// Implements ECMA-262 27.2.1.3.2 Promise Resolve Functions:
+///   * honour the shared `[[AlreadyResolved]]` flag (capture slot 1);
+///   * if `resolution` is the promise itself, reject with a TypeError;
+///   * if `resolution` is a thenable/promise, assimilate it (enqueue a job)
+///     rather than fulfilling with the thenable as a plain value.
 pub(super) extern "C" fn promise_resolve_fn(
     closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
 
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    js_promise_resolve(promise_ptr, value);
-    0.0 // resolve returns undefined
+    let guard = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    if !take_already_resolved(guard) {
+        return undef;
+    }
+
+    // Self-resolution: `resolve(thePromise)` rejects with a TypeError (27.2.1.3.2
+    // step 6). Detect by comparing the resolution value's pointer to the promise.
+    if !promise_ptr.is_null() {
+        let bits = value.to_bits();
+        if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+            let ptr = (bits & crate::value::POINTER_MASK) as usize;
+            if ptr == promise_ptr as usize {
+                let msg = b"Chaining cycle detected for promise #<Promise>";
+                let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+                let err_ptr = crate::error::js_typeerror_new(s);
+                let err =
+                    f64::from_bits(crate::value::JSValue::pointer(err_ptr as *const u8).bits());
+                js_promise_reject(promise_ptr, err);
+                return undef;
+            }
+        }
+    }
+
+    promise_resolve_assimilating(promise_ptr, value);
+    undef // resolve returns undefined
 }
 
 /// Internal reject function for Promise executor callbacks.
@@ -540,9 +623,14 @@ pub(super) extern "C" fn promise_reject_fn(
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
 
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let guard = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    if !take_already_resolved(guard) {
+        return undef;
+    }
     js_promise_reject(promise_ptr, reason);
-    0.0 // reject returns undefined
+    undef // reject returns undefined
 }
 
 #[inline]

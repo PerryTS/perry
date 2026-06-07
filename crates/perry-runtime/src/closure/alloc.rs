@@ -449,6 +449,14 @@ pub extern "C" fn js_closure_get_capture_ptr(closure: *const ClosureHeader, inde
         return 0;
     }
     unsafe {
+        // Bounds-guard reads past the declared capture count: returning 0 for an
+        // out-of-range slot lets callers probe optional captures (e.g. a Promise
+        // resolving function's shared [[AlreadyResolved]] guard in slot 1) on
+        // closures that were allocated with fewer slots, without reading uninit
+        // memory. Codegen-emitted reads always stay in range.
+        if index as usize >= real_capture_count((*closure).capture_count) as usize {
+            return 0;
+        }
         let captures_ptr =
             (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const i64;
         *captures_ptr.add(index as usize)

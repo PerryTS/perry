@@ -18,9 +18,7 @@
 //! invocations, the `.then` invocations, and the resolve-element call counts
 //! are all asserted.
 
-use super::combinators::{
-    combinator_catch_js, combinator_iterable_to_array_caught, promise_reject_fn, promise_resolve_fn,
-};
+use super::combinators::{combinator_catch_js, combinator_iterable_to_array_caught};
 use super::*;
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_set_f64};
 use crate::closure::{
@@ -167,11 +165,8 @@ fn new_promise_capability(c: f64) -> Capability {
     // directly (the generic construct path does not model `new Promise`).
     if is_default_promise_constructor(c) {
         let promise = js_promise_new();
-        let resolve = js_closure_alloc(promise_resolve_fn as *const u8, 1);
-        js_closure_set_capture_ptr(resolve, 0, promise as i64);
+        let (resolve, reject) = super::combinators::make_resolving_functions(promise);
         crate::object::set_builtin_closure_length(resolve as usize, 1);
-        let reject = js_closure_alloc(promise_reject_fn as *const u8, 1);
-        js_closure_set_capture_ptr(reject, 0, promise as i64);
         crate::object::set_builtin_closure_length(reject as usize, 1);
         return Capability {
             promise: js_nanbox_pointer(promise as i64),
