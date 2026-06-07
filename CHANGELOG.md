@@ -2,6 +2,18 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1134 — external `node:zlib` Transform stream handles (write/end/on/pipe/reset…)
+
+Part of #800. External `node:zlib` stream handles now expose callable
+Transform-style method properties (`write`, `end`, `on`, `pipe`, `close`,
+`destroy`, `params`, `reset`), add `reset()` support, and report Node-like
+`bytesWritten` timing for queued stream writes. The external zlib stream pump is
+drained whenever `external-zlib-pump` is enabled (including no-auto node-suite
+builds that keep the full stdlib), and `run_parity_tests.sh` now builds
+`perry-ext-zlib` + the stdlib zlib pump bridge for no-auto zlib parity runs so
+stream fixtures exercise the same external archive path. Complementary to #4506
+(async one-shot callback validation); no overlap.
+
 ## v0.5.1133 — zlib async one-shot helpers validate their callback synchronously
 
 Node throws synchronously (`ERR_INVALID_ARG_TYPE`) when an async one-shot zlib
