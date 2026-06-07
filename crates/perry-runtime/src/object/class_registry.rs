@@ -2271,6 +2271,35 @@ fn constructor_return_overrides_this(value: f64) -> bool {
     }
 }
 
+/// Apply ECMAScript constructor return-override semantics for an inlined
+/// constructor body's explicit `return <value>`. Given the implicit `this`
+/// and the returned value:
+///   - returned value is an Object  → it becomes the construction result;
+///   - returned value is `undefined` → result is `this`;
+///   - returned value is any other primitive → for a derived constructor
+///     (`class X extends Y`) this is a TypeError; for a base constructor the
+///     primitive is ignored and the result is `this`.
+/// `is_derived` is 1 for a class with an `extends` clause, 0 otherwise.
+/// Refs class/subclass/derived-class-return-override-*.
+#[no_mangle]
+pub extern "C" fn js_ctor_return_override(this_val: f64, return_val: f64, is_derived: i32) -> f64 {
+    use crate::value::JSValue;
+    if constructor_return_overrides_this(return_val) {
+        return return_val;
+    }
+    let jv = JSValue::from_bits(return_val.to_bits());
+    if jv.is_undefined() {
+        return this_val;
+    }
+    if is_derived != 0 {
+        crate::collection_iter::throw_type_error(
+            "Derived constructors may only return object or undefined",
+        );
+    }
+    // Base constructor: a returned primitive is ignored.
+    this_val
+}
+
 /// Verify that a JSValue is a NaN-boxed pointer to a registered
 /// closure header. `js_native_call_value` itself doesn't validate the
 /// pointer shape — it dereferences whatever lower-48 bits it gets — so

@@ -125,6 +125,23 @@ pub(crate) use write_barrier::{
     lower_node_stream_super_init, lower_stream_super_init,
 };
 
+/// One in-flight inline-constructor return target. See
+/// `FnCtx::inline_ctor_return`.
+#[derive(Clone)]
+pub(crate) struct InlineCtorReturn {
+    /// `alloca` (as `%name`) holding the constructed instance, overwritten by
+    /// an explicit `return <object>` (spec return-override). Loaded as the
+    /// `new`-expression's value after the body's `after_label` block.
+    pub result_slot: String,
+    /// Label of the block that follows the inlined constructor body. Every
+    /// `return` inside the body branches here instead of emitting `ret`.
+    pub after_label: String,
+    /// True for a derived class (`class X extends Y`). A derived ctor that
+    /// `return`s a non-object, non-undefined value throws a TypeError; a base
+    /// ctor silently ignores it and keeps `this`.
+    pub is_derived: bool,
+}
+
 /// Per-function codegen context. Held briefly during lowering, never stored.
 pub(crate) struct FnCtx<'a> {
     /// Function being built (blocks, params, registers).
@@ -474,6 +491,16 @@ pub(crate) struct FnCtx<'a> {
     /// per call. Once 128 leaks accumulate the runtime panics with
     /// "Try block nesting too deep".
     pub try_depth: usize,
+
+    /// Stack of in-flight inline-constructor return targets. When a class
+    /// constructor body is inlined at a `new C(...)` site (see
+    /// `lower_call/new.rs`), an explicit `return` inside that body must NOT
+    /// emit a function-level `ret` (that would terminate the *enclosing*
+    /// function). Instead `Stmt::Return` stores the spec return-override
+    /// result into `result_slot` and branches to `after_label`; the
+    /// new-expression then loads `result_slot` as its value. One entry per
+    /// nested inline ctor; the innermost (`last()`) governs a `return`.
+    pub inline_ctor_return: Vec<InlineCtorReturn>,
 
     /// Cross-module function declarations to add to `LlModule` after
     /// lowering finishes. Each entry is `(llvm_name, return_type, param_types)`.
@@ -1382,6 +1409,7 @@ mod fs_await;
 mod index_get;
 mod index_set;
 mod instance_misc1;
+pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 mod js_runtime;
 mod literals_vars;
 mod logical_collections;

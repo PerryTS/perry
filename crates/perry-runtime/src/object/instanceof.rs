@@ -505,6 +505,45 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             depth += 1;
         }
     }
+    // Subclass-of-built-in: `class S extends Array {}` produces a real
+    // ObjectHeader instance whose class-id chain reaches the built-in's
+    // reserved class id (a parent edge registered at module init). The
+    // per-built-in probes below short-circuit to `false` for such an
+    // instance (it isn't a *real* Array/Map/Error/…), so walk the object's
+    // own class chain up front. Only genuine `GC_TYPE_OBJECT` instances carry
+    // a `class_id` field — real Arrays/Maps/Errors have other GC types and
+    // fall through to their dedicated probes unchanged. Refs
+    // class/subclass-builtins/* and class/subclass/builtin-objects/*.
+    {
+        let jv = crate::JSValue::from_bits(value.to_bits());
+        if jv.is_pointer() {
+            let obj = jv.as_pointer::<ObjectHeader>();
+            if !obj.is_null() && (obj as usize) >= 0x100000 {
+                let gc_header = unsafe {
+                    (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
+                };
+                if unsafe { (*gc_header).obj_type } == crate::gc::GC_TYPE_OBJECT {
+                    let mut cur = unsafe { (*obj).class_id };
+                    if cur != 0 {
+                        if cur == class_id {
+                            return true_val;
+                        }
+                        let mut depth = 0;
+                        while let Some(pid) = get_parent_class_id(cur) {
+                            if pid == 0 || depth > 64 {
+                                break;
+                            }
+                            if pid == class_id {
+                                return true_val;
+                            }
+                            cur = pid;
+                            depth += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // `value instanceof Function` — true for any callable value. Per
     // `OrdinaryHasInstance`, every Perry function (declaration, expression,
     // arrow, method, bound function, native handle, built-in constructor)

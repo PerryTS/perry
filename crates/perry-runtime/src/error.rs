@@ -725,6 +725,17 @@ pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
     throw_reference_error_message(b"assignment to undeclared variable")
 }
 
+/// A derived constructor whose body never calls `super()` leaves `this`
+/// uninitialized; the implicit `return this` (or any `this` access) throws a
+/// ReferenceError per ECMAScript. Refs class/subclass/builtin-objects/*/
+/// super-must-be-called.
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_this_before_super() -> f64 {
+    throw_reference_error_message(
+        b"Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+    )
+}
+
 fn throw_capture_stack_trace_target_type_error() -> ! {
     let message = b"The \"targetObject\" argument must be an object";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);

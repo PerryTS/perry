@@ -115,10 +115,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {
                 return Ok(undef);
             };
-            let mut parent = ctx
+            let immediate_parent = ctx
                 .classes
                 .get(&current_class_name)
                 .and_then(|c| c.extends_name.clone());
+            let mut parent = immediate_parent.clone();
             let mut resolved_fn: Option<String> = None;
             while let Some(p) = parent {
                 let key = (p.clone(), property.clone());
@@ -129,7 +130,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
             }
             let Some(fn_name) = resolved_fn else {
-                return Ok(undef);
+                // Not a method on the parent chain — `super.prop` then reads the
+                // property off the parent prototype with `this` as receiver:
+                // an accessor (getter) is INVOKED, a data property
+                // (`B.prototype.x = 42`) is returned. Route to the runtime,
+                // which walks the parent class chain. Refs
+                // class/super/in-{constructor,getter,methods,setter}.
+                let parent_cid = immediate_parent
+                    .as_ref()
+                    .and_then(|p| ctx.class_ids.get(p))
+                    .copied()
+                    .unwrap_or(0);
+                if parent_cid == 0 {
+                    return Ok(undef);
+                }
+                let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                    ctx.block().load(DOUBLE, &this_slot)
+                } else {
+                    let helper = if ctx.is_strict_fn {
+                        "js_implicit_this_get"
+                    } else {
+                        "js_implicit_this_get_sloppy"
+                    };
+                    ctx.block().call(DOUBLE, helper, &[])
+                };
+                let key_idx = ctx.strings.intern(property);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+                let parent_cid_s = parent_cid.to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_super_accessor_get",
+                    &[(I32, &parent_cid_s), (DOUBLE, &key_box), (DOUBLE, &recv_v)],
+                ));
             };
             // Mirror Expr::FuncRef: route through the singleton wrapper
             // so callers can invoke via the closure-call ABI. The

@@ -258,6 +258,7 @@ pub(super) fn compile_closure(
         this_stack,
         new_target_stack,
         class_stack,
+        inline_ctor_return: Vec::new(),
         methods,
         module_globals,
         import_function_prefixes,

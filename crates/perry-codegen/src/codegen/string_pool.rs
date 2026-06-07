@@ -324,6 +324,14 @@ pub(super) fn emit_string_pool(
                     if parent_cid != 0 {
                         parent_pairs.push((cid, parent_cid));
                     }
+                } else if let Some(reserved) =
+                    crate::expr::builtin_parent_reserved_class_id(parent_name)
+                {
+                    // `class S extends Array {}` — the parent is a built-in
+                    // with a reserved runtime class id, not a user class. Wire
+                    // the edge so `new S() instanceof Array` walks the chain to
+                    // the reserved id and matches. Refs class/subclass-builtins.
+                    parent_pairs.push((cid, reserved));
                 }
             }
         }

@@ -49,6 +49,50 @@ use super::{
     I18nLowerCtx,
 };
 
+/// Built-in constructor names (beyond Error/stream/fetch, which have their own
+/// SuperCall arms) that can appear as a class heritage. `super(...)` to these
+/// must NOT be routed through the runtime-value dispatch path
+/// (`js_fetch_or_value_super`), which would invoke e.g. `Map()` without `new`
+/// and throw "Constructor requires 'new'". Perry cannot yet give a subclass
+/// instance the built-in's internal slots, so `super()` is a best-effort no-op
+/// here — enough that `class M extends Map { constructor(){ super(); } }`
+/// constructs without throwing. Refs class/subclass/builtin-objects/*/
+/// super-must-be-called.
+pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Array"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "Boolean"
+            | "Number"
+            | "String"
+            | "Date"
+            | "RegExp"
+            | "Promise"
+            | "Function"
+            | "BigInt"
+            | "Symbol"
+            | "Object"
+            | "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::This => {
@@ -134,26 +178,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // semantics (Error sets this.message + this.name; streams allocate
                     // a registry handle). Anything else with an extends_expr is a
                     // real runtime-value parent and routes through this dispatch.
-                    let is_builtin_parent_name = matches!(
-                        parent_name.as_str(),
-                        "Error"
-                            | "TypeError"
-                            | "RangeError"
-                            | "ReferenceError"
-                            | "SyntaxError"
-                            | "URIError"
-                            | "EvalError"
-                            | "AggregateError"
-                            | "Readable"
-                            | "Writable"
-                            | "Duplex"
-                            | "Transform"
-                            | "ReadableStream"
-                            | "WritableStream"
-                            | "TransformStream"
-                            | "Request"
-                            | "Response"
-                    );
+                    let is_builtin_parent_name =
+                        matches!(
+                            parent_name.as_str(),
+                            "Error"
+                                | "TypeError"
+                                | "RangeError"
+                                | "ReferenceError"
+                                | "SyntaxError"
+                                | "URIError"
+                                | "EvalError"
+                                | "AggregateError"
+                                | "Readable"
+                                | "Writable"
+                                | "Duplex"
+                                | "Transform"
+                                | "ReadableStream"
+                                | "WritableStream"
+                                | "TransformStream"
+                                | "Request"
+                                | "Response"
+                        ) || is_other_builtin_constructor_name(parent_name.as_str());
                     if !is_builtin_parent_name {
                         if let Some(extends_expr) = current_class.extends_expr.as_deref() {
                             // Lower the super-call args first so they get fresh slots

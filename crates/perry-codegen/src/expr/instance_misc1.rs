@@ -46,6 +46,54 @@ use super::{
     I18nLowerCtx,
 };
 
+/// Reserved runtime class id for a built-in constructor usable as a class
+/// heritage (`class S extends Array {}`). Used to register the subclass →
+/// built-in parent edge so `new S() instanceof Array` walks the class chain
+/// and matches. The ids MUST stay in sync with the `instanceof <Builtin>`
+/// match in `lower_instanceof` (this file) and the per-id branches in
+/// perry-runtime/src/object/instanceof.rs. Returns `None` for names without a
+/// reserved id (those can't be subclassed with working `instanceof` yet).
+pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
+    Some(match name {
+        "Error" => 0xFFFF0001,
+        "TypeError" => 0xFFFF0010,
+        "RangeError" => 0xFFFF0011,
+        "ReferenceError" => 0xFFFF0012,
+        "SyntaxError" => 0xFFFF0013,
+        "AggregateError" => 0xFFFF0014,
+        "EvalError" => 0xFFFF0015,
+        "URIError" => 0xFFFF0016,
+        "Date" => 0xFFFF0020,
+        "RegExp" => 0xFFFF0021,
+        "Map" => 0xFFFF0022,
+        "Set" => 0xFFFF0023,
+        "Array" => 0xFFFF0024,
+        "ArrayBuffer" => 0xFFFF0025,
+        "DataView" => 0xFFFF002B,
+        "WeakMap" => 0xFFFF002C,
+        "WeakSet" => 0xFFFF002D,
+        "Promise" => 0xFFFF0027,
+        "Number" => 0xFFFF00D0,
+        "String" => 0xFFFF00D1,
+        "Boolean" => 0xFFFF00D2,
+        "BigInt" => 0xFFFF00D3,
+        "Symbol" => 0xFFFF00D4,
+        "Int8Array" => 0xFFFF0030,
+        "Uint8Array" => 0xFFFF0004,
+        "Int16Array" => 0xFFFF0032,
+        "Uint16Array" => 0xFFFF0033,
+        "Int32Array" => 0xFFFF0034,
+        "Uint32Array" => 0xFFFF0035,
+        "Float32Array" => 0xFFFF0036,
+        "Float64Array" => 0xFFFF0037,
+        "Uint8ClampedArray" => 0xFFFF0038,
+        "BigInt64Array" => 0xFFFF0039,
+        "BigUint64Array" => 0xFFFF003A,
+        "Function" => 0xFFFF00F0,
+        _ => return None,
+    })
+}
+
 fn emit_with_key(ctx: &mut FnCtx<'_>, property: &str) -> (String, String) {
     let key_idx = ctx.strings.intern(property);
     let key_entry = ctx.strings.entry(key_idx);
@@ -336,6 +384,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `ArrayBuffer` — runtime detects BufferHeader storage marked
                 // with Perry's ArrayBuffer side registry.
                 "ArrayBuffer" => 0xFFFF0025u32,
+                // WeakMap / WeakSet / DataView — no runtime probe for real
+                // instances yet (those return false independently), but the
+                // reserved ids let a `class S extends WeakMap {}` subclass
+                // instance match via the class-chain walk in
+                // perry-runtime/src/object/instanceof.rs. Refs
+                // class/subclass-builtins/subclass-{WeakMap,WeakSet,DataView}.
+                "DataView" => 0xFFFF002Bu32,
+                "WeakMap" => 0xFFFF002Cu32,
+                "WeakSet" => 0xFFFF002Du32,
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,

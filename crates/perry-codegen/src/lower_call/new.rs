@@ -13,6 +13,88 @@ use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
+/// True when any `super(...)` call appears (anywhere) in this constructor
+/// body. A derived constructor that never calls `super()` leaves `this`
+/// uninitialized — ECMAScript then throws ReferenceError at the implicit
+/// `return this`. We detect the static no-super case at compile time so
+/// `new Sub()` throws instead of returning a half-built object.
+fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
+    body.iter().any(stmt_calls_super)
+}
+
+fn stmt_calls_super(stmt: &perry_hir::Stmt) -> bool {
+    use perry_hir::Stmt;
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_calls_super),
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_calls_super(e),
+        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_calls_super),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_calls_super(condition)
+                || ctor_body_calls_super(then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|b| ctor_body_calls_super(b))
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_calls_super(condition) || ctor_body_calls_super(body)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_some_and(stmt_calls_super)
+                || condition.as_ref().is_some_and(expr_calls_super)
+                || update.as_ref().is_some_and(expr_calls_super)
+                || ctor_body_calls_super(body)
+        }
+        Stmt::Labeled { body, .. } => stmt_calls_super(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            ctor_body_calls_super(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|c| ctor_body_calls_super(&c.body))
+                || finally.as_ref().is_some_and(|f| ctor_body_calls_super(f))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_calls_super(discriminant)
+                || cases.iter().any(|c| {
+                    c.test.as_ref().is_some_and(expr_calls_super) || ctor_body_calls_super(&c.body)
+                })
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+    }
+}
+
+fn expr_calls_super(expr: &Expr) -> bool {
+    if matches!(expr, Expr::SuperCall(_)) {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_calls_super(child) {
+            found = true;
+        }
+    });
+    found
+}
+
 fn node_stream_parent_kind(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<&'static str> {
     let mut cur = class.extends_name.as_deref();
     let mut depth = 0usize;
@@ -671,6 +753,31 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     ctx.this_stack.push(this_slot);
     ctx.class_stack.push(class_name.to_string());
 
+    // Set up the inline-constructor return target. An explicit `return`
+    // inside the (about-to-be-inlined) ctor body must apply spec
+    // return-override semantics and yield the `new` expression's value —
+    // NOT emit a function-level `ret` that terminates the enclosing
+    // function. `ctor_result_slot` starts as `this`; `Stmt::Return`
+    // overwrites it with a returned object (or throws for a derived ctor
+    // returning a primitive), then branches to `after_idx`. Refs
+    // class/subclass/derived-class-return-override-*.
+    let ctor_result_slot = ctx.func.alloca_entry(DOUBLE);
+    ctx.block().store(DOUBLE, &obj_box, &ctor_result_slot);
+    let after_idx = ctx.new_block("ctor.return.after");
+    let after_label = ctx.block_label(after_idx);
+    ctx.inline_ctor_return.push(crate::expr::InlineCtorReturn {
+        result_slot: ctor_result_slot,
+        after_label,
+        // A class is "derived" (and thus subject to the stricter
+        // return-override rules) if it has ANY heritage — a named parent,
+        // a resolved parent id, a native parent, or a dynamic
+        // `extends <expr>` clause (e.g. `extends class {}`).
+        is_derived: class.extends.is_some()
+            || class.extends_name.is_some()
+            || class.native_extends.is_some()
+            || class.extends_expr.is_some(),
+    });
+
     // Apply ANCESTOR field initializers — refs #420 / #631-followup.
     //
     // For the own-ctor case (class has its own ctor body): apply ALL
@@ -766,8 +873,24 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // initializers could read them. Don't re-bind (the slots already
         // hold the lowered arg values); just lower the body.
         let _ = ctor;
-        // Lower the constructor body. Errors propagate.
-        crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body)?;
+        // ECMAScript TDZ-on-`this`: a DERIVED constructor (any heritage) that
+        // never calls `super()` leaves `this` uninitialized, so the implicit
+        // `return this` throws ReferenceError. Detect the static no-super case
+        // and throw at construction time. (A base class with no heritage has
+        // `this` initialized up front, so this only applies when derived.)
+        // Refs class/subclass/builtin-objects/*/super-must-be-called.
+        let is_derived_class = class.extends.is_some()
+            || class.extends_name.is_some()
+            || class.native_extends.is_some()
+            || class.extends_expr.is_some();
+        if is_derived_class && !ctor_body_calls_super(&ctor.body) {
+            ctx.block()
+                .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
+            ctx.block().unreachable();
+        } else {
+            // Lower the constructor body. Errors propagate.
+            crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body)?;
+        }
 
         // Restore the enclosing function's local scope.
         if let Some(saved) = saved_scope_for_ctor.take() {
@@ -1167,9 +1290,22 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         );
     }
 
+    // Close the inline-constructor return: fall through (or branch) to the
+    // shared after-block, then load the (possibly return-overridden) result
+    // as the `new` expression's value.
+    let final_box = if let Some(ret) = ctx.inline_ctor_return.pop() {
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&ret.after_label);
+        }
+        ctx.current_block = after_idx;
+        ctx.block().load(DOUBLE, &ret.result_slot)
+    } else {
+        obj_box
+    };
+
     ctx.this_stack.pop();
     ctx.class_stack.pop();
-    Ok(obj_box)
+    Ok(final_box)
 }
 
 /// Walk the inheritance chain from the root down and apply each class's

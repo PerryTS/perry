@@ -265,6 +265,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[I32, DOUBLE, DOUBLE, DOUBLE, I32],
     );
+    module.declare_function("js_super_accessor_get", DOUBLE, &[I32, DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_has", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_delete", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_own_keys", DOUBLE, &[DOUBLE]);

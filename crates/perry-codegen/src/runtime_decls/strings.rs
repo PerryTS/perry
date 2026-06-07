@@ -1147,6 +1147,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE],
     );
     module.declare_function("js_throw_reference_error_unresolved_get", DOUBLE, &[]);
+    module.declare_function("js_throw_reference_error_this_before_super", DOUBLE, &[]);
     module.declare_function(
         "js_throw_reference_error_unresolved_assignment",
         DOUBLE,

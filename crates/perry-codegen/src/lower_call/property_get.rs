@@ -1104,6 +1104,15 @@ pub fn try_lower_property_get_method_call(
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);
                 }
+                // Pad missing trailing params with `undefined` so the callee
+                // never reads uninitialized arg slots and default-value params
+                // (`static m(a, b = x)`) fire. A direct `C.method(3)` call to a
+                // 3-param static method otherwise left params 2/3 as raw 0.
+                while lowered.len() < declared {
+                    lowered.push(crate::nanbox::double_literal(f64::from_bits(
+                        crate::nanbox::TAG_UNDEFINED,
+                    )));
+                }
             }
             let prev_this =
                 ctx.block()
