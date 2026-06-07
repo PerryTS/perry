@@ -1657,6 +1657,15 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             && !crate::object::is_valid_obj_ptr(id as *const u8)
             && crate::proxy::js_proxy_is_proxy(obj_f64) == 0
         {
+            // A user-stored symbol property (set via the symbol side table,
+            // keyed by the handle pointer — e.g. @hono/node-server's
+            // `incoming[wrapBodyStream] = true`) round-trips here. The side
+            // table is a pointer-keyed map, so this read does NOT dereference
+            // the small handle id as an ObjectHeader (which would EXC_BAD_ACCESS
+            // / segfault); it is safe for native handles.
+            if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+                return v;
+            }
             return f64::from_bits(TAG_UNDEFINED);
         }
     }

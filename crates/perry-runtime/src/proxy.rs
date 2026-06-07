@@ -568,6 +568,18 @@ fn small_handle_from_value(value: f64) -> Option<i64> {
 fn set_handle_property(target: f64, key: f64, value: f64) -> Option<bool> {
     let handle = small_handle_from_value(target)?;
     let Some(name) = key_to_rust_string(key) else {
+        // A SYMBOL-keyed write on a small native handle (e.g. the
+        // @hono/node-server `incoming[wrapBodyStream] = true` on the HTTP
+        // IncomingMessage handle). The handle is not a heap ObjectHeader, so
+        // it has no field storage; route the write to the per-object symbol
+        // side table (keyed by the handle pointer, exactly like a plain
+        // object) and report success. Returning `Some(false)` here made
+        // strict-mode assignment throw `TypeError: Cannot assign to read only
+        // property` and 500 every POST/PUT served by Hono's node adapter.
+        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            unsafe { crate::symbol::js_object_set_symbol_property(target, key, value) };
+            return Some(true);
+        }
         return Some(false);
     };
     if let Some(dispatch) = crate::object::handle_property_set_dispatch() {
