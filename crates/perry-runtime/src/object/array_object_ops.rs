@@ -215,18 +215,7 @@ pub(crate) unsafe fn define_array_property(
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
 
-    if let Some(index) = super::canonical_array_index(key_name) {
-        if has_value {
-            crate::array::js_array_set_f64_extend(
-                obj as *mut crate::array::ArrayHeader,
-                index,
-                value,
-            );
-        }
-        return Some(true);
-    }
-
-    crate::array::array_named_property_set(obj as *mut crate::array::ArrayHeader, key_str, value);
+    let arr = obj as *mut crate::array::ArrayHeader;
 
     let read_bool = |name: &[u8]| -> Option<bool> {
         let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -236,6 +225,156 @@ pub(crate) unsafe fn define_array_property(
         let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k);
         Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
     };
+
+    if let Some(index) = super::canonical_array_index(key_name) {
+        let exists = super::has_own_helpers::array_own_key_present(arr, key_str);
+
+        // Accessor descriptor on an array index: store get/set in the side table
+        // (the dense element store can't hold a getter/setter). Routing this
+        // through the generic object path would deref the array as an
+        // ObjectHeader and corrupt it, so handle it here.
+        let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+        let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
+        let desc_has_get = own_key_present(desc_ptr, get_key);
+        let desc_has_set = own_key_present(desc_ptr, set_key);
+        if desc_has_get || desc_has_set {
+            // Non-configurable existing index can't switch to an accessor.
+            if exists {
+                let cur = super::get_property_attrs(obj as usize, key_name)
+                    .unwrap_or_else(|| PropertyAttrs::new(true, true, true));
+                let already_accessor =
+                    super::get_accessor_descriptor(obj as usize, key_name).is_some();
+                if !cur.configurable() && !already_accessor {
+                    return Some(false);
+                }
+            }
+            let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
+            let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
+            let recv = crate::value::js_nanbox_pointer(obj as i64);
+            let prior = super::get_accessor_descriptor(obj as usize, key_name);
+            let get_bits = if desc_has_get {
+                if get_field.is_undefined() {
+                    0
+                } else {
+                    crate::closure::clone_closure_rebind_this(get_field.bits(), recv)
+                }
+            } else {
+                prior.map(|a| a.get).unwrap_or(0)
+            };
+            let set_bits = if desc_has_set {
+                if set_field.is_undefined() {
+                    0
+                } else {
+                    crate::closure::clone_closure_rebind_this(set_field.bits(), recv)
+                }
+            } else {
+                prior.map(|a| a.set).unwrap_or(0)
+            };
+            set_accessor_descriptor(
+                obj as usize,
+                key_name.to_string(),
+                AccessorDescriptor {
+                    get: get_bits,
+                    set: set_bits,
+                },
+            );
+            // Ensure the index counts as an own key for reflection.
+            if !exists {
+                crate::array::js_array_set_f64_extend(
+                    arr,
+                    index,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                );
+            }
+            // Retain existing attrs the descriptor omits when redefining; new
+            // accessor defaults to non-enumerable / non-configurable.
+            let cur = if exists {
+                super::get_property_attrs(obj as usize, key_name)
+            } else {
+                None
+            };
+            let enumerable = read_bool(b"enumerable")
+                .unwrap_or_else(|| cur.map(|a| a.enumerable()).unwrap_or(false));
+            let configurable = read_bool(b"configurable")
+                .unwrap_or_else(|| cur.map(|a| a.configurable()).unwrap_or(false));
+            set_property_attrs(
+                obj as usize,
+                key_name.to_string(),
+                PropertyAttrs::new(false, enumerable, configurable),
+            );
+            return Some(true);
+        }
+
+        // The element's current attributes: an explicit side-table entry wins;
+        // otherwise a present dense element defaults to all-true (writable,
+        // enumerable, configurable).
+        let cur_attrs: Option<PropertyAttrs> = if exists {
+            Some(
+                super::get_property_attrs(obj as usize, key_name)
+                    .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
+            )
+        } else {
+            None
+        };
+
+        // ValidateAndApplyPropertyDescriptor for the existing-non-configurable
+        // case: reject the spec-forbidden changes (make configurable, flip
+        // enumerable, re-enable writability, or change a non-writable value).
+        if let Some(cur) = cur_attrs {
+            if !cur.configurable() {
+                if read_bool(b"configurable") == Some(true) {
+                    return Some(false);
+                }
+                if let Some(want_enum) = read_bool(b"enumerable") {
+                    if want_enum != cur.enumerable() {
+                        return Some(false);
+                    }
+                }
+                if !cur.writable() {
+                    if read_bool(b"writable") == Some(true) {
+                        return Some(false);
+                    }
+                    if has_value {
+                        let cur_value = crate::array::js_array_get_f64(arr, index);
+                        if js_object_is(value, cur_value).to_bits()
+                            != crate::value::JSValue::bool(true).bits()
+                        {
+                            return Some(false);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Redefining an index that was previously an accessor back to a data
+        // property: drop the stale accessor entry.
+        ACCESSOR_DESCRIPTORS.with(|m| {
+            m.borrow_mut().remove(&(obj as usize, key_name.to_string()));
+        });
+
+        if has_value {
+            crate::array::js_array_set_f64_extend(arr, index, value);
+        }
+
+        // Compute final attributes. New property: omitted ⇒ false. Redefine:
+        // omitted ⇒ retain current.
+        let writable = read_bool(b"writable")
+            .unwrap_or_else(|| cur_attrs.map(|a| a.writable()).unwrap_or(false));
+        let enumerable = read_bool(b"enumerable")
+            .unwrap_or_else(|| cur_attrs.map(|a| a.enumerable()).unwrap_or(false));
+        let configurable = read_bool(b"configurable")
+            .unwrap_or_else(|| cur_attrs.map(|a| a.configurable()).unwrap_or(false));
+        set_property_attrs(
+            obj as usize,
+            key_name.to_string(),
+            PropertyAttrs::new(writable, enumerable, configurable),
+        );
+        let _ = obj_value;
+        return Some(true);
+    }
+
+    crate::array::array_named_property_set(arr, key_str, value);
+
     let writable = read_bool(b"writable").unwrap_or(false);
     let enumerable = read_bool(b"enumerable").unwrap_or(false);
     let configurable = read_bool(b"configurable").unwrap_or(false);

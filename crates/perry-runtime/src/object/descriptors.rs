@@ -433,9 +433,43 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     );
                 }
                 if let Some(index) = super::canonical_array_index(name) {
+                    // An array index converted to an accessor via
+                    // `Object.defineProperty(arr, i, { get/set })` is recorded in
+                    // the accessor side table; report it as an accessor descriptor.
+                    if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                        let attrs = get_property_attrs(obj as usize, name)
+                            .unwrap_or(PropertyAttrs::new(false, false, false));
+                        let get = if acc.get == 0 {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        } else {
+                            f64::from_bits(acc.get)
+                        };
+                        let set = if acc.set == 0 {
+                            f64::from_bits(crate::value::TAG_UNDEFINED)
+                        } else {
+                            f64::from_bits(acc.set)
+                        };
+                        return build_accessor_descriptor(
+                            get,
+                            set,
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        );
+                    }
                     if super::has_own_helpers::array_own_key_present(arr, key_str) {
                         let value = crate::array::js_array_get_f64(arr, index);
-                        return build_data_descriptor(value, !is_frozen, true, !is_frozen);
+                        // A dense element defaults to writable/enumerable/
+                        // configurable (frozen drops writable+configurable). A
+                        // prior `Object.defineProperty(arr, i, {...})` records
+                        // explicit attributes in the side table — honor those.
+                        let attrs = get_property_attrs(obj as usize, name)
+                            .unwrap_or_else(|| PropertyAttrs::new(!is_frozen, true, !is_frozen));
+                        return build_data_descriptor(
+                            value,
+                            attrs.writable(),
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        );
                     }
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
@@ -971,11 +1005,14 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
 /// `TypeError: Object prototype may only be an Object or null`.
 #[no_mangle]
 pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64) -> f64 {
-    // #2816 prototype validation: only an object or `null` is permitted.
+    // #2816 prototype validation: only an object or `null` is permitted. A
+    // Symbol is pointer-tagged but not an object, so reject it explicitly.
     let proto_jv = crate::value::JSValue::from_bits(proto_value.to_bits());
+    let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto_value) != 0 };
     let proto_ok = proto_jv.is_null()
-        || unsafe { value_is_object_like(proto_value) }
-        || super::class_ref_id(proto_value).is_some();
+        || (!proto_is_symbol
+            && (unsafe { value_is_object_like(proto_value) }
+                || super::class_ref_id(proto_value).is_some()));
     if !proto_ok {
         // V8 renders the offending value: `... an Object or null: 5`.
         let rendered = unsafe { describe_value_for_type_error(proto_value) };

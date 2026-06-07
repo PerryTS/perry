@@ -1430,9 +1430,11 @@ pub extern "C" fn js_object_define_property(
                 return obj_value;
             }
             // A rejected array `[[DefineOwnProperty]]` (e.g. redefining the
-            // non-configurable / non-writable `length`) throws under
+            // non-configurable / non-writable `length`, or a forbidden change to
+            // a non-configurable index property) throws under
             // `Object.defineProperty`.
-            throw_object_type_error(b"Cannot redefine property: length");
+            let k = key_rust.as_deref().unwrap_or("length");
+            throw_object_type_error_with_suffix("Cannot redefine property: ", k);
         }
         // #2843: enforce frozen / sealed / non-extensible invariants BEFORE any
         // mutation, so a rejected definition leaves the object untouched and the
@@ -1464,13 +1466,23 @@ pub extern "C" fn js_object_define_property(
             }
         });
 
-        // Detect accessor descriptor (has `get` and/or `set`) vs. data descriptor (has `value`).
-        // JS disallows mixing them, but we only check for `get`/`set` presence.
+        // Detect accessor descriptor (has `get` and/or `set`) vs. data
+        // descriptor (has `value`/`writable`) by OWN-FIELD PRESENCE on the
+        // descriptor object — not by `is_undefined`, since `{ get: undefined }`
+        // is an explicit (present) accessor field distinct from omitting it.
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
         let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
+        let desc_has_get = own_key_present(desc_ptr, get_key);
+        let desc_has_set = own_key_present(desc_ptr, set_key);
         let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
         let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
-        let has_accessor = !get_field.is_undefined() || !set_field.is_undefined();
+        let has_accessor = desc_has_get || desc_has_set;
+
+        // The existing accessor (if the property is currently an accessor) —
+        // used to retain `get`/`set` fields the redefining descriptor omits.
+        let existing_accessor: Option<AccessorDescriptor> = key_rust
+            .as_ref()
+            .and_then(|k| super::get_accessor_descriptor(obj as usize, k));
 
         if has_accessor {
             // Store the accessor closures in the side table. Ensure the key is present
@@ -1488,16 +1500,31 @@ pub extern "C" fn js_object_define_property(
                 // correct receiver. Closures without CAPTURES_THIS_FLAG (e.g. arrow-form
                 // `get: () => this._backing` written as a field rather than a method
                 // shorthand) pass through unchanged.
+                //
+                // Spec retention (ValidateAndApplyPropertyDescriptor): redefining
+                // an existing accessor with a descriptor that omits `get` (or
+                // `set`) keeps the current accessor's `get` (or `set`). When the
+                // current property is a data property being converted to an
+                // accessor, omitted fields default to `undefined` (0).
                 let recv_box = crate::value::js_nanbox_pointer(obj as i64);
-                let get_bits = if get_field.is_undefined() {
-                    0u64
+                let prior = existing_accessor;
+                let get_bits = if desc_has_get {
+                    if get_field.is_undefined() {
+                        0u64
+                    } else {
+                        crate::closure::clone_closure_rebind_this(get_field.bits(), recv_box)
+                    }
                 } else {
-                    crate::closure::clone_closure_rebind_this(get_field.bits(), recv_box)
+                    prior.map(|a| a.get).unwrap_or(0)
                 };
-                let set_bits = if set_field.is_undefined() {
-                    0u64
+                let set_bits = if desc_has_set {
+                    if set_field.is_undefined() {
+                        0u64
+                    } else {
+                        crate::closure::clone_closure_rebind_this(set_field.bits(), recv_box)
+                    }
                 } else {
-                    crate::closure::clone_closure_rebind_this(set_field.bits(), recv_box)
+                    prior.map(|a| a.set).unwrap_or(0)
                 };
                 set_accessor_descriptor(
                     obj as usize,
@@ -1509,30 +1536,58 @@ pub extern "C" fn js_object_define_property(
                 );
             }
         } else {
-            // Data descriptor: look for "value" field and store it.
+            // Either a data descriptor (`value`/`writable` present) or a generic
+            // descriptor (only `enumerable`/`configurable`). Detect by own-field
+            // presence so `{ value: undefined }` (present) stores `undefined`,
+            // while a generic descriptor on an existing accessor leaves it intact.
             let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-            let value_field =
-                js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
-            // Clear any existing accessor for this key so the write doesn't fire
-            // the setter, and clear any stale per-key descriptor so a prior
-            // `writable: false` doesn't reject the forced store below. The final
-            // attributes are (re)applied a few lines down.
-            if let Some(ref k) = key_rust {
-                ACCESSOR_DESCRIPTORS.with(|m| {
-                    m.borrow_mut().remove(&(obj as usize, k.clone()));
-                });
-                clear_property_attrs(obj as usize, k);
-            }
-            // Ensure the key exists even if the descriptor's value is undefined —
-            // the property still "exists" per JS semantics.
-            if value_field.is_undefined() {
-                ensure_key_in_keys_array(obj, key_str);
+            let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+            let desc_has_value = own_key_present(desc_ptr, value_key);
+            let desc_has_writable = own_key_present(desc_ptr, writable_key);
+            let is_data = desc_has_value || desc_has_writable;
+
+            if is_data {
+                // Converting to / redefining as a data property. Clear any
+                // existing accessor for this key so the write doesn't fire the
+                // setter, and clear any stale per-key descriptor so a prior
+                // `writable: false` doesn't reject the forced store below. The
+                // final attributes are (re)applied a few lines down.
+                if let Some(ref k) = key_rust {
+                    ACCESSOR_DESCRIPTORS.with(|m| {
+                        m.borrow_mut().remove(&(obj as usize, k.clone()));
+                    });
+                    clear_property_attrs(obj as usize, k);
+                }
+                let value_field =
+                    js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
+                // Ensure the key exists; store the (possibly `undefined`) value
+                // via `[[DefineOwnProperty]]`, bypassing the `[[Set]]` writability
+                // / frozen guard (invariants already enforced above). When
+                // `value` is omitted (a `{ writable: ... }`-only descriptor on a
+                // brand-new property) the value defaults to `undefined`.
+                if desc_has_value {
+                    define_property_force_store_value(
+                        obj,
+                        key_str,
+                        f64::from_bits(value_field.bits()),
+                    );
+                } else if existing_accessor.is_some() {
+                    // Accessor → data with no `value`: the value becomes the
+                    // data default `undefined`.
+                    define_property_force_store_value(
+                        obj,
+                        key_str,
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
+                    );
+                } else {
+                    ensure_key_in_keys_array(obj, key_str);
+                }
             } else {
-                // `Object.defineProperty` stores the value via
-                // `[[DefineOwnProperty]]`, bypassing the `[[Set]]` writability /
-                // frozen guard (the spec invariants were already enforced by
-                // `enforce_define_property_invariants`).
-                define_property_force_store_value(obj, key_str, f64::from_bits(value_field.bits()));
+                // Generic descriptor: no value/writable/get/set. It only adjusts
+                // enumerable/configurable and never converts the property kind.
+                // Leave any existing accessor / data value untouched; just make
+                // sure the key is present (for a brand-new generic define).
+                ensure_key_in_keys_array(obj, key_str);
             }
         }
 
@@ -2312,23 +2367,36 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
     // — descriptors and target are usually different objects, but a
     // defensive copy costs ~ngc and protects against a user who passes
     // `Object.defineProperties(obj, obj)` aliasing.
-    let key_array_ptr: *const crate::array::ArrayHeader = unsafe { (*desc_obj).keys_array };
-    if key_array_ptr.is_null() {
-        return target;
-    }
-    let len = unsafe { crate::array::js_array_length(key_array_ptr) } as usize;
-    let mut keys: Vec<f64> = Vec::with_capacity(len);
-    for i in 0..len {
-        let k = unsafe { crate::array::js_array_get(key_array_ptr, i as u32) };
-        keys.push(f64::from_bits(k.bits()));
+    // Spec (ObjectDefineProperties): the property keys come from the properties
+    // object's own keys, but only the ones whose own descriptor is ENUMERABLE
+    // participate — and the descriptor object for each is read through `[[Get]]`
+    // (so accessors on the properties bag run). Using the full own-key set is
+    // wrong for native namespaces like `Math` (whose `E`/`PI`/... are
+    // non-enumerable) and for any object with non-enumerable own props.
+    let names_value = js_object_get_own_property_names(descriptors);
+    let names_arr =
+        crate::value::js_nanbox_get_pointer(names_value) as *const crate::array::ArrayHeader;
+    let mut keys: Vec<f64> = Vec::new();
+    if !names_arr.is_null() {
+        let len = unsafe { crate::array::js_array_length(names_arr) } as usize;
+        for i in 0..len {
+            let k = unsafe { crate::array::js_array_get(names_arr, i as u32) };
+            let k_f64 = f64::from_bits(k.bits());
+            // Skip non-enumerable own keys (spec step: descriptor must be
+            // enumerable). `propertyIsEnumerable` returns false for absent or
+            // non-enumerable keys.
+            const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+            if js_object_property_is_enumerable(descriptors, k_f64).to_bits() == TAG_TRUE {
+                keys.push(k_f64);
+            }
+        }
     }
     for k in keys {
+        // Read the descriptor through `[[Get]]` so accessors on the properties
+        // bag are honored, then ToPropertyDescriptor + DefinePropertyOrThrow.
         let descriptor = unsafe {
             js_object_get_field_by_name_f64(desc_obj as *const ObjectHeader, str_from_value(k))
         };
-        if descriptor.to_bits() == TAG_UNDEFINED_LOCAL {
-            continue;
-        }
         js_object_define_property(target, k, descriptor);
     }
     target
@@ -2403,11 +2471,13 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     }
 
     // #2820: `proto` must be an object or `null`. A primitive / undefined proto
-    // throws `TypeError: Object prototype may only be an Object or null`.
+    // throws `TypeError: Object prototype may only be an Object or null`. A
+    // Symbol is pointer-tagged but is NOT an object, so reject it explicitly.
     let proto_is_null = proto_bits == TAG_NULL;
+    let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto) != 0 };
     let proto_ok = proto_is_null
-        || unsafe { value_is_object_like(proto) }
-        || super::class_ref_id(proto).is_some();
+        || (!proto_is_symbol
+            && (unsafe { value_is_object_like(proto) } || super::class_ref_id(proto).is_some()));
     if !proto_ok {
         // V8 renders the offending value: `... an Object or null: 5`.
         let rendered = unsafe { describe_value_for_type_error(proto) };

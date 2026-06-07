@@ -693,6 +693,51 @@ pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f6
     js_object_coerce(target_f64)
 }
 
+/// Spec `Set(to, key, value, true)` inside `Object.assign` uses the strict
+/// receiver, so a write that the ordinary `[[Set]]` would reject throws a
+/// `TypeError`. Perry's `js_object_set_field_by_name` silently no-ops those
+/// cases, so detect them up front: a non-writable existing own data property,
+/// an accessor own property with no setter, or a new property on a
+/// non-extensible target. Throws when the write must fail.
+unsafe fn object_assign_throw_if_set_rejected(
+    target: *mut ObjectHeader,
+    key_ptr: *const crate::StringHeader,
+    name: &str,
+) {
+    if target.is_null() || (target as usize) <= 0x10000 {
+        return;
+    }
+    let exists = own_key_present(target, key_ptr);
+    if exists {
+        // Accessor own property: a setter must exist, else the write fails.
+        if let Some(acc) = super::get_accessor_descriptor(target as usize, name) {
+            if acc.set == 0 {
+                throw_object_assign_readonly(name);
+            }
+            return;
+        }
+        // Data own property: must be writable.
+        if let Some(attrs) = super::get_property_attrs(target as usize, name) {
+            if !attrs.writable() {
+                throw_object_assign_readonly(name);
+            }
+        }
+        return;
+    }
+    // New property: target must be extensible.
+    let gc = gc_header_for(target);
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
+        throw_object_assign_readonly(name);
+    }
+}
+
+fn throw_object_assign_readonly(name: &str) -> ! {
+    throw_object_type_error_with_suffix(
+        "Cannot assign to read only property '",
+        &format!("{name}' of object '#<Object>'"),
+    )
+}
+
 unsafe fn object_assign_set_string_key(
     target: *mut ObjectHeader,
     target_is_array: bool,
@@ -708,6 +753,17 @@ unsafe fn object_assign_set_string_key(
             value_f64,
         );
     } else {
+        // Strict `Set` semantics: reject (throw) a write the ordinary `[[Set]]`
+        // would silently drop.
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some(name_bytes) = crate::string::js_string_key_bytes(
+            crate::value::JSValue::string_ptr(key_ptr as *mut _),
+            &mut sso,
+        ) {
+            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                object_assign_throw_if_set_rejected(target, key_ptr, name);
+            }
+        }
         js_object_set_field_by_name(target, key_ptr, value_f64);
     }
 }
@@ -867,6 +923,31 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         }
         let sym_f64 = f64::from_bits(JSValue::pointer(sym_ptr as *const u8).bits());
         let value_f64 = f64::from_bits(value_bits);
+        // Strict `Set` semantics for symbol-keyed writes too.
+        {
+            let owner = tgt_raw;
+            let existing = crate::symbol::symbol_property_root_bits(owner, sym_ptr).is_some()
+                || crate::symbol::symbol_accessor_descriptor_bits(owner, sym_ptr).is_some();
+            if existing {
+                if let Some((_get, set)) =
+                    crate::symbol::symbol_accessor_descriptor_bits(owner, sym_ptr)
+                {
+                    if set == 0 {
+                        throw_object_assign_readonly("Symbol()");
+                    }
+                } else if let Some(attrs) = crate::symbol::get_symbol_property_attrs(owner, sym_ptr)
+                {
+                    if !attrs.writable() {
+                        throw_object_assign_readonly("Symbol()");
+                    }
+                }
+            } else {
+                let gc = gc_header_for(target);
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
+                    throw_object_assign_readonly("Symbol()");
+                }
+            }
+        }
         crate::symbol::js_object_set_symbol_property(target_f64, sym_f64, value_f64);
     }
 
