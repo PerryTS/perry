@@ -2,6 +2,15 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1132 — WebCrypto `algorithm.length` for KMAC128/KMAC256, not ChaCha20-Poly1305
+
+Aligns the `CryptoKey.algorithm.length` surface with WebCrypto/Node:
+`crypto_key_algorithm_has_length` now reports a `length` member for the KMAC128
+(tag `23`) and KMAC256 (tag `24`) key algorithms and stops reporting one for
+ChaCha20-Poly1305 (tag `22`, a fixed-256-bit AEAD whose algorithm dictionary has
+no `length`). One-line table fix in
+`crates/perry-runtime/src/object/field_get_set.rs`.
+
 ## v0.5.1131 — async-from-sync iterator adapter (`for await` over sync iterables)
 
 Closes #4520. `for await...of` over a *synchronous* iterable that yields
