@@ -25,10 +25,13 @@ pub extern "C" fn js_object_delete_field(
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-                let key_f64 =
-                    f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 let r = crate::proxy::js_proxy_delete(boxed, key_f64);
-                return if crate::value::js_is_truthy(r) != 0 { 1 } else { 0 };
+                return if crate::value::js_is_truthy(r) != 0 {
+                    1
+                } else {
+                    0
+                };
             }
         }
     }
@@ -240,7 +243,11 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 let r = crate::proxy::js_proxy_delete(boxed, key);
-                return if crate::value::js_is_truthy(r) != 0 { 1 } else { 0 };
+                return if crate::value::js_is_truthy(r) != 0 {
+                    1
+                } else {
+                    0
+                };
             }
         }
     }

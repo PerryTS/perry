@@ -726,14 +726,14 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                 return f64::from_bits(TAG_FALSE);
             }
             let enum_key = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
-            let enum_v =
-                js_object_get_field_by_name(desc_ptr as *const ObjectHeader, enum_key);
-            return f64::from_bits(if crate::value::js_is_truthy(f64::from_bits(enum_v.bits())) != 0
-            {
-                TAG_TRUE
-            } else {
-                TAG_FALSE
-            });
+            let enum_v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, enum_key);
+            return f64::from_bits(
+                if crate::value::js_is_truthy(f64::from_bits(enum_v.bits())) != 0 {
+                    TAG_TRUE
+                } else {
+                    TAG_FALSE
+                },
+            );
         }
 
         let key_str = crate::builtins::js_string_coerce(key_value);
@@ -991,11 +991,10 @@ pub extern "C" fn js_object_define_property(
                 );
             }
             validate_property_descriptor(descriptor_value);
-            let ok = crate::proxy::js_reflect_define_property(obj_value, key_value, descriptor_value);
+            let ok =
+                crate::proxy::js_reflect_define_property(obj_value, key_value, descriptor_value);
             if crate::value::js_is_truthy(ok) == 0 {
-                throw_object_type_error(
-                    b"'defineProperty' on proxy: trap returned falsish",
-                );
+                throw_object_type_error(b"'defineProperty' on proxy: trap returned falsish");
             }
             return obj_value;
         }
