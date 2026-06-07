@@ -218,7 +218,24 @@ pub(crate) extern "C" fn global_this_request_thunk(
 ) -> f64 {
     let url_ptr = crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
     let method_ptr = global_this_fetch_option_string_ptr(init, b"method");
-    let body_ptr = global_this_fetch_option_string_ptr(init, b"body");
+    // Body init coercion that DRAINS a `ReadableStream` body. @hono/node-server
+    // wraps the incoming request body as `Readable.toWeb(incoming)` / a
+    // `new ReadableStream({...})`, so the plain string coercion would stringify
+    // the stream HANDLE to its numeric id and `await c.req.text()` would resolve
+    // to a bogus number. Route through the registered body-init helper (stdlib
+    // `js_response_body_init_ptr`), which drains the stream's buffered chunks;
+    // string bodies fall back to the ordinary coercion. Refs Hono `c.req.text()`.
+    let body_ptr = {
+        let body_val = global_this_fetch_option(init, b"body");
+        if matches!(
+            body_val.to_bits(),
+            crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+        ) {
+            std::ptr::null()
+        } else {
+            super::global_fetch::call_global_body_init_ptr(body_val)
+        }
+    };
     let headers_handle = global_this_init_headers_handle(init);
     let referrer_ptr = global_this_fetch_option_string_ptr(init, b"referrer");
     let referrer_policy_ptr = global_this_fetch_option_string_ptr(init, b"referrerPolicy");
@@ -365,7 +382,25 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     args_len: usize,
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let kind = super::class_registry::identify_global_builtin_constructor(parent_val);
+    // Resolve the parent constructor kind from the value first. When the
+    // `extends` expression is an alias of `global.Request`/`global.Response`
+    // (`@hono/node-server`'s `class Request extends GlobalRequest`), the alias
+    // var can lower to a constructor-scope local that reads `undefined` at
+    // super-time, so `identify_global_builtin_constructor(parent_val)` returns
+    // `None`. Fall back to the fetch-parent kind registered against the
+    // instance's class at module init (via `js_register_class_parent_dynamic`,
+    // where the alias resolved correctly) so the native handle still attaches.
+    let kind =
+        super::class_registry::identify_global_builtin_constructor(parent_val).or_else(|| {
+            let obj = subclass_this_object_ptr(this_box)?;
+            match super::class_registry::fetch_parent_kind_in_chain(
+                crate::object::js_object_get_class_id(obj),
+            ) {
+                Some(1) => Some("Request"),
+                Some(2) => Some("Response"),
+                _ => None,
+            }
+        });
     match kind {
         Some("Request") | Some("Response") => {
             let arg0 = if args_len >= 1 && !args_ptr.is_null() {

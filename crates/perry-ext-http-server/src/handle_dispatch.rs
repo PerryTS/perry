@@ -101,6 +101,7 @@ extern "C" {
     fn js_node_http_im_signal(handle: i64) -> f64;
     fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_remote_port(handle: i64) -> f64;
+    fn js_node_http_im_raw_body(handle: i64) -> f64;
     fn js_node_http_im_pause(handle: i64);
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
@@ -691,6 +692,7 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "signal" => js_node_http_im_signal(handle),
         "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
         "remotePort" => js_node_http_im_remote_port(handle),
+        "rawBody" => js_node_http_im_raw_body(handle),
         _ => undef,
     }
 }

@@ -303,6 +303,31 @@ pub extern "C" fn js_node_http_im_destroyed(handle: i64) -> i32 {
         .unwrap_or(0)
 }
 
+/// `req.rawBody` — the fully-collected request body as a `Buffer`.
+///
+/// Perry's HTTP server buffers the entire request body before invoking the
+/// handler (`req.collect().await`), so the bytes are available synchronously
+/// here. `@hono/node-server` checks `"rawBody" in incoming && incoming.rawBody
+/// instanceof Buffer` and, when present, builds the `Request` body from it via a
+/// synchronous single-chunk `ReadableStream` — avoiding the data-less
+/// `Readable.toWeb(incoming)` stub path (the #1540 Node↔WHATWG stream gap).
+/// Exposing it makes `await c.req.text()` / `.json()` / `.formData()` on a POST
+/// resolve to the real body instead of an empty/garbage value. Returns an empty
+/// Buffer when there is no body (harmless: node-server only consults it for
+/// non-GET/HEAD methods).
+#[no_mangle]
+pub extern "C" fn js_node_http_im_raw_body(handle: i64) -> f64 {
+    let bytes = get_handle::<IncomingMessage>(handle)
+        .map(|im| im.body_bytes.clone())
+        .unwrap_or_default();
+    let buf = alloc_buffer(&bytes);
+    if buf.is_null() {
+        f64::from_bits(crate::types::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+    }
+}
+
 /// `req.signal` — lazily-created AbortSignal for the request lifetime.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_signal(handle: i64) -> f64 {

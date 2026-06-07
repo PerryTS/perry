@@ -1895,6 +1895,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             property_name,
             "method"
                 | "url"
+                | "rawBody"
                 | "httpVersion"
                 | "headers"
                 | "rawHeaders"
@@ -2766,6 +2767,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             ) -> f64,
             response_static_error: extern "C" fn() -> f64,
         );
+        #[cfg(feature = "http-client")]
+        fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
@@ -2798,6 +2801,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::fetch::js_response_static_redirect,
         crate::fetch::js_response_static_error,
     );
+    #[cfg(feature = "http-client")]
+    js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
         crate::events::is_event_emitter_handle(handle)

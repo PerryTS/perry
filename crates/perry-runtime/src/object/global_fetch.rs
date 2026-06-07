@@ -54,6 +54,31 @@ static GLOBAL_FETCH_RESPONSE_NEW: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_RESPONSE_STATIC_JSON: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_RESPONSE_STATIC_REDIRECT: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_RESPONSE_STATIC_ERROR: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GLOBAL_FETCH_BODY_INIT_PTR: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+/// Register the stdlib body-init coercion (`js_response_body_init_ptr`), which
+/// drains a `ReadableStream` body to a `*const StringHeader` (and falls back to
+/// the ordinary string coercion for non-stream values). Used by the
+/// `Request`/`Response` thunks so a streamed request body (`@hono/node-server`
+/// wraps the incoming body as a `ReadableStream`) resolves to its bytes instead
+/// of a stringified stream handle id.
+#[no_mangle]
+pub extern "C" fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64) {
+    GLOBAL_FETCH_BODY_INIT_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// Coerce a fetch body-init value to a `*const StringHeader`, draining a
+/// `ReadableStream` body via the registered stdlib helper when present. Falls
+/// back to the plain unified string coercion (unchanged behavior for string
+/// bodies) when no helper is registered.
+pub(crate) fn call_global_body_init_ptr(value: f64) -> *const crate::StringHeader {
+    let f = GLOBAL_FETCH_BODY_INIT_PTR.load(Ordering::Acquire);
+    if !f.is_null() {
+        let func: extern "C" fn(f64) -> i64 = unsafe { std::mem::transmute(f) };
+        return func(value) as *const crate::StringHeader;
+    }
+    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
+}
 
 #[no_mangle]
 pub extern "C" fn js_register_global_fetch_with_options(f: FetchWithOptionsFn) {

@@ -46,6 +46,19 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     }
 }
 
+/// The Web-Fetch body-reading methods (`text`/`json`/`arrayBuffer`/`blob`/
+/// `bytes`/`formData`/`clone`). On a `class X extends Request/Response`
+/// instance these live on the underlying native handle, not the JS prototype
+/// chain, so they must be made readable as callable VALUES (see the property
+/// forward in `js_object_get_field_by_name`). Mirrors the set in
+/// `native_call_method.rs` (the fused-call body-method forward).
+pub(crate) fn is_fetch_subclass_body_method(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"text" | b"json" | b"arrayBuffer" | b"blob" | b"bytes" | b"formData" | b"clone"
+    )
+}
+
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
@@ -4634,6 +4647,31 @@ pub extern "C" fn js_object_get_field_by_name(
         // and the key isn't the marker field itself. Refs Hono `c.req` body.
         if !key.is_null() && key_bytes != FETCH_SUBCLASS_HANDLE_FIELD {
             if let Some(id) = fetch_subclass_handle_id(obj as usize) {
+                // Body methods (`text`/`json`/`arrayBuffer`/`blob`/`bytes`/
+                // `formData`/`clone`) live on the native fetch handle. They must
+                // be READABLE as callable values, not just invocable as a fused
+                // `inst.text()` (handled by the `js_native_call_method`
+                // body-method arm, #4756): codegen lowers `inst.text()` to a
+                // property read + call, and @hono/node-server forwards the body
+                // through `this[getRequestCache]()[k]()` -- a *computed* read of
+                // the native handle method off a `class extends Request`
+                // instance. Forwarding that read to the handle as an object
+                // pointer yields `undefined` -> "text is not a function". Return
+                // a bound method that re-dispatches through
+                // `js_native_call_method`, whose body-method arm forwards to the
+                // handle. Refs Hono `c.req.text()` / `.json()` / `.formData()`.
+                if is_fetch_subclass_body_method(key_bytes) {
+                    let this_f64 = crate::value::js_nanbox_pointer(obj as i64);
+                    let heap_name = {
+                        let layout =
+                            std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1).unwrap();
+                        let ptr = std::alloc::alloc(layout);
+                        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+                        ptr
+                    };
+                    let bound = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                    return JSValue::from_bits(bound.to_bits());
+                }
                 let v = js_object_get_field_by_name(id as usize as *const ObjectHeader, key);
                 if !v.is_undefined() {
                     return v;

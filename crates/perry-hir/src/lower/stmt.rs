@@ -669,7 +669,35 @@ pub(crate) fn lower_stmt(
                                             )
                                         })
                                         .collect();
+                                    // Runtime-value parent (`var X = class extends
+                                    // <expr> {}` where the parent isn't a known class —
+                                    // e.g. @hono/node-server's `var Request = class
+                                    // extends GlobalRequest {}`, `GlobalRequest =
+                                    // global.Request`). The general class-expression arm
+                                    // in `lower_expr.rs` and the `Decl::Class` arms emit
+                                    // `RegisterClassParentDynamic` so the parent edge —
+                                    // and the fetch-parent kind for Request/Response
+                                    // subclasses — is wired at module init (where the
+                                    // alias still resolves). This `var C = class {…}`
+                                    // fast path emitted a bare `ClassRef` binding and
+                                    // skipped it, so the parent never registered and a
+                                    // `Request`/`Response` subclass got no native handle
+                                    // (inherited body methods threw "text is not a
+                                    // function"). Emit it here too, in source order
+                                    // before the value binding. Clone the extends
+                                    // expression before `push_class_dedup` moves the
+                                    // class out.
+                                    let parent_register =
+                                        lowered_class.extends_expr.clone().map(|p| {
+                                            Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                                class_name: bind_name.clone(),
+                                                parent_expr: p,
+                                            })
+                                        });
                                     push_class_dedup(module, lowered_class);
+                                    if let Some(reg) = parent_register {
+                                        module.init.push(reg);
+                                    }
                                     for reg in computed_member_registrations {
                                         module.init.push(Stmt::Expr(reg));
                                     }

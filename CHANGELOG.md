@@ -2,6 +2,48 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1142 — @hono/node-server `c.req.text()`/`.json()`/`.formData()` work on POST/PUT
+
+Fixes `TypeError: text is not a function` (and `formData is not a function`) on
+every body-reading route of a Perry-compiled Hono app served by
+`@hono/node-server`. GET/HEAD were unaffected; any POST/PUT handler that read the
+body 500'd. Root cause spans three layers.
+
+**1. Parent registration dropped for `var X = class extends <alias> {}`.** The
+`var C = class {…}` fast path in `perry-hir/src/lower/stmt.rs` lowered the class
+to a bare `ClassRef` and — unlike the general class-expression arm
+(`lower_expr.rs`) and the `Decl::Class` arms — never emitted
+`RegisterClassParentDynamic`. node-server's `var Request = class extends
+GlobalRequest {}` (with `GlobalRequest = global.Request`) therefore never
+registered its fetch-builtin parent, so the constructed subclass instance got no
+underlying native fetch handle, `instanceof Request` was false, and all
+inherited body methods were missing. The fast path now emits the dynamic parent
+registration in source order (where the alias still resolves), matching the
+other class-lowering paths.
+
+**2. `super()` could not see the aliased parent.** `js_fetch_or_value_super`
+identified the parent kind solely from the runtime parent VALUE, which for an
+aliased module-var parent re-lowered to `undefined` at super-call time. It now
+falls back to the fetch-parent kind registered against the instance's class id
+(captured at module init), so the native handle attaches regardless of how the
+`extends` expression resolves at the call site.
+
+**3. Body methods were not readable, and a streamed body was not read.** Reading
+a body method as a value — `r.text` or the computed `r["text"]` that
+`@hono/node-server` uses (`this[getRequestCache]()[k]()`) — on a fetch-subclass
+returned `undefined` (the handle id was dereferenced as an `ObjectHeader`). It
+now returns a bound method that re-dispatches through the native handle. The
+`Request` thunk drains a `ReadableStream` body via the existing
+`js_response_body_init_ptr` (instead of stringifying the stream handle to its
+numeric id), and Perry's `node:http` `IncomingMessage` now exposes `rawBody`
+(the already-collected body `Buffer`). With `rawBody` present, node-server takes
+its synchronous body path and avoids the data-less `Readable.toWeb(incoming)`
+stub (the #1540 Node↔WHATWG stream-forwarding gap).
+
+Result: `c.req.text()` / `.json()` / `.formData()` return the real request body
+on POST/PUT, GET is unaffected, and a 50-POST burst is stable. Regression test:
+`tests/test_request_subclass_stream_body.sh`.
+
 ## v0.5.1141 — Node streams honor `emitClose` / `autoDestroy` close-lifecycle options
 
 `new Readable/Writable/Duplex({ emitClose: false })` now suppresses the `'close'`
