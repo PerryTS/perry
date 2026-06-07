@@ -1125,61 +1125,6 @@ fn class_super_accessor_set(
     None
 }
 
-/// `super.prop` GET where `prop` resolves to an accessor (getter) defined on
-/// an ancestor class. Walks the parent class chain from `parent_class_id`,
-/// finds the getter named `key`, and invokes it with `receiver` as `this`
-/// (the spec: lookup starts at the super prototype, but the getter runs with
-/// the current `this`). Returns `undefined` when no getter is found — the
-/// codegen only routes here when a getter exists in the chain, so that's a
-/// defensive fallback. Refs class/super/in-{getter,methods,setter}.
-#[no_mangle]
-pub extern "C" fn js_super_accessor_get(parent_class_id: u32, key: f64, receiver: f64) -> f64 {
-    let receiver = normalize_accessor_receiver(receiver);
-    let Some(key_name) = property_key_to_rust_string(key) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    if let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() {
-        if let Some(reg) = registry.as_ref() {
-            let mut cid = parent_class_id;
-            let mut depth = 0usize;
-            while cid != 0 && depth < 32 {
-                if let Some(vtable) = reg.get(&cid) {
-                    let getter_alias = format!("__get_{}", key_name);
-                    if let Some(&getter_ptr) = vtable
-                        .getters
-                        .get(&key_name)
-                        .or_else(|| vtable.getters.get(&getter_alias))
-                    {
-                        let f: extern "C" fn(f64) -> f64 =
-                            unsafe { std::mem::transmute(getter_ptr) };
-                        let prev_this = crate::object::js_implicit_this_set(receiver);
-                        let result = f(receiver);
-                        crate::object::js_implicit_this_set(prev_this);
-                        return result;
-                    }
-                }
-                match crate::object::get_parent_class_id(cid) {
-                    Some(parent) if parent != 0 && parent != cid => {
-                        cid = parent;
-                        depth += 1;
-                    }
-                    _ => break,
-                }
-            }
-        }
-    }
-    // No accessor in the chain — read a DATA property off the parent
-    // prototype object (e.g. `B.prototype.x = 42` then `super.x`). The
-    // prototype object holds own data properties; reading by key returns
-    // the value (or undefined if absent).
-    let proto = crate::object::class_prototype_object(parent_class_id);
-    if !proto.is_null() {
-        let target = crate::value::js_nanbox_pointer(proto as i64);
-        return unsafe { crate::object::js_object_get_property_key(target, key) };
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
-
 fn receiver_super_parent_class_id(receiver: f64) -> Option<u32> {
     let obj = extract_pointer(receiver.to_bits()) as *const crate::ObjectHeader;
     if obj.is_null() {

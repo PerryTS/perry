@@ -136,6 +136,67 @@ pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, _receive
     js_object_get_property_key(proto, key_value)
 }
 
+/// `super.prop` GET for class methods: walk the parent class chain from
+/// `parent_class_id` for an accessor (getter) named `key` and invoke it with
+/// `receiver` as `this` (lookup starts at the super prototype, but the getter
+/// runs with the current `this`). If no getter is found, read a data property
+/// off the parent prototype object (`B.prototype.x = 42` then `super.x`).
+/// Refs class/super/in-{constructor,getter,methods,setter}.
+#[no_mangle]
+pub unsafe extern "C" fn js_super_accessor_get(
+    parent_class_id: u32,
+    key: f64,
+    receiver: f64,
+) -> f64 {
+    let key_hdr = crate::builtins::js_string_coerce(key);
+    let key_name: Option<String> = if key_hdr.is_null() {
+        None
+    } else {
+        let p = (key_hdr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let n = (*key_hdr).byte_len as usize;
+        std::str::from_utf8(std::slice::from_raw_parts(p, n))
+            .ok()
+            .map(|s| s.to_string())
+    };
+    if let Some(key_name) = key_name {
+        if let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() {
+            if let Some(reg) = registry.as_ref() {
+                let mut cid = parent_class_id;
+                let mut depth = 0usize;
+                while cid != 0 && depth < 32 {
+                    if let Some(vtable) = reg.get(&cid) {
+                        let getter_alias = format!("__get_{}", key_name);
+                        if let Some(&getter_ptr) = vtable
+                            .getters
+                            .get(&key_name)
+                            .or_else(|| vtable.getters.get(&getter_alias))
+                        {
+                            let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
+                            let prev = crate::object::js_implicit_this_set(receiver);
+                            let r = f(receiver);
+                            crate::object::js_implicit_this_set(prev);
+                            return r;
+                        }
+                    }
+                    match crate::object::get_parent_class_id(cid) {
+                        Some(parent) if parent != 0 && parent != cid => {
+                            cid = parent;
+                            depth += 1;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+    }
+    let proto = crate::object::class_prototype_object(parent_class_id);
+    if !proto.is_null() {
+        let target = crate::value::js_nanbox_pointer(proto as i64);
+        return js_object_get_property_key(target, key);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// `super[key] = value` for object-literal methods using the captured home
 /// object. The prototype is resolved before the RHS has already been evaluated
 /// by codegen; this helper performs the final ordinary [[Set]].

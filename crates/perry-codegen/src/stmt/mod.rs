@@ -208,25 +208,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // expression's value — it must NOT emit a function-level `ret`
             // (that would terminate the ENCLOSING function, e.g. `main`).
             if let Some(target) = ctx.inline_ctor_return.last().cloned() {
+                // Store the RAW returned value and branch to the construction
+                // completion block. The spec return-override check (object? /
+                // derived-primitive TypeError) is applied THERE, not here —
+                // it must run as part of [[Construct]] completion, OUTSIDE any
+                // `try` in the body, so `try { return 0; } catch {}` in a
+                // derived ctor throws uncaught (the catch can't see it).
                 let ret_val = lower_expr(ctx, e)?;
-                let this_slot = ctx.this_stack.last().cloned();
-                let this_val = match this_slot {
-                    Some(slot) => ctx.block().load(DOUBLE, &slot),
-                    None => {
-                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    }
-                };
-                let is_derived = if target.is_derived { "1" } else { "0" };
-                let resolved = ctx.block().call(
-                    DOUBLE,
-                    "js_ctor_return_override",
-                    &[
-                        (DOUBLE, &this_val),
-                        (DOUBLE, &ret_val),
-                        (crate::types::I32, is_derived),
-                    ],
-                );
-                ctx.block().store(DOUBLE, &resolved, &target.result_slot);
+                ctx.block().store(DOUBLE, &ret_val, &target.result_slot);
                 // Pop any open try frames before leaving the body (mirrors the
                 // ordinary `return` path below).
                 for _ in 0..ctx.try_depth {

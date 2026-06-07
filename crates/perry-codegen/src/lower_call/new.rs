@@ -1291,14 +1291,27 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     }
 
     // Close the inline-constructor return: fall through (or branch) to the
-    // shared after-block, then load the (possibly return-overridden) result
-    // as the `new` expression's value.
+    // shared after-block, then apply the spec return-override at construction
+    // completion. `result_slot` holds the constructed `this` on fall-through
+    // (initial value) or the raw value from an explicit `return`. The override
+    // runs HERE (outside any `try` in the body) so a derived ctor's
+    // `try { return <primitive>; } catch {}` still throws uncaught.
     let final_box = if let Some(ret) = ctx.inline_ctor_return.pop() {
         if !ctx.block().is_terminated() {
             ctx.block().br(&ret.after_label);
         }
         ctx.current_block = after_idx;
-        ctx.block().load(DOUBLE, &ret.result_slot)
+        let raw = ctx.block().load(DOUBLE, &ret.result_slot);
+        let is_derived = if ret.is_derived { "1" } else { "0" };
+        ctx.block().call(
+            DOUBLE,
+            "js_ctor_return_override",
+            &[
+                (DOUBLE, &obj_box),
+                (DOUBLE, &raw),
+                (crate::types::I32, is_derived),
+            ],
+        )
     } else {
         obj_box
     };
