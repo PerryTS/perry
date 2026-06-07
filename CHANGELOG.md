@@ -2,6 +2,17 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1135 — `net.Socket` instanceof for native handles + explicit Tokio runtimes
+
+Registers the ext-net socket-handle probe so dynamic/static `instanceof
+net.Socket` (and the `net.Stream` alias) recognize native socket handles, so
+`new net.Stream() instanceof net.Socket` matches Node while preserving
+`net.Stream === net.Socket`. Socket `connect` and server `listen` futures now
+run on explicit current-thread Tokio runtimes instead of relying on an ambient
+reactor handle, stabilizing the net reactor paths. Touches
+`perry-ext-net/src/lib.rs`, `perry-runtime/src/object/instanceof.rs`, and
+`perry-codegen/src/expr/instance_misc1.rs`.
+
 ## v0.5.1134 — external `node:zlib` Transform stream handles (write/end/on/pipe/reset…)
 
 Part of #800. External `node:zlib` stream handles now expose callable
