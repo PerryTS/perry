@@ -2263,6 +2263,49 @@ extern "C" fn async_generator_proto_throw_thunk(
     generator_proto_method(b"throw", arg, true)
 }
 
+/// `%AsyncGenerator.prototype%[Symbol.asyncIterator]()` returns `this` (spec
+/// inherits this from `%AsyncIteratorPrototype%`). Without it, `for await` /
+/// `GetIterator(obj, async)` over a generator instance can't obtain the async
+/// iterator and either throws or silently produces nothing.
+extern "C" fn async_generator_proto_async_iterator_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    crate::object::js_implicit_this_get()
+}
+
+/// Install a well-known-symbol-keyed method (returning `this`) on a
+/// generator/async-generator prototype, with the spec descriptor shape
+/// (`name`/`length` own props, non-enumerable value).
+fn install_proto_symbol_self_method(
+    proto: *mut ObjectHeader,
+    symbol_name: &str,
+    display_name: &str,
+    func_ptr: *const u8,
+) {
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    super::native_module::set_bound_native_closure_name(closure, display_name);
+    super::native_module::set_builtin_closure_length(closure as usize, 0);
+    let configurable = super::PropertyAttrs::new(false, false, true);
+    super::set_builtin_property_attrs(closure as usize, "name".to_string(), configurable);
+    super::set_builtin_property_attrs(closure as usize, "length".to_string(), configurable);
+    let sym = crate::symbol::well_known_symbol(symbol_name);
+    if sym.is_null() {
+        return;
+    }
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            crate::value::js_nanbox_pointer(proto as i64),
+            f64::from_bits(JSValue::pointer(sym as *const u8).bits()),
+            crate::value::js_nanbox_pointer(closure as i64),
+        );
+    }
+}
+
 /// #4141: link a freshly-built generator/async-generator instance object into
 /// the spec `[[Prototype]]` chain. Perry lowers `gen()` to a `{next,return,
 /// throw}` object literal; this interposes a fresh intermediate object (the
@@ -2449,6 +2492,28 @@ fn build_generator_tower(
     install_proto_method(gen_proto, "next", next_thunk, 1);
     install_proto_method(gen_proto, "return", return_thunk, 1);
     install_proto_method(gen_proto, "throw", throw_thunk, 1);
+    // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
+    // `%AsyncIteratorPrototype%` (returning `this`). Without it, `for await (x of
+    // gen())` over an async-generator *method instance* can't resolve the async
+    // iterator and hangs/yields nothing (the instance carries no own iterator
+    // symbol). The async-iterator-acquisition path (`js_get_async_iterator`)
+    // sets the implicit-this before invoking this thunk, so it returns the
+    // generator instance.
+    //
+    // Note: the SYNC `%Generator.prototype%` deliberately gets NO own
+    // `[Symbol.iterator]` here — the sync `for-of` iterator-acquisition path
+    // (`js_get_iterator`) does NOT bind implicit-this before invoking a
+    // `[Symbol.iterator]` method, so a `this`-returning thunk would resolve to
+    // `undefined` and break `for (x of gen())`. Sync generators already iterate
+    // through their own `next` via the builtin-iterator recognizers.
+    if is_async {
+        install_proto_symbol_self_method(
+            gen_proto,
+            "asyncIterator",
+            "[Symbol.asyncIterator]",
+            async_generator_proto_async_iterator_thunk as *const u8,
+        );
+    }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
 
     ctor_slot.store(ctor as i64, Ordering::Release);

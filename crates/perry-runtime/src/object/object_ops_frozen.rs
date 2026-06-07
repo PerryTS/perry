@@ -274,6 +274,22 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
         if obj.is_null() || (obj as usize) <= 0x10000 {
             return f64::from_bits(TAG_FALSE); // non-objects are not extensible
         }
+        // Typed arrays and ArrayBuffers use a non-standard allocation that does
+        // not carry the 8-byte object `GcHeader` the freeze/seal/extend flags
+        // live in (small typed arrays are raw-`alloc`'d with the
+        // `TypedArrayHeader` at offset 0 — only the large-object path interposes
+        // a `GcHeader`). Reading `_reserved` for them dereferences whatever
+        // precedes the allocation, so `isExtensible` would non-deterministically
+        // report `false` depending on heap layout. Integer-indexed exotic
+        // objects are extensible by default; report that instead of reading a
+        // header that may not exist.
+        let raw = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+        if raw > 0x10000
+            && (crate::typedarray::lookup_typed_array_kind(raw).is_some()
+                || crate::buffer::is_registered_buffer(raw))
+        {
+            return f64::from_bits(TAG_TRUE);
+        }
         let gc = gc_header_for(obj);
         if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
             f64::from_bits(TAG_FALSE)

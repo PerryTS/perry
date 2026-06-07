@@ -2,6 +2,48 @@
 
 use super::*;
 
+thread_local! {
+    /// Whether the generator currently being linearized is an `async function*`.
+    /// Set by `transform_generator_function_with_extra_captures` right before it
+    /// calls `linearize_body` (linearization is fully synchronous, so a
+    /// thread-local avoids threading a bool through ~14 recursive call sites).
+    /// Read by the `yield*` arms to pick the async vs sync delegation protocol.
+    static LINEARIZE_IS_ASYNC_GEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn set_linearize_async_generator(v: bool) {
+    LINEARIZE_IS_ASYNC_GEN.with(|c| c.set(v));
+}
+
+fn linearize_async_generator() -> bool {
+    LINEARIZE_IS_ASYNC_GEN.with(|c| c.get())
+}
+
+/// Resolve a `yield*` operand into its iterator. An async generator delegates
+/// through the async-iterator protocol (`GetAsyncIterator`, which honours
+/// `[Symbol.asyncIterator]` and wraps a sync iterable via
+/// CreateAsyncFromSyncIterator); a sync generator uses `GetIterator`.
+fn delegate_get_iterator(inner: Expr) -> Expr {
+    if linearize_async_generator() {
+        Expr::GetAsyncIterator(Box::new(inner))
+    } else {
+        Expr::GetIterator(Box::new(inner))
+    }
+}
+
+/// Wrap a delegated-iterator `next()`/`return()`/`throw()` call. In an async
+/// generator the delegated iterator's methods return a promise of the
+/// iter-result, which must be awaited before `.value`/`.done` are read (`await`
+/// is a synchronous promise-drain in codegen). Sync generators read the
+/// iter-result directly.
+fn delegate_await(call: Expr) -> Expr {
+    if linearize_async_generator() {
+        Expr::Await(Box::new(call))
+    } else {
+        call
+    }
+}
+
 pub struct State {
     pub num: u32,
     pub body: Vec<Stmt>,
@@ -136,11 +178,11 @@ pub fn linearize_body(
                 // well-known-symbol method to obtain one.
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_iter_id,
-                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
+                    Box::new(delegate_get_iterator(*inner.clone())),
                 )));
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_result_id,
-                    Box::new(next_call),
+                    Box::new(delegate_await(next_call)),
                 )));
 
                 // Build the while loop with yield
@@ -152,7 +194,10 @@ pub fn linearize_body(
                         })),
                         delegate: false,
                     }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
+                    Stmt::Expr(Expr::LocalSet(
+                        del_result_id,
+                        Box::new(delegate_await(next_call_resumed)),
+                    )),
                 ];
 
                 let while_stmt = Stmt::While {
@@ -243,14 +288,15 @@ pub fn linearize_body(
 
                 // #1831: resolve the iterator (effect / custom `[Symbol.iterator]`
                 // operands need `js_get_iterator` to invoke the well-known-symbol
-                // method; a generator call already is its iterator).
+                // method; a generator call already is its iterator). Async
+                // generators delegate through the async-iterator protocol.
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_iter_id,
-                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
+                    Box::new(delegate_get_iterator(*inner.clone())),
                 )));
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_result_id,
-                    Box::new(next_call),
+                    Box::new(delegate_await(next_call)),
                 )));
 
                 let while_body = vec![
@@ -261,7 +307,10 @@ pub fn linearize_body(
                         })),
                         delegate: false,
                     }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
+                    Stmt::Expr(Expr::LocalSet(
+                        del_result_id,
+                        Box::new(delegate_await(next_call_resumed)),
+                    )),
                 ];
 
                 let while_stmt = Stmt::While {
@@ -998,14 +1047,15 @@ pub fn linearize_body(
                 // #1831: resolve the iterator. For a generator *call* the result
                 // already is its iterator; for an arbitrary iterable (effect,
                 // custom `[Symbol.iterator]`) `js_get_iterator` invokes the
-                // well-known-symbol method to obtain one.
+                // well-known-symbol method to obtain one. Async generators
+                // delegate through the async-iterator protocol.
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_iter_id,
-                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
+                    Box::new(delegate_get_iterator(*inner.clone())),
                 )));
                 current.push(Stmt::Expr(Expr::LocalSet(
                     del_result_id,
-                    Box::new(next_call),
+                    Box::new(delegate_await(next_call)),
                 )));
 
                 let while_body = vec![
@@ -1016,7 +1066,10 @@ pub fn linearize_body(
                         })),
                         delegate: false,
                     }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
+                    Stmt::Expr(Expr::LocalSet(
+                        del_result_id,
+                        Box::new(delegate_await(next_call_resumed)),
+                    )),
                 ];
 
                 let while_stmt = Stmt::While {

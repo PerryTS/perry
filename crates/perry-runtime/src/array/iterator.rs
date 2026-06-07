@@ -453,8 +453,36 @@ pub(crate) fn async_from_sync_wrap_iterator(iter: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_get_async_iterator(value: f64) -> f64 {
-    if let Some(iter) = call_symbol_async_iterator(value) {
-        return iter;
+    // GetIterator(value, async) — ECMA-262 §7.4.3.
+    //
+    // Spec ordering matters (test262 yield-star-getiter-async-*): consult
+    // @@asyncIterator with GetMethod semantics FIRST. A method that is present
+    // but not callable is a TypeError; a callable method whose result is not an
+    // Object is a TypeError. Only an ABSENT (undefined/null) @@asyncIterator
+    // falls back to the sync iterator wrapped via CreateAsyncFromSyncIterator —
+    // so e.g. `yield* { [Symbol.asyncIterator]() { return undefined } }` throws
+    // instead of (wrongly) reaching the object's `[Symbol.iterator]`.
+    let sym = crate::symbol::well_known_symbol("asyncIterator");
+    if !sym.is_null() {
+        let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
+        let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_f64) };
+        let mb = method.to_bits();
+        if mb != crate::value::TAG_UNDEFINED && mb != crate::value::TAG_NULL {
+            // @@asyncIterator is present: GetMethod requires it be callable.
+            if !is_callable_value(method) {
+                throw_iterator_method_not_callable();
+            }
+            let prev_this = crate::object::js_implicit_this_set(value);
+            let iterator =
+                unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
+            crate::object::js_implicit_this_set(prev_this);
+            // GetIterator step 5: the result must be an Object.
+            if !is_async_iterator_object(iterator) {
+                throw_iterator_result_not_object();
+            }
+            return iterator;
+        }
+        // @@asyncIterator absent → fall through to the sync-iterator path.
     }
 
     let iter = crate::symbol::js_get_iterator(value);
@@ -467,6 +495,15 @@ pub extern "C" fn js_get_async_iterator(value: f64) -> f64 {
     }
 
     async_from_sync_wrap_iterator(iter)
+}
+
+/// `Type(x) is Object` for the GetIterator(async) result check: heap
+/// pointer-tagged values that are not registered Symbols (strings, numbers,
+/// booleans, null/undefined, symbols are all NOT objects).
+fn is_async_iterator_object(value: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    jv.is_pointer()
+        && !crate::symbol::is_registered_symbol(crate::value::js_nanbox_get_pointer(value) as usize)
 }
 
 #[cold]

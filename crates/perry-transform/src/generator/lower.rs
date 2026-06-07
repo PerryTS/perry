@@ -110,6 +110,10 @@ pub fn transform_generator_function_with_extra_captures(
     // completion. Innermost finallys are pushed first (the recursion into a
     // try body collects nested finallys before the enclosing one).
     let mut finallys: Vec<FinallyRoute> = Vec::new();
+    // Tell the linearizer whether `yield*` should delegate through the
+    // async-iterator protocol (await each delegated `next()`); see the `yield*`
+    // arms in `linearize.rs`.
+    super::linearize::set_linearize_async_generator(is_async_generator);
     linearize_body(
         &func.body,
         &mut states,

@@ -3341,8 +3341,14 @@ pub(crate) unsafe fn call_vtable_method(
     has_synthetic_arguments: bool,
     has_rest: bool,
 ) -> f64 {
+    // A missing trailing argument is `undefined` per spec (NOT NaN): default
+    // parameters lower to a `param === undefined ? <default> : param` check in
+    // the method prologue, so padding a hole with NaN left the default
+    // un-applied (`async method(a, b, c = 99)` called via the dynamic vtable
+    // path — e.g. a detached `C.prototype.method` value — saw `c = NaN`). Pad
+    // with TAG_UNDEFINED so the prologue's default-check fires.
     #[inline(always)]
-    unsafe fn arg_or_nan(args_ptr: *const f64, args_len: usize, idx: usize) -> f64 {
+    unsafe fn arg_or_undefined(args_ptr: *const f64, args_len: usize, idx: usize) -> f64 {
         if idx < args_len {
             *args_ptr.add(idx)
         } else {
@@ -3406,13 +3412,13 @@ pub(crate) unsafe fn call_vtable_method(
             crate::array::js_array_set_f64(
                 raw_args,
                 slot as u32,
-                arg_or_nan(args_ptr, args_len, i),
+                arg_or_undefined(args_ptr, args_len, i),
             );
         }
         let raw_args_value = crate::value::js_nanbox_pointer(raw_args as i64);
         let mut args = Vec::with_capacity(param_count as usize);
         for i in 0..visible_params {
-            args.push(arg_or_nan(args_ptr, args_len, i));
+            args.push(arg_or_undefined(args_ptr, args_len, i));
         }
         args.push(raw_args_value);
         adjusted_args_storage = Some(args);
@@ -3429,33 +3435,33 @@ pub(crate) unsafe fn call_vtable_method(
         }
         1 => {
             let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(this_f64, arg_or_nan(call_args_ptr, call_args_len, 0))
+            f(this_f64, arg_or_undefined(call_args_ptr, call_args_len, 0))
         }
         2 => {
             let f: extern "C" fn(f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
             )
         }
         3 => {
             let f: extern "C" fn(f64, f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
             )
         }
         4 => {
             let f: extern "C" fn(f64, f64, f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
-                arg_or_nan(call_args_ptr, call_args_len, 3),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 3),
             )
         }
         5 => {
@@ -3463,11 +3469,11 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
-                arg_or_nan(call_args_ptr, call_args_len, 3),
-                arg_or_nan(call_args_ptr, call_args_len, 4),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 3),
+                arg_or_undefined(call_args_ptr, call_args_len, 4),
             )
         }
         6 => {
@@ -3475,12 +3481,12 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
-                arg_or_nan(call_args_ptr, call_args_len, 3),
-                arg_or_nan(call_args_ptr, call_args_len, 4),
-                arg_or_nan(call_args_ptr, call_args_len, 5),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 3),
+                arg_or_undefined(call_args_ptr, call_args_len, 4),
+                arg_or_undefined(call_args_ptr, call_args_len, 5),
             )
         }
         7 => {
@@ -3488,13 +3494,13 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
-                arg_or_nan(call_args_ptr, call_args_len, 3),
-                arg_or_nan(call_args_ptr, call_args_len, 4),
-                arg_or_nan(call_args_ptr, call_args_len, 5),
-                arg_or_nan(call_args_ptr, call_args_len, 6),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 3),
+                arg_or_undefined(call_args_ptr, call_args_len, 4),
+                arg_or_undefined(call_args_ptr, call_args_len, 5),
+                arg_or_undefined(call_args_ptr, call_args_len, 6),
             )
         }
         8 => {
@@ -3502,14 +3508,14 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
-                arg_or_nan(call_args_ptr, call_args_len, 3),
-                arg_or_nan(call_args_ptr, call_args_len, 4),
-                arg_or_nan(call_args_ptr, call_args_len, 5),
-                arg_or_nan(call_args_ptr, call_args_len, 6),
-                arg_or_nan(call_args_ptr, call_args_len, 7),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 3),
+                arg_or_undefined(call_args_ptr, call_args_len, 4),
+                arg_or_undefined(call_args_ptr, call_args_len, 5),
+                arg_or_undefined(call_args_ptr, call_args_len, 6),
+                arg_or_undefined(call_args_ptr, call_args_len, 7),
             )
         }
         9 => {
@@ -3517,15 +3523,15 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
-                arg_or_nan(call_args_ptr, call_args_len, 3),
-                arg_or_nan(call_args_ptr, call_args_len, 4),
-                arg_or_nan(call_args_ptr, call_args_len, 5),
-                arg_or_nan(call_args_ptr, call_args_len, 6),
-                arg_or_nan(call_args_ptr, call_args_len, 7),
-                arg_or_nan(call_args_ptr, call_args_len, 8),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 3),
+                arg_or_undefined(call_args_ptr, call_args_len, 4),
+                arg_or_undefined(call_args_ptr, call_args_len, 5),
+                arg_or_undefined(call_args_ptr, call_args_len, 6),
+                arg_or_undefined(call_args_ptr, call_args_len, 7),
+                arg_or_undefined(call_args_ptr, call_args_len, 8),
             )
         }
         _ => {
@@ -3533,16 +3539,16 @@ pub(crate) unsafe fn call_vtable_method(
                 std::mem::transmute(func_ptr);
             f(
                 this_f64,
-                arg_or_nan(call_args_ptr, call_args_len, 0),
-                arg_or_nan(call_args_ptr, call_args_len, 1),
-                arg_or_nan(call_args_ptr, call_args_len, 2),
-                arg_or_nan(call_args_ptr, call_args_len, 3),
-                arg_or_nan(call_args_ptr, call_args_len, 4),
-                arg_or_nan(call_args_ptr, call_args_len, 5),
-                arg_or_nan(call_args_ptr, call_args_len, 6),
-                arg_or_nan(call_args_ptr, call_args_len, 7),
-                arg_or_nan(call_args_ptr, call_args_len, 8),
-                arg_or_nan(call_args_ptr, call_args_len, 9),
+                arg_or_undefined(call_args_ptr, call_args_len, 0),
+                arg_or_undefined(call_args_ptr, call_args_len, 1),
+                arg_or_undefined(call_args_ptr, call_args_len, 2),
+                arg_or_undefined(call_args_ptr, call_args_len, 3),
+                arg_or_undefined(call_args_ptr, call_args_len, 4),
+                arg_or_undefined(call_args_ptr, call_args_len, 5),
+                arg_or_undefined(call_args_ptr, call_args_len, 6),
+                arg_or_undefined(call_args_ptr, call_args_len, 7),
+                arg_or_undefined(call_args_ptr, call_args_len, 8),
+                arg_or_undefined(call_args_ptr, call_args_len, 9),
             )
         }
     }
@@ -4348,12 +4354,14 @@ pub(crate) unsafe fn call_static_method(
     args_len: usize,
     param_count: u32,
 ) -> f64 {
+    // Missing trailing args pad with `undefined` (NOT NaN) so default
+    // parameters fire — see `call_vtable_method::arg_or_undefined`.
     #[inline(always)]
     unsafe fn a(args_ptr: *const f64, args_len: usize, idx: usize) -> f64 {
         if idx < args_len {
             *args_ptr.add(idx)
         } else {
-            f64::NAN
+            f64::from_bits(crate::value::TAG_UNDEFINED)
         }
     }
     match param_count {
