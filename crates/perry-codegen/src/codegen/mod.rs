@@ -60,7 +60,7 @@ use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, scoped_fn_name, scoped_method_name, scoped_static_method_name,
+    sanitize, sanitize_member, scoped_fn_name, scoped_method_name, scoped_static_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
@@ -1513,8 +1513,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let name = format!(
                 "perry_static_{}__{}__{}",
                 module_prefix,
-                sanitize(&c.name),
-                sanitize(&sf.name),
+                sanitize_member(&c.name),
+                sanitize_member(&sf.name),
             );
             // External linkage so importing modules can reference the same
             // global. Static class fields are spec-level shared state across
@@ -1551,8 +1551,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     let global_name = format!(
                         "perry_static_{}__{}__{}",
                         module_prefix,
-                        sanitize(&ic.name),
-                        sanitize(sf_name),
+                        sanitize_member(&ic.name),
+                        sanitize_member(sf_name),
                     );
                     static_field_globals.insert(key, global_name);
                 }
@@ -1566,8 +1566,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let global_name = format!(
                 "perry_static_{}__{}__{}",
                 ic.source_prefix,
-                sanitize(&ic.name),
-                sanitize(sf_name),
+                sanitize_member(&ic.name),
+                sanitize_member(sf_name),
             );
             // Declare external (not define) — the source module owns the
             // defining global. Skip if already declared (multiple imports of
@@ -1727,8 +1727,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let llvm_fn = format!(
                 "perry_method_{}__{}__{}",
                 sanitize(src),
-                sanitize(&ic.name),
-                sanitize(method_name),
+                sanitize_member(&ic.name),
+                sanitize_member(method_name),
             );
             method_names
                 .entry((effective_name.to_string(), method_name.clone()))
@@ -1815,8 +1815,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 format!(
                     "perry_static_{}__{}__{}",
                     sanitize(src),
-                    sanitize(&ic.name),
-                    sanitize(sm),
+                    sanitize_member(&ic.name),
+                    sanitize_member(sm),
                 )
             };
             method_names

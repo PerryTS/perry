@@ -121,9 +121,9 @@ pub(super) fn scoped_static_method_name(
     format!(
         "perry_static_{}__{}__c{}__{}",
         module_prefix,
-        sanitize(class_name),
+        sanitize_member(class_name),
         class_id,
-        sanitize(method_name)
+        sanitize_member(method_name)
     )
 }
 
@@ -266,46 +266,72 @@ pub(super) fn scoped_method_name(
     format!(
         "perry_method_{}__{}__{}",
         module_prefix,
-        sanitize(class_name),
-        sanitize(method_name)
+        sanitize_member(class_name),
+        sanitize_member(method_name)
     )
 }
 
-/// Sanitize a name for use in an LLVM symbol.
+/// Sanitize a name for use in an LLVM symbol — replace anything that isn't
+/// `[A-Za-z0-9_]` with an underscore. LLVM IR identifiers cannot start with
+/// a digit, so prefix with `_` if the first character would be one (this
+/// happens with module names like `05_fibonacci.ts`).
 ///
-/// Names made up entirely of `[A-Za-z0-9_]` are returned unchanged (only a
-/// leading `_` is prepended when the first character is a digit, since LLVM
-/// identifiers cannot start with a digit — e.g. module names like
-/// `05_fibonacci.ts`). This keeps the symbols for ordinary methods/classes
-/// byte-identical, which matters because both the definition site and every
-/// call site re-derive the symbol through this function.
-///
-/// Names containing any character outside `[A-Za-z0-9_]` — chiefly private
-/// member names like `#$`, `#℘`, `#\u{6F}`, or computed/Unicode element
-/// names — are *injectively* escaped: each non-alphanumeric character
-/// (including `_`) is rewritten as `_<hex>_` and the whole thing is given a
-/// `u_` tag prefix. Previously every special character was collapsed to a
-/// single `_`, so distinct private names like `#$`, `#_` and `#℘` all
-/// mangled to the same LLVM symbol and clang rejected the module with
-/// `invalid redefinition of function`. The escaped form is unambiguous, so
-/// distinct source names always yield distinct symbols.
+/// NOTE: this mapping is *lossy* — every special character collapses to `_`,
+/// so distinct inputs can share an output. That is fine for the module-prefix
+/// and static-field components (whose values are recorded once and re-derived
+/// identically at every reference site), but NOT for class/method name
+/// components, where distinct private names like `#$`, `#_`, `#℘` would all
+/// collapse to the same `perry_method_…` symbol and clang would reject the
+/// module with `invalid redefinition of function`. Those components use the
+/// injective [`sanitize_member`] instead. Keep `sanitize` byte-for-byte stable:
+/// changing it desyncs cross-module symbol references (a module's prefix is
+/// `sanitize(module_name)` at the definition site and must match the prefix the
+/// importing module re-derives).
 pub(super) fn sanitize(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        s.insert(0, '_');
+    }
+    s
+}
+
+/// Injective variant of [`sanitize`] for the class-name and method-name
+/// components of `perry_method_*` / `perry_static_*` symbols.
+///
+/// Names made up entirely of `[A-Za-z0-9_]` are returned IDENTICAL to what
+/// `sanitize` produces (only a leading digit is `_`-prefixed), so every
+/// ordinary method/class symbol is byte-for-byte unchanged. Names containing
+/// any character outside `[A-Za-z0-9_]` — chiefly private member names (`#$`,
+/// `#℘`, `#\u{6F}`, ZWJ/ZWNJ escapes) — are escaped to an unambiguous form
+/// (`u_` tag + `_<hex>_` per non-alphanumeric character) so distinct source
+/// names always yield distinct symbols. `sanitize` collapsed all of these to a
+/// single `_`, so `#$`, `#_` and `#℘` mangled to the same symbol and clang
+/// rejected the module with `invalid redefinition of function`.
+///
+/// Must be applied at BOTH the definition site and every reference site for a
+/// given symbol component, or the symbols desync and the linker fails.
+pub(super) fn sanitize_member(name: &str) -> String {
     let is_plain = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     if is_plain {
-        let mut s = name.to_string();
-        if s.chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            s.insert(0, '_');
-        }
-        return s;
+        // Byte-identical to `sanitize` for plain names (incl. leading-digit fix).
+        return sanitize(name);
     }
-    // Injective escape for names with special characters. Pure-`[A-Za-z0-9_]`
-    // names never reach this branch, so they can never collide with an escaped
-    // name (every escaped name carries a `_<hex>_` group that a plain name
-    // cannot reproduce).
+    // A plain (pure-`[A-Za-z0-9_]`) name never reaches this branch, so it can
+    // never collide with an escaped name: every escaped name carries a
+    // `_<hex>_` group a plain name cannot reproduce.
     let mut s = String::from("u_");
     for c in name.chars() {
         if c.is_ascii_alphanumeric() {
