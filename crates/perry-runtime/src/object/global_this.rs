@@ -5251,6 +5251,36 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             );
         }
         "Function" => {
+            // `Function.prototype` has own `length` (0) and `name` ("") data
+            // properties, each `{ writable: false, enumerable: false,
+            // configurable: true }` (ECMA-262 20.2.3). Install them first so
+            // `length` precedes `name` in `getOwnPropertyNames` order, matching
+            // the built-in-function property order Test262 checks.
+            {
+                let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                js_object_set_field_by_name(
+                    proto_obj,
+                    len_key,
+                    f64::from_bits(JSValue::number(0.0).bits()),
+                );
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    "length".to_string(),
+                    super::PropertyAttrs::new(false, false, true),
+                );
+                let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+                let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+                js_object_set_field_by_name(
+                    proto_obj,
+                    name_key,
+                    f64::from_bits(JSValue::string_ptr(empty).bits()),
+                );
+                super::set_builtin_property_attrs(
+                    proto_obj as usize,
+                    "name".to_string(),
+                    super::PropertyAttrs::new(false, false, true),
+                );
+            }
             install_proto_method(
                 proto_obj,
                 "apply",

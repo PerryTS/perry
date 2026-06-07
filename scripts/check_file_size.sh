@@ -157,6 +157,11 @@ crates/perry-hir/src/lower/lower_expr.rs
 # destructuring-binding support added the pattern-walk arms. Splitting the
 # export-binding helpers into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/module_decl.rs
+# Bare-callee intrinsics + CJS/UMD legacy-shape lowering (require/eval/Function
+# folds, IIFE rewrite, RegExp bare-call). Crossed the 2000-line gate (2010 LOC)
+# on current main, independent of this PR. Splitting the per-shape helpers into a
+# sibling module is tracked under #1435.
+crates/perry-hir/src/lower/expr_call/intrinsics.rs
 # Module collection / resolution driver. Crossed the 2000-line gate after the
 # ESM package `.js` detection helpers (package.json `type`/`exports`/`module`
 # probing) landed. Extracting the package-metadata probe into a sibling module

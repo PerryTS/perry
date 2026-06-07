@@ -411,6 +411,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // → false, so `{} instanceof Object` would otherwise
                 // regress; thread a real id through here instead.
                 "Object" => 0xFFFF0050u32,
+                // `Function` — every callable value (function declaration,
+                // expression, arrow, method, bound function, native handle,
+                // built-in constructor) is `instanceof Function`. The runtime
+                // resolves this reserved id by testing callability rather than
+                // walking a class chain. Keep in sync with
+                // perry-runtime/src/object/instanceof.rs (CLASS_ID_FUNCTION).
+                "Function" => 0xFFFF00F0u32,
                 _ => ctx.class_ids.get(ty).copied().unwrap_or_else(|| {
                     // Keep in sync with perry-runtime/src/object/instanceof.rs.
                     let classic_stream_cid = match ty.as_str() {

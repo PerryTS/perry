@@ -13,6 +13,24 @@ const CLASS_ID_NET_SOCKET: u32 = 0xFFFF00B4;
 const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
 const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
 const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
+/// `value instanceof Function` reserved id (see `js_instanceof`).
+const CLASS_ID_FUNCTION: u32 = 0xFFFF00F0;
+
+/// Whether `value` is callable — the predicate behind `x instanceof Function`
+/// and `Function[Symbol.hasInstance]`. Covers every Perry function
+/// representation: heap closures (declarations / expressions / arrows /
+/// methods / bound functions / built-in constructors, all carrying
+/// `CLOSURE_MAGIC`) and small native function handles.
+pub(crate) fn value_is_callable(value: f64) -> bool {
+    if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
+        return true;
+    }
+    let jv = crate::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    crate::closure::is_closure_ptr((jv.bits() & crate::value::POINTER_MASK) as usize)
+}
 
 fn small_native_handle_id(value: f64) -> Option<i64> {
     let bits = value.to_bits();
@@ -253,6 +271,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "ArrayBuffer" => 0xFFFF0025,
             "Array" => 0xFFFF0024,
             "Object" => 0xFFFF0050,
+            "Function" => CLASS_ID_FUNCTION,
             "Number" => 0xFFFF00D0,
             "String" => 0xFFFF00D1,
             "Boolean" => 0xFFFF00D2,
@@ -476,6 +495,18 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             value = crate::proxy::js_proxy_target(value);
             depth += 1;
         }
+    }
+    // `value instanceof Function` — true for any callable value. Per
+    // `OrdinaryHasInstance`, every Perry function (declaration, expression,
+    // arrow, method, bound function, native handle, built-in constructor)
+    // has `Function.prototype` in its prototype chain. Keep `CLASS_ID_FUNCTION`
+    // in sync with perry-codegen/src/expr/instance_misc1.rs.
+    if class_id == CLASS_ID_FUNCTION {
+        return if value_is_callable(value) {
+            true_val
+        } else {
+            false_val
+        };
     }
     // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
     let classic_stream_name = match class_id {

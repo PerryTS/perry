@@ -3155,6 +3155,14 @@ pub extern "C" fn js_object_get_field_by_name(
                     {
                         return JSValue::from_bits(ctor.to_bits());
                     }
+                    // Ordinary functions inherit `constructor` from
+                    // `Function.prototype` → the global `Function`. (Generator /
+                    // async-generator functions are handled just above with
+                    // their own intrinsic constructors.)
+                    let ctor = super::js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+                    if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
                 }
                 if name_str == "prototype" {
                     if let Some(proto) =
