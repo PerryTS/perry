@@ -524,6 +524,34 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     )));
                 }
                 ctx.pending_classes.push(class);
+            } else {
+                // The class is name-deduped against an earlier same-named class
+                // (Perry's codegen is name-keyed; #336). But ECMA-262
+                // ClassDefinitionEvaluation still evaluates every `class`
+                // expression's ComputedPropertyName in source order, so a
+                // computed member key with side effects (a throw, an
+                // assignment, a call) must still run — e.g. two
+                // `assert.throws(() => { class C { set [unresolvable](_) {} } })`
+                // helpers both named `C` (Test262 accessor-name-*/computed-err).
+                // Evaluate just the key expressions; the (duplicate) class body
+                // itself stays deduped.
+                for member in &class_decl.class.body {
+                    let computed_key = match member {
+                        ast::ClassMember::Method(m) => match &m.key {
+                            ast::PropName::Computed(c) => Some(c.expr.as_ref()),
+                            _ => None,
+                        },
+                        ast::ClassMember::ClassProp(p) => match &p.key {
+                            ast::PropName::Computed(c) => Some(c.expr.as_ref()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(key_ast) = computed_key {
+                        let lowered = lower_expr(ctx, key_ast)?;
+                        result.push(Stmt::Expr(lowered));
+                    }
+                }
             }
         }
         ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) => {
