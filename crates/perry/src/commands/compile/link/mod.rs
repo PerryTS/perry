@@ -30,14 +30,13 @@ use std::process::Command;
 use crate::OutputFormat;
 
 use super::{
-    apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3,
-    dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
-    find_geisterhand_library, find_geisterhand_runtime, find_geisterhand_stdlib,
-    find_geisterhand_ui, find_lld_link, find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe,
-    find_perry_windows_sdk, find_stdlib_library, find_ui_library, find_visionos_swift_runtime,
-    find_watchos_swift_runtime, rust_target_triple, strip_duplicate_objects_from_lib,
-    strip_duplicate_objects_from_well_known_lib, windows_pe_subsystem_flag,
-    windows_subsystem_needs_ui, CompilationContext,
+    apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3, dedup_runtime_for_tier3,
+    dedup_stdlib_for_tier3, find_geisterhand_library, find_geisterhand_runtime,
+    find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
+    find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
+    find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime, rust_target_triple,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
+    windows_pe_subsystem_flag, windows_subsystem_needs_ui, CompilationContext,
 };
 
 mod link_cache;

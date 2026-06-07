@@ -81,7 +81,10 @@ fn find_nightly_llvm_tool(tool: &str) -> Option<PathBuf> {
     // `<dir>/.cargo/bin/cargo` on PATH implies the rustup home is `<dir>/.rustup`.
     for tool_name in ["rustup", "cargo"] {
         if let Some(bin) = find_path_tool(tool_name) {
-            if let Some(cargo_root) = bin.parent().and_then(|p| p.parent()).and_then(|p| p.parent())
+            if let Some(cargo_root) = bin
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
             {
                 rustup_homes.push(cargo_root.join(".rustup"));
             }
