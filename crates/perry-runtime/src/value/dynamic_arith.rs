@@ -160,6 +160,41 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     a + b
 }
 
+/// `x++` / `++x` step for a type-uncertain local. When `v` is a BigInt the
+/// step is `v + 1n` (ECMAScript `BigInt::add`); otherwise it is the plain
+/// `v + 1.0` the codegen previously emitted inline. The codegen `Expr::Update`
+/// lowering routes here because a bare `fadd(v, 1.0)` on a NaN-boxed BigInt
+/// propagates the BigInt's NaN payload unchanged — leaving the value at its
+/// original BigInt and turning `for (let i = 0n; i < n; i++)` into an infinite
+/// loop. Non-BigInt operands take the fast `v + 1.0` return, preserving the
+/// exact prior behaviour (including `NaN` for non-numeric operands).
+#[no_mangle]
+pub unsafe extern "C" fn js_value_inc(v: f64) -> f64 {
+    value_step(v, crate::bigint::js_bigint_add, 1.0)
+}
+
+/// `x--` / `--x` step for a type-uncertain local. BigInt operands step by
+/// `1n` via `BigInt::subtract`; everything else falls back to `v - 1.0`.
+/// See [`js_value_inc`] for why the BigInt case cannot use a bare `fsub`.
+#[no_mangle]
+pub unsafe extern "C" fn js_value_dec(v: f64) -> f64 {
+    value_step(v, crate::bigint::js_bigint_sub, -1.0)
+}
+
+#[inline]
+unsafe fn value_step(v: f64, bigint_op: BigIntBinaryOp, float_delta: f64) -> f64 {
+    if !JSValue::from_bits(v.to_bits()).is_bigint() {
+        return v + float_delta;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let v_handle = scope.root_nanbox_f64(v);
+    // Allocate `1n` while `v` is rooted so a GC during allocation can't
+    // invalidate the operand pointer.
+    let one_f64 = js_nanbox_bigint(crate::bigint::js_bigint_from_i64(1) as i64);
+    let one_handle = scope.root_nanbox_f64(one_f64);
+    dynamic_bigint_binary_op_from_handles(&scope, &v_handle, &one_handle, bigint_op)
+}
+
 /// Dynamic `a + b` for type-uncertain operands. Per JS spec, when either
 /// operand is a string after ToPrimitive, the result is string concatenation;
 /// otherwise both operands are coerced to numbers and summed (or BigInt-

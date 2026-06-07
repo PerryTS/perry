@@ -606,6 +606,36 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     }
 }
 
+/// Spec-complete `Array.of ( ...items )` (ECMA-262 §23.1.2.3), returning a
+/// NaN-boxed result value. `c` is the `this` value: when it `IsConstructor`,
+/// the result is `Construct(C, «len»)`; otherwise a plain Array is created.
+/// Each element is installed via `CreateDataPropertyOrThrow` and the final
+/// `Set(A, "length", len, true)` runs — every abrupt completion (a throwing
+/// constructor, a failed define, a poisoned length setter) propagates.
+pub fn array_of_full(c: f64, vals: &[f64]) -> f64 {
+    let len = vals.len();
+    let is_ctor = is_constructor_value(c);
+    let result = if is_ctor {
+        let len_arg = [len as f64];
+        unsafe { crate::object::js_new_function_construct(c, len_arg.as_ptr(), 1) }
+    } else {
+        let arr = js_array_alloc(len as u32);
+        unsafe {
+            (*arr).length = 0;
+        }
+        f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+    };
+    for (k, &v) in vals.iter().enumerate() {
+        if !unsafe { create_index_data_property(result, k, v) } {
+            throw_cannot_define_property(k);
+        }
+    }
+    unsafe {
+        set_result_length(result, len);
+    }
+    result
+}
+
 /// Append every element of the (already-materializable) source array `src`
 /// into `result`, returning the (possibly reallocated) result. `src` is
 /// materialized via `js_array_clone` so sets/maps/typed-arrays/buffers spread

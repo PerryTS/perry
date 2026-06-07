@@ -1,8 +1,73 @@
 //! Indexing — length / element get / element set / hybrid string-or-index dispatch.
 use super::*;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
+
+/// Lazily-memoized address of the `Array.prototype` array, and a sticky flag
+/// recording whether anyone has installed an indexed property on it. An
+/// out-of-bounds element read on an ordinary array must fall through to
+/// `Array.prototype[index]` (ECMA-262 OrdinaryGet → prototype chain), but in
+/// real code nobody adds numeric indices to `Array.prototype`, so the hot OOB
+/// path stays a single relaxed atomic load until the (rare) write flips the
+/// flag. `usize::MAX` marks the address as not-yet-computed.
+static ARRAY_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
+static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
+
+fn array_prototype_addr() -> usize {
+    let cached = ARRAY_PROTO_ADDR.load(Ordering::Relaxed);
+    if cached != usize::MAX {
+        return cached;
+    }
+    let ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
+    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
+    let addr = if ctor_value.is_pointer() {
+        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
+        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+        let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
+        if proto_value.is_pointer() {
+            proto_value.as_pointer::<u8>() as usize
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    ARRAY_PROTO_ADDR.store(addr, Ordering::Relaxed);
+    addr
+}
+
+/// Record (if `arr` is `Array.prototype`) that the prototype now carries an
+/// indexed property, so subsequent out-of-bounds reads consult it. Called from
+/// the array element-write paths; cheap (two relaxed atomic loads + compare).
+#[inline]
+pub(crate) fn note_array_index_write(arr: usize) {
+    if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) && arr != 0 && arr == array_prototype_addr() {
+        ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Out-of-bounds element read fallback: `Array.prototype[index]` when the
+/// prototype has indexed properties (see `ARRAY_PROTO_HAS_INDEX`). Returns the
+/// inherited value, or `undefined` if absent. Skipped entirely when the
+/// receiver IS `Array.prototype` (avoids self-recursion) or the flag is unset.
+#[inline]
+unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+    if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        return TAG_UNDEFINED_F64;
+    }
+    let proto = array_prototype_addr();
+    if proto == 0 || proto == receiver {
+        return TAG_UNDEFINED_F64;
+    }
+    let proto_arr = proto as *const ArrayHeader;
+    if index >= (*proto_arr).length {
+        return TAG_UNDEFINED_F64;
+    }
+    js_array_get_f64(proto_arr, index)
+}
 
 unsafe fn array_sparse_index_property_get(arr: *const ArrayHeader, index: u32) -> Option<f64> {
     let arr = clean_arr_ptr(arr);
@@ -123,13 +188,13 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
     unsafe {
         let length = (*arr).length;
         if index >= length {
-            return TAG_UNDEFINED_F64;
+            return array_oob_prototype_get(arr as usize, index);
         }
         if let Some(value) = array_sparse_index_property_get(arr, index) {
             return value;
         }
         if index >= (*arr).capacity {
-            return TAG_UNDEFINED_F64;
+            return array_oob_prototype_get(arr as usize, index);
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let raw = *elements_ptr.add(index as usize);
@@ -241,13 +306,15 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     unsafe {
         let length = (*arr).length;
         if index >= length {
-            return TAG_UNDEFINED_F64;
+            // Out of bounds: fall through to `Array.prototype[index]` (gated;
+            // see `array_oob_prototype_get`). Common case is one atomic load.
+            return array_oob_prototype_get(arr as usize, index);
         }
         if let Some(value) = array_sparse_index_property_get(arr, index) {
             return value;
         }
         if index >= (*arr).capacity {
-            return TAG_UNDEFINED_F64;
+            return array_oob_prototype_get(arr as usize, index);
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let raw = *elements_ptr.add(index as usize);
@@ -367,6 +434,10 @@ pub extern "C" fn js_array_set_f64_extend(
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    // If this write targets `Array.prototype`, mark the prototype as carrying an
+    // indexed property so out-of-bounds element reads on ordinary arrays consult
+    // it (ECMA-262 OrdinaryGet → prototype chain). Cheap no-op otherwise.
+    note_array_index_write(arr as usize);
     // Check if this is actually a buffer (Uint8Array) — write individual bytes
     if crate::buffer::is_registered_buffer(arr as usize) {
         crate::buffer::js_buffer_set(

@@ -549,7 +549,13 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         if let Some(class_id) = super::class_ref_id(obj_value) {
             let present = super::has_own_helpers::str_from_string_header(key_str)
                 .map(|key| {
-                    if super::class_registry::class_is_key_deleted(class_id, key) {
+                    if super::field_get_set::private_member_key_bytes(key.as_bytes()) {
+                        // Static private members (`#gen`) and private
+                        // methods/accessors (`#m` on the prototype ref) are
+                        // never own string properties of the constructor or
+                        // prototype.
+                        false
+                    } else if super::class_registry::class_is_key_deleted(class_id, key) {
                         false
                     } else if matches!(key, "length" | "prototype") {
                         true
@@ -662,6 +668,19 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
+        // Class instances store private fields (`#x`) in `keys_array`, but they
+        // are never observable as own string properties. Plain object literals
+        // (class_id 0) keep any real `#`-prefixed string key. Checked here —
+        // after the array/native-module guards — so `(*obj).class_id` is read
+        // off a real `ObjectHeader`.
+        if (*obj).class_id != 0 {
+            if let Some(k) = super::has_own_helpers::str_from_string_header(key_str) {
+                if super::field_get_set::private_member_key_bytes(k.as_bytes()) {
+                    return f64::from_bits(TAG_FALSE);
+                }
+            }
+        }
+
         if own_key_present(obj, key_str) {
             f64::from_bits(TAG_TRUE)
         } else {
@@ -756,6 +775,12 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             return result;
         }
         if !is_valid_obj_ptr(obj as *const u8) {
+            return f64::from_bits(TAG_FALSE);
+        }
+        // Class-instance private members (`#x`) are not enumerable own props.
+        if (*obj).class_id != 0
+            && super::field_get_set::private_member_key_bytes(key_name.as_bytes())
+        {
             return f64::from_bits(TAG_FALSE);
         }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
@@ -1212,14 +1237,20 @@ pub extern "C" fn js_object_define_property(
             }
             return obj_value;
         }
-        if let Some(result) = super::define_array_property(
+        if let Some(ok) = super::define_array_property(
             obj,
             obj_value,
             key_str,
             key_rust.as_deref(),
             descriptor_value,
         ) {
-            return result;
+            if ok {
+                return obj_value;
+            }
+            // A rejected array `[[DefineOwnProperty]]` (e.g. redefining the
+            // non-configurable / non-writable `length`) throws under
+            // `Object.defineProperty`.
+            throw_object_type_error(b"Cannot redefine property: length");
         }
         // #2843: enforce frozen / sealed / non-extensible invariants BEFORE any
         // mutation, so a rejected definition leaves the object untouched and the

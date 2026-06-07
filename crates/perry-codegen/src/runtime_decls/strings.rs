@@ -995,11 +995,20 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_bigint_from_string", I64, &[PTR, I32]);
     module.declare_function("js_bigint_from_f64", I64, &[DOUBLE]);
     module.declare_function("js_bigint_cmp", I32, &[I64, I64]);
+    // Mixed BigInt/Number relational compare (`10n < 11`). Takes the raw
+    // NaN-boxed operands + an op code (0=`<` 1=`<=` 2=`>` 3=`>=`) and returns
+    // a NaN-boxed boolean.
+    module.declare_function("js_bigint_relational", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     // Dynamic bigint arithmetic — lowered from `Expr::Binary` when
     // either operand is statically bigint-typed. These unbox, call
     // the raw `js_bigint_<op>`, and re-box with BIGINT_TAG. Also
     // tolerate mixed bigint/int32 operands.
     module.declare_function("js_dynamic_add", DOUBLE, &[DOUBLE, DOUBLE]);
+    // `x++`/`--x` step that handles a BigInt operand (steps by `1n`) and
+    // otherwise falls back to `v ± 1.0`. The `Expr::Update` lowering routes
+    // type-uncertain locals here so BigInt loop counters actually advance.
+    module.declare_function("js_value_inc", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_value_dec", DOUBLE, &[DOUBLE]);
     // Refs #486: dispatch path for `+` when neither operand has a static
     // type (string|number|bigint). Per JS spec, string concat takes
     // priority; otherwise BigInt or numeric add. Hono's

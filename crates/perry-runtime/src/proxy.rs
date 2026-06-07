@@ -214,6 +214,25 @@ pub extern "C" fn js_proxy_is_proxy(value: f64) -> i32 {
     }
 }
 
+/// `IsArray`'s Proxy branch (ECMA-262 §7.2.2). If `value` is a live Proxy,
+/// returns `Some(target)` so the caller can recurse on the target; if the Proxy
+/// has been revoked, throws a `TypeError` (does not return). Returns `None` for
+/// any non-Proxy value, so the caller falls back to its ordinary array check.
+pub(crate) fn is_array_proxy_step(value: f64) -> Option<f64> {
+    let id = lookup(value)?;
+    let (target, revoked) = PROXIES.with(|p| {
+        p.borrow()
+            .get(id as usize)
+            .and_then(|o| o.as_ref())
+            .map(|e| (e.target, e.revoked))
+            .unwrap_or((f64::from_bits(TAG_UNDEFINED), false))
+    });
+    if revoked {
+        revoked_return_with_message("Cannot perform 'IsArray' on a proxy that has been revoked");
+    }
+    Some(target)
+}
+
 /// Return the proxy's target (for Proxy.revocable.proxy revocation checks).
 #[no_mangle]
 pub extern "C" fn js_proxy_target(proxy_boxed: f64) -> f64 {

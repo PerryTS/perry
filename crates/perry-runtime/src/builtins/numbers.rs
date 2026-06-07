@@ -455,8 +455,17 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
                 }
                 return f64::NAN;
             }
-            crate::value::OrdinaryToPrimitiveOutcome::TypeError
-            | crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {}
+            crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+                // ECMA-262 7.1.1 OrdinaryToPrimitive: if both `valueOf` and
+                // `toString` return non-primitive objects, ToPrimitive throws a
+                // TypeError — `Number(obj)` must propagate it rather than fall
+                // through and stringify to NaN (test262 built-ins/Number/
+                // S8.12.8_A4.js).
+                crate::collection_iter::throw_type_error(
+                    "Cannot convert object to primitive value",
+                );
+            }
+            crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {}
         }
         let str_ptr = crate::value::js_jsvalue_to_string(value);
         if str_ptr.is_null() {

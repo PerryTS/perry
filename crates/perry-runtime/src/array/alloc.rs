@@ -11,6 +11,13 @@ fn throw_invalid_array_length() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Throw the `RangeError: Invalid array length` raised by `ArraySetLength`
+/// when `ToUint32(value) !== ToNumber(value)` (a fractional / out-of-range
+/// length). Does not return.
+pub(crate) fn array_length_range_error() -> ! {
+    throw_invalid_array_length()
+}
+
 pub(crate) fn array_length_from_number_or_throw(number: f64) -> u32 {
     if number.is_finite() && number >= 0.0 && number <= u32::MAX as f64 && number.trunc() == number
     {

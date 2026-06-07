@@ -518,7 +518,7 @@ pub(super) fn try_array_only_methods(
                             initial,
                         }));
                     }
-                    "map" if !args.is_empty() && !recv_is_class => {
+                    "map" if args.len() == 1 && !recv_is_class => {
                         let cb = args.into_iter().next().unwrap();
                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                         let array_expr = lower_expr(ctx, &member.obj)?;
@@ -527,7 +527,7 @@ pub(super) fn try_array_only_methods(
                             callback: Box::new(cb),
                         }));
                     }
-                    "filter" if !args.is_empty() && !recv_is_class => {
+                    "filter" if args.len() == 1 && !recv_is_class => {
                         let cb = args.into_iter().next().unwrap();
                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                         let array_expr = lower_expr(ctx, &member.obj)?;
@@ -536,7 +536,7 @@ pub(super) fn try_array_only_methods(
                             callback: Box::new(cb),
                         }));
                     }
-                    "forEach" if !args.is_empty() && !recv_is_class => {
+                    "forEach" if args.len() == 1 && !recv_is_class => {
                         // Check if the receiver is a Map or Set - if so, don't use ArrayForEach
                         let is_map_or_set = if let ast::Expr::Ident(ident) = member.obj.as_ref() {
                             ctx.lookup_local_type(ident.sym.as_ref())
@@ -555,7 +555,7 @@ pub(super) fn try_array_only_methods(
                             }));
                         }
                     }
-                    "find" if !args.is_empty() && !recv_is_class => {
+                    "find" if args.len() == 1 && !recv_is_class => {
                         let cb = args.into_iter().next().unwrap();
                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                         let array_expr = lower_expr(ctx, &member.obj)?;
@@ -564,7 +564,7 @@ pub(super) fn try_array_only_methods(
                             callback: Box::new(cb),
                         }));
                     }
-                    "findIndex" if !args.is_empty() && !recv_is_class => {
+                    "findIndex" if args.len() == 1 && !recv_is_class => {
                         let cb = args.into_iter().next().unwrap();
                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                         let array_expr = lower_expr(ctx, &member.obj)?;
@@ -573,7 +573,7 @@ pub(super) fn try_array_only_methods(
                             callback: Box::new(cb),
                         }));
                     }
-                    "some" if !args.is_empty() && !recv_is_class => {
+                    "some" if args.len() == 1 && !recv_is_class => {
                         let cb = args.into_iter().next().unwrap();
                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                         let array_expr = lower_expr(ctx, &member.obj)?;
@@ -582,7 +582,7 @@ pub(super) fn try_array_only_methods(
                             callback: Box::new(cb),
                         }));
                     }
-                    "every" if !args.is_empty() && !recv_is_class => {
+                    "every" if args.len() == 1 && !recv_is_class => {
                         let cb = args.into_iter().next().unwrap();
                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                         let array_expr = lower_expr(ctx, &member.obj)?;

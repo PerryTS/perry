@@ -226,11 +226,20 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
     }
 
     let property_key = unsafe { js_to_property_key(key) };
-    if unsafe { crate::symbol::js_is_symbol(property_key) } == 0 {
-        let key_str = crate::value::js_jsvalue_to_string(property_key);
-        if !key_str.is_null() {
-            return js_object_delete_field(obj, key_str as *const crate::StringHeader);
-        }
+    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
+        // Symbol-keyed delete (`delete obj[Symbol.iterator]`). Previously this
+        // fell through to the vacuous `return 1`, so the delete *reported*
+        // success while leaving the property in place — `verifyProperty`'s
+        // `isConfigurable` (delete-then-hasOwn) then saw the property survive
+        // and flagged a configurable symbol property as non-configurable
+        // (Test262 `Map.prototype/Symbol.iterator.js`). Route to the symbol
+        // property table delete, which honors the configurable attribute.
+        let obj_f64 = crate::value::js_nanbox_pointer(obj as i64);
+        return unsafe { crate::symbol::js_object_delete_symbol_property(obj_f64, property_key) };
+    }
+    let key_str = crate::value::js_jsvalue_to_string(property_key);
+    if !key_str.is_null() {
+        return js_object_delete_field(obj, key_str as *const crate::StringHeader);
     }
 
     // For other types, delete succeeds vacuously

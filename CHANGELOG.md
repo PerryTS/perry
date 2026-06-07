@@ -2,61 +2,119 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
-## v0.5.1126 — feat(temporal): native TC39 Temporal API via temporal_rs (8 types + Temporal.Now)
+## v0.5.1127 — fix(array): Array.prototype callback `thisArg`, array-like `ToLength`, spec op-order + 0-arg validation
 
-Implements the TC39 **Temporal** API natively (umbrella #4686), wrapping the pure-Rust
-[`temporal_rs`](https://github.com/boa-dev/temporal) `0.2.3` engine (the same one V8 uses) so Perry writes no
-date/calendar/duration/timezone math itself. Ships all reference types plus the `Temporal.Now` namespace.
+Closes a batch of `built-ins/Array/prototype/*` test262 gaps in the callback /
+array-like / validation clusters. Focused `built-ins/Array` test262 parity
+(test262_subset radar) moved **61.5% → 72.5%** (~290 fewer runtime/compile
+failures); zero regressions in the forEach before/after diff.
 
-### Types (each: constructor, `from`/`compare` statics, getters, core arithmetic, `toString`/`toJSON`/`toLocaleString`, `valueOf` throws per spec)
-- **Foundation (#4687)** — `temporal_rs` dep with the vendored IANA tz DB (`compiled_data` + `sys-local`,
-  confirmed building on Windows); a single `GC_TYPE_TEMPORAL` cell with an internal `TemporalValue` enum
-  (boxed so the `i128`-bearing values get the 16-byte alignment the 8-byte-`GcHeader`-prefixed arena can't
-  give inline); a `TemporalCleanup` finalize hook; the `Temporal` global namespace; and ISO-string routing
-  through `String()`, `JSON.stringify`, and `console.log` (`Temporal.X <iso>`).
-- **Duration (#4688)** — all 12 getters; `with`/`add`/`subtract`/`negated`/`abs`.
-- **Instant (#4690)** — `bigint` epoch nanoseconds (round-tripped through the BigInt marshalling path);
-  `fromEpochMilliseconds`/`fromEpochNanoseconds`; `add`/`subtract`/`until`/`since`/`equals`.
-- **PlainDate / PlainTime / PlainDateTime (#4691/#4692/#4693)** — full calendar + clock getter sets,
-  `add`/`subtract`/`until`/`since`/`equals`, and `PlainDateTime` → `toPlainDate`/`toPlainTime`.
-- **PlainYearMonth / PlainMonthDay (#4694)** — partial-date types sharing the calendar-field machinery.
-- **ZonedDateTime (#4695)** — timezone-aware moments backed by the IANA tz DB; offset/DST resolution
-  (`hoursInDay` correctly returns 23 on a spring-forward day), `toInstant`/`toPlainDate`/`toPlainTime`/
-  `toPlainDateTime`, and arithmetic.
-- **Now (#4689)** — `instant`/`timeZoneId`/`plainDateISO`/`plainTimeISO`/`plainDateTimeISO`/`zonedDateTimeISO`
-  off the host clock via `Temporal::local_now()`.
+**1. `thisArg` on the dense-array callback methods.** `arr.forEach(cb, thisArg)`
+(and `map`/`filter`/`some`/`every`/`find`/`findIndex`/`findLast`/`findLastIndex`/
+`flatMap`) silently dropped the second `thisArg` argument — the callback's `this`
+was whatever ambient `this` happened to be active, so the entire
+`15.4.4.N-5-*` ("thisArg is X") test series failed. The hot `js_array_<m>(arr,
+cb)` runtime entry points take no `this`, and the HIR fast-path variants
+(`Expr::ArrayForEach { array, callback }` …) carry no `thisArg` field.
 
-### Architecture
-Lives entirely in `perry-runtime` (`crates/perry-runtime/src/temporal/`) — no per-method HIR/codegen surgery.
-`new Temporal.X(...)` flows through the existing generic-construct path (taught to honor a returned
-`GC_TYPE_TEMPORAL` cell in `constructor_return_overrides_this`); instance getters/methods route through one
-brand arm each in `js_object_get_field_by_name` and `js_native_call_method` into a central
-`temporal::dispatch` router. `Temporal` is registered as a global identifier in the HIR + codegen builtin lists.
+- Runtime: added `js_array_<m>_this(arr, cb, this_arg)` wrappers
+  (`array/iter_methods.rs`) that install `this_arg` via the implicit-`this`
+  thread-local (a `Drop` guard restores the prior binding) and delegate to the
+  existing loop, so hole/length semantics stay in one place. `#[used]` anchors
+  pin them against dead-strip on the default bitcode-relink path (#3320).
+- Codegen: `lower_array_method` now lowers the optional 2nd arg and calls the
+  `_this` variant when present; the no-`thisArg` path is byte-identical.
+- HIR: the array-method folds (`array_only_methods`, `local_array_methods`,
+  `inline_array_methods`, `imported_array_methods`, `array_fold`) only fold to
+  the fast-path variant for the 1-arg form now; a 2-arg call falls through to
+  the generic member call → `lower_array_method` (which binds `this`).
+  `reduce`/`reduceRight` (whose 2nd arg is the initial value) are unchanged.
 
-### Tests / parity (#4696)
-Adds `test-files/test_gap_temporal_*.ts` covering every shipped type (construction, getters, arithmetic
-round-trips, `toString`/`toJSON`, `compare`/`equals`, DST). Byte-for-byte comparison expects Temporal-enabled
-Node (`node --harmony-temporal` / Node ≥ 24).
+**2. Array-like `LengthOfArrayLike` = `ToLength(ToNumber(...))`.** The generic
+`Array.prototype.<m>.call(arrayLike, …)` engine (`array/generic.rs`) read the
+`length` property and fed the raw NaN-boxed value straight to `ToLength`. String
+/ boolean / null `length` values are themselves NaN bit-patterns, so
+`length: "2"` / `"0x0002"` collapsed to 0 and iteration was skipped. Now runs
+`js_number_coerce` (ToNumber) first; an un-coercible object `length`
+(`{valueOf,toString}` returning objects) correctly throws a `TypeError`.
 
-### Constructor overflow correctness (post-review)
-The `Temporal.PlainX` constructors must reject out-of-range fields (overflow `"reject"`), not silently
-constrain them. Two bugs were fixed:
-- `PlainDate`/`PlainDateTime`/`PlainYearMonth` were calling `temporal_rs`'s `::new` (overflow `Constrain`)
-  and `PlainMonthDay` `new_with_overflow(..., Overflow::default())` — so `new Temporal.PlainDate(2021, 13, 1)`
-  returned `2021-12-01` and `new Temporal.PlainMonthDay(2, 30)` returned Feb 29 instead of throwing
-  `RangeError`. Switched the constructors to `try_new` / `Overflow::Reject`. The `.from()` fields path
-  (`coerce_*`) keeps the spec's `"constrain"` default.
-- `PlainTime`/`PlainDateTime` time fields were cast from the raw `i64` arg with `as u8`/`as u16`, which
-  *wraps*: `new Temporal.PlainTime(256)` produced `00:00` (256 → 0) and was accepted, and negatives slipped
-  through. Added saturating `field_u8`/`field_u16` helpers (out-of-range → `u8::MAX`/`u16::MAX`, which
-  `temporal_rs`'s range check then rejects), so out-of-range fields throw. Covered by
-  `test-files/test_gap_temporal_construct_overflow.ts`. Also ran `cargo fmt` to clear the lint gate.
+**3. Spec operation order.** All generic array-like callback methods computed the
+`IsCallable(callbackfn)` check before `LengthOfArrayLike`. Per ECMA-262 §23.1.3,
+`LengthOfArrayLike` (step 2) runs first, so a `length` getter's side effects /
+throw are observed even when the callback is non-callable. Swapped the order.
 
-### Deferred (clear RangeError stubs, follow-ups)
-Options-object-heavy methods — `round`/`total`, `with`/`withCalendar`/`withPlainTime`/`withTimeZone`,
-`PlainYearMonth`/`PlainMonthDay` `toPlainDate`, `Instant.toZonedDateTimeISO`,
-`ZonedDateTime.getTimeZoneTransition`/`startOfDay` — throw a "not yet implemented" `RangeError` pending the
-RoundingOptions / fields-object marshalling work.
+**4. 0-arg validation (compile-fail → runtime semantics).**
+`[].reduce()` / `[].reduceRight()` compile-failed instead of throwing a
+`TypeError` at runtime; `[undefined].indexOf()` / `.lastIndexOf()` compile-failed
+instead of searching for `undefined` (returns `0`). These `lower_array_method`
+arms now pad the missing argument and defer to the runtime (validator throws for
+the callback methods; the search proceeds for indexOf/lastIndexOf), matching
+Node.
+
+Known remaining `built-ins/Array/prototype` clusters (follow-ups): boxed-
+primitive / exotic-object receivers (`-1-*`: `forEach.call(false, cb)`,
+Date/RegExp/Error expandos), and live-mutation / index-getter / inherited-
+`HasProperty` during iteration (`-7-*`).
+
+## v0.5.1126 — fix(class): hide private members from reflection + unblock exotic-private-name compilation
+
+Two fixes for class **private members** (`#x` fields, `#m()` methods, `get/set #a`
+accessors, and their `static` forms), targeting the largest test262 class cluster.
+On `language/expressions/class/elements` this moved the radar from **pass=415 /
+parity 30.4%** to **pass=497 / parity 36.4%** (+82 tests, 0 regressions), with the
+`compile-fail` bucket dropping 430→5.
+
+**1. Private names are no longer observable as own string properties.** Perry
+stores a class instance's private fields in the object's `keys_array` under their
+`#`-prefixed source name, and private methods/accessors in the class vtable /
+static tables under `#name` keys. These leaked into every reflection and
+enumeration surface — `Object.getOwnPropertyNames(c)` returned `["#x"]`,
+`c.hasOwnProperty("#x")` / `"#x" in c` returned `true`, and `#m` showed up on the
+prototype's own-property list — none of which Node does. Per ECMA-262 a private
+name is never an own string property.
+
+Added `private_member_key_bytes` / `private_member_key_value` helpers
+(`object/field_get_set.rs`) and filtered `#`-prefixed keys from: `Object.keys` /
+`values` / `entries`, `Object.getOwnPropertyNames` (both the class-ref
+prototype/constructor path and the instance `keys_array` path),
+`getOwnPropertyDescriptor` (both paths → `undefined`), `hasOwnProperty` (instance
+*and* class-ref, so `static #gen` no longer appears on the constructor),
+`propertyIsEnumerable`, the `in` operator, `JSON.stringify`, object spread
+(`{...c}`), and `Object.assign`. `Reflect.ownKeys` is covered transitively.
+
+The instance-side filters are gated on `class_id != 0` (i.e. the receiver is a
+class instance), so a plain object literal that legitimately uses a `#`-prefixed
+*string* key — e.g. a hex-color map `{ "#fff": "white" }` created via
+`obj["#fff"] = …` — keeps that key visible. The class-ref (prototype/constructor)
+paths filter unconditionally, since a `#`-name there is always a private member.
+
+**2. Exotic private names no longer collide into one LLVM symbol.** The codegen
+symbol sanitizer (`codegen/helpers.rs::sanitize`) replaced every character outside
+`[A-Za-z0-9_]` with a single `_`, so distinct private methods like `#$`, `#_`, and
+`#℘` all mangled to the same `perry_method_…__C____` symbol and clang aborted the
+whole module with `invalid redefinition of function`. This failed ~425 procedurally
+generated `*-private*` cases (which exercise private names built from `$`, unicode,
+and zero-width joiners) at compile time.
+
+The fix adds a new injective `sanitize_member` (escapes each non-alnum char to
+`_<hex-codepoint>_`) and applies it to the **member-name component** of method /
+getter / setter / static-method symbols (`perry_method_…` / `perry_static_…__c<id>__…`).
+Member symbols are module-local — instance methods/accessors dispatch through the
+runtime vtable by source name, not by cross-module LLVM symbol — so the encoding
+only has to be self-consistent within one codegen pass. `sanitize` itself is left
+unchanged (single-`_` collapse): it is also used for the **module-symbol prefix**
+(`perry_fn_<prefix>__<name>`, `native_region_slug`), which must stay byte-compatible
+with the driver's `compute_module_prefix`, or cross-module function references go
+unresolved at link time. Names made only of `[A-Za-z0-9_]` (essentially all ordinary
+identifiers) are returned unchanged by both, so existing symbols are unperturbed.
+
+Not yet covered (follow-ups): the private **brand check on access** — reading
+`other.#x` on a receiver that lacks the brand must throw `TypeError`, but Perry
+currently returns `undefined`; a correct fix needs lexical resolution of the
+private name's *declaring* class (it is not always the innermost class), so it is
+deferred to avoid regressing nested-class private access. Many of the now-compiling
+tests also depend on unrelated **public** static-method descriptor support
+(`verifyProperty(C, "m", …)` on `static *m()`), which is tracked separately.
 
 ## v0.5.1125 — feat(compile): --windows-subsystem override + tier-3 Apple link dedup + pointer-width portability
 

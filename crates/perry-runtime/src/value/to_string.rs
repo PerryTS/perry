@@ -73,11 +73,23 @@ unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
 
     match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
         MethodOutcome::Primitive(p) => Some(p),
-        // Both toString and valueOf failed to produce a primitive — Node
-        // throws `TypeError: Cannot convert object to primitive value`. We
-        // approximate by falling back to the default `"[object Object]"`.
-        MethodOutcome::NonPrimitive | MethodOutcome::Absent => None,
+        // We only reach here when a *custom* `toString` ran and returned a
+        // non-primitive (the `Absent` toString case already returned
+        // `"[object Object]"` above). Per spec `OrdinaryToPrimitive` then tries
+        // `valueOf`; if that also fails to yield a primitive, ToPrimitive throws
+        // `TypeError: Cannot convert object to primitive value` (Node agrees:
+        // `String({ toString: () => ({}) })` throws). A plain object with no
+        // custom `toString` never reaches this throw.
+        MethodOutcome::NonPrimitive | MethodOutcome::Absent => throw_cannot_convert_to_primitive(),
     }
+}
+
+#[cold]
+fn throw_cannot_convert_to_primitive() -> ! {
+    let msg = b"Cannot convert object to primitive value";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 /// Function objects are closure headers, not `ObjectHeader`s, so the ordinary
@@ -675,9 +687,33 @@ unsafe fn radix_arg_to_number(radix_value: f64) -> f64 {
         } else {
             trimmed.parse::<f64>().unwrap_or(f64::NAN)
         }
+    } else if jsval.is_pointer() {
+        // An object radix goes through `ToPrimitive(radix, number)` (valueOf /
+        // toString / @@toPrimitive). A throwing or absent conversion surfaces a
+        // TypeError *before* the RangeError range check, e.g.
+        // `BigInt.prototype.toString.call(10n, {valueOf: undefined, toString:
+        // undefined})`. The resulting primitive is then ToNumber-coerced via a
+        // single recursive step (it is no longer an object, so it can't loop).
+        match to_primitive_number(radix_value) {
+            OrdinaryToPrimitiveOutcome::Primitive(p) => {
+                if p.to_bits() == radix_value.to_bits() {
+                    // No usable valueOf/toString produced a primitive.
+                    crate::collection_iter::throw_type_error(
+                        "Cannot convert object to primitive value",
+                    );
+                }
+                radix_arg_to_number(p)
+            }
+            OrdinaryToPrimitiveOutcome::DefaultString => {
+                let s = js_jsvalue_to_string(radix_value);
+                radix_arg_to_number(crate::value::js_nanbox_string(s as i64))
+            }
+            OrdinaryToPrimitiveOutcome::TypeError => {
+                crate::collection_iter::throw_type_error("Cannot convert object to primitive value")
+            }
+        }
     } else {
-        // Plain f64 number (or some other heap pointer that does not coerce
-        // to a finite radix — treat as NaN so it triggers RangeError).
+        // Plain f64 number.
         if jsval.is_number() {
             radix_value
         } else {

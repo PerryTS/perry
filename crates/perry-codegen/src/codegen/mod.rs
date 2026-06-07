@@ -60,7 +60,7 @@ use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, scoped_fn_name, scoped_method_name, scoped_static_method_name,
+    sanitize, sanitize_member, scoped_fn_name, scoped_method_name, scoped_static_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
@@ -1401,6 +1401,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 module_global_types.insert(*id, ty.clone());
             }
             if referenced_from_fn.contains(id) || exported_var_names.contains(name) {
+                // A `var` redeclared at module scope (`var x = …; … var x = …;`)
+                // lowers to multiple `Stmt::Let` sharing the SAME id. The backing
+                // global (and any exported getter) is keyed by that id, so emit it
+                // exactly once — a second `add_global` for the same symbol is an
+                // LLVM "redefinition of global" hard error. Captured + redeclared
+                // module vars are the trigger (e.g. test262 capability tests).
+                if module_globals.contains_key(id) {
+                    continue;
+                }
                 // Use external linkage for exported vars so other
                 // modules can reference them. Internal for the rest.
                 let is_exported = exported_var_names.contains(name);
@@ -1717,7 +1726,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 "perry_method_{}__{}__{}",
                 sanitize(src),
                 sanitize(&ic.name),
-                sanitize(method_name),
+                sanitize_member(method_name),
             );
             method_names
                 .entry((effective_name.to_string(), method_name.clone()))

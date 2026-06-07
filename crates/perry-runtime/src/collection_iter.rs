@@ -194,8 +194,20 @@ pub unsafe extern "C" fn js_builtin_prototype_method_value(
         Ok(value) => value,
         Err(_) => return f64::from_bits(TAG_UNDEFINED),
     };
+    // Prefer the actual method object installed on the built-in prototype so a
+    // folded `Number.prototype.toString` value-read resolves to the SAME
+    // closure that a boxed wrapper reaches via its [[Prototype]] chain
+    // (`(new Number()).toString === Number.prototype.toString`, test262
+    // S15.7.5_A1_T0*). The primitive-wrapper prototypes install their real
+    // thunks (`primitive_proto_thunks::install_primitive_proto_methods`), so
+    // the proto field is authoritative; only synthesize a fresh closure when
+    // the prototype carries no own method under that name.
+    let installed = builtin_prototype_method(builtin, method);
+    if installed.to_bits() != TAG_UNDEFINED {
+        return installed;
+    }
     crate::object::primitive_proto_method_value(builtin, method)
-        .unwrap_or_else(|| builtin_prototype_method(builtin, method))
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
 }
 
 pub(crate) enum ConstructorIter {

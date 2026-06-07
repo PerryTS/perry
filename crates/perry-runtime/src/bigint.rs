@@ -1078,6 +1078,68 @@ pub extern "C" fn js_bigint_xor(
     bigint_alloc_with_limbs(result)
 }
 
+/// Relational comparison (`<` `<=` `>` `>=`) for an expression where at least
+/// one operand is a BigInt. Handles BigInt-vs-BigInt exactly and the mixed
+/// BigInt-vs-Number case (ECMAScript compares mathematical values, so
+/// `10n < 11` is `true`). The codegen routes relational compares here instead
+/// of calling [`js_bigint_cmp`] directly, because that helper dereferences
+/// *both* operands as BigInt pointers — when the other side is a Number its
+/// NaN-boxed bits are not a valid pointer, giving a wrong result and a SIGSEGV.
+///
+/// `op`: 0 = `<`, 1 = `<=`, 2 = `>`, 3 = `>=`. Returns a NaN-boxed boolean. A
+/// `NaN` Number operand makes every relational compare `false` (unordered).
+/// The mixed comparison uses an f64 view of the BigInt, which is exact for the
+/// common in-range case (loop counters, small integers) and only loses
+/// precision for BigInts beyond 2^53.
+#[no_mangle]
+pub extern "C" fn js_bigint_relational(l: f64, r: f64, op: i32) -> f64 {
+    let lv = crate::value::JSValue::from_bits(l.to_bits());
+    let rv = crate::value::JSValue::from_bits(r.to_bits());
+    let l_big = lv.is_bigint();
+    let r_big = rv.is_bigint();
+
+    // `ordering`: Some(-1/0/1) for l<r / l==r / l>r, None when unordered (a
+    // Number operand is NaN).
+    let ordering: Option<i32> = if l_big && r_big {
+        Some(js_bigint_cmp(
+            lv.as_bigint_ptr() as *const BigIntHeader,
+            rv.as_bigint_ptr() as *const BigIntHeader,
+        ))
+    } else {
+        let lf = if l_big {
+            js_bigint_to_f64(lv.as_bigint_ptr() as *const BigIntHeader)
+        } else {
+            l
+        };
+        let rf = if r_big {
+            js_bigint_to_f64(rv.as_bigint_ptr() as *const BigIntHeader)
+        } else {
+            r
+        };
+        if lf.is_nan() || rf.is_nan() {
+            None
+        } else if lf < rf {
+            Some(-1)
+        } else if lf > rf {
+            Some(1)
+        } else {
+            Some(0)
+        }
+    };
+
+    let result = match ordering {
+        None => false,
+        Some(o) => match op {
+            0 => o < 0,
+            1 => o <= 0,
+            2 => o > 0,
+            3 => o >= 0,
+            _ => false,
+        },
+    };
+    f64::from_bits(crate::value::JSValue::bool(result).bits())
+}
+
 /// Compare two BigInts (-1 if a < b, 0 if equal, 1 if a > b)
 #[no_mangle]
 pub extern "C" fn js_bigint_cmp(a: *const BigIntHeader, b: *const BigIntHeader) -> i32 {

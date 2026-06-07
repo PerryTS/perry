@@ -21,6 +21,7 @@ mod splice_slice;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::alloc::array_length_range_error;
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
     js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,
@@ -34,7 +35,8 @@ pub use self::flat_clone::{
     js_array_values,
 };
 pub use self::from_concat::{
-    array_from_full, js_array_concat_variadic, js_array_from_mapped, js_array_from_value,
+    array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
+    js_array_from_value,
 };
 pub use self::generic::{
     js_arraylike_at, js_arraylike_every, js_arraylike_filter, js_arraylike_find,

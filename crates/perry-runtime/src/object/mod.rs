@@ -60,6 +60,7 @@ mod property_key;
 pub(crate) mod prototype_chain;
 mod prototype_helpers;
 mod reflect_support;
+mod string_proto_thunks;
 mod typed_array_define;
 mod typed_array_proto_thunks;
 mod util_types;

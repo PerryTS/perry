@@ -79,7 +79,7 @@ pub(super) fn try_imported_array_methods(
                                     // Fall through.
                                 }
                                 "map" => {
-                                    if !args.is_empty() {
+                                    if args.len() == 1 {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayMap {
@@ -89,7 +89,7 @@ pub(super) fn try_imported_array_methods(
                                     }
                                 }
                                 "filter" => {
-                                    if !args.is_empty() {
+                                    if args.len() == 1 {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayFilter {
@@ -99,7 +99,7 @@ pub(super) fn try_imported_array_methods(
                                     }
                                 }
                                 "forEach" => {
-                                    if !args.is_empty() {
+                                    if args.len() == 1 {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayForEach {
@@ -109,7 +109,7 @@ pub(super) fn try_imported_array_methods(
                                     }
                                 }
                                 "find" => {
-                                    if !args.is_empty() {
+                                    if args.len() == 1 {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayFind {

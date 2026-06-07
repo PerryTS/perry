@@ -80,6 +80,11 @@ pub(super) unsafe fn array_own_key_present(
     arr: *const crate::array::ArrayHeader,
     key: *const crate::StringHeader,
 ) -> bool {
+    // Issue #233: resolve a grow forwarding pointer so `arr.hasOwnProperty(i)` /
+    // `getOwnPropertyDescriptor` stay correct after `arr.length = N` reallocated
+    // the buffer (the `in` path already does this; the named-method paths reach
+    // here with the stale pre-grow pointer otherwise).
+    let arr = crate::array::clean_arr_ptr(arr);
     let Some(key_name) = string_header_as_str(key) else {
         return false;
     };

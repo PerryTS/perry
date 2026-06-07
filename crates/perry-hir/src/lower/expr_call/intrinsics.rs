@@ -1116,6 +1116,32 @@ fn is_primitive_wrapper_brand_method(recv: &ast::Expr, method: &str) -> bool {
     }
 }
 
+/// True when `recv.<method>` is a `String.prototype` generic-`this` method backed
+/// by a real reflective runtime thunk (RequireObjectCoercible + ToString(this)).
+/// Folding `String.prototype.charAt.call(x)` into `x.charAt()` would re-dispatch
+/// `charAt` *by name on `x`'s own type* — a boolean/number/object has no
+/// `charAt`, so it throws `(boolean).charAt is not a function`. Keeping it
+/// reflective lets the installed thunk coerce `this` to a string. Only the
+/// `String.prototype.<m>` receiver shape is guarded (string-literal receivers
+/// like `"".charAt.call(x)` are vanishingly rare); kept in lock-step with
+/// `string_proto_thunks::install_string_proto_methods`.
+fn is_string_prototype_generic_method(recv: &ast::Expr, method: &str) -> bool {
+    let ast::Expr::Member(member) = recv else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    if prop.sym.as_ref() != "prototype" {
+        return false;
+    }
+    let ast::Expr::Ident(base) = member.obj.as_ref() else {
+        return false;
+    };
+    base.sym.as_ref() == "String"
+        && matches!(method, "at" | "charAt" | "charCodeAt" | "codePointAt")
+}
+
 pub(super) fn try_builtin_prototype_method_apply_call(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -1173,6 +1199,13 @@ pub(super) fn try_builtin_prototype_method_apply_call(
             // `this`). Folding to `x.<method>()` routes through the lenient
             // `Object.prototype` fallback (`"[object Object]"`, no throw).
             if is_primitive_wrapper_brand_method(inner.obj.as_ref(), method_ident.sym.as_ref()) {
+                return Ok(None);
+            }
+            // Generic-`this` String.prototype char-access methods must stay
+            // reflective so the runtime thunk coerces `this` to a string (see
+            // `is_string_prototype_generic_method`). Folding to `x.<m>()` would
+            // dispatch on `x`'s own type and throw.
+            if is_string_prototype_generic_method(inner.obj.as_ref(), method_ident.sym.as_ref()) {
                 return Ok(None);
             }
             method_ident.clone()
@@ -1392,6 +1425,11 @@ pub(crate) fn as_builtin_proto_method_ref(
     if is_primitive_wrapper_brand_method(&member.obj, method.sym.as_ref()) {
         return None;
     }
+    // Keep `const m = String.prototype.charAt; m.call(x)` reflective too — the
+    // thunk must coerce `this` (see `is_string_prototype_generic_method`).
+    if is_string_prototype_generic_method(&member.obj, method.sym.as_ref()) {
+        return None;
+    }
     // For a `<Ctor>.prototype` receiver, any method ident is accepted (mirrors
     // the existing `.call`/`.apply` rewrite, which doesn't gate on the method
     // name). For an array/string literal receiver, gate on the known
@@ -1553,16 +1591,25 @@ fn match_namespace_static_member(
     // `Promise.all.call(C, …)` / `.apply` / `.bind` must NOT drop the
     // thisArg — let them fall through to the generic reified-static dispatch
     // (which preserves `this` via the implicit-this mechanism).
-    if ns == "Promise" && matches!(name, "all" | "race" | "allSettled" | "any") {
+    // `resolve` / `reject` are likewise `this`-sensitive: `Promise.{resolve,
+    // reject}.call(C, x)` go through `NewPromiseCapability(C)` (a non-ctor /
+    // non-object `this` throws; a custom constructor's executor runs), so they
+    // must keep their receiver too.
+    if ns == "Promise"
+        && matches!(
+            name,
+            "all" | "race" | "allSettled" | "any" | "resolve" | "reject"
+        )
+    {
         return None;
     }
-    // `Array.from` is `this`-sensitive: per ECMA-262 §23.1.2.1 it constructs
-    // the result via its `this` value when that is a constructor
-    // (`Array.from.call(C, items)` builds an instance of `C`). The
-    // `this`-dropping fold below would discard the receiver, so route these
-    // through the dynamic dispatch path (the runtime `Array.from` thunk reads
-    // the implicit `this` and runs the full algorithm).
-    if ns == "Array" && name == "from" {
+    // `Array.from` / `Array.of` are `this`-sensitive: per ECMA-262 §23.1.2.1 /
+    // §23.1.2.3 each constructs the result via its `this` value when that is a
+    // constructor (`Array.from.call(C, items)` / `Array.of.call(C, …)` build an
+    // instance of `C`). The `this`-dropping fold below would discard the
+    // receiver, so route these through the dynamic dispatch path (the runtime
+    // thunks read the implicit `this` and run the full algorithm).
+    if ns == "Array" && matches!(name, "from" | "of") {
         return None;
     }
     Some(m.clone())

@@ -12,6 +12,16 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     let false_val = f64::from_bits(TAG_FALSE);
     let true_val = f64::from_bits(TAG_TRUE);
 
+    // IsArray (ECMA-262 §7.2.2) recurses through a Proxy to its target — a
+    // `Proxy([], {})` is an Array, a `Proxy(Proxy([], {}), {})` is too — and
+    // throws a TypeError if the Proxy has been revoked. Unwrap before the
+    // ordinary heap-pointer inspection below (proxy ids are small encoded
+    // values that the pointer checks would otherwise reject as non-arrays).
+    let mut value = value;
+    while let Some(target) = crate::proxy::is_array_proxy_step(value) {
+        value = target;
+    }
+
     let bits = value.to_bits();
     let jsvalue = JSValue::from_bits(bits);
 

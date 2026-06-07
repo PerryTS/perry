@@ -215,7 +215,13 @@ fn al_length(recv: f64) -> i64 {
                 (b & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader,
                 key,
             );
-            to_length(len_val)
+            // `LengthOfArrayLike` is `ToLength(Get(O, "length"))`, and `ToLength`
+            // begins with `ToNumber`. The raw property value may be a string
+            // (`length: "2"`), boolean, `null`, etc.; without coercion those
+            // NaN-boxed bit patterns are themselves NaN floats and `to_length`
+            // would collapse them to 0. Run `ToNumber` first so e.g.
+            // `length: "0x0002"` → 2.
+            to_length(crate::builtins::js_number_coerce(len_val))
         }
         // Typed arrays / buffers expose a real length via the safe dispatcher.
         Some(PtrKind::IndexedNative) => to_length(crate::value::js_value_length_f64(recv)),
@@ -302,8 +308,11 @@ impl Drop for ThisGuard {
 #[no_mangle]
 pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         if !al_has(recv, k) {
@@ -318,8 +327,11 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
 #[no_mangle]
 pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let result = js_array_alloc_with_length(len.max(0) as u32);
     let elems = unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
     let _g = ThisGuard::new(this_arg);
@@ -340,8 +352,11 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let mut result = js_array_alloc(0);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
@@ -360,8 +375,11 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
 #[no_mangle]
 pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         if !al_has(recv, k) {
@@ -378,8 +396,11 @@ pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         if !al_has(recv, k) {
@@ -399,8 +420,11 @@ pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         let v = al_get(recv, k);
@@ -414,8 +438,11 @@ pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     for k in 0..len {
         let v = al_get(recv, k);
@@ -429,8 +456,11 @@ pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     let mut k = len - 1;
     while k >= 0 {
@@ -446,8 +476,11 @@ pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f6
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let _g = ThisGuard::new(this_arg);
     let mut k = len - 1;
     while k >= 0 {
@@ -474,8 +507,11 @@ fn throw_reduce_empty() -> ! {
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let mut acc = init;
     let mut k = 0i64;
     if has_init == 0 {
@@ -505,8 +541,11 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
     let recv = to_object(recv);
-    let cb = callable(cb);
+    // Spec order: `LengthOfArrayLike` (step 2) runs *before* the `IsCallable`
+    // check (step 3) — a `length` getter's side effects / throw must be
+    // observed even when the callback is non-callable.
     let len = al_length(recv);
+    let cb = callable(cb);
     let mut acc = init;
     let mut k = len - 1;
     if has_init == 0 {

@@ -17,6 +17,55 @@ thread_local! {
         const { std::cell::UnsafeCell::new([std::ptr::null_mut(); SMALL_INT_CACHE_SIZE]) };
 }
 
+/// Normalize a `Number.prototype` format-method receiver to its underlying
+/// `f64`. Codegen lowers `x.toFixed(n)` / `.toExponential(n)` / `.toPrecision(n)`
+/// to a direct runtime call that passes the receiver's bits as the first `f64`
+/// argument. A boxed wrapper (`new Number(Infinity).toExponential(1000)`)
+/// arrives as a NaN-boxed pointer — whose raw bits are themselves a NaN — so
+/// without unboxing the formatters misread it as `NaN` and emit "NaN" instead
+/// of "Infinity" (test262 .../toExponential/infinity.js). Plain numbers and
+/// int32-tagged values pass through unchanged.
+pub(crate) fn number_method_receiver(value: f64) -> f64 {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_int32() {
+        return jv.as_int32() as f64;
+    }
+    if jv.is_number() {
+        return value;
+    }
+    if let Some((class_id, payload)) = crate::builtins::boxed_primitive_payload(value) {
+        // 0xFFFF_00D0 == CLASS_ID_BOXED_NUMBER (see formatting::boxed_primitives).
+        if class_id == 0xFFFF_00D0 {
+            let pj = crate::value::JSValue::from_bits(payload.to_bits());
+            if pj.is_int32() {
+                return pj.as_int32() as f64;
+            }
+            return payload;
+        }
+    }
+    // ECMA-262 21.1.3: `Number.prototype` is itself a Number object whose
+    // [[NumberData]] is +0. The codegen-lowered `Number.prototype.toFixed(...)` /
+    // `.toExponential(...)` calls land here directly (not via the brand-checking
+    // thunk), so map the prototype receiver to +0 (test262
+    // toFixed/S15.7.4.5_A1.1_T01.js, toExponential/this-is-0-fractiondigits-is-0.js).
+    if value.to_bits() == crate::object::builtin_prototype_value("Number").to_bits() {
+        return 0.0;
+    }
+    value
+}
+
+/// The `fractionDigits` / `precision` argument of `toFixed` / `toExponential`
+/// / `toPrecision` is run through `ToIntegerOrInfinity` → `ToNumber`, and
+/// `ToNumber` of a BigInt (or Symbol) throws a `TypeError` (ECMA-262 7.1.4).
+/// The codegen-inline path passes the raw argument bits straight through, so
+/// detect a BigInt here and throw before the numeric coercion silently
+/// reinterprets the pointer (test262 toFixed/toFixed-tonumber-throws-typeerror-bigint.js).
+fn throw_if_bigint_digits(arg: f64) {
+    if crate::value::JSValue::from_bits(arg.to_bits()).is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+}
+
 /// Convert a number (f64) to a string
 /// Returns a new string representing the number
 #[no_mangle]
@@ -185,6 +234,8 @@ pub(crate) fn test_clear_small_int_cache_root(index: usize) {
 /// overflow becomes a real risk.
 #[no_mangle]
 pub extern "C" fn js_number_to_fixed(value: f64, decimals: f64) -> *mut StringHeader {
+    let value = number_method_receiver(value);
+    throw_if_bigint_digits(decimals);
     let dp_number = to_integer_or_infinity(decimals);
     if !(0.0..=100.0).contains(&dp_number) {
         throw_number_format_range_error("toFixed() digits argument must be between 0 and 100");
@@ -334,6 +385,8 @@ fn fmt_fixed_int(value: f64, dp: usize) -> Option<*mut StringHeader> {
 /// JS spec: total significant digits, switches to exponential for very small/large.
 #[no_mangle]
 pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut StringHeader {
+    let value = number_method_receiver(value);
+    throw_if_bigint_digits(precision);
     let s = if is_undefined_arg(precision) {
         format_number_for_js(value)
     } else {
@@ -389,6 +442,8 @@ pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut Str
 /// Format a number in exponential notation (Number.prototype.toExponential).
 #[no_mangle]
 pub extern "C" fn js_number_to_exponential(value: f64, decimals: f64) -> *mut StringHeader {
+    let value = number_method_receiver(value);
+    throw_if_bigint_digits(decimals);
     let s = if is_undefined_arg(decimals) {
         if value.is_nan() {
             "NaN".to_string()
@@ -418,14 +473,82 @@ pub extern "C" fn js_number_to_exponential(value: f64, decimals: f64) -> *mut St
         } else if !(0.0..=100.0).contains(&dp_number) {
             throw_number_format_range_error("toExponential() argument must be between 0 and 100");
         } else {
-            let dp = dp_number as usize;
-            // Rust's `{:e}` produces e.g. "1.23e4"; JS expects "1.23e+4"
-            let formatted = format!("{:.*e}", dp, value);
-            fix_exponent_format(&formatted)
+            // ECMA-262 §21.1.3.2 selects `f+1` significant digits and, on an
+            // exact tie, picks the *larger* mantissa (round half away from
+            // zero). Rust's `{:.*e}` rounds half-to-even, so e.g.
+            // `(25).toExponential(0)` gave "2e+1" instead of "3e+1" and
+            // `(12345).toExponential(3)` gave "1.234e+4" instead of "1.235e+4".
+            // Generate digits with spec rounding instead.
+            spec_to_exponential(value, dp_number as usize)
         }
     };
     let bytes = s.as_bytes();
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+}
+
+/// `Number.prototype.toExponential` digit generation with ECMA-262 rounding
+/// (round half away from zero on a tie). `value` is finite; `dp` is the
+/// fraction-digit count (already range-checked to `0..=100`).
+fn spec_to_exponential(value: f64, dp: usize) -> String {
+    if value == 0.0 {
+        let mantissa = if dp == 0 {
+            "0".to_string()
+        } else {
+            format!("0.{}", "0".repeat(dp))
+        };
+        return format!("{mantissa}e+0");
+    }
+    let neg = value < 0.0;
+    let x = value.abs();
+    // Format with far more digits than any f64 needs (≤767 significant decimal
+    // digits) so the expansion is exact; then round it ourselves.
+    let full = format!("{x:.1100e}");
+    let epos = full.find('e').unwrap();
+    let mut exp: i32 = full[epos + 1..].parse().unwrap_or(0);
+    let mut digits: Vec<u8> = full[..epos]
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .map(|b| b - b'0')
+        .collect();
+    let keep = dp + 1;
+    if digits.len() > keep {
+        // Round half away from zero: the first dropped digit decides.
+        let round_up = digits[keep] >= 5;
+        digits.truncate(keep);
+        if round_up {
+            let mut i = keep;
+            loop {
+                if i == 0 {
+                    // Carry past the most significant digit: 9.99→10.0, i.e.
+                    // mantissa becomes 1 followed by zeros and the exponent grows.
+                    digits.insert(0, 1);
+                    digits.truncate(keep);
+                    exp += 1;
+                    break;
+                }
+                i -= 1;
+                if digits[i] == 9 {
+                    digits[i] = 0;
+                } else {
+                    digits[i] += 1;
+                    break;
+                }
+            }
+        }
+    } else {
+        digits.resize(keep, 0);
+    }
+    let mut mantissa = String::with_capacity(keep + 2);
+    mantissa.push((digits[0] + b'0') as char);
+    if dp > 0 {
+        mantissa.push('.');
+        for d in &digits[1..] {
+            mantissa.push((d + b'0') as char);
+        }
+    }
+    let sign = if neg { "-" } else { "" };
+    let esign = if exp >= 0 { "+" } else { "-" };
+    format!("{sign}{mantissa}e{esign}{}", exp.abs())
 }
 
 /// Convert Rust's `{:e}` exponential format to JS's: "1.23e4" -> "1.23e+4", "1.23e-4" stays.
