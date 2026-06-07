@@ -2631,6 +2631,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                     return JSValue::undefined();
                 }
+                // Empty-string is a legal static member key (`static get ''()`);
+                // the `!name.is_empty()` guard below skips it, so resolve a
+                // static accessor named "" here (Test262 accessor-name-static
+                // literal-string-empty).
+                if name.is_empty() {
+                    if let Some(v) = super::class_registry::class_static_accessor_getter_value(
+                        class_id,
+                        name,
+                        class_value,
+                    ) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
                 if !name.is_empty() {
                     if super::class_registry::class_is_key_deleted(class_id, name) {
                         return JSValue::undefined();

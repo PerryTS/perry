@@ -209,6 +209,25 @@ pub extern "C" fn js_object_set_field_by_name(
                 let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
                     .unwrap_or("")
                     .to_string();
+                // Empty-string is a legal accessor key (`set ''(v)`); the
+                // `!name.is_empty()` guard below skips it, so dispatch a
+                // prototype-ref instance setter / constructor-ref static setter
+                // named "" here (Test262 accessor-name-* literal-string-empty).
+                if name.is_empty() {
+                    let recv = f64::from_bits(bits);
+                    if super::class_prototype_ref_id(recv).is_some()
+                        && super::class_registry::class_instance_setter_apply(
+                            class_id, &name, recv, value,
+                        )
+                    {
+                        return;
+                    }
+                    if super::class_registry::class_static_accessor_setter_apply(
+                        class_id, &name, recv, value,
+                    ) {
+                        return;
+                    }
+                }
                 if !name.is_empty() {
                     if name == "name"
                         && !super::class_registry::class_is_key_deleted(class_id, &name)
