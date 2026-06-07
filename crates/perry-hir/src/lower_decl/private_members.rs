@@ -118,6 +118,19 @@ pub fn lower_private_method(
         body = destructuring_stmts;
     }
 
+    // Default-parameter prologue (`if (p === undefined) p = <default>`) — this
+    // was missing for private methods, so `#m(a = 1)` silently dropped the
+    // default and `#m([x] = [])` left the destructuring source `undefined`
+    // (→ a thrown TypeError under the iterator protocol). Prepend BEFORE the
+    // destructuring prologue, matching the public-method ordering in
+    // `lower_method`.
+    let default_stmts = build_default_param_stmts(&params);
+    if !default_stmts.is_empty() {
+        let mut new_body = default_stmts;
+        new_body.extend(body);
+        body = new_body;
+    }
+
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.exit_type_param_scope();

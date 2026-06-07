@@ -107,6 +107,32 @@ pub(crate) fn lower_native_method_call(
                     &[(DOUBLE, &iter), (DOUBLE, &done)],
                 ));
             }
+            "requireObjectCoercible" => {
+                let val = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_require_object_coercible",
+                    &[(DOUBLE, &val)],
+                ));
+            }
+            "iteratorRestToArray" => {
+                let iter = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let done = args.get(1).map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_iterator_rest_to_array",
+                    &[(DOUBLE, &iter), (DOUBLE, &done)],
+                ));
+            }
             _ => {}
         }
     }

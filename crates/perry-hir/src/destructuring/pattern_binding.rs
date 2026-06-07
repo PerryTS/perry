@@ -36,6 +36,233 @@ fn is_global_this_fetch_constructor(name: &str) -> bool {
     )
 }
 
+/// Allocate a fresh internal local for destructuring scaffolding.
+fn fresh_destruct_local(ctx: &mut LoweringContext, ty: Type) -> (LocalId, String) {
+    let id = ctx.fresh_local();
+    let name = format!("__destruct_{}", id);
+    ctx.locals.push((name.clone(), id, ty));
+    (id, name)
+}
+
+/// Build a call into the runtime iterator-protocol helpers (same dispatch the
+/// assignment-destructuring path uses).
+fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
+    Expr::NativeMethodCall {
+        module: "__perry_runtime".to_string(),
+        class_name: None,
+        object: None,
+        method: method.to_string(),
+        args,
+    }
+}
+
+/// `value === undefined` — the spec check that gates a destructuring default
+/// (`[a = d]`, `{a = d}`). Distinct from `IsUndefinedOrBareNan`: a genuine NaN
+/// element/property must NOT trigger the default (`let [a = 1] = [NaN]` → NaN).
+fn is_strictly_undefined(value: Expr) -> Expr {
+    Expr::Compare {
+        op: CompareOp::Eq,
+        left: Box::new(value),
+        right: Box::new(Expr::Undefined),
+    }
+}
+
+/// Pull the next value from `iter` into `value_id`, honoring the `done` flag.
+/// Mirrors the assignment-destructuring `iterator_next_value_stmts`:
+///   if (done) { value = undefined; }
+///   else { step = IteratorNext(iter); if (step.done) { done = true; value = undefined } else value = step.value }
+fn iterator_next_value_stmts(
+    ctx: &mut LoweringContext,
+    iter_id: LocalId,
+    done_id: LocalId,
+    value_id: LocalId,
+) -> Vec<Stmt> {
+    let (step_id, step_name) = fresh_destruct_local(ctx, Type::Any);
+    let pull_next = vec![
+        Stmt::Let {
+            id: step_id,
+            name: step_name,
+            ty: Type::Any,
+            mutable: false,
+            init: Some(runtime_iterator_call(
+                "iteratorNextResult",
+                vec![Expr::LocalGet(iter_id)],
+            )),
+        },
+        Stmt::If {
+            condition: Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(step_id)),
+                property: "done".to_string(),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Expr(Expr::LocalSet(value_id, Box::new(Expr::Undefined))),
+            ],
+            else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
+                value_id,
+                Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(step_id)),
+                    property: "value".to_string(),
+                }),
+            ))]),
+        },
+    ];
+
+    vec![Stmt::If {
+        condition: Expr::LocalGet(done_id),
+        then_branch: vec![Stmt::Expr(Expr::LocalSet(
+            value_id,
+            Box::new(Expr::Undefined),
+        ))],
+        else_branch: Some(pull_next),
+    }]
+}
+
+/// Lower an array binding pattern using the iterator protocol (spec
+/// §8.5.2/8.5.3 IteratorBindingInitialization). Replaces the legacy index-based
+/// (`tmp[0]`, `tmp[1]`) lowering, which never invoked `Symbol.iterator`, never
+/// closed the iterator, and could not destructure non-array iterables. Each
+/// element pulls via `IteratorStep`/`IteratorValue`; holes still advance the
+/// iterator; a rest element drains the remainder; and the iterator is closed
+/// (`IteratorClose`) on both normal completion (when not exhausted) and on any
+/// abrupt completion from a default initializer or nested pattern.
+fn lower_array_pattern_binding(
+    ctx: &mut LoweringContext,
+    arr_pat: &ast::ArrayPat,
+    source: Expr,
+    mutable: bool,
+    result: &mut Vec<Stmt>,
+) -> Result<()> {
+    let (iter_id, iter_name) = fresh_destruct_local(ctx, Type::Any);
+    result.push(Stmt::Let {
+        id: iter_id,
+        name: iter_name,
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::GetIterator(Box::new(source))),
+    });
+    let (done_id, done_name) = fresh_destruct_local(ctx, Type::Boolean);
+    result.push(Stmt::Let {
+        id: done_id,
+        name: done_name,
+        ty: Type::Boolean,
+        mutable: true,
+        init: Some(Expr::Bool(false)),
+    });
+
+    let mut body: Vec<Stmt> = Vec::new();
+    for elem in &arr_pat.elems {
+        match elem {
+            // Elision (`[, x]`) — advance the iterator and discard the value.
+            None => {
+                let (value_id, value_name) = fresh_destruct_local(ctx, Type::Any);
+                body.push(Stmt::Let {
+                    id: value_id,
+                    name: value_name,
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Undefined),
+                });
+                body.extend(iterator_next_value_stmts(ctx, iter_id, done_id, value_id));
+            }
+            // Rest element (`[...rest]`) — drain the remainder into an array.
+            Some(ast::Pat::Rest(rest_pat)) => {
+                let (rest_id, rest_name) = fresh_destruct_local(ctx, Type::Any);
+                body.push(Stmt::Let {
+                    id: rest_id,
+                    name: rest_name,
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(runtime_iterator_call(
+                        "iteratorRestToArray",
+                        vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
+                    )),
+                });
+                // Draining exhausts the iterator, so it is now done.
+                body.push(Stmt::Expr(Expr::LocalSet(
+                    done_id,
+                    Box::new(Expr::Bool(true)),
+                )));
+                lower_pattern_binding_into(
+                    ctx,
+                    &rest_pat.arg,
+                    Expr::LocalGet(rest_id),
+                    mutable,
+                    &mut body,
+                )?;
+                break;
+            }
+            Some(elem_pat) => {
+                let (value_id, value_name) = fresh_destruct_local(ctx, Type::Any);
+                body.push(Stmt::Let {
+                    id: value_id,
+                    name: value_name,
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Undefined),
+                });
+                body.extend(iterator_next_value_stmts(ctx, iter_id, done_id, value_id));
+
+                // A `Pat::Assign` element carries a default initializer that is
+                // evaluated lazily, only when the pulled value is `undefined`.
+                if let ast::Pat::Assign(assign_pat) = elem_pat {
+                    let default_val = lower_expr(ctx, &assign_pat.right)?;
+                    let with_default = Expr::Conditional {
+                        condition: Box::new(is_strictly_undefined(Expr::LocalGet(value_id))),
+                        then_expr: Box::new(default_val),
+                        else_expr: Box::new(Expr::LocalGet(value_id)),
+                    };
+                    lower_pattern_binding_into(
+                        ctx,
+                        &assign_pat.left,
+                        with_default,
+                        mutable,
+                        &mut body,
+                    )?;
+                } else {
+                    lower_pattern_binding_into(
+                        ctx,
+                        elem_pat,
+                        Expr::LocalGet(value_id),
+                        mutable,
+                        &mut body,
+                    )?;
+                }
+            }
+        }
+    }
+
+    // Close the iterator: on any abrupt completion from the body (default
+    // initializer / nested pattern throwing), and again on normal completion
+    // when the iterator was not exhausted.
+    let close_stmt = Stmt::Expr(runtime_iterator_call(
+        "iteratorCloseIfNotDone",
+        vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
+    ));
+    let (exc_id, exc_name) = fresh_destruct_local(ctx, Type::Any);
+    result.push(Stmt::Try {
+        body,
+        catch: Some(CatchClause {
+            param: Some((exc_id, exc_name)),
+            body: vec![
+                Stmt::Try {
+                    body: vec![close_stmt.clone()],
+                    catch: Some(CatchClause {
+                        param: None,
+                        body: Vec::new(),
+                    }),
+                    finally: None,
+                },
+                Stmt::Throw(Expr::LocalGet(exc_id)),
+            ],
+        }),
+        finally: None,
+    });
+    result.push(close_stmt);
+
+    Ok(())
+}
+
 /// Recursively lower a binding pattern against a source expression, producing
 /// `Let` statements that declare each bound variable.
 ///
@@ -105,53 +332,20 @@ pub(crate) fn lower_pattern_binding_into(
                 init: Some(source),
             });
             let default_val = lower_expr(ctx, &assign_pat.right)?;
-            // If `IsUndefinedOrBareNan(tmp)` then use default, else use tmp.
+            // A destructuring default applies only when the source is strictly
+            // `undefined` (not a genuine NaN value — `let [a = 1] = [NaN]` → NaN).
             let with_default = Expr::Conditional {
-                condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(Expr::LocalGet(tmp_id)))),
+                condition: Box::new(is_strictly_undefined(Expr::LocalGet(tmp_id))),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
             };
             lower_pattern_binding_into(ctx, &assign_pat.left, with_default, mutable, result)
         }
         ast::Pat::Array(arr_pat) => {
-            // Materialize source into a temp
-            let arr_ty = arr_pat
-                .type_ann
-                .as_ref()
-                .map(|ann| extract_ts_type(&ann.type_ann))
-                .unwrap_or(Type::Array(Box::new(Type::Any)));
-            let tmp_id = ctx.fresh_local();
-            let tmp_name = format!("__destruct_{}", tmp_id);
-            ctx.locals.push((tmp_name.clone(), tmp_id, arr_ty.clone()));
-            result.push(Stmt::Let {
-                id: tmp_id,
-                name: tmp_name,
-                ty: arr_ty,
-                mutable: false,
-                init: Some(source),
-            });
-
-            for (idx, elem) in arr_pat.elems.iter().enumerate() {
-                let Some(elem_pat) = elem else { continue }; // hole — skip
-
-                if let ast::Pat::Rest(rest_pat) = elem_pat {
-                    // Rest element `...rest` — take remaining elements as an array
-                    let slice_expr = Expr::ArraySlice {
-                        array: Box::new(Expr::LocalGet(tmp_id)),
-                        start: Box::new(Expr::Number(idx as f64)),
-                        end: None,
-                    };
-                    lower_pattern_binding_into(ctx, &rest_pat.arg, slice_expr, mutable, result)?;
-                    break; // Rest must be last
-                }
-
-                let element_source = Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(tmp_id)),
-                    index: Box::new(Expr::Number(idx as f64)),
-                };
-                lower_pattern_binding_into(ctx, elem_pat, element_source, mutable, result)?;
-            }
-            Ok(())
+            // Array binding patterns use the iterator protocol (GetIterator /
+            // IteratorStep / IteratorValue / IteratorClose), per spec — not raw
+            // index reads. See `lower_array_pattern_binding`.
+            lower_array_pattern_binding(ctx, arr_pat, source, mutable, result)
         }
         ast::Pat::Object(obj_pat) => {
             // Materialize source into a temp
@@ -164,12 +358,18 @@ pub(crate) fn lower_pattern_binding_into(
             let tmp_id = ctx.fresh_local();
             let tmp_name = format!("__destruct_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, obj_ty.clone()));
+            // RequireObjectCoercible: destructuring a `null`/`undefined` source
+            // throws a TypeError even for an empty pattern `{}`, before any
+            // property is read.
             result.push(Stmt::Let {
                 id: tmp_id,
                 name: tmp_name,
                 ty: obj_ty,
                 mutable: false,
-                init: Some(source),
+                init: Some(runtime_iterator_call(
+                    "requireObjectCoercible",
+                    vec![source],
+                )),
             });
 
             // Collect statically-known keys for rest exclusion tracking.
@@ -287,8 +487,8 @@ pub(crate) fn lower_pattern_binding_into(
                             });
                             let default_val = lower_expr(ctx, default_expr)?;
                             Expr::Conditional {
-                                condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(
-                                    Expr::LocalGet(val_tmp_id),
+                                condition: Box::new(is_strictly_undefined(Expr::LocalGet(
+                                    val_tmp_id,
                                 ))),
                                 then_expr: Box::new(default_val),
                                 else_expr: Box::new(Expr::LocalGet(val_tmp_id)),

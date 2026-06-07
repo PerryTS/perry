@@ -3346,7 +3346,12 @@ pub(crate) unsafe fn call_vtable_method(
         if idx < args_len {
             *args_ptr.add(idx)
         } else {
-            f64::NAN
+            // A missing argument is `undefined` per spec, not a bare IEEE NaN.
+            // This vtable path is reached without call-site padding when a
+            // method is invoked as a value (`const f = obj.m; f()`, or a bound
+            // method from a getter), so NaN here defeated the callee's
+            // default-param / destructuring prologue (`if (p === undefined)`).
+            f64::from_bits(crate::value::TAG_UNDEFINED)
         }
     }
 

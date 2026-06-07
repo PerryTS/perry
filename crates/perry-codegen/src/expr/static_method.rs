@@ -137,6 +137,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             lowered.insert(idx, undef);
                         }
                     }
+                } else {
+                    // Issue #235: a static method called with fewer args than
+                    // declared (`C.f()` for `static f(a = 1)`, or
+                    // `C.m([x] = [])`) must hand the callee `undefined` for the
+                    // missing slots — otherwise the LLVM function reads an
+                    // uninitialized parameter register (0.0), so its
+                    // default-param prologue (`if (p === undefined) p = …`) and
+                    // destructuring (`GetIterator(p)`) never fire.
+                    let declared_count = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    while lowered.len() < declared_count {
+                        lowered.push(undef.clone());
+                    }
                 }
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();

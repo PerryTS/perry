@@ -27,6 +27,20 @@ pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
     }
 }
 
+/// `RequireObjectCoercible(value)` for object destructuring binding/assignment
+/// (`let {a} = src`, `method({a}) {}`). Throws a TypeError when `value` is
+/// `null` or `undefined` (so even an empty pattern `{}` rejects nullish input),
+/// otherwise returns the value unchanged. Property reads happen afterward via
+/// the ordinary `[[Get]]` path, which boxes primitives as needed.
+#[no_mangle]
+pub extern "C" fn js_require_object_coercible(value: f64) -> f64 {
+    let bits = value.to_bits();
+    if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
+        throw_to_object_nullish_type_error();
+    }
+    value
+}
+
 pub(crate) fn throw_to_object_nullish_type_error() -> ! {
     let message = "Cannot convert undefined or null to object";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);

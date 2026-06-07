@@ -2,6 +2,20 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1143 — Class destructuring (dstr) + default-parameter parity (test262)
+
+Brought `language/{statements,expressions}/class/dstr` from 512→664 passing (41.6%→53.9%) with **zero regressions**, and lifted the wider `built-ins`+`language` sweep by ~6–9% per shard (0 regressions across sampled shards). These are method/constructor/accessor parameter-destructuring tests across plain, generator, async-generator, static, and private class methods.
+
+Root causes fixed:
+
+- **Array binding patterns now use the iterator protocol.** `lower_pattern_binding` lowered `let [a, b] = x` (and every method/param destructuring) to raw index reads (`x[0]`, `x[1]`), so it never invoked `Symbol.iterator`, never closed the iterator, mishandled holes/rest, and couldn't destructure non-array iterables. Rewrote the `Pat::Array` arm to emit `GetIterator` → `IteratorStep`/`IteratorValue` per element, draining a rest element via the new `js_iterator_rest_to_array`, advancing the iterator for elisions, and performing `IteratorClose` on both normal completion (when not exhausted) and any abrupt completion from a default initializer or nested pattern. Destructuring defaults now use a strict `=== undefined` check (a genuine `NaN` element no longer triggers the default).
+- **Object binding patterns enforce `RequireObjectCoercible`.** New `js_require_object_coercible` throws a `TypeError` for a `null`/`undefined` source even for an empty pattern `{}`, before any property read.
+- **Static-method calls now pad omitted arguments with `undefined`.** `Expr::StaticMethodCall` (non-rest path) forwarded only the supplied args, so a static method called with fewer args than declared read uninitialized parameter slots; `static f(a = 1)` returned `0` and `static m([x] = [])` threw. It now pads to the declared arity.
+- **Private methods emit their default-parameter prologue.** `lower_private_method` computed `param.default` but never called `build_default_param_stmts`, so `#m(a = 1)` silently dropped the default.
+- **Method-as-value calls pad omitted arguments with `undefined`.** `call_vtable_method` padded missing args with a bare IEEE `NaN`; that path is reached without call-site padding when a method is invoked as a value (`const f = obj.m; f()`, or a `get m(){ return this.#m }` accessor exposing a private method), so a defaulted/destructuring param never saw `undefined`. It now pads with `undefined`.
+
+Files: `crates/perry-hir/src/destructuring/pattern_binding.rs`, `crates/perry-hir/src/lower_decl/private_members.rs`, `crates/perry-codegen/src/expr/static_method.rs`, `crates/perry-codegen/src/lower_call/native/mod.rs`, `crates/perry-codegen/src/runtime_decls/{arrays,objects}.rs`, `crates/perry-runtime/src/array/iterator.rs`, `crates/perry-runtime/src/object/{class_registry,has_own_helpers}.rs`.
+
 ## v0.5.1142 — @hono/node-server `c.req.text()`/`.json()`/`.formData()` work on POST/PUT
 
 Fixes `TypeError: text is not a function` (and `formData is not a function`) on

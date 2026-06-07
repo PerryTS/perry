@@ -928,6 +928,23 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     result
 }
 
+/// `BindingRestElement` / `AssignmentRestElement` iterator drain for
+/// destructuring (`let [...rest] = src`, `method([...rest]) {}`). Spec §8.5.3
+/// ArrayBindingPattern step for a rest element: if the iterator is already
+/// done, the rest is an empty array; otherwise drain the remaining values into
+/// a fresh array (which leaves the iterator exhausted). `done_f64` carries the
+/// destructuring `[[Done]]` flag so a rest after an exhausted iterator
+/// (`let [a, b, ...r] = [1]`) yields `[]` without re-invoking `next()`.
+#[no_mangle]
+pub extern "C" fn js_iterator_rest_to_array(iter_f64: f64, done_f64: f64) -> f64 {
+    if crate::value::js_is_truthy(done_f64) != 0 {
+        let arr = js_array_alloc(0);
+        return crate::value::js_nanbox_pointer(arr as i64);
+    }
+    let arr = js_iterator_to_array(iter_f64);
+    crate::value::js_nanbox_pointer(arr as i64)
+}
+
 fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     use crate::closure;
     use crate::object::{js_object_get_field_by_name, ObjectHeader};
