@@ -37,6 +37,8 @@ const RUST_ALLOCATOR_SYMBOL_PARTS: &[&str] = &[
     "__rust_foreign_exception",
     "rust_begin_unwind",
     "rust_eh_personality",
+    "__rust_abort",
+    "rust_panic",
 ];
 
 fn force_localize_symbol(symbol: &str) -> bool {
@@ -51,6 +53,71 @@ fn find_path_tool(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&paths)
         .map(|dir| dir.join(name))
         .find(|path| path.is_file())
+}
+
+/// Find an LLVM tool shipped with a `nightly` rustup toolchain.
+///
+/// Tier-3 targets (tvOS/watchOS) build runtime/stdlib with nightly Rust via
+/// `-Zbuild-std`, emitting object bitcode from nightly's bundled LLVM (e.g.
+/// LLVM 22). A system `llvm-nm` / `llvm-objcopy` from an older LLVM (e.g. 18)
+/// fails on that bitcode — `llvm-nm` reports zero symbols ("Unknown attribute
+/// kind"), defeating the symbol-set dedup, and `llvm-objcopy` rejects
+/// `--localize-symbol` on Mach-O ("option is not supported for MachO"). Prefer
+/// nightly's own tool, whose LLVM matches the bytes it produced.
+///
+/// `$HOME` / `$RUSTUP_HOME` may both be unset (the Linux build worker runs
+/// `perry compile` as a systemd subprocess whose environment carries only
+/// `PATH`), so the rustup home is also derived from the `rustup`/`cargo` binary
+/// on `PATH` and from well-known absolute locations.
+fn find_nightly_llvm_tool(tool: &str) -> Option<PathBuf> {
+    let exe_suffix = std::env::consts::EXE_SUFFIX;
+    let mut rustup_homes: Vec<PathBuf> = Vec::new();
+    if let Some(rustup_home) = std::env::var_os("RUSTUP_HOME") {
+        rustup_homes.push(PathBuf::from(rustup_home));
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        rustup_homes.push(PathBuf::from(home).join(".rustup"));
+    }
+    // `<dir>/.cargo/bin/cargo` on PATH implies the rustup home is `<dir>/.rustup`.
+    for tool_name in ["rustup", "cargo"] {
+        if let Some(bin) = find_path_tool(tool_name) {
+            if let Some(cargo_root) = bin.parent().and_then(|p| p.parent()).and_then(|p| p.parent())
+            {
+                rustup_homes.push(cargo_root.join(".rustup"));
+            }
+        }
+    }
+    for fixed in ["/root/.rustup", "/usr/local/rustup", "/opt/rust/rustup"] {
+        rustup_homes.push(PathBuf::from(fixed));
+    }
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for home in rustup_homes {
+        let t = home.join("toolchains");
+        if !roots.contains(&t) {
+            roots.push(t);
+        }
+    }
+    for toolchains in roots {
+        let Ok(dir) = std::fs::read_dir(&toolchains) else {
+            continue;
+        };
+        for entry in dir.flatten() {
+            if !entry.file_name().to_string_lossy().starts_with("nightly") {
+                continue;
+            }
+            let rustlib = entry.path().join("lib").join("rustlib");
+            if let Ok(targets) = std::fs::read_dir(&rustlib) {
+                for t in targets.flatten() {
+                    let candidate = t.path().join("bin").join(format!("{tool}{exe_suffix}"));
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Parse `nm --defined-only` archive output into a per-member symbol map.
@@ -365,7 +432,9 @@ pub(super) fn strip_duplicate_objects_from_lib(lib_path: &PathBuf) -> Result<Pat
     //
     // Falls back to the legacy `.dll` / `compiler_builtins` short-circuits
     // plus the rlib name-prefix check when llvm-nm isn't available.
-    let llvm_nm = find_llvm_tool("llvm-nm").or_else(|| find_path_tool("nm"));
+    let llvm_nm = find_nightly_llvm_tool("llvm-nm")
+        .or_else(|| find_llvm_tool("llvm-nm"))
+        .or_else(|| find_path_tool("nm"));
     let nm_works = llvm_nm.as_ref().is_some_and(|nm| {
         // Probe with a trivial call; if it can't even run, skip the
         // symbol-set path entirely.
@@ -582,10 +651,12 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
     let llvm_ar = find_llvm_tool("llvm-ar")
         .or_else(|| find_path_tool("ar"))
         .ok_or_else(|| anyhow::anyhow!("ar not found"))?;
-    let objcopy = find_llvm_tool("llvm-objcopy")
+    let objcopy = find_nightly_llvm_tool("llvm-objcopy")
+        .or_else(|| find_llvm_tool("llvm-objcopy"))
         .or_else(|| find_path_tool("objcopy"))
         .ok_or_else(|| anyhow::anyhow!("objcopy not found"))?;
-    let nm = find_llvm_tool("llvm-nm")
+    let nm = find_nightly_llvm_tool("llvm-nm")
+        .or_else(|| find_llvm_tool("llvm-nm"))
         .or_else(|| find_path_tool("nm"))
         .ok_or_else(|| anyhow::anyhow!("nm not found"))?;
 
@@ -686,17 +757,44 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
 /// `ld64.lld: duplicate symbol`. Localize those shims in the stdlib copy.
 /// No-op (clone) on every other target; a strip failure is non-fatal and
 /// falls back to the original archive.
-pub(super) fn dedup_stdlib_for_tier3(target: Option<&str>, stdlib: &PathBuf) -> PathBuf {
+pub(super) fn dedup_stdlib_for_tier3(_target: Option<&str>, stdlib: &PathBuf) -> PathBuf {
+    // perry-stdlib is kept WHOLE on tier-3 and is the authoritative provider of
+    // std/core/alloc + the allocator/panic shims. It is earliest on the link
+    // line, so its std symbols win first-definition and stop ld64 from pulling
+    // the duplicate std objects out of perry-runtime and the native binding lib
+    // (which would then collide on e.g. `__rdl_alloc`). The de-duplication for
+    // tier-3 happens on the *other* archives instead: [`dedup_runtime_for_tier3`]
+    // strips perry-runtime's copies of stdlib's objects, and
+    // [`dedup_native_lib_for_tier3`] localizes the native lib's allocator shims.
+    // (Localizing the allocator *here* would leave no global allocator once the
+    // runtime copy is stripped, producing undefined-symbol errors.)
+    stdlib.clone()
+}
+
+/// Tier-3 (tvOS/watchOS) dedup for perry-runtime against perry-stdlib.
+///
+/// The auto-optimizer rebuilds perry-stdlib and perry-runtime from the same
+/// `-Zbuild-std` crate graph, so perry-stdlib bundles byte-identical copies of
+/// perry-runtime's std/core/alloc/perry_runtime objects. perry-stdlib is linked
+/// whole and first (see [`dedup_stdlib_for_tier3`]), so strip every member from
+/// perry-runtime that perry-stdlib already provides — leaving only the
+/// runtime-unique members (e.g. the ios-game-loop variant object) and exactly
+/// one copy of each symbol for ld64. No-op (clone) off tier-3.
+pub(super) fn dedup_runtime_for_tier3(
+    target: Option<&str>,
+    runtime: &Path,
+    stdlib: &Path,
+) -> PathBuf {
     if matches!(target, Some("tvos") | Some("watchos")) {
-        match strip_duplicate_objects_from_well_known_lib(stdlib) {
+        match strip_members_present_in_reference(runtime, stdlib, "") {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[strip-dedup] skipped for stdlib (non-fatal): {e}");
-                stdlib.clone()
+                eprintln!("[strip-dedup] runtime-vs-stdlib dedup skipped (non-fatal): {e}");
+                runtime.to_path_buf()
             }
         }
     } else {
-        stdlib.clone()
+        runtime.to_path_buf()
     }
 }
 
@@ -712,16 +810,134 @@ pub(super) fn dedup_native_lib_for_tier3(
     lib: PathBuf,
 ) -> PathBuf {
     if matches!(target, Some("tvos") | Some("watchos")) && !lib_name.ends_with(".so") {
-        match strip_duplicate_objects_from_lib(&lib) {
+        let trimmed = match strip_duplicate_objects_from_lib(&lib) {
             Ok(trimmed) => trimmed,
             Err(e) => {
                 eprintln!("[strip-dedup] skipped for native lib {lib_name} (non-fatal): {e}");
                 lib
             }
+        };
+        // The member-subset trim removes the native crate's std objects that are
+        // a clean subset of perry-stdlib, but its allocator/panic/EH shim cgu
+        // (`alloc-*.rcgu.o`) carries extra monomorphizations so it survives — and
+        // its `__rdl_alloc` / `rust_eh_personality` / … globals then collide with
+        // perry-stdlib's. Localize those shim symbols here so perry-stdlib stays
+        // the single global allocator.
+        match strip_duplicate_objects_from_well_known_lib(&trimmed) {
+            Ok(localized) => localized,
+            Err(e) => {
+                eprintln!(
+                    "[strip-dedup] allocator localize skipped for native lib {lib_name} (non-fatal): {e}"
+                );
+                trimmed
+            }
         }
     } else {
         lib
     }
+}
+
+/// Remove from `lib_path` every archive member whose name (a) starts with
+/// `name_prefix` and (b) also appears in `reference_lib`, returning the path to
+/// a rebuilt archive.
+///
+/// Used on tier-3 (tvOS/watchOS) to drop the perry-runtime object(s) that the
+/// auto-optimized perry-stdlib bundles. The auto-optimizer rebuilds perry-stdlib
+/// *and* perry-runtime from the same `-Zbuild-std` crate graph, so a
+/// perry-runtime codegen unit (e.g.
+/// `perry_runtime-<hash>.perry_runtime.<hash>-cgu.0.rcgu.o`) lands in BOTH
+/// archives. They are byte-identical (the hashes in the member name encode the
+/// content), and perry-runtime is linked separately right after stdlib, so the
+/// stdlib copy is pure duplication. ld64 (Mach-O) has no `/FORCE:MULTIPLE`, so an
+/// identical object reachable from two archives is a fatal "duplicate symbol".
+///
+/// The `name_prefix` filter is essential: only the `perry_runtime-*` members are
+/// pure duplication. The `std-*` / `alloc-*` / `core-*` members are also shared,
+/// but stdlib's copies are *load-bearing* — being earliest on the link line they
+/// satisfy std symbols first, which stops ld64 from pulling the std objects out
+/// of perry-runtime AND the bundling native lib for the same symbols (those two
+/// would then collide on e.g. `__rdl_alloc`). So we keep stdlib's std/alloc/core
+/// objects and strip only its redundant perry-runtime objects.
+pub(super) fn strip_members_present_in_reference(
+    lib_path: &Path,
+    reference_lib: &Path,
+    name_prefix: &str,
+) -> Result<PathBuf> {
+    let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
+    let llvm_ar = find_llvm_tool("llvm-ar")
+        .or_else(|| find_path_tool("ar"))
+        .ok_or_else(|| anyhow::anyhow!("ar not found"))?;
+
+    let abs_lib = std::fs::canonicalize(lib_path)?;
+    let abs_ref = std::fs::canonicalize(reference_lib)?;
+
+    let list_members = |archive: &Path| -> Result<Vec<String>> {
+        let out = Command::new(&llvm_ar).arg("t").arg(archive).output()?;
+        if !out.status.success() {
+            return Err(anyhow::anyhow!(
+                "failed to list members of {}",
+                archive.display()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.to_string())
+            .collect())
+    };
+
+    let ref_members: std::collections::BTreeSet<String> =
+        list_members(&abs_ref)?.into_iter().collect();
+    let members = list_members(&abs_lib)?;
+    let remove_set: std::collections::BTreeSet<&String> = members
+        .iter()
+        .filter(|m| m.starts_with(name_prefix) && ref_members.contains(*m))
+        .collect();
+    if remove_set.is_empty() {
+        return Ok(lib_path.to_path_buf());
+    }
+
+    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_base).ok();
+    let extract_dir = tmp_base.join(format!("_{lib_name}_refdiff_extract"));
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir)?;
+    let trimmed_lib = tmp_base.join(format!("_{lib_name}_refdiff.lib"));
+    let _ = std::fs::remove_file(&trimmed_lib);
+
+    let extract_out = Command::new(&llvm_ar)
+        .arg("x")
+        .arg(&abs_lib)
+        .current_dir(&extract_dir)
+        .output()?;
+    if !extract_out.status.success() {
+        let stderr = String::from_utf8_lossy(&extract_out.stderr);
+        return Err(anyhow::anyhow!("failed to extract {lib_name}: {stderr}"));
+    }
+
+    let mut ar_cmd = Command::new(&llvm_ar);
+    ar_cmd.arg("crs").arg(&trimmed_lib);
+    let mut kept = 0usize;
+    for member in &members {
+        if remove_set.contains(member) {
+            continue;
+        }
+        ar_cmd.arg(extract_dir.join(member));
+        kept += 1;
+    }
+    let ar_out = ar_cmd.output()?;
+    if !ar_out.status.success() {
+        let stderr = String::from_utf8_lossy(&ar_out.stderr);
+        return Err(anyhow::anyhow!(
+            "failed to create ref-diff archive for {lib_name}: {stderr}"
+        ));
+    }
+    eprintln!(
+        "[strip-dedup] {lib_name}: removed {} member(s) also present in {} (kept {kept})",
+        remove_set.len(),
+        abs_ref.file_name().and_then(|f| f.to_str()).unwrap_or("?")
+    );
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    Ok(trimmed_lib)
 }
 
 #[cfg(test)]

@@ -94,8 +94,8 @@ use resolve::{
     parse_package_specifier, resolve_import,
 };
 use strip_dedup::{
-    dedup_native_lib_for_tier3, dedup_stdlib_for_tier3, strip_duplicate_objects_from_lib,
-    strip_duplicate_objects_from_well_known_lib,
+    dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
 };
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,

@@ -30,7 +30,8 @@ use std::process::Command;
 use crate::OutputFormat;
 
 use super::{
-    apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3, dedup_stdlib_for_tier3,
+    apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3,
+    dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
     find_geisterhand_library, find_geisterhand_runtime, find_geisterhand_stdlib,
     find_geisterhand_ui, find_lld_link, find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe,
     find_perry_windows_sdk, find_stdlib_library, find_ui_library, find_visionos_swift_runtime,
@@ -534,9 +535,11 @@ pub(super) fn build_and_run_link(
                     cmd.arg(wk);
                 }
                 // Also link runtime to supply symbols that may be DCE'd from stdlib's
-                // bundled perry-runtime (e.g. js_closure_unbind_this, js_string_addref)
+                // bundled perry-runtime (e.g. js_closure_unbind_this, js_string_addref).
+                // On tier-3 the runtime is first stripped of every object stdlib
+                // already provides (no-op elsewhere); see dedup_runtime_for_tier3.
                 if !is_android && !is_windows {
-                    cmd.arg(runtime_lib);
+                    cmd.arg(&dedup_runtime_for_tier3(target, runtime_lib, stdlib));
                 }
             } else {
                 if ctx.needs_stdlib {
