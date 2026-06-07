@@ -6,16 +6,18 @@
 /// Round-to-nearest-even, with overflow → ±Inf and subnormal/underflow → ±0.
 /// Mirrors the V8 / `Math.f16round`-then-store semantics used by Float16Array.
 pub fn f64_to_f16_bits(value: f64) -> u16 {
-    // Work from the f32 rounding of the value first (matches JS, which stores
-    // through the double→half path; an intermediate f32 keeps the mantissa
-    // handling simple and is exact for all f16-representable inputs).
-    let f = value as f32;
-    let bits = f.to_bits();
-    let sign = ((bits >> 16) & 0x8000) as u16;
-    let exp = ((bits >> 23) & 0xFF) as i32; // f32 biased exponent
-    let mantissa = bits & 0x007F_FFFF;
+    // Convert DIRECTLY from the f64 (no intermediate f32). Going through f32
+    // first double-rounds: a value just past a half-ulp boundary gets rounded
+    // to the exact halfway point by the f32 step, losing the sticky bit, so the
+    // f16 round-to-even step then rounds the wrong way (e.g. the smallest f16
+    // subnormal boundary `2^-25 + ε` collapsed to `2^-25` → 0 instead of
+    // `2^-24`). Operating on the 52-bit f64 mantissa keeps the sticky bits.
+    let bits = value.to_bits();
+    let sign = (((bits >> 48) & 0x8000) as u16) & 0x8000;
+    let exp = ((bits >> 52) & 0x7FF) as i32; // f64 biased exponent
+    let mantissa = bits & 0x000F_FFFF_FFFF_FFFF; // 52-bit fraction
 
-    if exp == 0xFF {
+    if exp == 0x7FF {
         // Inf / NaN.
         if mantissa != 0 {
             // NaN: keep it a NaN (set a mantissa bit), drop payload.
@@ -24,8 +26,13 @@ pub fn f64_to_f16_bits(value: f64) -> u16 {
         return sign | 0x7C00; // Inf
     }
 
-    // Unbias f32 exponent, rebias for f16 (bias 15).
-    let unbiased = exp - 127;
+    // ±0 (and f64 subnormals, which are far below the f16 range → ±0).
+    if exp == 0 {
+        return sign;
+    }
+
+    // Unbias f64 exponent (bias 1023), rebias for f16 (bias 15).
+    let unbiased = exp - 1023;
     let half_exp = unbiased + 15;
 
     if half_exp >= 0x1F {
@@ -33,35 +40,49 @@ pub fn f64_to_f16_bits(value: f64) -> u16 {
         return sign | 0x7C00;
     }
 
+    // 53-bit significand with the implicit leading 1 restored.
+    let significand = mantissa | 0x0010_0000_0000_0000; // bit 52 set
+
+    // Round-half-to-even: shift `significand` right by `shift`, rounding the
+    // discarded low bits to nearest, ties to even. Returns the rounded value
+    // (which may carry up one extra bit).
+    let round = |shift: u32| -> u64 {
+        let kept = significand >> shift;
+        let remainder = significand & ((1u64 << shift) - 1);
+        let halfway = 1u64 << (shift - 1);
+        if remainder > halfway || (remainder == halfway && (kept & 1) == 1) {
+            kept + 1
+        } else {
+            kept
+        }
+    };
+
     if half_exp <= 0 {
-        // Subnormal or underflow to zero.
-        if half_exp < -10 {
-            return sign; // too small → ±0
+        // Subnormal or underflow to zero. Express the value as a count of f16
+        // subnormal units (2^-24), rounding to nearest-even. A carry out of the
+        // top subnormal bit naturally yields the smallest normal (0x0400).
+        // shift = 52 (f64 frac width) - 10 (f16 frac width) + (1 - half_exp)
+        let shift = (43 - half_exp) as u32;
+        if shift >= 64 {
+            return sign; // far below the smallest subnormal → ±0
         }
-        // Build the f16 subnormal mantissa with round-to-nearest-even.
-        // Implicit leading 1 of the f32 mantissa is restored, then shifted.
-        let m = mantissa | 0x0080_0000; // 24-bit significand (1.mantissa)
-        let shift = (14 - half_exp) as u32; // 14 = 23 - 10 + 1
-        let half_m = m >> shift;
-        // Round half to even.
-        let remainder = m & ((1u32 << shift) - 1);
-        let halfway = 1u32 << (shift - 1);
-        let mut result = half_m as u16;
-        if remainder > halfway || (remainder == halfway && (half_m & 1) == 1) {
-            result += 1;
+        if shift == 0 {
+            return sign | (significand as u16);
         }
-        return sign | result;
+        return sign | (round(shift) as u16);
     }
 
-    // Normal f16. Take top 10 mantissa bits, round-to-nearest-even on the rest.
-    let half_m = (mantissa >> 13) as u16;
-    let remainder = mantissa & 0x1FFF;
-    let halfway = 0x1000;
-    let mut result = ((half_exp as u16) << 10) | half_m;
-    if remainder > halfway || (remainder == halfway && (half_m & 1) == 1) {
-        result += 1; // carry naturally rolls into exponent if mantissa overflows
+    // Normal f16. `round(42)` yields an 11-bit value `1.ffffffffff` (implicit
+    // leading 1 in bit 10 + 10 fraction bits), or `0x800` if rounding carried.
+    // Encoding = (half_exp << 10) | frac, so subtract the implicit 0x400 from
+    // both sides: result = ((half_exp - 1) << 10) + rounded. A rounding carry
+    // (rounded == 0x800) then bumps the exponent for free.
+    let rounded = round(42);
+    let result = (((half_exp as u32) - 1) << 10) + rounded as u32;
+    if (result >> 10) >= 0x1F {
+        return sign | 0x7C00; // rounding overflowed to Inf
     }
-    sign | result
+    sign | (result as u16)
 }
 
 /// Decode an IEEE-754 binary16 bit pattern into an f64.
@@ -121,5 +142,27 @@ mod tests {
         assert_eq!(f64_to_f16_bits(-2.0), 0xC000);
         assert_eq!(f64_to_f16_bits(0.0), 0x0000);
         assert_eq!(f64_to_f16_bits(65504.0), 0x7BFF); // max finite half
+    }
+
+    #[test]
+    fn direct_rounding_no_double_round() {
+        // Oracle values from Node's `new Float16Array([v])` DataView bits.
+        // The key non-regression: a value just above the smallest-subnormal
+        // half-ulp boundary must round UP to 0x0001, not collapse to 0 — which
+        // the old f64→f32→f16 double-rounding path got wrong.
+        assert_eq!(f64_to_f16_bits(2.980232238769532e-8), 0x0001);
+        assert_eq!(f64_to_f16_bits(5.960464477539063e-8), 0x0001); // smallest subnormal
+        assert_eq!(f64_to_f16_bits(2.9802e-8), 0x0000); // just below → ties to even 0
+        assert_eq!(f64_to_f16_bits(1e-7), 0x0002);
+        assert_eq!(f64_to_f16_bits(0.1), 0x2E66);
+        assert_eq!(f64_to_f16_bits(0.2), 0x3266);
+        assert_eq!(f64_to_f16_bits(100.0), 0x5640);
+        assert_eq!(f64_to_f16_bits(3.141592653589793), 0x4248);
+        assert_eq!(f64_to_f16_bits(6.0997555e-5), 0x03FF); // largest subnormal-ish
+        assert_eq!(f64_to_f16_bits(6.103515625e-5), 0x0400); // smallest normal
+        assert_eq!(f64_to_f16_bits(70000.0), 0x7C00); // overflow → +Inf
+        assert_eq!(f64_to_f16_bits(65520.0), 0x7C00); // rounds up past max → +Inf
+        assert_eq!(f64_to_f16_bits(65504.1), 0x7BFF); // stays max finite
+        assert_eq!(f64_to_f16_bits(32768.0), 0x7800);
     }
 }

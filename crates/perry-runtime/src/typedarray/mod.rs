@@ -618,6 +618,22 @@ fn jsvalue_to_f64(v: f64) -> f64 {
     f64::NAN
 }
 
+/// ECMA-262 `ToUint32` (§7.1.7) on a double, returning the raw 32-bit pattern.
+/// `NaN`/±`Inf`/±0 → 0; otherwise truncate toward zero, then reduce modulo
+/// 2^32. Done in f64 space so values past `i64::MAX` (e.g. `1e21`) wrap
+/// correctly instead of saturating — `value as i64` would clamp to `i64::MAX`
+/// and produce the wrong low bits. The signed integer kinds (`Int8`/`Int16`/
+/// `Int32`) all derive from these bits via a width-narrowing reinterpret, which
+/// matches `ToInt8`/`ToInt16`/`ToInt32` (they share `ToUint32`'s modular step
+/// and differ only in the final two's-complement reinterpretation).
+fn to_uint32_bits(value: f64) -> u32 {
+    if !value.is_finite() || value == 0.0 {
+        return 0;
+    }
+    let m = value.trunc().rem_euclid(4294967296.0); // value mod 2^32, in [0, 2^32)
+    m as u32
+}
+
 /// Store a number into the typed array slot, performing the per-kind cast.
 pub(super) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
     let kind = (*ta).kind;
@@ -626,13 +642,11 @@ pub(super) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64)
     let off = idx * elem_size;
     match kind {
         KIND_INT8 => {
-            let v = value as i32 as i8;
+            let v = to_uint32_bits(value) as u8 as i8;
             *(base.add(off) as *mut i8) = v;
         }
         KIND_UINT8 => {
-            let mut v = value as i64;
-            v = v.rem_euclid(256);
-            *base.add(off) = v as u8;
+            *base.add(off) = to_uint32_bits(value) as u8;
         }
         KIND_UINT8_CLAMPED => {
             // ToUint8Clamp: NaN → 0, v ≤ 0 → 0, v ≥ 255 → 255,
@@ -658,21 +672,18 @@ pub(super) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64)
             *base.add(off) = byte;
         }
         KIND_INT16 => {
-            let v = value as i32 as i16;
+            let v = to_uint32_bits(value) as u16 as i16;
             *(base.add(off) as *mut i16) = v;
         }
         KIND_UINT16 => {
-            let mut v = value as i64;
-            v = v.rem_euclid(65536);
-            *(base.add(off) as *mut u16) = v as u16;
+            *(base.add(off) as *mut u16) = to_uint32_bits(value) as u16;
         }
         KIND_INT32 => {
-            let v = value as i32;
+            let v = to_uint32_bits(value) as i32;
             *(base.add(off) as *mut i32) = v;
         }
         KIND_UINT32 => {
-            let v = value as i64 as u32;
-            *(base.add(off) as *mut u32) = v;
+            *(base.add(off) as *mut u32) = to_uint32_bits(value);
         }
         KIND_FLOAT16 => {
             *(base.add(off) as *mut u16) = f64_to_f16_bits(value);
@@ -2058,5 +2069,40 @@ mod tests {
             js_typed_array_get(ta, crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as i32 - 1),
             99.0
         );
+    }
+
+    #[test]
+    fn to_uint32_bits_wraps_modularly_not_saturating() {
+        // NaN / ±Inf / ±0 → 0.
+        assert_eq!(to_uint32_bits(f64::NAN), 0);
+        assert_eq!(to_uint32_bits(f64::INFINITY), 0);
+        assert_eq!(to_uint32_bits(f64::NEG_INFINITY), 0);
+        assert_eq!(to_uint32_bits(0.0), 0);
+        assert_eq!(to_uint32_bits(-0.0), 0);
+        // Truncate toward zero, then mod 2^32.
+        assert_eq!(to_uint32_bits(7.9), 7);
+        assert_eq!(to_uint32_bits(-1.0), 0xFFFF_FFFF);
+        assert_eq!(to_uint32_bits(4294967296.0 + 7.0), 7); // 2^32 + 7
+                                                           // 1e21 is exactly representable; ToUint32 wraps (NOT i32::MAX saturate).
+        assert_eq!(to_uint32_bits(1e21) as i32, -559939584);
+    }
+
+    #[test]
+    fn store_at_integer_kinds_wrap_per_spec() {
+        unsafe {
+            let check = |kind: u8, v: f64| -> f64 {
+                let ta = typed_array_alloc(kind, 1);
+                store_at(ta, 0, v);
+                load_at(ta, 0)
+            };
+            assert_eq!(check(KIND_INT8, 300.0), 44.0);
+            assert_eq!(check(KIND_UINT8, 261.0), 5.0);
+            assert_eq!(check(KIND_INT16, 105536.0), -25536.0);
+            assert_eq!(check(KIND_UINT16, 1e21), 0.0);
+            assert_eq!(check(KIND_INT32, 4294967303.0), 7.0);
+            assert_eq!(check(KIND_INT32, 1e21), -559939584.0);
+            assert_eq!(check(KIND_UINT32, -1.0), 4294967295.0);
+            assert_eq!(check(KIND_INT8, 1e21), 0.0);
+        }
     }
 }
