@@ -394,9 +394,12 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             js_promise_run_microtasks();
         }
     }
-    crate::server::synthesize_default_response_if_needed(pending.response_handle);
-    perry_ffi::drop_handle(pending.request_handle);
-    perry_ffi::drop_handle(pending.response_handle);
+    // #4728 — an async handler (outbound `fetch()`, `setTimeout`, `await`
+    // chain) returns before `res.end()` runs. Finalize now if the response
+    // is already flushed, otherwise park it for the reaper instead of
+    // synthesizing a premature empty response and freeing the handles out
+    // from under the pending work.
+    crate::server::finalize_or_park_request(&pending);
 }
 
 /// `httpsServer.address()` mirroring `http.Server.address()`.
