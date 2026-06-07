@@ -698,6 +698,7 @@ mod tests {
             getters: Vec::new(),
             setters: Vec::new(),
             static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
             computed_members: Vec::new(),

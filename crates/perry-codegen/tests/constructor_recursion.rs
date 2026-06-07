@@ -106,6 +106,7 @@ fn module_with_recursive_constructor_return() -> Module {
             getters: Vec::new(),
             setters: Vec::new(),
             static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
             computed_members: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
