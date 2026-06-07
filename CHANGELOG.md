@@ -2,6 +2,21 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1139 — spec `.length` for legacy/global function values (e.g. `parseInt.length`)
+
+Adds `builtin_global_function_length`, giving bare global function *values* their
+spec-defined `.length` when read or borrowed (`parseInt.length` was `0`, now `2`;
+also covers `structuredClone`/`setTimeout`/`setInterval` → 2 and the
+1-arg globals `eval`/`fetch`/`atob`/`btoa`/`clearTimeout`/`clearInterval`/
+`setImmediate`/`clearImmediate`/`queueMicrotask`/`parseFloat`/`isNaN`/`isFinite`/
+`encodeURI`/`decodeURI`/`encodeURIComponent`/`decodeURIComponent`/`escape`/
+`unescape` → 1). Wired through `name_fold.rs` and the `.length` member resolver in
+`expr_member.rs`. (Originally #4511's legacy-escape + `global`-alias work, but
+those already landed on `main` independently — this is the residual net-new
+`.length` slice; the conflicting duplicate `escape`/`unescape` runtime impl and
+`global` reclassification were dropped in favor of main's.) Adds
+`node-suite/globals/legacy-escape-global.ts`.
+
 ## v0.5.1138 — Promise static methods preserve receiver brand checks when borrowed
 
 Part of #4521. Borrowed `Promise` statics (`Promise.resolve`/`reject`/`all`/
