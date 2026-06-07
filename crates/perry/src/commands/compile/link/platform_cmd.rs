@@ -507,6 +507,29 @@ pub fn select_linker_command(
             .arg("-Wl,-Bsymbolic")
             .arg("-Wl,--warn-unresolved-symbols");
         c
+    } else if matches!(target, Some("linux-arm64") | Some("linux-aarch64")) {
+        // aarch64 Linux is a cross-compile (the builder host is x86_64), so the
+        // plain host `cc` won't do. Prefer the `aarch64-linux-gnu-gcc` cross
+        // toolchain (ships its own sysroot + linker); fall back to clang/cc with
+        // an explicit target triple + an optional sysroot from
+        // PERRY_LINUX_ARM64_SYSROOT. Mirrors the iOS/Windows cross pattern.
+        let cross_gcc = std::env::var("PERRY_LINUX_ARM64_CC")
+            .unwrap_or_else(|_| "aarch64-linux-gnu-gcc".to_string());
+        let cross_on_path = std::env::var_os("PATH")
+            .map(|paths| std::env::split_paths(&paths).any(|d| d.join(&cross_gcc).is_file()))
+            .unwrap_or(false);
+        if cross_on_path {
+            Command::new(cross_gcc)
+        } else {
+            let mut c = Command::new("cc");
+            c.arg("-target").arg("aarch64-unknown-linux-gnu");
+            c.arg("-fuse-ld=lld");
+            if let Ok(sysroot) = std::env::var("PERRY_LINUX_ARM64_SYSROOT") {
+                c.arg(format!("--sysroot={}", sysroot));
+                c.arg("-Wl,-dynamic-linker=/lib/ld-linux-aarch64.so.1");
+            }
+            c
+        }
     } else if is_linux {
         // Linux target: when running on Linux natively, just use "cc".
         // When cross-compiling from macOS, use clang + ld.lld + a glibc

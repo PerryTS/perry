@@ -269,8 +269,8 @@ pub(super) fn build_and_run_link(
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
     let is_android = matches!(target, Some("android"));
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
-    let is_linux =
-        matches!(target, Some("linux")) || (target.is_none() && cfg!(target_os = "linux"));
+    let is_linux = matches!(target, Some(t) if t.starts_with("linux"))
+        || (target.is_none() && cfg!(target_os = "linux"));
     let is_windows =
         matches!(target, Some("windows")) || (target.is_none() && cfg!(target_os = "windows"));
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
