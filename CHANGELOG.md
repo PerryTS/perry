@@ -2,6 +2,19 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1136 — generic `Array.prototype.fill` over array-like receivers
+
+`Array.prototype.fill.call(arrayLike, …)` (and bound/`.apply` forms) now mutates
+a generic array-like receiver in place instead of falling through to the
+member-call path that only handled real arrays. A dedicated
+`js_array_fill_generic` runtime helper writes back to the *original* receiver
+(rather than a materialized clone), wired through a new `array`/`fill_generic`
+`NativeMethodCall` lowering in `try_arraylike_receiver_method` — sitting beside
+the existing generic `copyWithin` mutator and the #4597 read-only generic
+engine. Plain objects with a `length` + indexed keys, and real arrays, both fill
+correctly (`{length:3,0:'a',1:'b',2:'c'}` → `a x x`; `[1,2,3,4].fill(9,1,3)` →
+`[1,9,9,4]`). Adds `node-suite/globals/array-generic-fill.ts`.
+
 ## v0.5.1135 — `net.Socket` instanceof for native handles + explicit Tokio runtimes
 
 Registers the ext-net socket-handle probe so dynamic/static `instanceof
