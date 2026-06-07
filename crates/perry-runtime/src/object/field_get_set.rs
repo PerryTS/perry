@@ -4570,6 +4570,13 @@ pub extern "C" fn js_object_get_field_by_name(
             // receivers — the closure-call dispatch routes through
             // `js_native_call_method` which walks the same vtable chain.
             // Refs #446 / drizzle's `(ins as any)._prepare()` chain.
+            //
+            // Method IDENTITY (test262 class/elements): `js_class_method_bind`
+            // routes user-class method-as-value reads through a single cached
+            // canonical per `(owner_class, name)`, so `c.m === C.prototype.m`
+            // and `c1.m === c2.m` hold (and an own data property of the same
+            // name still shadows it). Actual `obj.method(args)` calls don't flow
+            // through here — they lower directly to `js_native_call_method`.
             if let Ok(name) = std::str::from_utf8(key_bytes) {
                 if lookup_class_method_in_chain(class_id, name).is_some() {
                     // Allocate a fresh i8 buffer for the method name owned

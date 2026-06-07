@@ -4514,3 +4514,45 @@ pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize,
     }
     None
 }
+
+/// True when `ptr` is the prototype OBJECT of some registered class. Class
+/// methods are installed as own fields on the prototype object, so a method-as-
+/// value read whose receiver *is* the prototype must return the shared canonical
+/// method value (for identity), not the raw stored field — i.e. the own-property
+/// shadow rule applies to genuine instances, not to the prototype itself.
+pub fn is_registered_class_prototype_object(ptr: usize) -> bool {
+    if ptr < 0x100000 {
+        return false;
+    }
+    if let Ok(guard) = CLASS_PROTOTYPE_OBJECTS.read() {
+        if let Some(map) = guard.as_ref() {
+            return map.values().any(|&p| p == ptr);
+        }
+    }
+    false
+}
+
+/// Walk the prototype chain of `class_id` and return the id of the class that
+/// actually OWNS the method `name` (the prototype where it is defined). Used to
+/// make method-as-value identity stable: a class method is a single shared
+/// function object, so every read of it — `c.m`, `C.prototype.m`, `c2.m` —
+/// must resolve to the canonical value keyed by the OWNING class, not the
+/// (possibly derived) class of the receiver. Returns `None` when no class in
+/// the chain declares the method.
+pub fn method_owner_class_id(class_id: u32, name: &str) -> Option<u32> {
+    let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
+    let reg = registry.as_ref()?;
+    let mut cur = class_id;
+    for _ in 0..32 {
+        if let Some(vt) = reg.get(&cur) {
+            if vt.methods.contains_key(name) {
+                return Some(cur);
+            }
+        }
+        match get_parent_class_id(cur) {
+            Some(pid) if pid != 0 => cur = pid,
+            _ => return None,
+        }
+    }
+    None
+}

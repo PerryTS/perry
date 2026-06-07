@@ -271,27 +271,50 @@ pub(super) fn scoped_method_name(
     )
 }
 
-/// Sanitize a name for use in an LLVM symbol — replace anything that isn't
-/// `[A-Za-z0-9_]` with an underscore. LLVM IR identifiers cannot start with
-/// a digit, so prefix with `_` if the first character would be one (this
-/// happens with module names like `05_fibonacci.ts`).
+/// Sanitize a name for use in an LLVM symbol.
+///
+/// Names made up entirely of `[A-Za-z0-9_]` are returned unchanged (only a
+/// leading `_` is prepended when the first character is a digit, since LLVM
+/// identifiers cannot start with a digit — e.g. module names like
+/// `05_fibonacci.ts`). This keeps the symbols for ordinary methods/classes
+/// byte-identical, which matters because both the definition site and every
+/// call site re-derive the symbol through this function.
+///
+/// Names containing any character outside `[A-Za-z0-9_]` — chiefly private
+/// member names like `#$`, `#℘`, `#\u{6F}`, or computed/Unicode element
+/// names — are *injectively* escaped: each non-alphanumeric character
+/// (including `_`) is rewritten as `_<hex>_` and the whole thing is given a
+/// `u_` tag prefix. Previously every special character was collapsed to a
+/// single `_`, so distinct private names like `#$`, `#_` and `#℘` all
+/// mangled to the same LLVM symbol and clang rejected the module with
+/// `invalid redefinition of function`. The escaped form is unambiguous, so
+/// distinct source names always yield distinct symbols.
 pub(super) fn sanitize(name: &str) -> String {
-    let mut s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if s.chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        s.insert(0, '_');
+    let is_plain = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if is_plain {
+        let mut s = name.to_string();
+        if s.chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            s.insert(0, '_');
+        }
+        return s;
+    }
+    // Injective escape for names with special characters. Pure-`[A-Za-z0-9_]`
+    // names never reach this branch, so they can never collide with an escaped
+    // name (every escaped name carries a `_<hex>_` group that a plain name
+    // cannot reproduce).
+    let mut s = String::from("u_");
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c);
+        } else {
+            s.push('_');
+            s.push_str(&format!("{:x}", c as u32));
+            s.push('_');
+        }
     }
     s
 }

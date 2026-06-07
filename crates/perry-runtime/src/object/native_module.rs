@@ -5814,6 +5814,84 @@ pub extern "C" fn js_class_method_bind(
         }
     }
 
+    // Method IDENTITY (test262 class/elements): a class method is a single
+    // shared function object, so `c.m`, `c2.m` and `C.prototype.m` must all be
+    // the IDENTICAL value. Route every user-class method-as-value read through
+    // the per-`(owner_class, name)` cached canonical built by
+    // `class_prototype_method_value_for_name` instead of minting a fresh
+    // per-receiver closure here. The canonical captures the OWNER class's
+    // prototype-ref (capture 0); `dispatch_bound_method` recognises that marker
+    // and supplies the call-site `this` (IMPLICIT_THIS) so invocations still see
+    // the right receiver — e.g. the `this.m = this.m.bind(this)` idiom rebinds
+    // correctly, and a bare `const f = c.m; f()` runs with the spec `this`.
+    //
+    // Guard against re-entry from `class_prototype_method_value_for_name`
+    // itself: it builds the canonical by calling `build_bound_method_closure`
+    // directly (NOT this function), so the cache is populated without looping.
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        if let Ok(name) = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
+        } {
+            if bound_native_method_length(name).is_none() {
+                if let Some(class_id) = class_id_from_method_receiver(instance) {
+                    if let Some(owner) =
+                        super::class_registry::method_owner_class_id(class_id, name)
+                    {
+                        // [[Get]] order: an OWN data property of this name
+                        // shadows the prototype method. The ubiquitous
+                        // `this.m = this.m.bind(this)` idiom installs an own `m`
+                        // (a bound function), so `obj.m` must read that own value
+                        // back — not the shared prototype method. Skipping this
+                        // both returned the wrong identity (`obj.m ===
+                        // C.prototype.m` where Node says false) and looped when
+                        // the canonical re-resolved `m` by name. A class
+                        // prototype-ref receiver has no own-property bag, so this
+                        // check is naturally a no-op there.
+                        let recv_jsv = JSValue::from_bits(instance.to_bits());
+                        if recv_jsv.is_pointer()
+                            && !super::class_registry::is_registered_class_prototype_object(
+                                crate::value::js_nanbox_get_pointer(instance) as usize,
+                            )
+                        {
+                            let obj = recv_jsv.as_pointer::<ObjectHeader>();
+                            if !obj.is_null() && (obj as usize) >= 0x100000 {
+                                let key = crate::string::js_string_from_bytes(
+                                    method_name_ptr,
+                                    method_name_len as u32,
+                                );
+                                if let Some(own) =
+                                    unsafe { super::own_data_field_by_name(obj, key) }
+                                {
+                                    if own.bits() != crate::value::TAG_UNDEFINED {
+                                        return f64::from_bits(own.bits());
+                                    }
+                                }
+                            }
+                        }
+                        let canonical = class_prototype_method_value_for_name(owner, name);
+                        if canonical.to_bits() != crate::value::TAG_UNDEFINED {
+                            return canonical;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    build_bound_method_closure(instance, method_name_ptr, method_name_len)
+}
+
+/// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the
+/// named method, stamping its `.name`/`.length`. This is the raw builder used
+/// by both `js_class_method_bind` (after its canonical-identity short-circuit)
+/// and `class_prototype_method_value_for_name` (which caches one canonical per
+/// `(class_id, name)`). Keeping it separate breaks the recursion that an
+/// unconditional canonical lookup inside `js_class_method_bind` would create.
+pub(crate) fn build_bound_method_closure(
+    instance: f64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
     crate::closure::js_closure_set_capture_f64(closure, 0, instance);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
@@ -5843,6 +5921,22 @@ pub extern "C" fn js_class_method_bind(
 
 /// Resolve the owning class id for a `js_class_method_bind` receiver: a class
 /// constructor/prototype ref (INT32-tagged) or a real class instance pointer.
+/// Resolve the effective receiver for a BOUND_METHOD dispatch. When the
+/// captured receiver is a canonical class-method marker (a class prototype-ref,
+/// produced by `class_prototype_method_value_for_name`), substitute the
+/// call-site `this` (IMPLICIT_THIS) provided it is itself a dispatchable class
+/// receiver (an instance or class ref). Otherwise the captured value is the real
+/// receiver and is returned unchanged. See `dispatch_bound_method`.
+pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
+    if class_prototype_ref_id(captured).is_some() {
+        let call_this = super::js_implicit_this_get();
+        if class_id_from_method_receiver(call_this).is_some() {
+            return call_this;
+        }
+    }
+    captured
+}
+
 fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
     if let Some(cid) = class_ref_id(instance) {
         return Some(cid);
@@ -5937,7 +6031,11 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
     // descriptors. The cache below short-circuits repeat queries.
     let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
     let class_ref = class_prototype_ref_value(class_id);
-    let value = js_class_method_bind(class_ref, leaked.as_ptr(), leaked.len());
+    // Build the closure DIRECTLY (not via `js_class_method_bind`, whose
+    // canonical short-circuit would call back into this function and recurse).
+    // The captured receiver is the prototype-ref, which doubles as the
+    // "canonical class method" marker that `dispatch_bound_method` keys on.
+    let value = build_bound_method_closure(class_ref, leaked.as_ptr(), leaked.len());
     class_prototype_method_value_cache_root_store(
         class_id,
         method_name.to_string(),

@@ -10,9 +10,20 @@ use super::*;
 /// then calls js_native_call_method with the packed arguments.
 #[inline]
 pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64]) -> f64 {
-    let namespace_obj = js_closure_get_capture_f64(closure, 0);
+    let mut namespace_obj = js_closure_get_capture_f64(closure, 0);
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
+
+    // Canonical class method value (test262 method identity): a class method is
+    // a single shared function object whose captured receiver is the OWNER
+    // class's prototype-ref — a marker, not the real `this`. The actual receiver
+    // is the call-site `this` (IMPLICIT_THIS): for `const f = c.m; f()` that is
+    // the spec `this`, and for `this.m = this.m.bind(this)` the outer
+    // `dispatch_bound_function` has already set IMPLICIT_THIS to the instance so
+    // the rebind targets the right object. Ordinary `obj.method(args)` calls do
+    // NOT reach here (they lower straight to `js_native_call_method`), so this
+    // only governs method-as-value invocations.
+    namespace_obj = crate::object::canonical_bound_method_receiver(namespace_obj);
 
     // A bound-method VALUE (`const f = obj.method`) is resolved at READ time and
     // must always invoke that method — even if `obj.method` is later reassigned.
