@@ -230,7 +230,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             // `this` param; `this` is the implicit-this slot the constructor-ref
             // dispatch sets) so they match the CLASS_STATIC_ACCESSORS reader,
             // exactly like static computed accessors below.
-            if class.static_accessor_names.iter().any(|n| n == prop) {
+            if class.static_accessor_fn_ids.contains(&getter_fn.id) {
                 compile_static_method(
                     llmod,
                     class,
@@ -279,7 +279,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         for (prop, setter_fn) in &class.setters {
             let mut renamed = setter_fn.clone();
             renamed.name = format!("__set_{}", prop);
-            if class.static_accessor_names.iter().any(|n| n == prop) {
+            if class.static_accessor_fn_ids.contains(&setter_fn.id) {
                 compile_static_method(
                     llmod,
                     class,

@@ -109,6 +109,41 @@ fn is_async_dispose_symbol_index(index: &Expr) -> bool {
     }
 }
 
+/// True when `object` evaluates to an INT32-tagged class ref or class
+/// prototype ref (NaN-box tag `0x7FFE`) rather than a heap-pointer object.
+/// Such values must reach `js_object_get_field_by_name` with their tag bits
+/// intact — masking with `POINTER_MASK_I64` strips the `0x7FFE` tag and the
+/// runtime never routes to the class-static-accessor / prototype-vtable
+/// lookup, so `(class { static get 0(){} })['0']` reads `undefined`.
+///
+/// Covers three shapes:
+///   * `Expr::ClassRef` / imported-class `ExternFuncRef` — a class ref value.
+///   * `LocalGet` of a local aliased to a class (`var C = class {…}` lowers to
+///     `Let { init: ClassRef }`, recording `local_class_aliases["C"] = "C"`).
+///     A literal member name (`C.x`) folds to `PropertyGet` and resolves on its
+///     own, but an integer-like / empty key stays an `IndexGet` and lands here.
+///   * `C.prototype` of either of the above — a prototype ref value, so
+///     `C.prototype['']` reaches the instance-vtable getter.
+pub(crate) fn index_object_is_class_or_proto_ref(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    match object {
+        Expr::ClassRef(_) => true,
+        Expr::ExternFuncRef { name, .. } => ctx.class_ids.contains_key(name),
+        Expr::LocalGet(id) => ctx
+            .local_id_to_name
+            .get(id)
+            .and_then(|name| ctx.local_class_aliases.get(name))
+            .map(|cls| ctx.class_ids.contains_key(cls))
+            .unwrap_or(false),
+        Expr::PropertyGet {
+            object: inner,
+            property,
+        } if property.as_str() == "prototype" => {
+            index_object_is_class_or_proto_ref(ctx, inner.as_ref())
+        }
+        _ => false,
+    }
+}
+
 fn lower_class_method_bind(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -770,8 +805,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Expr::String(literal) = index.as_ref() {
                 // Static string key: use the interned StringPool entry
                 // so we get the same handle as obj["foo"].
-                let preserve_class_ref_bits = matches!(object.as_ref(), Expr::ClassRef(_))
-                    || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
+                let preserve_class_ref_bits =
+                    index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let obj_box = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -803,8 +838,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // key may be an SSO value (e.g. from JSON.parse, .slice, or
                 // any short-string-producing op); the runtime fn dereferences
                 // it as `*StringHeader`. Issue #214 SSO bug class.
-                let preserve_class_ref_bits = matches!(object.as_ref(), Expr::ClassRef(_))
-                    || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
+                let preserve_class_ref_bits =
+                    index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let obj_box = lower_expr(ctx, object)?;
                 let key_box = lower_expr(ctx, index)?;
                 let blk = ctx.block();
@@ -831,8 +866,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // First runtime-check whether the index is a Symbol; if so,
             // dispatch to the symbol-property side table — mirrors the
             // IndexSet branch. Otherwise fall through to string/numeric.
-            let preserve_class_ref_bits = matches!(object.as_ref(), Expr::ClassRef(_))
-                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
+            let preserve_class_ref_bits = index_object_is_class_or_proto_ref(ctx, object.as_ref());
             let obj_box = lower_expr(ctx, object)?;
             let idx_box = lower_expr(ctx, index)?;
             let blk = ctx.block();

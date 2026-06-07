@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Result};
-use perry_types::{LocalId, Type};
+use perry_types::{FuncId, LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::*;
@@ -407,6 +407,7 @@ pub fn lower_class_decl(
     let mut getters = Vec::new();
     let mut setters = Vec::new();
     let mut static_accessor_names: Vec<String> = Vec::new();
+    let mut static_accessor_fn_ids: Vec<FuncId> = Vec::new();
     let mut computed_members = Vec::new();
     let mut seen_generic_computed_member = false;
 
@@ -596,6 +597,7 @@ pub fn lower_class_decl(
                         }
                         if method.is_static {
                             static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
                         }
                         getters.push((prop_name, func));
                     }
@@ -611,6 +613,7 @@ pub fn lower_class_decl(
                         }
                         if method.is_static {
                             static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
                         }
                         setters.push((prop_name, func));
                     }
@@ -1054,6 +1057,7 @@ pub fn lower_class_decl(
         getters,
         setters,
         static_accessor_names,
+        static_accessor_fn_ids,
         static_fields,
         static_methods,
         computed_members,
@@ -1210,6 +1214,7 @@ pub fn lower_class_from_ast(
     let mut getters = Vec::new();
     let mut setters = Vec::new();
     let mut static_accessor_names: Vec<String> = Vec::new();
+    let mut static_accessor_fn_ids: Vec<FuncId> = Vec::new();
     let mut computed_members = Vec::new();
     let mut seen_generic_computed_member = false;
 
@@ -1257,6 +1262,7 @@ pub fn lower_class_from_ast(
                         }
                         if method.is_static {
                             static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
                         }
                         getters.push((prop_name, func));
                     }
@@ -1271,6 +1277,7 @@ pub fn lower_class_from_ast(
                         }
                         if method.is_static {
                             static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
                         }
                         setters.push((prop_name, func));
                     }
@@ -1403,6 +1410,30 @@ pub fn lower_class_from_ast(
         }
     }
 
+    // Mirror `lower_class_decl`: register the union of this class's accessor
+    // names (own get/set, including private and the parent chain) so the
+    // assignment recogniser in `expr_assign.rs` treats `C.prototype.<accessor>
+    // = v` as a setter INVOCATION instead of a prototype-method monkey-patch.
+    // `lower_class_decl` registers these for class declarations; without the
+    // parallel call here, a class EXPRESSION's instance setters (e.g.
+    // `var C = class { set ''(p){…} }; C.prototype[''] = v`) were silently
+    // dropped to `RegisterPrototypeMethod`. Test262 accessor-name-inst setters.
+    {
+        let mut accessor_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for (prop_name, _) in getters.iter().chain(setters.iter()) {
+            accessor_names.insert(prop_name.clone());
+        }
+        if let Some(ref parent_name) = extends_name {
+            if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
+                for a in parent_accessors {
+                    accessor_names.insert(a.clone());
+                }
+            }
+        }
+        ctx.register_class_accessor_names(name.to_string(), accessor_names.into_iter().collect());
+    }
+
     // Issue #740: synthesize __perry_cap_* capture machinery for class
     // expressions that reference enclosing-fn locals (e.g. `const Inner =
     // class { _tag = tag }` inside `function makeFactory(tag)`). Without
@@ -1435,6 +1466,7 @@ pub fn lower_class_from_ast(
         getters,
         setters,
         static_accessor_names,
+        static_accessor_fn_ids,
         static_fields,
         static_methods,
         computed_members,

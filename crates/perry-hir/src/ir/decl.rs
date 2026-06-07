@@ -197,6 +197,15 @@ pub struct Class {
     /// vtable, since a static accessor is an own property of `C`, not of
     /// `C.prototype`/instances.
     pub static_accessor_names: Vec<String>,
+    /// Function ids of the accessor entries in `getters` / `setters` that are
+    /// `static`. `static_accessor_names` alone cannot disambiguate a name that
+    /// is BOTH a static and an instance accessor (`static get 0(){} get 0(){}`)
+    /// — the by-name check classified the instance entry as static too, so both
+    /// emitted under the same `perry_static_…__get_0` symbol (LLVM "invalid
+    /// redefinition"). Keying the static/instance split on the accessor
+    /// function's unique id is unambiguous. Preserved across monomorphization
+    /// (specialize.rs copies `f.id` verbatim).
+    pub static_accessor_fn_ids: Vec<FuncId>,
     /// Static fields
     pub static_fields: Vec<ClassField>,
     /// Static methods

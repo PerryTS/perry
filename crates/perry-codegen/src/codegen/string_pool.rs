@@ -665,7 +665,7 @@ pub(super) fn emit_string_pool(
             // the LLVM symbol `perry_method_<modprefix>__<class>__<sanitize(__get_get_<prop>)>`.
             // Use the same mangling here so the registered func_ptr
             // matches the actual emitted body.
-            let is_static = class.static_accessor_names.iter().any(|n| n == prop);
+            let is_static = class.static_accessor_fn_ids.contains(&getter_fn.id);
             // Static accessors are emitted via compile_static_method (no-this
             // ABI) under a `perry_static_…` symbol keyed on `__get_<prop>`;
             // instance accessors via compile_method under `perry_method_…`.
@@ -743,7 +743,7 @@ pub(super) fn emit_string_pool(
             _ => continue,
         };
         for (prop, setter_fn) in &class.setters {
-            let is_static = class.static_accessor_names.iter().any(|n| n == prop);
+            let is_static = class.static_accessor_fn_ids.contains(&setter_fn.id);
             let llvm_name = if is_static {
                 super::helpers::scoped_static_method_name(
                     module_prefix,

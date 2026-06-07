@@ -651,7 +651,28 @@ pub(crate) fn lower_stmt(
                                     if let Some(inner_name) = inner_name_for_register {
                                         lowered_class.aliases.push(inner_name);
                                     }
+                                    // Computed member keys (`static get [expr]()`,
+                                    // `[expr]() {}`) register at runtime against the
+                                    // class id — the general class-expression arm in
+                                    // `lower_expr.rs` sequences these in front of the
+                                    // `ClassRef`. This `var C = class {…}` fast path
+                                    // emits a bare `ClassRef` binding instead, so emit
+                                    // the same registrations here or the computed
+                                    // accessors/methods never reach the side tables
+                                    // (Test262 accessor-name-{static,inst}/computed).
+                                    let computed_member_registrations: Vec<Expr> = lowered_class
+                                        .computed_members
+                                        .iter()
+                                        .map(|member| {
+                                            class_computed_member_registration_expr(
+                                                &bind_name, member,
+                                            )
+                                        })
+                                        .collect();
                                     push_class_dedup(module, lowered_class);
+                                    for reg in computed_member_registrations {
+                                        module.init.push(Stmt::Expr(reg));
+                                    }
                                     // Register the alias so `new X()` → `new X()`
                                     // (no-op lookup, but marks the binding as a class).
                                     ctx.class_expr_aliases
