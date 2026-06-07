@@ -3959,7 +3959,7 @@ App('Hello Hone', () => {\n\
     file("/documents/tsconfig.json",
 '{\n\
   "compilerOptions": {\n\
-    "target": "ES2022",\n\
+    "target": "ES2023",\n\
     "module": "ESNext",\n\
     "moduleResolution": "bundler",\n\
     "strict": true,\n\
