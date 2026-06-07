@@ -1781,7 +1781,18 @@ pub extern "C" fn js_object_get_own_field_or_undef(
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        if obj.is_null() || (obj as usize) < 0x10000 {
+        // Reject anything in the native / Web-Fetch small-handle range
+        // (< 0x100000). Headers/Request/Response/Blob and node:http handles
+        // are NaN-boxed POINTER_TAG values holding a small registry id in
+        // [0x40000, 0x100000) (perry-stdlib `FETCH_HANDLE_ID_{START,END}`),
+        // not heap object pointers. The old `< 0x10000` floor let a Headers
+        // handle (first id = 0x40000) through; this fn then dereferenced
+        // `[handle - GC_HEADER_SIZE]` as a GcHeader and segfaulted. macOS's
+        // `is_valid_obj_ptr` floor (0x200_0000_0000) masked this, but on
+        // Linux/Android/iOS the floor is 0x1000, so the bad deref reached.
+        // 0x100000 matches the cutoff in `js_object_get_field_by_name`
+        // (field_get_set.rs) and `class_registry` handle guards.
+        if obj.is_null() || (obj as usize) < 0x100000 {
             return f64::from_bits(TAG_UNDEF);
         }
         if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
