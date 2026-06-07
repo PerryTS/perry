@@ -15,6 +15,23 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
+    // A Proxy is a small registered id in [0xF0000, 0x100000), not a heap
+    // ObjectHeader. Dereferencing it below (GC header / keys_array reads) would
+    // segfault. Route `delete proxy.k` / `delete proxy[k]` through the proxy
+    // `deleteProperty` trap. (#2846-family Proxy crash cluster.)
+    {
+        let addr = obj as u64;
+        if (0xF0000..0x100000).contains(&addr) {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 =
+                    f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                let r = crate::proxy::js_proxy_delete(boxed, key_f64);
+                return if crate::value::js_is_truthy(r) != 0 { 1 } else { 0 };
+            }
+        }
+    }
     if (obj as usize) < 0x10000 {
         unsafe {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
@@ -212,6 +229,21 @@ pub extern "C" fn js_object_delete_field(
 /// Returns 1 if successful, 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
+    // Proxy receiver (small registered id) — route through the proxy
+    // `deleteProperty` trap before any key coercion that would deref the fake
+    // pointer. Handles symbol keys too (the string path also funnels into
+    // `js_object_delete_field`, which has its own guard).
+    {
+        let addr = obj as u64;
+        if (0xF0000..0x100000).contains(&addr) {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let r = crate::proxy::js_proxy_delete(boxed, key);
+                return if crate::value::js_is_truthy(r) != 0 { 1 } else { 0 };
+            }
+        }
+    }
     let key_val = JSValue::from_bits(key.to_bits());
 
     // If the key is a string, use js_object_delete_field. #1781: accept

@@ -44,6 +44,17 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
 /// Object.preventExtensions(obj) — sets the no-extend flag. Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
+    // A Proxy is a small registered id, not a heap object — `extract_obj_ptr`
+    // yields the fake pointer and `gc_header_for` would deref unmapped memory.
+    // Route through the `[[PreventExtensions]]` trap; per spec throw a TypeError
+    // if it reports failure, then return the proxy. (Proxy crash cluster.)
+    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        let ok = crate::proxy::js_reflect_prevent_extensions(obj_value);
+        if crate::value::js_is_truthy(ok) == 0 {
+            throw_object_type_error(b"'preventExtensions' on proxy: trap returned falsish");
+        }
+        return obj_value;
+    }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if !obj.is_null() && (obj as usize) > 0x10000 {
@@ -97,6 +108,16 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
 pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // Proxy receiver: route through the `[[IsExtensible]]` trap rather than
+    // dereferencing the fake pointer. (Proxy crash cluster.)
+    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        let r = crate::proxy::js_reflect_is_extensible(obj_value);
+        return if crate::value::js_is_truthy(r) != 0 {
+            f64::from_bits(TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) <= 0x10000 {

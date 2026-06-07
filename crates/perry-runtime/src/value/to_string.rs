@@ -504,6 +504,19 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
         // objects fall back to "[object Object]".
         let ptr: *const u8 = jsval.as_pointer();
         if !ptr.is_null() && (ptr as usize) >= 0x10000 {
+            // A Proxy is a small registered id, not a heap object — the GC-header
+            // probes / ToPrimitive dispatch below would deref the fake pointer
+            // and segfault (e.g. `String(proxy)`). Default `ToString` has no
+            // toString/valueOf trap of its own, so resolve to the target and
+            // stringify that ("[object Object]" for an ordinary object target),
+            // which matches Node for the trap-less case. (Proxy crash cluster.)
+            if crate::proxy::js_proxy_is_proxy(value) != 0 {
+                let target = crate::proxy::js_proxy_target(value);
+                if target.to_bits() != value.to_bits() {
+                    return js_jsvalue_to_string(target);
+                }
+                return crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15);
+            }
             // Symbols: detect via the side-table before any GC header read.
             if crate::symbol::is_registered_symbol(ptr as usize) {
                 return unsafe {

@@ -113,6 +113,15 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             super::has_own_helpers::throw_to_object_nullish_type_error();
         }
 
+        // A Proxy is a small registered id, not a heap object — the ordinary
+        // resolution below would deref the fake pointer and segfault. The
+        // Reflect entry point shares `[[GetOwnProperty]]` semantics (trap +
+        // invariant checks + FromPropertyDescriptor) and forwards non-proxies
+        // straight back here, so there's no recursion. (Proxy crash cluster.)
+        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+            return crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
+        }
+
         // #2818: string primitives box to String objects whose own
         // properties are the index keys "0".."len-1" (writable:false,
         // enumerable:true, configurable:false) plus "length"

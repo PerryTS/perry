@@ -1896,6 +1896,20 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let obj_val = JSValue::from_bits(obj.to_bits());
     let key_val = JSValue::from_bits(key.to_bits());
 
+    // A Proxy is a small registered id (POINTER_TAG with a tiny pointer), not a
+    // heap object. Falling through to the symbol/class/pointer paths below would
+    // deref the fake pointer (or call symbol helpers that do) and segfault. Route
+    // `key in proxy` through the proxy `has` trap and ToBoolean-coerce, matching
+    // `Reflect.has`.
+    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
+        let r = crate::proxy::js_proxy_has(obj, key);
+        return if crate::value::js_is_truthy(r) != 0 {
+            nanbox_true
+        } else {
+            nanbox_false
+        };
+    }
+
     // #1758: a SYMBOL key. The class-ref path below + the keys_array scan
     // (string keys only) can't see a class-object's static `[Sym]` props nor
     // ones inherited from a class-expression parent. Delegate to the symbol

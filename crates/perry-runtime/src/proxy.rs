@@ -572,7 +572,12 @@ pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
         let trap_result = js_closure_call3(closure_from(trap), target, key, value);
         return coerce_trap_bool(trap_result);
     }
-    // No set trap — write to target and report the ordinary [[Set]] result.
+    // No set trap — forward to the target's `[[Set]]`. When the target is
+    // itself a Proxy, recurse through the proxy dispatch (its own trap or
+    // target) rather than `ordinary_set`, which would deref the fake pointer.
+    if lookup(target).is_some() {
+        return js_proxy_set(target, key, value);
+    }
     reflect_ordinary_set(target, key, value)
 }
 
@@ -1522,7 +1527,12 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64
             let trap_result = js_closure_call3(closure_from(trap), target, key, descriptor);
             return coerce_trap_bool(trap_result);
         }
-        // No trap — define on the underlying target with ordinary semantics.
+        // No trap — define on the underlying target. When the target is itself
+        // a Proxy, recurse through the proxy dispatch rather than the ordinary
+        // path, which would deref the fake pointer.
+        if lookup(target).is_some() {
+            return js_reflect_define_property(target, key, descriptor);
+        }
         return crate::object::reflect_define_property(target, key, descriptor);
     }
     crate::object::reflect_define_property(obj, key, descriptor)
@@ -1703,18 +1713,26 @@ pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
 /// target reports `true` after recording the change on its underlying target.
 #[no_mangle]
 pub extern "C" fn js_reflect_set_prototype_of(target: f64, proto: f64) -> f64 {
-    // Resolve a proxy to its underlying target.
-    let real = if let Some(id) = lookup(target) {
-        PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|o| o.as_ref())
-                .map(|e| e.target)
-                .unwrap_or(f64::from_bits(TAG_UNDEFINED))
-        })
-    } else {
-        target
-    };
+    // Resolve a proxy to its underlying target. A proxy's target can itself be
+    // a proxy, so unwrap to the innermost non-proxy object — operating on a
+    // proxy via the ordinary `obj_value_no_extend` / set-prototype helpers below
+    // would deref the fake pointer and segfault. (setPrototypeOf trap dispatch
+    // is out of scope; this just avoids the crash.)
+    let mut real = target;
+    for _ in 0..64 {
+        match lookup(real) {
+            Some(id) => {
+                real = PROXIES.with(|p| {
+                    p.borrow()
+                        .get(id as usize)
+                        .and_then(|o| o.as_ref())
+                        .map(|e| e.target)
+                        .unwrap_or(f64::from_bits(TAG_UNDEFINED))
+                });
+            }
+            None => break,
+        }
+    }
 
     // Target must be an object.
     if !reflect_value_is_object(real) {

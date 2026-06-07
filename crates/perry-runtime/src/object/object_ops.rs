@@ -517,6 +517,19 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             super::has_own_helpers::throw_to_object_nullish_type_error();
         }
 
+        // A Proxy is a small registered id, not a heap object — route
+        // `hasOwnProperty` through `[[GetOwnProperty]]` (a present own property
+        // is one whose descriptor is not undefined) rather than dereferencing
+        // the fake pointer. (Proxy crash cluster.)
+        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+            let desc = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
+            return f64::from_bits(if desc.to_bits() != crate::value::TAG_UNDEFINED {
+                TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
+        }
+
         // Symbol-keyed lookup: route through SYMBOL_PROPERTIES side table.
         if crate::symbol::js_is_symbol(key_value) != 0 {
             // ClassRef receivers carry class_id in the low 32 bits.
@@ -698,6 +711,29 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
         if obj_jv.is_null() || obj_jv.is_undefined() {
             super::has_own_helpers::throw_to_object_nullish_type_error();
+        }
+
+        // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
+        // report its `enumerable` attribute (absent property → false) rather
+        // than dereferencing the fake pointer. (Proxy crash cluster.)
+        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+            let desc = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
+            if desc.to_bits() == crate::value::TAG_UNDEFINED {
+                return f64::from_bits(TAG_FALSE);
+            }
+            let desc_ptr = extract_obj_ptr(desc);
+            if desc_ptr.is_null() {
+                return f64::from_bits(TAG_FALSE);
+            }
+            let enum_key = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+            let enum_v =
+                js_object_get_field_by_name(desc_ptr as *const ObjectHeader, enum_key);
+            return f64::from_bits(if crate::value::js_is_truthy(f64::from_bits(enum_v.bits())) != 0
+            {
+                TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
         }
 
         let key_str = crate::builtins::js_string_coerce(key_value);
@@ -939,6 +975,31 @@ pub extern "C" fn js_object_define_property(
     descriptor_value: f64,
 ) -> f64 {
     unsafe {
+        // A Proxy receiver is a small registered id, not a heap object — it
+        // fails the `value_is_object_like` test below (so it would wrongly throw
+        // "called on non-object") and the ordinary paths would deref the fake
+        // pointer and segfault. Per spec, Object.defineProperty(proxy, …):
+        // validate the descriptor (ToPropertyDescriptor), invoke the
+        // `[[DefineOwnProperty]]` trap, and throw a TypeError if it reports
+        // failure. (Proxy crash cluster.)
+        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+            if !value_is_object_like(descriptor_value) {
+                let desc = describe_value_for_type_error(descriptor_value);
+                throw_object_type_error_with_suffix(
+                    "Property description must be an object: ",
+                    &desc,
+                );
+            }
+            validate_property_descriptor(descriptor_value);
+            let ok = crate::proxy::js_reflect_define_property(obj_value, key_value, descriptor_value);
+            if crate::value::js_is_truthy(ok) == 0 {
+                throw_object_type_error(
+                    b"'defineProperty' on proxy: trap returned falsish",
+                );
+            }
+            return obj_value;
+        }
+
         // #2817: ES Object.defineProperty validation.
         //   1. Target must be an object (or class-ref / function — all objects
         //      in Node). Primitives / null / undefined throw.
@@ -2194,6 +2255,16 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     let obj_bits = obj_value.to_bits();
     let proto_bits = proto.to_bits();
+
+    // A Proxy receiver is a small registered id, not a heap object — the
+    // recording path below would deref the fake pointer and segfault. Route
+    // through the Reflect entry (which resolves the proxy to its target) and
+    // return the proxy per Object.setPrototypeOf's contract. (Proxy crash
+    // cluster.)
+    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        crate::proxy::js_reflect_set_prototype_of(obj_value, proto);
+        return obj_value;
+    }
 
     // #2820: `Object.setPrototypeOf(null | undefined, proto)` throws
     // `TypeError: Object.setPrototypeOf called on null or undefined`.
