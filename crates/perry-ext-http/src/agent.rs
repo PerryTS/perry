@@ -491,36 +491,6 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_method(
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_http_agent_dispatch_method(
-    handle: Handle,
-    method_ptr: *const u8,
-    method_len: usize,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> f64 {
-    if method_ptr.is_null() || method_len == 0 || get_handle_mut::<AgentHandle>(handle).is_none() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let method = String::from_utf8_lossy(std::slice::from_raw_parts(method_ptr, method_len));
-    match method.as_ref() {
-        "getName" => {
-            let options = if args_len > 0 && !args_ptr.is_null() {
-                *args_ptr
-            } else {
-                f64::from_bits(TAG_UNDEFINED)
-            };
-            let ptr = js_http_agent_get_name(handle, options);
-            f64::from_bits(JsValue::from_string_ptr(ptr).bits())
-        }
-        "destroy" => pointer_value(js_http_agent_destroy(handle)),
-        "close" | "keepSocketAlive" | "reuseSocket" => {
-            pointer_value(js_http_agent_noop_self(handle))
-        }
-        _ => f64::from_bits(TAG_UNDEFINED),
-    }
-}
-
 // ------------------------------------------------------------------
 // Constructor (with validation)
 // ------------------------------------------------------------------
