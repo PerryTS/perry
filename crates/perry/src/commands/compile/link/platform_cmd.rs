@@ -273,6 +273,13 @@ pub fn select_linker_command(
             .arg("-F")
             .arg(format!("{}/System/Library/Frameworks", sysroot))
             .arg("-lSystem")
+            // Native C++ deps (bloom engine, Jolt physics, …) reference libc++ /
+            // libc++abi symbols (exceptions, RTTI, operator new/delete, vtables).
+            // ld64 only auto-links those from C++ *inputs*; we hand it .o/.a, so
+            // request them explicitly — mirrors the native (on-Mac) iOS branch.
+            // The .tbd stubs live in the sysroot usr/lib already on the -L path.
+            .arg("-lc++")
+            .arg("-lc++abi")
             .arg("-dead_strip");
         c
     } else if is_ios {
@@ -380,6 +387,13 @@ pub fn select_linker_command(
             .arg("-F")
             .arg(format!("{}/System/Library/Frameworks", sysroot))
             .arg("-lSystem")
+            // Native C++ deps (bloom engine, Jolt physics, …) reference libc++ /
+            // libc++abi symbols (exceptions, RTTI, operator new/delete, vtables).
+            // ld64 only auto-links those from C++ *inputs*; we hand it .o/.a, so
+            // request them explicitly — mirrors the native (on-Mac) iOS branch.
+            // The .tbd stubs live in the sysroot usr/lib already on the -L path.
+            .arg("-lc++")
+            .arg("-lc++abi")
             .arg("-dead_strip");
         c
     } else if is_tvos {
@@ -689,6 +703,13 @@ pub fn select_linker_command(
             .arg("-F")
             .arg(format!("{}/System/Library/Frameworks", sysroot))
             .arg("-lSystem")
+            // Native C++ deps (bloom engine, Jolt physics, …) reference libc++ /
+            // libc++abi symbols (exceptions, RTTI, operator new/delete, vtables).
+            // ld64 only auto-links those from C++ *inputs*; we hand it .o/.a, so
+            // request them explicitly — mirrors the native (on-Mac) iOS branch.
+            // The .tbd stubs live in the sysroot usr/lib already on the -L path.
+            .arg("-lc++")
+            .arg("-lc++abi")
             .arg("-dead_strip");
         c
     } else {
