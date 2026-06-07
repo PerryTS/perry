@@ -114,6 +114,19 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_join", I64, &[I64, I64]);
     module.declare_function("js_array_join_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_forEach", VOID, &[I64, I64]);
+    // `thisArg`-aware wrappers for the dense callback methods: same as the base
+    // `js_array_<m>` but the trailing DOUBLE is the callback `this` binding,
+    // installed for the iteration. Emitted only when source passes a 2nd arg.
+    module.declare_function("js_array_forEach_this", VOID, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_map_this", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_filter_this", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_some_this", DOUBLE, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_every_this", DOUBLE, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_find_this", DOUBLE, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_findIndex_this", I32, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_find_last_this", DOUBLE, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_find_last_index_this", I32, &[I64, I64, DOUBLE]);
+    module.declare_function("js_array_flatMap_this", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_array_fill", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_fill_range", I64, &[I64, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_array_delete", I32, &[I64, I32]);

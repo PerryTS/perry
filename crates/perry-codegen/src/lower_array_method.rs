@@ -16,6 +16,17 @@ use crate::expr::{
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
+/// Lower the optional `thisArg` (2nd positional argument) of a dense Array
+/// callback method. Must be called *after* the callback is lowered (source
+/// evaluation order: receiver, callback, thisArg) and *before* `ctx.block()`
+/// is borrowed. Returns the boxed value name, or `None` when absent.
+fn lower_opt_this_arg(ctx: &mut FnCtx<'_>, args: &[Expr]) -> Result<Option<String>> {
+    Ok(match args.get(1) {
+        Some(e) => Some(lower_expr(ctx, e)?),
+        None => None,
+    })
+}
+
 /// Lower `arr.method(args…)` for an array-typed receiver. Currently
 /// supported: `pop`, `join`. `push` is handled separately by the HIR
 /// `Expr::ArrayPush` variant (Phase B.7).
@@ -56,27 +67,30 @@ pub(crate) fn lower_array_method(
             // `arr.some()` / `arr.every()` with no callback must throw a
             // runtime TypeError ("undefined is not a function"), not fail to
             // compile — pad a missing callback with `undefined` and let
-            // `js_validate_array_callback` raise it. (A trailing `thisArg`
-            // is accepted but not yet applied.)
+            // `js_validate_array_callback` raise it.
             let cb_box = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            let runtime_fn = if property == "some" {
-                "js_array_some"
+            let (base_fn, this_fn) = if property == "some" {
+                ("js_array_some", "js_array_some_this")
             } else {
-                "js_array_every"
+                ("js_array_every", "js_array_every_this")
             };
-            Ok(blk.call(
-                DOUBLE,
-                runtime_fn,
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            ))
+            Ok(match &this_box {
+                Some(tb) => blk.call(
+                    DOUBLE,
+                    this_fn,
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(DOUBLE, base_fn, &[(I64, &recv_handle), (I64, &cb_handle)]),
+            })
         }
         "toString" => {
             // arr.toString() == arr.join(",")
@@ -236,15 +250,23 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            let result = blk.call(
-                I64,
-                "js_array_flatMap",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            );
+            let result = match &this_box {
+                Some(tb) => blk.call(
+                    I64,
+                    "js_array_flatMap_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(
+                    I64,
+                    "js_array_flatMap",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            };
             Ok(nanbox_pointer_inline(blk, &result))
         }
         // -------- Safety-net handlers for methods that normally arrive --------
@@ -257,15 +279,23 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            Ok(blk.call(
-                DOUBLE,
-                "js_array_find",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            ))
+            Ok(match &this_box {
+                Some(tb) => blk.call(
+                    DOUBLE,
+                    "js_array_find_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(
+                    DOUBLE,
+                    "js_array_find",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            })
         }
         "findIndex" => {
             // 0-arg → runtime TypeError (pad undefined), not compile-fail.
@@ -274,15 +304,23 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            let i32_v = blk.call(
-                I32,
-                "js_array_findIndex",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            );
+            let i32_v = match &this_box {
+                Some(tb) => blk.call(
+                    I32,
+                    "js_array_findIndex_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(
+                    I32,
+                    "js_array_findIndex",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            };
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "findLast" => {
@@ -292,15 +330,23 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            Ok(blk.call(
-                DOUBLE,
-                "js_array_find_last",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            ))
+            Ok(match &this_box {
+                Some(tb) => blk.call(
+                    DOUBLE,
+                    "js_array_find_last_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(
+                    DOUBLE,
+                    "js_array_find_last",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            })
         }
         "findLastIndex" => {
             // 0-arg → runtime TypeError (pad undefined), not compile-fail.
@@ -309,25 +355,40 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            let i32_v = blk.call(
-                I32,
-                "js_array_find_last_index",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            );
+            let i32_v = match &this_box {
+                Some(tb) => blk.call(
+                    I32,
+                    "js_array_find_last_index_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(
+                    I32,
+                    "js_array_find_last_index",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            };
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "reduce" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.reduce expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError ("undefined is not a function") via the
+            // callback validator below, not a compile error: Node rejects
+            // `[].reduce()` at runtime, so pad a missing callback with undefined.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let (has_initial, initial_box) = if args.len() == 2 {
                 let init = lower_expr(ctx, &args[1])?;
                 (1i32, init)
@@ -351,13 +412,19 @@ pub(crate) fn lower_array_method(
             ))
         }
         "reduceRight" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.reduceRight expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError via the validator (Node rejects
+            // `[].reduceRight()` at runtime), not a compile error.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let (has_initial, initial_box) = if args.len() == 2 {
                 let init = lower_expr(ctx, &args[1])?;
                 (1i32, init)
@@ -387,6 +454,7 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -397,11 +465,18 @@ pub(crate) fn lower_array_method(
                 "js_validate_array_map_callback",
                 &[(I64, &recv_handle), (DOUBLE, &cb_box)],
             );
-            let result = blk.call(
-                I64,
-                "js_array_map",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            );
+            let result = match &this_box {
+                Some(tb) => blk.call(
+                    I64,
+                    "js_array_map_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(
+                    I64,
+                    "js_array_map",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            };
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "filter" => {
@@ -411,15 +486,23 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            let result = blk.call(
-                I64,
-                "js_array_filter",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            );
+            let result = match &this_box {
+                Some(tb) => blk.call(
+                    I64,
+                    "js_array_filter_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call(
+                    I64,
+                    "js_array_filter",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            };
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "forEach" => {
@@ -429,14 +512,21 @@ pub(crate) fn lower_array_method(
             } else {
                 crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
             };
+            let this_box = lower_opt_this_arg(ctx, args)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
             let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            blk.call_void(
-                "js_array_forEach",
-                &[(I64, &recv_handle), (I64, &cb_handle)],
-            );
+            match &this_box {
+                Some(tb) => blk.call_void(
+                    "js_array_forEach_this",
+                    &[(I64, &recv_handle), (I64, &cb_handle), (DOUBLE, tb)],
+                ),
+                None => blk.call_void(
+                    "js_array_forEach",
+                    &[(I64, &recv_handle), (I64, &cb_handle)],
+                ),
+            }
             // forEach returns undefined
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
@@ -484,13 +574,19 @@ pub(crate) fn lower_array_method(
             Ok(blk.bitcast_i64_to_double(&tagged))
         }
         "indexOf" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.indexOf expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let val_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → `indexOf(undefined)` (Node: `[undefined].indexOf() === 0`),
+            // not a compile error. Pad a missing searchElement with undefined.
+            let val_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
             // when present; otherwise has_from=0 with a placeholder DOUBLE.
             let (from_box, has_from) = if args.len() == 2 {
@@ -519,13 +615,19 @@ pub(crate) fn lower_array_method(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "lastIndexOf" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.lastIndexOf expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let val_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → `lastIndexOf(undefined)` (Node: `[undefined].lastIndexOf()
+            // === 0`), not a compile error.
+            let val_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             // Optional fromIndex: with has_from=1 pass the lowered index;
             // when absent pass has_from=0 (runtime defaults to length-1) and
             // reuse `val_box` as an ignored placeholder DOUBLE operand.

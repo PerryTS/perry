@@ -992,3 +992,163 @@ pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64
 #[used]
 static KEEP_VALIDATE_ARRAY_MAP_CALLBACK: extern "C" fn(i64, f64) -> i64 =
     js_validate_array_map_callback;
+
+// ---------------------------------------------------------------------------
+// `thisArg`-aware wrappers for the dense-array callback methods.
+//
+// The hot `js_array_<m>` paths above bind no callback `this` — they are reached
+// from `arr.<m>(cb)` with no second argument. When source passes an explicit
+// `thisArg` (`arr.forEach(cb, obj)`, ECMA-262 §23.1.3), codegen routes here:
+// each wrapper installs `thisArg` as the ambient `this` (read by the callback
+// via `js_implicit_this_get`) for the duration of the iteration, then restores
+// the prior binding. The base function does the actual work, so hole/length
+// semantics stay in one place. No `thisArg` ⇒ codegen keeps calling the
+// 2-argument base directly (unchanged behavior, incl. sloppy-mode global
+// `this`). reduce/reduceRight take no `thisArg` and are intentionally absent.
+struct CallbackThisGuard(f64);
+impl CallbackThisGuard {
+    #[inline]
+    fn new(this_arg: f64) -> Self {
+        CallbackThisGuard(crate::object::js_implicit_this_set(this_arg))
+    }
+}
+impl Drop for CallbackThisGuard {
+    #[inline]
+    fn drop(&mut self) {
+        crate::object::js_implicit_this_set(self.0);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_forEach_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_forEach(arr, callback);
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_map_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> *mut ArrayHeader {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_map(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_filter_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> *mut ArrayHeader {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_filter(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_some_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_some(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_every_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_every(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_find_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_find(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_findIndex_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> i32 {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_findIndex(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_find_last_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_find_last(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_find_last_index_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> i32 {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_find_last_index(arr, callback)
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_flatMap_this(
+    arr: *const ArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> *mut ArrayHeader {
+    let _g = CallbackThisGuard::new(this_arg);
+    js_array_flatMap(arr, callback)
+}
+
+// Pin the `thisArg` wrappers against dead-strip in the default (codegen-only
+// reference) compile path — `#[no_mangle]` alone is not enough once the
+// whole-program bitcode is re-linked (see #3320).
+#[used]
+static KEEP_ARRAY_CB_THIS_VOID: extern "C" fn(*const ArrayHeader, *const ClosureHeader, f64) =
+    js_array_forEach_this;
+#[used]
+static KEEP_ARRAY_CB_THIS_PTR: [extern "C" fn(
+    *const ArrayHeader,
+    *const ClosureHeader,
+    f64,
+) -> *mut ArrayHeader; 3] = [
+    js_array_map_this,
+    js_array_filter_this,
+    js_array_flatMap_this,
+];
+#[used]
+static KEEP_ARRAY_CB_THIS_F64: [extern "C" fn(
+    *const ArrayHeader,
+    *const ClosureHeader,
+    f64,
+) -> f64; 4] = [
+    js_array_some_this,
+    js_array_every_this,
+    js_array_find_this,
+    js_array_find_last_this,
+];
+#[used]
+static KEEP_ARRAY_CB_THIS_I32: [extern "C" fn(
+    *const ArrayHeader,
+    *const ClosureHeader,
+    f64,
+) -> i32; 2] = [js_array_findIndex_this, js_array_find_last_index_this];

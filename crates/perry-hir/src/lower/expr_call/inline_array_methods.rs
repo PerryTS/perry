@@ -37,7 +37,9 @@ pub(super) fn try_inline_array_methods(
                             }));
                         }
                         "map" => {
-                            if !args.is_empty() {
+                            // 1-arg only; a 2nd `thisArg` falls through to the
+                            // generic call → `lower_array_method` (binds `this`).
+                            if args.len() == 1 {
                                 let cb = args.into_iter().next().unwrap();
                                 let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                 return Ok(Ok(Expr::ArrayMap {
@@ -47,7 +49,9 @@ pub(super) fn try_inline_array_methods(
                             }
                         }
                         "filter" => {
-                            if !args.is_empty() {
+                            // 1-arg only; a 2nd `thisArg` falls through to the
+                            // generic call → `lower_array_method` (binds `this`).
+                            if args.len() == 1 {
                                 let cb = args.into_iter().next().unwrap();
                                 let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                 return Ok(Ok(Expr::ArrayFilter {
@@ -57,7 +61,9 @@ pub(super) fn try_inline_array_methods(
                             }
                         }
                         "forEach" => {
-                            if !args.is_empty() {
+                            // 1-arg only; a 2nd `thisArg` falls through to the
+                            // generic call → `lower_array_method` (binds `this`).
+                            if args.len() == 1 {
                                 let cb = args.into_iter().next().unwrap();
                                 let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                 return Ok(Ok(Expr::ArrayForEach {
@@ -67,7 +73,9 @@ pub(super) fn try_inline_array_methods(
                             }
                         }
                         "find" => {
-                            if !args.is_empty() {
+                            // 1-arg only; a 2nd `thisArg` falls through to the
+                            // generic call → `lower_array_method` (binds `this`).
+                            if args.len() == 1 {
                                 let cb = args.into_iter().next().unwrap();
                                 let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                 return Ok(Ok(Expr::ArrayFind {

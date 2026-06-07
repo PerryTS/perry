@@ -2,6 +2,60 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1127 — fix(array): Array.prototype callback `thisArg`, array-like `ToLength`, spec op-order + 0-arg validation
+
+Closes a batch of `built-ins/Array/prototype/*` test262 gaps in the callback /
+array-like / validation clusters. Focused `built-ins/Array` test262 parity
+(test262_subset radar) moved **61.5% → 72.5%** (~290 fewer runtime/compile
+failures); zero regressions in the forEach before/after diff.
+
+**1. `thisArg` on the dense-array callback methods.** `arr.forEach(cb, thisArg)`
+(and `map`/`filter`/`some`/`every`/`find`/`findIndex`/`findLast`/`findLastIndex`/
+`flatMap`) silently dropped the second `thisArg` argument — the callback's `this`
+was whatever ambient `this` happened to be active, so the entire
+`15.4.4.N-5-*` ("thisArg is X") test series failed. The hot `js_array_<m>(arr,
+cb)` runtime entry points take no `this`, and the HIR fast-path variants
+(`Expr::ArrayForEach { array, callback }` …) carry no `thisArg` field.
+
+- Runtime: added `js_array_<m>_this(arr, cb, this_arg)` wrappers
+  (`array/iter_methods.rs`) that install `this_arg` via the implicit-`this`
+  thread-local (a `Drop` guard restores the prior binding) and delegate to the
+  existing loop, so hole/length semantics stay in one place. `#[used]` anchors
+  pin them against dead-strip on the default bitcode-relink path (#3320).
+- Codegen: `lower_array_method` now lowers the optional 2nd arg and calls the
+  `_this` variant when present; the no-`thisArg` path is byte-identical.
+- HIR: the array-method folds (`array_only_methods`, `local_array_methods`,
+  `inline_array_methods`, `imported_array_methods`, `array_fold`) only fold to
+  the fast-path variant for the 1-arg form now; a 2-arg call falls through to
+  the generic member call → `lower_array_method` (which binds `this`).
+  `reduce`/`reduceRight` (whose 2nd arg is the initial value) are unchanged.
+
+**2. Array-like `LengthOfArrayLike` = `ToLength(ToNumber(...))`.** The generic
+`Array.prototype.<m>.call(arrayLike, …)` engine (`array/generic.rs`) read the
+`length` property and fed the raw NaN-boxed value straight to `ToLength`. String
+/ boolean / null `length` values are themselves NaN bit-patterns, so
+`length: "2"` / `"0x0002"` collapsed to 0 and iteration was skipped. Now runs
+`js_number_coerce` (ToNumber) first; an un-coercible object `length`
+(`{valueOf,toString}` returning objects) correctly throws a `TypeError`.
+
+**3. Spec operation order.** All generic array-like callback methods computed the
+`IsCallable(callbackfn)` check before `LengthOfArrayLike`. Per ECMA-262 §23.1.3,
+`LengthOfArrayLike` (step 2) runs first, so a `length` getter's side effects /
+throw are observed even when the callback is non-callable. Swapped the order.
+
+**4. 0-arg validation (compile-fail → runtime semantics).**
+`[].reduce()` / `[].reduceRight()` compile-failed instead of throwing a
+`TypeError` at runtime; `[undefined].indexOf()` / `.lastIndexOf()` compile-failed
+instead of searching for `undefined` (returns `0`). These `lower_array_method`
+arms now pad the missing argument and defer to the runtime (validator throws for
+the callback methods; the search proceeds for indexOf/lastIndexOf), matching
+Node.
+
+Known remaining `built-ins/Array/prototype` clusters (follow-ups): boxed-
+primitive / exotic-object receivers (`-1-*`: `forEach.call(false, cb)`,
+Date/RegExp/Error expandos), and live-mutation / index-getter / inherited-
+`HasProperty` during iteration (`-7-*`).
+
 ## v0.5.1126 — fix(class): hide private members from reflection + unblock exotic-private-name compilation
 
 Two fixes for class **private members** (`#x` fields, `#m()` methods, `get/set #a`

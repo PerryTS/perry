@@ -339,7 +339,12 @@ pub(super) fn try_local_array_methods(
                                     }
                                     _ => false,
                                 };
-                                if !is_map_or_set && !args.is_empty() {
+                                // Only fold the fast path for the 1-arg form. With
+                                // an explicit `thisArg` (2nd arg), fall through to
+                                // the generic call → `lower_array_method`, which
+                                // binds the callback `this` (the fast-path
+                                // `Expr::ArrayForEach` carries no `thisArg`).
+                                if !is_map_or_set && args.len() == 1 {
                                     let cb = args.into_iter().next().unwrap();
                                     let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                     return Ok(Ok(Expr::ArrayForEach {
@@ -406,7 +411,10 @@ pub(super) fn try_local_array_methods(
                                                 index: Box::new(args.into_iter().next().unwrap()),
                                             }));
                                         }
-                                    } else if method_name != "at" && !args.is_empty() {
+                                    } else if method_name != "at" && args.len() == 1 {
+                                        // 1-arg only: a 2nd `thisArg` falls through
+                                        // to the generic call → `lower_array_method`
+                                        // (binds the callback `this`).
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         let array = Box::new(Expr::LocalGet(array_id));
@@ -428,7 +436,9 @@ pub(super) fn try_local_array_methods(
                                 }
                             }
                             "flatMap" => {
-                                if !args.is_empty() {
+                                // 1-arg only; a 2nd `thisArg` falls through to the
+                                // generic call → `lower_array_method`.
+                                if args.len() == 1 {
                                     let cb = args.into_iter().next().unwrap();
                                     let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                     return Ok(Ok(Expr::ArrayFlatMap {
