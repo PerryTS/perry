@@ -2,6 +2,20 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1138 — Promise static methods preserve receiver brand checks when borrowed
+
+Part of #4521. Borrowed `Promise` statics (`Promise.resolve`/`reject`/`all`/
+`race`/`allSettled`/`any` via `.call`/`.apply`/`.bind` or detached value reads)
+now keep their receiver-sensitive behavior: invoked on a non-`Promise` `this`
+(or detached) they throw a `TypeError`, while `Promise.resolve.call(Promise, x)`
+still works. `Promise` joins the reified-builtin-static-value set in
+`expr_member.rs` (alongside main's `Array`/`Number`) so the value read resolves
+to the real native function object, and new `js_promise_static_function_value`
+runtime thunks brand-check `this` against the Promise constructor. Verified
+against the parity fixture: detached/object receivers `throw:TypeError`,
+proper-receiver calls fulfil/reject as expected. Adds
+`node-suite/globals/promise-static-brand-checks.ts`.
+
 ## v0.5.1137 — generic `Array.prototype.reverse` over array-like receivers
 
 `Array.prototype.reverse.call(arrayLike)` (and bound/`.apply` forms) now

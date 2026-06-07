@@ -1919,7 +1919,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let outer_is_reified_builtin_static_value = !member_is_call_callee
                         && matches!(
                             property.as_str(),
-                            "JSON" | "Reflect" | "BigInt" | "Symbol" | "Array" | "Number"
+                            "JSON"
+                                | "Reflect"
+                                | "BigInt"
+                                | "Symbol"
+                                | "Array"
+                                | "Number"
                                 | "Promise"
                         )
                         && outer_static_member
