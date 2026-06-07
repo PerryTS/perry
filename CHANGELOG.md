@@ -2,6 +2,18 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1133 — zlib async one-shot helpers validate their callback synchronously
+
+Node throws synchronously (`ERR_INVALID_ARG_TYPE`) when an async one-shot zlib
+helper (`gzip`/`gunzip`/`brotliCompress`/`brotliDecompress`/… `(data, cb)`) is
+called without a callable callback, *before* any codec work is queued. Perry's
+ext-zlib path previously coerced a missing/invalid callback to a null pointer
+and silently dropped the result. It now calls a new
+`js_zlib_validate_callback` runtime shim (delegating to the shared
+`fs::validate::validate_required_callback`) at the top of
+`queue_one_shot_callback`, so the throw happens up front and matches Node. The
+old ad-hoc `callback_ptr` helper is removed in favor of the validated handle.
+
 ## v0.5.1132 — WebCrypto `algorithm.length` for KMAC128/KMAC256, not ChaCha20-Poly1305
 
 Aligns the `CryptoKey.algorithm.length` surface with WebCrypto/Node:
