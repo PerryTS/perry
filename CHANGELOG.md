@@ -2,6 +2,19 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1137 — generic `Array.prototype.reverse` over array-like receivers
+
+`Array.prototype.reverse.call(arrayLike)` (and bound/`.apply` forms) now
+reverses a generic array-like receiver in place and returns the *same*
+receiver, instead of falling through to the array-only member-call path. A
+dedicated `Expr::ArrayReverseValue` HIR variant lowers to a new
+`js_array_reverse_value` runtime helper (wired through the codegen collectors,
+JS emitter, stable-hash, and HIR walkers). Routed beside the `fill` /
+`copyWithin` generic mutators in `try_arraylike_receiver_method`. Verified:
+`{length:3,0:'a',1:'b',2:'c'}` → `c b a` (same receiver identity);
+`[1,2,3,4].reverse()` → `[4,3,2,1]`. Adds
+`node-suite/globals/array-generic-reverse.ts`.
+
 ## v0.5.1136 — generic `Array.prototype.fill` over array-like receivers
 
 `Array.prototype.fill.call(arrayLike, …)` (and bound/`.apply` forms) now mutates
