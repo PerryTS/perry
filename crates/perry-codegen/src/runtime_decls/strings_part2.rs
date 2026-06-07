@@ -1102,6 +1102,27 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    // `class X extends Request` / `extends Response`: `super(...)` shims that
+    // allocate the underlying native fetch handle and stash it on `this`.
+    // Invoked from the `Expr::SuperCall` Request/Response arm.
+    module.declare_function(
+        "js_request_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_response_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    // Runtime-value super() dispatcher: identifies an aliased global
+    // Request/Response constructor parent (e.g. `extends GlobalRequest`) and
+    // stashes the native handle on `this`, else forwards to js_native_call_value.
+    module.declare_function(
+        "js_fetch_or_value_super",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR, I64],
+    );
 
     // ──────────────────────────────────────────────────────────────────
     // AbortController / AbortSignal — perry-runtime/src/url.rs.

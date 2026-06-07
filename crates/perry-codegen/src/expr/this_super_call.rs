@@ -151,6 +151,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "ReadableStream"
                             | "WritableStream"
                             | "TransformStream"
+                            | "Request"
+                            | "Response"
                     );
                     if !is_builtin_parent_name {
                         if let Some(extends_expr) = current_class.extends_expr.as_deref() {
@@ -204,24 +206,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                                 }
                             };
-                            let prev_this = ctx.block().call(
-                                DOUBLE,
-                                "js_implicit_this_set",
-                                &[(DOUBLE, &this_box)],
-                            );
+                            // Route runtime-value super() through the
+                            // fetch-aware dispatcher: when `parent_val` is the
+                            // global Request/Response constructor (possibly via
+                            // an alias like `@hono/node-server`'s
+                            // `GlobalRequest = global.Request`), it allocates the
+                            // native fetch handle and stashes it on `this` so
+                            // inherited body methods resolve; otherwise it falls
+                            // back to the ordinary implicit-`this`-bound
+                            // `js_native_call_value` (unchanged behavior for
+                            // every other runtime-value parent).
                             let _ = ctx.block().call(
                                 DOUBLE,
-                                "js_native_call_value",
+                                "js_fetch_or_value_super",
                                 &[
                                     (DOUBLE, &parent_val),
+                                    (DOUBLE, &this_box),
                                     (crate::types::PTR, &args_ptr),
                                     (I64, &args_len),
                                 ],
-                            );
-                            ctx.block().call(
-                                DOUBLE,
-                                "js_implicit_this_set",
-                                &[(DOUBLE, &prev_this)],
                             );
 
                             // Per JS spec: subclass field initializers run AFTER
@@ -302,6 +305,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
                         return Ok(result);
+                    }
+                    // `class X extends Request` / `extends Response`:
+                    // `super(input, init)` allocates the underlying native
+                    // Web-Fetch handle and stashes its id on `this` under
+                    // `__perry_fetch_handle__`. Inherited body methods
+                    // (`text`/`json`/…) and property getters route through that
+                    // handle at runtime (see `fetch_subclass_handle_id`). This
+                    // makes `class Request extends GlobalRequest {}` — exactly
+                    // what `@hono/node-server` does — produce a working Request.
+                    let fetch_subclass_fn = match parent_name.as_str() {
+                        "Request" => Some("js_request_subclass_init"),
+                        "Response" => Some("js_response_subclass_init"),
+                        _ => None,
+                    };
+                    if let Some(runtime_fn) = fetch_subclass_fn {
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
+                        for a in super_args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        let arg0 = lowered.first().cloned().unwrap_or_else(|| undef.clone());
+                        let arg1 = lowered.get(1).cloned().unwrap_or_else(|| undef.clone());
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => undef.clone(),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            runtime_fn,
+                            &[(DOUBLE, &this_box), (DOUBLE, &arg0), (DOUBLE, &arg1)],
+                        );
+                        // Per JS spec, subclass field initializers run after
+                        // super() returns (mirrors the stream/error arms above).
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     // Built-in parent (Error, TypeError, RangeError, etc.)
                     // — user classes extending them need `super(message)` to

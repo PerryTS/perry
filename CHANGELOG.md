@@ -2,6 +2,50 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1130 — subclassing native `Request`/`Response` exposes working body methods
+
+Subclassing the native global `Request` (or `Response`) produced instances that
+were missing the body-reading methods (`text`/`json`/`arrayBuffer`/`blob`/
+`formData`/`bytes`) and the inherited property getters, and `sub instanceof
+Request` was `false`. This broke `@hono/node-server`, which does
+`class Request extends GlobalRequest { ... }` — every `c.req.text()` /
+`c.req.json()` on a POST/PUT route threw, turning webhooks and form posts into
+500s.
+
+**Root cause.** A Web-Fetch `Request`/`Response` in Perry is not a heap JS
+object — it is a native registry handle (a small id NaN-boxed as a pointer)
+whose methods are resolved by native handle dispatch, not via a JS prototype
+chain. `class X extends Request {}` + `new X(...)` produced an ordinary heap JS
+object with no link to any native handle: property/method lookup walked the JS
+prototype chain, found nothing (the body methods live in native dispatch, not on
+`Request.prototype`), and returned `undefined`.
+
+**Fix.** `super(input, init)` on a `Request`/`Response` parent now allocates the
+underlying native handle and stashes its id on `this` under the hidden field
+`__perry_fetch_handle__` (mirrors the Web-Streams `__perry_stream_handle__`
+mechanism from #562). Both the explicit-constructor path (`Expr::SuperCall`,
+`expr/this_super_call.rs`) and the implicit default-constructor path
+(`lower_call/new.rs`, parallel to the node-stream `*_subclass_init` hooks) are
+wired, via two new runtime shims `js_request_subclass_init` /
+`js_response_subclass_init` (`object/global_this.rs`). At access time:
+
+- method calls (`object/native_call_method.rs`): inherited body methods on a
+  subclass receiver are forwarded to the native handle dispatcher (gated on the
+  fetch body-method name set, and only after all user-defined dispatch — own
+  fields, vtable, prototype walk — has missed, so a subclass override still
+  wins);
+- property reads (`object/field_get_set.rs`): a missed read on a subclass
+  instance is forwarded to the handle, so `url`/`method`/`headers`/`body`/
+  `bodyUsed`/… and body-method-as-value reads resolve;
+- `instanceof` (`object/instanceof.rs`): the `Request`/`Response`/`Headers`/
+  `Blob` arm unwraps the stashed handle and runs the existing fetch kind-probe.
+
+Non-subclassed `Request`/`Response` and other native-builtin subclasses are
+unaffected (the new paths only trigger when a heap object carries
+`__perry_fetch_handle__`). Regression test:
+`tests/test_request_subclass_body.sh`.
+
+
 ## v0.5.1129 — fix(windows): `perry update` extracts the `.zip` artifact instead of failing with "invalid gzip header" (#4715)
 
 `perform_self_update` in `crates/perry/src/update_checker.rs` always decoded the

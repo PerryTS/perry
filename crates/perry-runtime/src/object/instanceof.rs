@@ -689,16 +689,30 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         || class_id == CLASS_ID_HEADERS
         || class_id == CLASS_ID_BLOB
     {
+        let want = match class_id {
+            CLASS_ID_RESPONSE => 1u8,
+            CLASS_ID_REQUEST => 2,
+            CLASS_ID_HEADERS => 3,
+            _ => 4, // CLASS_ID_BLOB
+        };
         if let Some(handle) = small_native_handle_id(value) {
             if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-                let want = match class_id {
-                    CLASS_ID_RESPONSE => 1u8,
-                    CLASS_ID_REQUEST => 2,
-                    CLASS_ID_HEADERS => 3,
-                    _ => 4, // CLASS_ID_BLOB
-                };
                 if unsafe { probe(handle as usize) } == want {
                     return true_val;
+                }
+            }
+        }
+        // `class X extends Request/Response` instance: a heap object that
+        // stashes the underlying native fetch handle id under
+        // `__perry_fetch_handle__`. Unwrap and probe so `sub instanceof
+        // Request` is true, matching a bare handle.
+        if jsval.is_pointer() {
+            let raw = jsval.as_pointer::<u8>() as usize;
+            if let Some(id) = unsafe { crate::object::fetch_subclass_handle_id(raw) } {
+                if let Some(probe) = crate::object::fetch_handle_kind_probe() {
+                    if unsafe { probe(id as usize) } == want {
+                        return true_val;
+                    }
                 }
             }
         }

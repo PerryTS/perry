@@ -255,6 +255,150 @@ pub(crate) extern "C" fn global_this_request_thunk(
     )
 }
 
+/// Resolve a NaN-boxed `this` value to a heap `ObjectHeader` pointer, or
+/// `None` for a non-pointer / small-handle / null receiver.
+unsafe fn subclass_this_object_ptr(this_box: f64) -> Option<*mut ObjectHeader> {
+    let bits = this_box.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if raw < 0x100000 || !crate::object::is_valid_obj_ptr(raw as *const u8) {
+        return None;
+    }
+    Some(raw as *mut ObjectHeader)
+}
+
+/// Stash the id of a freshly-created native Web-Fetch handle (`handle_box` is
+/// the NaN-boxed pointer-tagged value the Request/Response thunk returns) on a
+/// subclass instance's `this` under `__perry_fetch_handle__`. Stored as a
+/// plain numeric f64 — `fetch_subclass_handle_id` reads it back.
+unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
+    if let Some(obj) = subclass_this_object_ptr(this_box) {
+        let id = crate::value::js_nanbox_get_pointer(handle_box);
+        let key = crate::string::js_string_from_bytes(
+            FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
+            FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
+        );
+        crate::object::js_object_set_field_by_name(obj, key, id as f64);
+    }
+}
+
+/// Attach a native fetch handle to a freshly dynamically-constructed
+/// Request/Response subclass instance, building it from the `new` arguments.
+/// `kind` is 1 (Request) or 2 (Response). Used by the runtime
+/// dynamic-construction path (`js_new_function_construct`) for class-expression
+/// / ClassRef subclasses whose `super()` couldn't statically route the parent.
+pub(crate) unsafe fn attach_fetch_handle_for_construction(
+    inst: *mut ObjectHeader,
+    kind: u8,
+    args_ptr: *const f64,
+    args_len: usize,
+) {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg0 = if args_len >= 1 && !args_ptr.is_null() {
+        *args_ptr
+    } else {
+        undef
+    };
+    let arg1 = if args_len >= 2 && !args_ptr.is_null() {
+        *args_ptr.add(1)
+    } else {
+        undef
+    };
+    let handle = if kind == 1 {
+        global_this_request_thunk(std::ptr::null(), arg0, arg1)
+    } else {
+        global_this_response_thunk(std::ptr::null(), arg0, arg1)
+    };
+    let this_box = crate::value::js_nanbox_pointer(inst as i64);
+    attach_fetch_handle_to_this(this_box, handle);
+}
+
+/// `super(input, init)` for `class X extends Request`. Allocates the underlying
+/// native Request handle and stashes it on `this`; inherited body methods /
+/// property getters are forwarded to the handle at access time. Returns
+/// `undefined` (the super-call value).
+#[no_mangle]
+pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
+    let handle = global_this_request_thunk(std::ptr::null(), input, init);
+    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `super(body, init)` for `class X extends Response`. Mirror of
+/// `js_request_subclass_init` for the Response handle.
+#[no_mangle]
+pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
+    let handle = global_this_response_thunk(std::ptr::null(), body, init);
+    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+// The two shims above are reached only from codegen-emitted IR (the
+// `Expr::SuperCall` Request/Response arm); pin them so the auto-optimize
+// bitcode rebuild's dead-strip can't drop them (see
+// project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_REQUEST_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
+    js_request_subclass_init;
+#[used]
+static KEEP_JS_RESPONSE_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
+    js_response_subclass_init;
+
+/// `super(...)` for `class X extends <runtime-value constructor>` where the
+/// parent expression is an alias of the global `Request`/`Response` constructor
+/// — e.g. `@hono/node-server`'s `class Request extends GlobalRequest` with
+/// `GlobalRequest = global.Request`. The textual parent name is the alias
+/// ("GlobalRequest"), not "Request", so codegen can't statically route it;
+/// instead every runtime-value `super()` dispatches through here. When
+/// `parent_val` resolves to the Request/Response constructor we allocate the
+/// native handle and stash it on `this` (so inherited body methods work);
+/// otherwise we fall back to the ordinary implicit-`this`-bound
+/// `js_native_call_value`, preserving the prior behavior for every other
+/// runtime-value parent (Effect's `Data.Class`, etc.).
+#[no_mangle]
+pub unsafe extern "C" fn js_fetch_or_value_super(
+    parent_val: f64,
+    this_box: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let kind = super::class_registry::identify_global_builtin_constructor(parent_val);
+    match kind {
+        Some("Request") | Some("Response") => {
+            let arg0 = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let arg1 = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            let handle = if kind == Some("Request") {
+                global_this_request_thunk(std::ptr::null(), arg0, arg1)
+            } else {
+                global_this_response_thunk(std::ptr::null(), arg0, arg1)
+            };
+            attach_fetch_handle_to_this(this_box, handle);
+            undef
+        }
+        _ => {
+            let prev = crate::object::js_implicit_this_set(this_box);
+            let r = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+            crate::object::js_implicit_this_set(prev);
+            r
+        }
+    }
+}
+
+#[used]
+static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C" fn(f64, f64, *const f64, usize) -> f64 =
+    js_fetch_or_value_super;
+
 extern "C" fn global_this_response_error_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {

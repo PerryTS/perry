@@ -1721,6 +1721,31 @@ pub fn overflow_fields_is_empty() -> bool {
 /// Global class registry mapping class_id -> parent_class_id for inheritance chain lookups
 static CLASS_REGISTRY: RwLock<Option<HashMap<u32, u32>>> = RwLock::new(None);
 
+/// class_id -> fetch-builtin parent kind (1 = Request, 2 = Response). Recorded
+/// when a class is registered (at module init / class-expression evaluation)
+/// whose parent value identifies as the global `Request`/`Response`
+/// constructor — including via an alias such as `@hono/node-server`'s
+/// `GlobalRequest = global.Request`. Lets the runtime dynamic-construction
+/// path (`new (classExprValue)(...)` / ClassRef `new`) attach the underlying
+/// native fetch handle, matching what the static codegen `super()` path does.
+static FETCH_PARENT_KIND: RwLock<Option<HashMap<u32, u8>>> = RwLock::new(None);
+
+/// Record that `class_id` directly extends the global Request (kind 1) or
+/// Response (kind 2) constructor.
+pub(crate) fn register_fetch_parent_kind(class_id: u32, kind: u8) {
+    let mut g = FETCH_PARENT_KIND.write().unwrap();
+    if g.is_none() {
+        *g = Some(HashMap::new());
+    }
+    g.as_mut().unwrap().insert(class_id, kind);
+}
+
+/// The directly-recorded fetch parent kind for `class_id` (no chain walk).
+pub(crate) fn fetch_parent_kind(class_id: u32) -> Option<u8> {
+    let g = FETCH_PARENT_KIND.read().ok()?;
+    g.as_ref()?.get(&class_id).copied()
+}
+
 /// Global registry of class IDs that extend the built-in Error class
 static EXTENDS_ERROR_REGISTRY: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
 

@@ -699,6 +699,19 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     } else {
         None
     };
+    // `class X extends Request/Response {}` with no own constructor — forward
+    // `new X(input, init)` to the native fetch subclass-init shim (stashes the
+    // underlying handle on `this`). Two user args (input/init), unlike the
+    // single-opts stream shims above, so it has its own emit block below.
+    let fetch_parent_runtime = if !has_own_ctor && !has_imported_ctor {
+        match class.extends_name.as_deref() {
+            Some("Request") => Some("js_request_subclass_init"),
+            Some("Response") => Some("js_response_subclass_init"),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let inherited_ctor_class: Option<String> = if !has_own_ctor && has_extends {
         // Walk the inheritance chain to find the closest ancestor with
         // an explicit ctor — same logic as the body-inlining loop below.
@@ -952,6 +965,29 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
             found_inherited_ctor = true;
         }
+        if let Some(runtime_fn) = fetch_parent_runtime {
+            let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let arg0 = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef_lit.clone());
+            let arg1 = lowered_args
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| undef_lit.clone());
+            let this_box = ctx
+                .this_stack
+                .last()
+                .cloned()
+                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                .unwrap_or_else(|| undef_lit.clone());
+            ctx.block().call(
+                DOUBLE,
+                runtime_fn,
+                &[(DOUBLE, &this_box), (DOUBLE, &arg0), (DOUBLE, &arg1)],
+            );
+            found_inherited_ctor = true;
+        }
         // If no parent constructor was found (imported class with no
         // inlineable constructor body), call the cross-module constructor.
         // Refs #420: walk past empty-bodied ancestors with param_count==0
@@ -1085,7 +1121,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // `BetterSQLiteSession` (explicit ctor) and arrow-field cross-
     // module classes are both load-bearing. Refs #420 / #618 followup.
     if !has_own_ctor && has_extends && !has_imported_ctor {
-        if builtin_parent_runtime.is_some() {
+        if builtin_parent_runtime.is_some() || fetch_parent_runtime.is_some() {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
         } else if let Some(stop_at) = inherited_ctor_class {
             apply_field_initializers_recursive(

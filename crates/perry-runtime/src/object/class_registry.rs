@@ -1922,6 +1922,16 @@ pub unsafe extern "C" fn js_new_function_construct(
             super::class_constructors::replay_class_object_constructor(
                 func_value, class_cid, inst, args_ptr, args_len,
             );
+            // `class X extends Request/Response {}` constructed via the dynamic
+            // (class-expression value) path: the replayed ctor's `super()`
+            // can't statically route an aliased parent, so attach the native
+            // fetch handle here when the registered parent is a fetch builtin
+            // and the instance didn't already get one. Refs `@hono/node-server`.
+            if let Some(kind) = fetch_parent_kind_in_chain(class_cid) {
+                if super::field_get_set::fetch_subclass_handle_id(inst as usize).is_none() {
+                    super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len);
+                }
+            }
             return crate::value::js_nanbox_pointer(inst as i64);
         }
     }
@@ -2045,6 +2055,13 @@ unsafe fn construct_registered_class_ref(
     super::class_constructors::replay_registered_class_constructor(
         target_cid, inst, args_ptr, args_len,
     );
+    // ClassRef `new` of a Request/Response subclass — attach the native fetch
+    // handle on the dynamic path (mirrors the class-expression arm above).
+    if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
+        if super::field_get_set::fetch_subclass_handle_id(inst as usize).is_none() {
+            super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len);
+        }
+    }
     crate::value::js_nanbox_pointer(inst as i64)
 }
 
@@ -3449,6 +3466,27 @@ pub(crate) unsafe fn call_vtable_method(
     }
 }
 
+/// Walk the class parent chain looking for a recorded fetch-builtin parent
+/// (Request = 1, Response = 2). Returns the kind for the first ancestor (incl.
+/// `class_id` itself) that directly extends a global Request/Response.
+pub(crate) fn fetch_parent_kind_in_chain(class_id: u32) -> Option<u8> {
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while depth < 32 {
+        if let Some(kind) = super::fetch_parent_kind(cid) {
+            return Some(kind);
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
     let mut registry = CLASS_REGISTRY.write().unwrap();
@@ -3542,6 +3580,20 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
 
     if parent_cid != 0 && parent_cid != class_id {
         register_class(class_id, parent_cid);
+    }
+
+    // Record whether the parent value is the global Request/Response
+    // constructor (possibly via an alias like `GlobalRequest = global.Request`),
+    // resolved here in the scope where the alias is live. The runtime
+    // dynamic-construction path (`new (classExprValue)(...)`) consults this to
+    // attach the underlying native fetch handle on the instance — the static
+    // codegen `super()` path can't, because the textual parent name is the
+    // alias, not "Request". Refs `@hono/node-server`'s `class Request extends
+    // GlobalRequest`.
+    match identify_global_builtin_constructor(parent_value) {
+        Some("Request") => super::register_fetch_parent_kind(class_id, 1),
+        Some("Response") => super::register_fetch_parent_kind(class_id, 2),
+        _ => {}
     }
 
     // #1788: when the parent is a per-evaluation class OBJECT (a class

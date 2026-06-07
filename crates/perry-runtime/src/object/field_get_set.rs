@@ -8,6 +8,44 @@
 
 use super::*;
 
+/// Hidden own-field name under which a `class X extends Request/Response`
+/// instance stashes the id of its underlying native Web-Fetch handle. Written
+/// by the `js_request_subclass_init` / `js_response_subclass_init` super-init
+/// shims (global_this.rs); read here (property forward), in
+/// `native_call_method.rs` (body-method forward), and in `instanceof.rs`
+/// (`x instanceof Request/Response`). A Request/Response is a registry-backed
+/// native handle, not a heap object whose methods live on the JS prototype
+/// chain, so a subclass instance can only reach those members via the handle.
+pub(crate) const FETCH_SUBCLASS_HANDLE_FIELD: &[u8] = b"__perry_fetch_handle__";
+
+/// If `obj` (a raw heap object address) is a `class X extends Request/Response`
+/// instance, return the id of its underlying native fetch handle. Returns
+/// `None` for any non-object / non-subclass receiver, so callers can fall
+/// through to their normal dispatch unchanged.
+pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
+    if obj < crate::gc::GC_HEADER_SIZE + 0x1000 || !is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(
+        FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
+        FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
+    );
+    let v = js_object_get_field_by_name(obj as *const ObjectHeader, key);
+    if v.is_undefined() {
+        return None;
+    }
+    let id = f64::from_bits(v.bits());
+    if id.is_finite() && id > 0.0 && id.fract() == 0.0 {
+        Some(id as i64)
+    } else {
+        None
+    }
+}
+
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
@@ -4562,6 +4600,20 @@ pub extern "C" fn js_object_get_field_by_name(
             }
             if let Some(v) = ordinary_object_prototype_method_value(obj, key) {
                 return v;
+            }
+        }
+
+        // `class X extends Request/Response`: inherited native members
+        // (`url`/`method`/`headers`/`body`/`bodyUsed`/… and body methods read
+        // as values) live on the underlying fetch handle, not the JS prototype
+        // chain. Forward the read to the handle when this object stashes one
+        // and the key isn't the marker field itself. Refs Hono `c.req` body.
+        if !key.is_null() && key_bytes != FETCH_SUBCLASS_HANDLE_FIELD {
+            if let Some(id) = fetch_subclass_handle_id(obj as usize) {
+                let v = js_object_get_field_by_name(id as usize as *const ObjectHeader, key);
+                if !v.is_undefined() {
+                    return v;
+                }
             }
         }
 

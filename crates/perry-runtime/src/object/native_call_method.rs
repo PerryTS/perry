@@ -4403,6 +4403,32 @@ pub unsafe extern "C" fn js_native_call_method(
     // surfaces far downstream as a stray `{}` — hiding the real call site. Print
     // a located report first so `PERRY_DISPATCH_DIAG=1` names the missing
     // method+receiver before the throw is caught.
+    // `class X extends Request/Response`: the body methods (`text`/`json`/
+    // `arrayBuffer`/`blob`/`bytes`/`formData`/`clone`) live on the underlying
+    // native fetch handle, not the JS prototype chain. All user-defined
+    // dispatch (own fields, vtable, prototype walk) has missed by here, so a
+    // subclass that overrides one of these still wins; only genuinely
+    // inherited body methods reach this forward. Refs Hono `c.req.text()`.
+    if matches!(
+        method_name,
+        "text" | "json" | "arrayBuffer" | "blob" | "bytes" | "formData" | "clone"
+    ) && jsval.is_pointer()
+    {
+        let raw = crate::value::js_nanbox_get_pointer(object) as usize;
+        if let Some(id) = crate::object::fetch_subclass_handle_id(raw) {
+            if let Some(dispatch) = handle_method_dispatch() {
+                let args = refreshed_args();
+                return dispatch(
+                    id,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                );
+            }
+        }
+    }
+
     crate::object::class_registry::report_dispatch_miss(
         "call-method (no method/field/proto match)",
         object,
