@@ -127,8 +127,10 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             base: "Map".into(),
             type_args: Vec::new(),
         }),
-        // Object.keys() always returns string handles.
-        Expr::ObjectKeys(_) => Some(HirType::Array(Box::new(HirType::String))),
+        // Object.keys() / for-in keys always return string handles.
+        Expr::ObjectKeys(_) | Expr::ForInKeys(_) => {
+            Some(HirType::Array(Box::new(HirType::String)))
+        }
         Expr::ObjectGetOwnPropertyNames(_) => Some(HirType::Array(Box::new(HirType::String))),
         Expr::ObjectGetOwnPropertySymbols(_) => Some(HirType::Array(Box::new(HirType::Any))),
         Expr::String(_)
@@ -1893,6 +1895,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         | Expr::ArrayKeys(_)
         | Expr::ArrayValues(_)
         | Expr::ObjectKeys(_)
+        | Expr::ForInKeys(_)
         | Expr::ObjectValues(_)
         | Expr::ObjectEntries(_) => Some(HirType::Array(Box::new(HirType::Any))),
         // `process.argv` is a real Array<string> at runtime (see

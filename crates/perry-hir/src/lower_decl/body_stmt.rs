@@ -1797,7 +1797,9 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             };
 
             let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
-            let keys_expr = Expr::ObjectKeys(Box::new(obj_expr));
+            // for-in: own + inherited enumerable keys, nullish-safe (no throw).
+            // See lower/stmt_loops.rs::lower_stmt_for_in for the rationale.
+            let keys_expr = Expr::ForInKeys(Box::new(obj_expr));
             let keys_id = ctx.fresh_local();
             let idx_id = ctx.fresh_local();
             let key_id = ctx.define_local(key_name.clone(), Type::String);

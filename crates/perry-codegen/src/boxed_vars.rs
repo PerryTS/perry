@@ -1404,6 +1404,7 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
         | Expr::ArrayFlat { .. }
         | Expr::ArrayFlatMap { .. }
         | Expr::ObjectKeys(_)
+        | Expr::ForInKeys(_)
         | Expr::ObjectValues(_)
         | Expr::ObjectEntries(_)
         | Expr::ArrayEntries { .. }

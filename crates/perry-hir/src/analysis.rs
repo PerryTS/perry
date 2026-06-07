@@ -1127,7 +1127,10 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::GlobalThisExpr
         | Expr::NativeModuleRef(_)
         | Expr::RegExp { .. } => {}
-        Expr::ObjectKeys(obj) | Expr::ObjectValues(obj) | Expr::ObjectEntries(obj) => {
+        Expr::ObjectKeys(obj)
+        | Expr::ForInKeys(obj)
+        | Expr::ObjectValues(obj)
+        | Expr::ObjectEntries(obj) => {
             collect_assigned_locals_expr(obj, assigned);
         }
         Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {

@@ -56,22 +56,16 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         return js_nanbox_pointer(arr_i64);
     }
 
-    // Non-pointer scalars (number/bool/null/undefined) are not iterable;
-    // hand back an empty array so the loop runs zero times rather than
-    // dereferencing a non-pointer. Web Streams are the exception here: their
-    // runtime handles are finite numeric ids, but plain `for...of` must still
-    // reject them because they are async-iterable only.
+    // Non-pointer scalars (number/bool/null/undefined/symbol) are not
+    // iterable. Per ECMA-262 §13.7.5.13 (ForIn/OfHeadEvaluation →
+    // GetIterator → ToObject/GetMethod) these MUST throw a TypeError:
+    // `for (x of null)`, `for (x of 37)`, `for (x of false)` all reject
+    // (language/statements/for-of/head-expr-to-obj,
+    // head-expr-primitive-iterator-method). Web Streams are async-iterable
+    // only, so plain `for...of` rejects them here too.
     let raw_ptr = crate::value::js_nanbox_get_pointer(val_f64);
     if raw_ptr == 0 {
-        if val_f64.is_finite()
-            && val_f64 > 0.0
-            && val_f64.fract() == 0.0
-            && crate::object::stream_handle_kind_probe()
-                .is_some_and(|probe| unsafe { probe(val_f64 as usize) != 0 })
-        {
-            throw_not_iterable(val_f64);
-        }
-        return js_nanbox_pointer(js_array_alloc(0) as i64);
+        throw_not_iterable(val_f64);
     }
 
     // Inspect the GC header's object kind to dispatch Array / Map / Set
@@ -608,10 +602,19 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         } else {
             closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
         };
-        let result_ptr = js_nanbox_get_pointer(result_f64);
-        if result_ptr == 0 {
-            break;
+        // IteratorNext (ECMA-262 §7.4.2 step 3): if Type(result) is not
+        // Object, throw a TypeError. `is_pointer()` is true only for
+        // POINTER_TAG heap objects/arrays — strings, numbers, booleans,
+        // null and undefined all fail it (and would otherwise be silently
+        // treated as "done"). Symbols are pointer-tagged but are NOT objects,
+        // so exclude registered symbols too.
+        // language/statements/for-of/iterator-next-result-type.
+        let result_is_object = crate::value::JSValue::from_bits(result_f64.to_bits()).is_pointer()
+            && !crate::symbol::is_registered_symbol(js_nanbox_get_pointer(result_f64) as usize);
+        if !result_is_object {
+            throw_iterator_result_not_object();
         }
+        let result_ptr = js_nanbox_get_pointer(result_f64);
         let result_obj = result_ptr as *const ObjectHeader;
 
         // Check .done

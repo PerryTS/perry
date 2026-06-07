@@ -903,6 +903,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
 
         // Object.keys/values/entries
         Expr::ObjectKeys(obj) => Expr::ObjectKeys(Box::new(substitute_expr(obj, substitutions))),
+        Expr::ForInKeys(obj) => Expr::ForInKeys(Box::new(substitute_expr(obj, substitutions))),
         Expr::ObjectValues(obj) => {
             Expr::ObjectValues(Box::new(substitute_expr(obj, substitutions)))
         }

@@ -541,6 +541,7 @@ impl SH for Expr {
             Expr::ObjectIs(a, b) => { tag(h, 389); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::ObjectHasOwn(a, b) => { tag(h, 390); a.as_ref().hash(h); b.as_ref().hash(h); }
             Expr::ObjectKeys(e) => { tag(h, 391); e.as_ref().hash(h); }
+            Expr::ForInKeys(e) => { tag(h, 12506); e.as_ref().hash(h); }
             Expr::ObjectValues(e) => { tag(h, 392); e.as_ref().hash(h); }
             Expr::ObjectEntries(e) => { tag(h, 393); e.as_ref().hash(h); }
             Expr::ObjectGroupBy { items, key_fn } => { tag(h, 394); items.as_ref().hash(h); key_fn.as_ref().hash(h); }

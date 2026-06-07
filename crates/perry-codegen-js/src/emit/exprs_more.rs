@@ -954,6 +954,14 @@ impl JsEmitter {
                 self.emit_expr(obj);
                 self.output.push(')');
             }
+            // for-in enumeration keys: own + inherited enumerable, nullish-safe.
+            Expr::ForInKeys(obj) => {
+                self.output.push_str(
+                    "((__o)=>{var __a=[];for(var __k in __o)__a.push(__k);return __a;})(",
+                );
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
             Expr::ObjectValues(obj) => {
                 self.output.push_str("Object.values(");
                 self.emit_expr(obj);

@@ -147,6 +147,7 @@ where
         | Expr::ObjectGetPrototypeOf(v)
         | Expr::ObjectGetOwnPropertySymbols(v)
         | Expr::ObjectKeys(v)
+        | Expr::ForInKeys(v)
         | Expr::ObjectValues(v)
         | Expr::ObjectEntries(v)
         | Expr::ObjectFromEntries(v)

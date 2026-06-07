@@ -62,6 +62,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_substr", I64, &[I64, I32, I32]);
     module.declare_function("js_string_split", I64, &[I64, I64]);
     module.declare_function("js_string_split_n", I64, &[I64, I64, I32]);
+    // Boxed separator + boxed limit; full ToUint32(limit)/ToString(separator)
+    // coercion + undefined/RegExp handling (ECMA-262 §22.1.3.21).
+    module.declare_function("js_string_split_value", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_math_pow", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // Math.* unary functions: use LLVM intrinsics directly so we
@@ -309,6 +312,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_delete", I32, &[I64, DOUBLE]);
     module.declare_function("js_object_keys", I64, &[I64]);
     module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
+    module.declare_function("js_for_in_keys_value", I64, &[DOUBLE]);
     module.declare_function("js_is_finite", DOUBLE, &[DOUBLE]);
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);
@@ -891,6 +895,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // #2089: deref a Date (NaN-boxed DateCell pointer) to its ms timestamp for
     // ordered relational compares; a plain number passes through unchanged.
     module.declare_function("js_date_coerce_number", DOUBLE, &[DOUBLE]);
+    // Abstract relational comparison (`<`, `<=`, `>`, `>=`) for operands that
+    // aren't both statically numeric: full ToPrimitive / string / BigInt /
+    // mixed-numeric semantics. Each returns a NaN-boxed boolean.
+    module.declare_function("js_rel_lt", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_rel_le", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_rel_gt", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_rel_ge", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_to_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_iso_string_or_throw", I64, &[DOUBLE]);

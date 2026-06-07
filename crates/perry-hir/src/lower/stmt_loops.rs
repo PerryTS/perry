@@ -1462,8 +1462,12 @@ pub(crate) fn lower_stmt_for_in(
     // Lower the object expression
     let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
 
-    // Create Object.keys(obj) expression to get the array of keys
-    let keys_expr = Expr::ObjectKeys(Box::new(obj_expr));
+    // for-in enumerates the receiver's own AND inherited enumerable string
+    // keys (deduplicated), and is a no-op — not a throw — on null/undefined.
+    // `ForInKeys` carries those semantics; `ObjectKeys` (Object.keys) would
+    // throw on nullish and miss inherited keys. Refs language/statements/for-in
+    // S12.6.4_A1/A2 (nullish) and A6/A6.1 (prototype chain).
+    let keys_expr = Expr::ForInKeys(Box::new(obj_expr));
 
     // Create internal variables for the keys array and index
     let keys_id = ctx.fresh_local();

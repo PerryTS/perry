@@ -1177,7 +1177,7 @@ pub fn transform_expr(
             transform_expr(replacement, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // Object operations
-        Expr::ObjectKeys(e) => {
+        Expr::ObjectKeys(e) | Expr::ForInKeys(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // Parse/coerce functions

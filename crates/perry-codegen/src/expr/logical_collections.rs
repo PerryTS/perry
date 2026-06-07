@@ -349,6 +349,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
+        // -------- for (key in obj) enumeration keys -> string[] --------
+        // Like ObjectKeys but nullish-safe (no throw) and walks the prototype
+        // chain for inherited enumerable keys. Backs the for-in desugar.
+        Expr::ForInKeys(obj) => {
+            let obj_box = lower_expr(ctx, obj)?;
+            let blk = ctx.block();
+            let arr_handle = blk.call(I64, "js_for_in_keys_value", &[(DOUBLE, &obj_box)]);
+            Ok(nanbox_pointer_inline(blk, &arr_handle))
+        }
+
         // -------- isFinite(x) — global, coerces to Number first --------
         // The runtime's js_is_finite returns NaN-tagged TAG_TRUE/TAG_FALSE
         // (not a raw 0.0/1.0), so we return the result directly. No fcmp

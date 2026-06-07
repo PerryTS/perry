@@ -1097,6 +1097,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::IsUndefinedOrBareNan(operand)
         | Expr::ParseFloat(operand)
         | Expr::ObjectKeys(operand)
+        | Expr::ForInKeys(operand)
         | Expr::ObjectValues(operand)
         | Expr::ObjectEntries(operand)
         | Expr::ObjectFromEntries(operand)

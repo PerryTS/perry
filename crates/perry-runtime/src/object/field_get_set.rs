@@ -993,6 +993,12 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     if jv.is_null() || jv.is_undefined() {
         super::has_own_helpers::throw_to_object_nullish_type_error();
     }
+    // A Proxy is a small registered id — route through the `ownKeys` trap +
+    // enumerability filter rather than the handle-dispatch fallback below.
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        let arr = crate::proxy::proxy_enum_own_keys(value);
+        return (arr.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+    }
     if jv.is_any_string() {
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let len = match crate::string::str_bytes_from_jsvalue(value, &mut scratch) {
@@ -1092,6 +1098,90 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         return js_object_keys(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)
+}
+
+/// `for (key in value)` enumeration key set. Differs from
+/// [`js_object_keys_value`] (which backs `Object.keys`) in two ways
+/// mandated by ECMA-262 §14.7.5 / EnumerateObjectProperties:
+///
+///   * null / undefined enumerate NOTHING and must NOT throw — `Object.keys`
+///     throws `TypeError`, but `for (k in undefined) {}` is a no-op
+///     (language/statements/for-in/S12.6.4_A1, A2).
+///   * inherited enumerable string-keyed properties on the prototype chain
+///     are visited too, with shadowed/duplicate names emitted only once
+///     (S12.6.4_A6 / A6.1 — `FACTORY.prototype = {feat,hint}`).
+///
+/// Enumerable own keys at each level come from `js_object_keys_value` so every
+/// existing tag-dispatch case (arrays → index keys, strings → index keys, typed
+/// arrays, proxies, plain objects, class instances) is reused unchanged. Class /
+/// built-in prototype methods are non-enumerable, so they are correctly skipped.
+///
+/// Shadowing follows the spec exactly: a name that appears as an OWN property at
+/// a closer level — even a non-enumerable one — hides the same name on the rest
+/// of the chain (language/statements/for-in/12.6.4-2). So at each level we mark
+/// ALL own property names (`js_object_get_own_property_names`, incl
+/// non-enumerable) as "seen" after emitting that level's enumerable subset.
+#[no_mangle]
+pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_null() || jv.is_undefined() {
+        return crate::array::js_array_alloc(0);
+    }
+    let mut out = crate::array::js_array_alloc(8);
+    // Non-pointer primitives (number/boolean, boxed string) have only their own
+    // enumerable keys; every prototype property they inherit is non-enumerable.
+    if !jv.is_pointer() {
+        let own = js_object_keys_value(value);
+        let n = crate::array::js_array_length(own);
+        for i in 0..n {
+            let kv = crate::array::js_array_get(own, i);
+            out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+        }
+        return out;
+    }
+    let key_string = |kv: JSValue, scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN]| {
+        unsafe { crate::string::js_string_key_bytes(kv, scratch) }
+            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.to_string()))
+    };
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let mut current = value;
+    // Depth cap guards against pathological / cyclic prototype graphs.
+    for _ in 0..1000 {
+        let cv = JSValue::from_bits(current.to_bits());
+        if cv.is_null() || cv.is_undefined() || !cv.is_pointer() {
+            break;
+        }
+        // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),
+        // skipping any name already shadowed by a closer level.
+        let enum_arr = js_object_keys_value(current);
+        let en = crate::array::js_array_length(enum_arr);
+        for i in 0..en {
+            let kv = crate::array::js_array_get(enum_arr, i);
+            let name = match key_string(kv, &mut scratch) {
+                Some(s) => s,
+                None => continue,
+            };
+            if seen.insert(name) {
+                out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+            }
+        }
+        // Mark ALL own names (incl non-enumerable) seen so they shadow the
+        // remainder of the chain.
+        let all_f64 = super::descriptors::js_object_get_own_property_names(current);
+        let all_arr = (all_f64.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+        if !all_arr.is_null() {
+            let an = crate::array::js_array_length(all_arr);
+            for i in 0..an {
+                let kv = crate::array::js_array_get(all_arr, i);
+                if let Some(name) = key_string(kv, &mut scratch) {
+                    seen.insert(name);
+                }
+            }
+        }
+        current = super::object_ops::js_object_get_prototype_of(current);
+    }
+    out
 }
 
 fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {

@@ -2032,6 +2032,11 @@ pub enum Expr {
     /// Object.keys(obj) -> string[]
     /// Returns an array of the object's own enumerable property names
     ObjectKeys(Box<Expr>),
+    /// `for (key in obj)` enumeration keys -> string[]
+    /// Like `ObjectKeys` but follows ECMA-262 EnumerateObjectProperties:
+    /// null/undefined enumerate nothing (no throw) and inherited enumerable
+    /// string keys on the prototype chain are included (deduplicated).
+    ForInKeys(Box<Expr>),
     /// Object.values(obj) -> any[]
     /// Returns an array of the object's own enumerable property values
     ObjectValues(Box<Expr>),
