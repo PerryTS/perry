@@ -22,7 +22,10 @@ use crate::analysis::{
 };
 use crate::ir::{EnumValue, Expr, Function, Param, Stmt};
 use crate::lower_decl::{append_synthetic_arguments_param, body_uses_arguments, lower_block_stmt};
-use crate::lower_patterns::{get_param_default, get_pat_name, is_rest_param};
+use crate::lower_patterns::{
+    generate_param_destructuring_stmts, get_param_default, get_pat_name, is_destructuring_pattern,
+    is_rest_param,
+};
 use crate::lower_types::{extract_param_type_with_ctx, extract_ts_type_with_ctx};
 
 use super::{lower_expr, LoweringContext};
@@ -174,6 +177,12 @@ fn lower_method_prop(
     ctx.enter_strict_mode(true);
     let mut params = Vec::new();
     let mut default_param_pats: Vec<ast::Pat> = Vec::new();
+    // Destructuring method params (`method([x, y]) {}` / `m({a, b}) {}`) need
+    // extraction statements prepended to the body, mirroring `fn_decl` /
+    // `expr_function`. Without this the bound names (`x`, `y`, `a`, `b`) never
+    // get a `Let`, so the body throws `ReferenceError: identifier is not
+    // defined` — every `dstr/{,gen-,async-gen-}meth-*` test262 case.
+    let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in method.function.params.iter() {
         let param_name = get_pat_name(&param.pat)?;
         // TypeScript's `this: T` is a TYPE-only marker (SWC emits it as a
@@ -200,9 +209,28 @@ fn lower_method_prop(
             arguments_object: None,
         });
         default_param_pats.push(param.pat.clone());
+        // Unwrap `Pat::Assign` (`[x, y] = [1, 2]`) to the inner array/object
+        // pattern — the default value is applied separately via
+        // `build_default_param_stmts`, and the destructuring extracts from the
+        // (possibly defaulted) param. Mirrors `lower_decl/class_members.rs`.
+        let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
+            assign.left.as_ref()
+        } else {
+            &param.pat
+        };
+        if is_destructuring_pattern(inner_pat) {
+            destructuring_params.push((param_id, inner_pat.clone()));
+        }
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
         param.default = get_param_default(ctx, pat)?;
+    }
+    // Generate extraction `Let`s BEFORE lowering the body so the destructured
+    // bindings are in scope when the body references them.
+    let mut destructuring_stmts = Vec::new();
+    for (param_id, pat) in &destructuring_params {
+        let stmts = generate_param_destructuring_stmts(ctx, pat, *param_id)?;
+        destructuring_stmts.extend(stmts);
     }
     let return_type = method
         .function
@@ -234,11 +262,29 @@ fn lower_method_prop(
         append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
-    let body = if let Some(ref block) = method.function.body {
+    let mut body = if let Some(ref block) = method.function.body {
         lower_block_stmt(ctx, block)?
     } else {
         Vec::new()
     };
+    // Prepend destructuring extraction statements (mirrors expr_function).
+    if !destructuring_stmts.is_empty() {
+        let mut new_body = destructuring_stmts;
+        new_body.append(&mut body);
+        body = new_body;
+    }
+    // Prepend default-parameter fill statements. Object-literal methods never
+    // dispatch through the `__perry_wrap_<name>` prologue that applies a
+    // top-level function's defaults, so the body must carry the
+    // `if (p === undefined) p = <default>` checks itself — otherwise
+    // `{ m(a = 23) {} }; obj.m(undefined)` reads `a === undefined`. Defaults
+    // must run BEFORE destructuring (`m([x] = [1]) {}`), so prepend them last.
+    let default_stmts = crate::lower_decl::build_default_param_stmts(&params);
+    if !default_stmts.is_empty() {
+        let mut new_body = default_stmts;
+        new_body.append(&mut body);
+        body = new_body;
+    }
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
