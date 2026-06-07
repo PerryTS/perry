@@ -147,6 +147,11 @@ crates/perry-stdlib/src/sqlite.rs
 # `process_allowed_node_flags_literal`. Splitting the per-namespace literal
 # builders into a sibling module is tracked under #1435.
 crates/perry-hir/src/lower/expr_member.rs
+# Built-in call intrinsic-lowering tower. Crossed the 2000-line gate on current
+# main after the String.prototype generic-`this` + Array/Promise receiver-brand
+# parity arms (#4713/#4720/#4603). Splitting the per-builtin lowering helpers
+# into sibling modules is tracked under #1435.
+crates/perry-hir/src/lower/expr_call/intrinsics.rs
 # Expression lowering entry point — crossed the 2000-line gate when the
 # CJS-default-import allow-list grew to cover all node-core namespaces with
 # `default` namespace shims (#3903). Splitting the per-namespace dispatch
