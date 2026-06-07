@@ -2,6 +2,24 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1131 — async-from-sync iterator adapter (`for await` over sync iterables)
+
+Closes #4520. `for await...of` over a *synchronous* iterable that yields
+promises now unwraps each yielded promise instead of materializing the sync
+iterable up front and awaiting the raw values.
+
+A runtime async-from-sync iterator wrapper (`crates/perry-runtime/src/array/iterator.rs`)
+implements `next`/`return`/`throw`/`[Symbol.asyncIterator]` with full argument
+forwarding, missing-`return`/missing-`throw` handling, sync-call rejection, and
+close-on-rejected-value semantics. Dynamic `for await...of` lowering now routes
+through `js_get_async_iterator` rather than eagerly draining sync iterables, and
+`Array.fromAsync` wraps sync iterables so promise-valued sync yields are
+unwrapped while async-generator inputs stay on the async path. Parity coverage
+added under `node-suite/globals/async-from-sync-iterator.ts` (for-await, early
+close, destructuring, `Array.fromAsync`, rejected promise values, malformed
+iterator results). Async-generator `yield*` delegation keeps its separate
+transform path and is out of scope here.
+
 ## v0.5.1130 — subclassing native `Request`/`Response` exposes working body methods
 
 Subclassing the native global `Request` (or `Response`) produced instances that
