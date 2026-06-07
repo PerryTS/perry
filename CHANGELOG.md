@@ -2,6 +2,19 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1140 — `http`/`https` Agent drops the bogus `close` method (matches Node)
+
+Node's `http.Agent`/`https.Agent` has no `close()` method — only `destroy()`.
+Perry previously bound `agent.close` as a chainable no-op, so `typeof
+agent.close` was `"function"` instead of Node's `"undefined"`. `close` is now
+removed from the Agent method/property surface (`expr_member.rs`,
+`common/dispatch.rs`, `http/agent_dispatch.rs`, `agent.rs`, the http-client
+native table, and `http.rs`), so a bare read of `agent.close` is `undefined`
+while `destroy`/`getName`/`keepSocketAlive`/`reuseSocket` keep working. The PR's
+`js_ext_http_agent_dispatch_method` had already landed on `main` via another
+change; the duplicate was reconciled (kept the `close`-free version). Adds
+`node-suite/https/surface/agent-method-values.ts`.
+
 ## v0.5.1139 — spec `.length` for legacy/global function values (e.g. `parseInt.length`)
 
 Adds `builtin_global_function_length`, giving bare global function *values* their
