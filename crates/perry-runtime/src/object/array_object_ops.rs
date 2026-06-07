@@ -207,7 +207,8 @@ pub(crate) unsafe fn define_array_property(
         return Some(true);
     }
     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let has_value = own_key_present(desc_ptr, value_key);
+    // `ToPropertyDescriptor` field presence is HasProperty (own OR inherited).
+    let has_value = super::desc_has_field(descriptor_value, b"value");
     let value_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
     let value = if has_value {
         f64::from_bits(value_field.bits())
@@ -218,10 +219,10 @@ pub(crate) unsafe fn define_array_property(
     let arr = obj as *mut crate::array::ArrayHeader;
 
     let read_bool = |name: &[u8]| -> Option<bool> {
-        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        if !own_key_present(desc_ptr, k) {
+        if !super::desc_has_field(descriptor_value, name) {
             return None;
         }
+        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k);
         Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
     };
@@ -235,8 +236,8 @@ pub(crate) unsafe fn define_array_property(
         // ObjectHeader and corrupt it, so handle it here.
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
         let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
-        let desc_has_get = own_key_present(desc_ptr, get_key);
-        let desc_has_set = own_key_present(desc_ptr, set_key);
+        let desc_has_get = super::desc_has_field(descriptor_value, b"get");
+        let desc_has_set = super::desc_has_field(descriptor_value, b"set");
         if desc_has_get || desc_has_set {
             // Non-configurable existing index can't switch to an accessor.
             if exists {

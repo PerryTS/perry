@@ -118,6 +118,19 @@ unsafe fn registered_buffer_index_own_property_present(
     Some(idx < (*buf).length as u32)
 }
 
+/// `ToPropertyDescriptor` field presence: `HasProperty(descriptor, name)` —
+/// own OR inherited. Spec §6.2.6.5 reads each descriptor field with
+/// `HasProperty` then `Get`, so an inherited `value`/`get`/... counts as
+/// present (e.g. `Object.defineProperty(o, k, child)` where `child`'s prototype
+/// carries `value`). `descriptor_value` is the NaN-boxed descriptor object.
+pub(crate) unsafe fn desc_has_field(descriptor_value: f64, name: &[u8]) -> bool {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key_f64 = crate::value::JSValue::string_ptr(key).bits();
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    crate::object::js_object_has_property(descriptor_value, f64::from_bits(key_f64)).to_bits()
+        == TAG_TRUE
+}
+
 /// Validate a property descriptor object per ES `ToPropertyDescriptor`
 /// invariants that Node surfaces as `TypeError`s (#2817). Assumes
 /// `descriptor_value` is already known to be an object. Throws on:
@@ -131,10 +144,8 @@ unsafe fn validate_property_descriptor(descriptor_value: f64) {
     }
     let desc = desc_ptr as *const ObjectHeader;
 
-    let has_field = |name: &[u8]| -> bool {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        own_key_present(desc_ptr, key)
-    };
+    // `ToPropertyDescriptor` field presence is HasProperty (own OR inherited).
+    let has_field = |name: &[u8]| -> bool { desc_has_field(descriptor_value, name) };
     let read = |name: &[u8]| -> crate::value::JSValue {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         js_object_get_field_by_name(desc, key)
@@ -257,10 +268,8 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     }
     let reject = || throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
 
-    let has_field = |name: &[u8]| -> bool {
-        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        own_key_present(desc_ptr, k)
-    };
+    // `ToPropertyDescriptor` field presence is HasProperty (own OR inherited).
+    let has_field = |name: &[u8]| -> bool { desc_has_field(descriptor_value, name) };
     let read = |name: &[u8]| -> crate::value::JSValue {
         let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k)
@@ -1467,13 +1476,14 @@ pub extern "C" fn js_object_define_property(
         });
 
         // Detect accessor descriptor (has `get` and/or `set`) vs. data
-        // descriptor (has `value`/`writable`) by OWN-FIELD PRESENCE on the
-        // descriptor object — not by `is_undefined`, since `{ get: undefined }`
-        // is an explicit (present) accessor field distinct from omitting it.
+        // descriptor (has `value`/`writable`) by `ToPropertyDescriptor` field
+        // PRESENCE (HasProperty — own OR inherited) on the descriptor object,
+        // not by `is_undefined`: `{ get: undefined }` is an explicit (present)
+        // accessor field, and an *inherited* `value`/`get` counts as present.
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
         let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
-        let desc_has_get = own_key_present(desc_ptr, get_key);
-        let desc_has_set = own_key_present(desc_ptr, set_key);
+        let desc_has_get = desc_has_field(descriptor_value, b"get");
+        let desc_has_set = desc_has_field(descriptor_value, b"set");
         let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
         let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
         let has_accessor = desc_has_get || desc_has_set;
@@ -1541,9 +1551,8 @@ pub extern "C" fn js_object_define_property(
             // presence so `{ value: undefined }` (present) stores `undefined`,
             // while a generic descriptor on an existing accessor leaves it intact.
             let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-            let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
-            let desc_has_value = own_key_present(desc_ptr, value_key);
-            let desc_has_writable = own_key_present(desc_ptr, writable_key);
+            let desc_has_value = desc_has_field(descriptor_value, b"value");
+            let desc_has_writable = desc_has_field(descriptor_value, b"writable");
             let is_data = desc_has_value || desc_has_writable;
 
             if is_data {
