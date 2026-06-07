@@ -466,8 +466,8 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
     let binary_name = "perry.exe";
     #[cfg(not(target_os = "windows"))]
     let binary_name = "perry";
-    let new_binary = find_binary_in_dir(&tmp_dir, binary_name)
-        .context("Perry binary not found in archive")?;
+    let new_binary =
+        find_binary_in_dir(&tmp_dir, binary_name).context("Perry binary not found in archive")?;
 
     // Atomic swap
     let backup_path = current_exe.with_extension("old");
@@ -673,7 +673,9 @@ mod tests {
             header.set_size(data.len() as u64);
             header.set_mode(0o755);
             header.set_cksum();
-            builder.append_data(&mut header, "perry", &data[..]).unwrap();
+            builder
+                .append_data(&mut header, "perry", &data[..])
+                .unwrap();
             builder.finish().unwrap();
         }
         let mut gz_buf = Vec::new();
@@ -688,7 +690,8 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
-        extract_archive(&gz_buf, "perry-linux-x86_64.tar.gz", &tmp).expect("tarball should extract");
+        extract_archive(&gz_buf, "perry-linux-x86_64.tar.gz", &tmp)
+            .expect("tarball should extract");
         assert!(tmp.join("perry").exists(), "perry should be extracted");
 
         let _ = fs::remove_dir_all(&tmp);
