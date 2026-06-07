@@ -367,5 +367,17 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
         );
     }
 
+    // [[GetOwnProperty]] step 21.a: a non-configurable result descriptor is only
+    // valid for a non-configurable existing target property.
+    if unsafe { descriptor_bool_field(result, b"configurable") } == Some(false) {
+        let target_configurable = target_desc.to_bits() == TAG_UNDEFINED
+            || unsafe { descriptor_bool_field(target_desc, b"configurable") } != Some(false);
+        if target_configurable {
+            return throw_type_error(
+                "proxy getOwnPropertyDescriptor trap reports a non-configurable descriptor for a configurable or absent target property",
+            );
+        }
+    }
+
     result
 }

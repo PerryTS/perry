@@ -743,6 +743,12 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         if obj_jv.is_null() || obj_jv.is_undefined() {
             super::has_own_helpers::throw_to_object_nullish_type_error();
         }
+        // A Proxy is a small registered id, not a heap object — route it to the
+        // `ownKeys` trap (string subset) before the handle-dispatch fallback,
+        // which would mis-read the fake pointer and return an empty array.
+        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+            return crate::proxy::proxy_own_property_names(obj_value);
+        }
         if obj_jv.is_pointer() {
             let raw = crate::value::js_nanbox_get_pointer(obj_value) as usize;
             if raw > 0 && raw < 0x100000 {

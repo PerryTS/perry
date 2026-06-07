@@ -2076,6 +2076,12 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if jv.is_null() || jv.is_undefined() {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
+    // A Proxy is a small registered id — route through the `ownKeys` trap
+    // (symbol subset) before the heap-object paths below.
+    if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
+        let arr = crate::proxy::proxy_own_property_symbols(obj_f64);
+        return (arr.to_bits() & POINTER_MASK) as i64;
+    }
     if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
         let mut entries = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
             crate::object::class_own_symbol_member_keys(class_id, false)

@@ -993,6 +993,12 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     if jv.is_null() || jv.is_undefined() {
         super::has_own_helpers::throw_to_object_nullish_type_error();
     }
+    // A Proxy is a small registered id — route through the `ownKeys` trap +
+    // enumerability filter rather than the handle-dispatch fallback below.
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        let arr = crate::proxy::proxy_enum_own_keys(value);
+        return (arr.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+    }
     if jv.is_any_string() {
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let len = match crate::string::str_bytes_from_jsvalue(value, &mut scratch) {

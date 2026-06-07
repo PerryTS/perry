@@ -20,9 +20,18 @@ use std::collections::HashMap;
 
 use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
+mod invariants;
 mod json;
 mod metadata;
+mod own_keys;
+mod prototype;
 mod reflect;
+
+pub use own_keys::js_proxy_own_keys;
+pub(crate) use own_keys::{
+    proxy_enum_own_keys, proxy_own_property_names, proxy_own_property_symbols,
+};
+pub use prototype::js_reflect_set_prototype_of;
 
 pub(crate) use json::{
     js_proxy_checked_target, js_proxy_checked_target_for_is_array, js_proxy_own_keys_for_json,
@@ -310,6 +319,35 @@ fn coerce_trap_bool(value: f64) -> f64 {
     nanbox_bool(crate::value::js_is_truthy(value) != 0)
 }
 
+/// Invoke a present (already-confirmed-callable) handler trap with the handler
+/// bound as the trap's `this` (ECMA-262: traps are called as
+/// `Call(trap, handler, args)`). Object-literal/method traps read `this` from a
+/// reserved closure slot, while free-function traps fall back to
+/// `IMPLICIT_THIS`; we set both so either style observes the handler. Mirrors
+/// the apply/construct/getOwnPropertyDescriptor trap-call dance, which the
+/// per-trap paths (get/set/has/deleteProperty/defineProperty/…) previously
+/// skipped — they called the trap with the wrong `this` and, for get/set,
+/// dropped the trailing `receiver` argument.
+fn call_trap(handler: f64, trap: f64, args: &[f64]) -> f64 {
+    let rebound = crate::closure::clone_closure_rebind_this(trap.to_bits(), handler);
+    let closure = closure_from(f64::from_bits(rebound));
+    if closure.is_null() {
+        return throw_type_error("proxy trap is not a function");
+    }
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let a = |i: usize| -> f64 { args.get(i).copied().unwrap_or(undef) };
+    let prev = crate::object::js_implicit_this_set(handler);
+    let result = match args.len() {
+        0 => js_closure_call0(closure),
+        1 => js_closure_call1(closure, a(0)),
+        2 => js_closure_call2(closure, a(0), a(1)),
+        3 => js_closure_call3(closure, a(0), a(1), a(2)),
+        _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+    };
+    crate::object::js_implicit_this_set(prev);
+    result
+}
+
 /// Throw `TypeError: Reflect.<op> called on non-object`. Does not return.
 fn reflect_non_object_typeerror(op: &str) -> f64 {
     let msg = format!("Reflect.{op} called on non-object");
@@ -469,9 +507,32 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
     }
     let trap = handler_trap(handler, "get");
     if is_callable(trap) {
-        return js_closure_call2(closure_from(trap), target, key);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target_h = scope.root_nanbox_f64(target);
+        let key_h = scope.root_nanbox_f64(key);
+        let result = call_trap(
+            handler,
+            trap,
+            &[
+                target_h.get_nanbox_f64(),
+                key_h.get_nanbox_f64(),
+                proxy_boxed,
+            ],
+        );
+        let result_h = scope.root_nanbox_f64(result);
+        invariants::enforce_get_invariant(
+            target_h.get_nanbox_f64(),
+            key_h.get_nanbox_f64(),
+            result_h.get_nanbox_f64(),
+        );
+        return result_h.get_nanbox_f64();
     }
-    // No get trap — forward to target.
+    // No get trap — forward to the target's `[[Get]]`. A proxy target must
+    // recurse through proxy dispatch rather than `target_get`, which would deref
+    // the fake pointer.
+    if lookup(target).is_some() {
+        return js_proxy_get(target, key);
+    }
     target_get(target, key)
 }
 
@@ -568,9 +629,33 @@ pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
     if is_callable(trap) {
         // #2756: the `set` trap's boolean result is observable through
         // `Reflect.set(proxy, …)` (and strict-mode assignment). Coerce and
-        // return it rather than discarding it.
-        let trap_result = js_closure_call3(closure_from(trap), target, key, value);
-        return coerce_trap_bool(trap_result);
+        // return it rather than discarding it. The trap receives the spec
+        // argument list `(target, key, value, receiver)` with `this` bound to
+        // the handler.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target_h = scope.root_nanbox_f64(target);
+        let key_h = scope.root_nanbox_f64(key);
+        let value_h = scope.root_nanbox_f64(value);
+        let trap_result = call_trap(
+            handler,
+            trap,
+            &[
+                target_h.get_nanbox_f64(),
+                key_h.get_nanbox_f64(),
+                value_h.get_nanbox_f64(),
+                proxy_boxed,
+            ],
+        );
+        // A falsy trap result means the assignment failed; no invariant check.
+        if crate::value::js_is_truthy(trap_result) == 0 {
+            return nanbox_bool(false);
+        }
+        invariants::enforce_set_invariant(
+            target_h.get_nanbox_f64(),
+            key_h.get_nanbox_f64(),
+            value_h.get_nanbox_f64(),
+        );
+        return nanbox_bool(true);
     }
     // No set trap — forward to the target's `[[Set]]`. When the target is
     // itself a Proxy, recurse through the proxy dispatch (its own trap or
@@ -1119,7 +1204,30 @@ pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
     }
     let trap = handler_trap(handler, "has");
     if is_callable(trap) {
-        return js_closure_call2(closure_from(trap), target, key);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target_h = scope.root_nanbox_f64(target);
+        let key_h = scope.root_nanbox_f64(key);
+        let trap_result = call_trap(
+            handler,
+            trap,
+            &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
+        );
+        // [[HasProperty]] invariant: a `false` trap result is rejected when the
+        // target owns the key non-configurably, or the target is non-extensible
+        // and owns the key.
+        if crate::value::js_is_truthy(trap_result) == 0 {
+            invariants::enforce_has_false_invariant(
+                target_h.get_nanbox_f64(),
+                key_h.get_nanbox_f64(),
+            );
+            return nanbox_bool(false);
+        }
+        return nanbox_bool(true);
+    }
+    // No has trap — forward to the target's `[[HasProperty]]`, recursing through
+    // a proxy target.
+    if lookup(target).is_some() {
+        return js_proxy_has(target, key);
     }
     crate::object::js_object_has_property(target, key)
 }
@@ -1150,10 +1258,27 @@ pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
     if is_callable(trap) {
         // #2760: the `deleteProperty` trap's boolean result is observable
         // through `Reflect.deleteProperty(proxy, …)`.
-        let trap_result = js_closure_call2(closure_from(trap), target, key);
-        return coerce_trap_bool(trap_result);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target_h = scope.root_nanbox_f64(target);
+        let key_h = scope.root_nanbox_f64(key);
+        let trap_result = call_trap(
+            handler,
+            trap,
+            &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
+        );
+        if crate::value::js_is_truthy(trap_result) == 0 {
+            return nanbox_bool(false);
+        }
+        // [[Delete]] invariant: a `true` result is rejected when the target owns
+        // the key non-configurably, or owns it and is non-extensible.
+        invariants::enforce_delete_invariant(target_h.get_nanbox_f64(), key_h.get_nanbox_f64());
+        return nanbox_bool(true);
     }
-    // Forward to target with ordinary `[[Delete]]` semantics.
+    // No trap — forward to the target's `[[Delete]]`, recursing through a proxy
+    // target.
+    if lookup(target).is_some() {
+        return js_proxy_delete(target, key);
+    }
     reflect_ordinary_delete(target, key)
 }
 
@@ -1432,22 +1557,14 @@ pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: 
 /// followed by own symbol keys (Node order: integer-index then insertion-order
 /// string keys, then symbols). Throws `TypeError` for a non-object target.
 ///
-/// Proxy `ownKeys` traps are out of scope (Perry has no `ownKeys` trap
-/// dispatch); a proxy target falls through to its registered target's keys.
+/// For a proxy, dispatches the `ownKeys` trap (with type/duplicate/invariant
+/// validation) via [`js_proxy_own_keys`].
 #[no_mangle]
 pub extern "C" fn js_reflect_own_keys(target: f64) -> f64 {
-    // Resolve a proxy to its target so we enumerate real keys.
-    let real = if let Some(id) = lookup(target) {
-        PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|o| o.as_ref())
-                .map(|e| e.target)
-                .unwrap_or(f64::from_bits(TAG_UNDEFINED))
-        })
-    } else {
-        target
-    };
+    if lookup(target).is_some() {
+        return own_keys::js_proxy_own_keys(target);
+    }
+    let real = target;
     if !reflect_value_is_object(real) {
         return reflect_non_object_typeerror("ownKeys");
     }
@@ -1524,8 +1641,28 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64
         }
         let trap = handler_trap(handler, "defineProperty");
         if is_callable(trap) {
-            let trap_result = js_closure_call3(closure_from(trap), target, key, descriptor);
-            return coerce_trap_bool(trap_result);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let target_h = scope.root_nanbox_f64(target);
+            let key_h = scope.root_nanbox_f64(key);
+            let desc_h = scope.root_nanbox_f64(descriptor);
+            let trap_result = call_trap(
+                handler,
+                trap,
+                &[
+                    target_h.get_nanbox_f64(),
+                    key_h.get_nanbox_f64(),
+                    desc_h.get_nanbox_f64(),
+                ],
+            );
+            if crate::value::js_is_truthy(trap_result) == 0 {
+                return nanbox_bool(false);
+            }
+            invariants::enforce_define_property_invariant(
+                target_h.get_nanbox_f64(),
+                key_h.get_nanbox_f64(),
+                desc_h.get_nanbox_f64(),
+            );
+            return nanbox_bool(true);
         }
         // No trap — define on the underlying target. When the target is itself
         // a Proxy, recurse through the proxy dispatch rather than the ordinary
@@ -1547,6 +1684,18 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64
 /// `getPrototypeOf(value).constructor`, crashing on `null.constructor`).
 /// Callers must have already confirmed `obj` is a registered proxy.
 pub(crate) fn js_proxy_get_prototype_of(obj: f64) -> f64 {
+    if lookup(obj).is_none() {
+        return crate::object::js_object_get_prototype_of(obj);
+    }
+    proxy_get_prototype_of_impl(obj)
+}
+
+/// Shared Proxy `[[GetPrototypeOf]]` (ECMA-262 §10.5.1): dispatch the trap
+/// bound to the handler, validate the result is an Object or `null`, and (when
+/// the target is non-extensible) enforce that the trap result matches the
+/// target's actual prototype. Used by both `Object.getPrototypeOf(proxy)` and
+/// `Reflect.getPrototypeOf(proxy)` so they validate identically.
+fn proxy_get_prototype_of_impl(obj: f64) -> f64 {
     let Some(id) = lookup(obj) else {
         return crate::object::js_object_get_prototype_of(obj);
     };
@@ -1565,11 +1714,28 @@ pub(crate) fn js_proxy_get_prototype_of(obj: f64) -> f64 {
         return revoked_return();
     }
     let trap = handler_trap(handler, "getPrototypeOf");
-    if is_callable(trap) {
-        return js_closure_call1(closure_from(trap), target);
+    let trap_bits = trap.to_bits();
+    if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
+        return reflect_target_get_prototype_of(target);
     }
-    // No trap — the prototype is the target's prototype.
-    crate::object::js_object_get_prototype_of(target)
+    if !is_callable_function(trap) {
+        return throw_type_error("proxy getPrototypeOf trap is not a function");
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let result = call_trap(handler, trap, &[target_h.get_nanbox_f64()]);
+    let result_bits = result.to_bits();
+    if result_bits != TAG_NULL && !reflect_value_is_object(result) {
+        return throw_type_error("proxy getPrototypeOf trap returned non-object");
+    }
+    let target = target_h.get_nanbox_f64();
+    if crate::object::obj_value_no_extend(target) {
+        let actual = reflect_target_get_prototype_of(target);
+        if actual.to_bits() != result_bits {
+            return throw_type_error("proxy getPrototypeOf trap violates target invariant");
+        }
+    }
+    result
 }
 
 /// `Reflect.getPrototypeOf(obj)` — shares the actual prototype lookup with
@@ -1581,54 +1747,11 @@ pub extern "C" fn js_reflect_get_prototype_of(obj: f64) -> f64 {
     // step 1). Note `Object.getPrototypeOf` is more lenient (ToObject-coerces
     // primitives), so guard here before delegating. Proxies have a registered
     // entry and are objects, so they pass this check and dispatch below.
-    if let Some(id) = lookup(obj) {
-        let (target, handler, revoked) = PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|o| o.as_ref())
-                .map(|e| (e.target, e.handler, e.revoked))
-                .unwrap_or((
-                    f64::from_bits(TAG_UNDEFINED),
-                    f64::from_bits(TAG_UNDEFINED),
-                    false,
-                ))
-        });
-        if revoked {
-            return revoked_return();
-        }
-        let trap = handler_trap(handler, "getPrototypeOf");
-        let trap_bits = trap.to_bits();
-        if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
-            return reflect_target_get_prototype_of(target);
-        }
-        if !is_callable_function(trap) {
-            return throw_type_error("proxy getPrototypeOf trap is not a function");
-        }
-        let rebound = crate::closure::clone_closure_rebind_this(trap_bits, handler);
-        let closure = closure_from(f64::from_bits(rebound));
-        if closure.is_null() {
-            return throw_type_error("proxy getPrototypeOf trap is not a function");
-        }
-        let prev = crate::object::js_implicit_this_set(handler);
-        let result = js_closure_call1(closure, target);
-        crate::object::js_implicit_this_set(prev);
-        let result_bits = result.to_bits();
-        if result_bits != TAG_NULL && !reflect_value_is_object(result) {
-            return throw_type_error("proxy getPrototypeOf trap returned non-object");
-        }
-        if crate::object::obj_value_no_extend(target) {
-            let actual = reflect_target_get_prototype_of(target);
-            if actual.to_bits() != result_bits {
-                return throw_type_error("proxy getPrototypeOf trap violates target invariant");
-            }
-        }
-        return result;
+    if lookup(obj).is_some() {
+        return proxy_get_prototype_of_impl(obj);
     }
     if !reflect_value_is_object(obj) {
         return reflect_non_object_typeerror("getPrototypeOf");
-    }
-    if lookup(obj).is_some() {
-        return js_proxy_get_prototype_of(obj);
     }
     crate::object::js_object_get_prototype_of(obj)
 }
@@ -1655,8 +1778,21 @@ pub extern "C" fn js_reflect_is_extensible(target: f64) -> f64 {
         }
         let trap = handler_trap(handler, "isExtensible");
         if is_callable(trap) {
-            let trap_result = js_closure_call1(closure_from(trap), inner);
-            return coerce_trap_bool(trap_result);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let inner_h = scope.root_nanbox_f64(inner);
+            let trap_result = call_trap(handler, trap, &[inner_h.get_nanbox_f64()]);
+            let booleanized = crate::value::js_is_truthy(trap_result) != 0;
+            // Invariant: the trap result must equal the target's actual
+            // extensibility.
+            let target_ext = crate::value::js_is_truthy(crate::object::js_object_is_extensible(
+                inner_h.get_nanbox_f64(),
+            )) != 0;
+            if booleanized != target_ext {
+                return throw_type_error(
+                    "proxy isExtensible trap result does not match target extensibility",
+                );
+            }
+            return nanbox_bool(booleanized);
         }
         return crate::object::js_object_is_extensible(inner);
     }
@@ -1689,8 +1825,22 @@ pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
         }
         let trap = handler_trap(handler, "preventExtensions");
         if is_callable(trap) {
-            let trap_result = js_closure_call1(closure_from(trap), inner);
-            return coerce_trap_bool(trap_result);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let inner_h = scope.root_nanbox_f64(inner);
+            let trap_result = call_trap(handler, trap, &[inner_h.get_nanbox_f64()]);
+            let booleanized = crate::value::js_is_truthy(trap_result) != 0;
+            // Invariant: a `true` result requires the target to be non-extensible.
+            if booleanized {
+                let target_ext = crate::value::js_is_truthy(
+                    crate::object::js_object_is_extensible(inner_h.get_nanbox_f64()),
+                ) != 0;
+                if target_ext {
+                    return throw_type_error(
+                        "proxy preventExtensions trap returned true but target is extensible",
+                    );
+                }
+            }
+            return nanbox_bool(booleanized);
         }
         crate::object::js_object_prevent_extensions(inner);
         return nanbox_bool(true);
@@ -1699,65 +1849,6 @@ pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
         return reflect_non_object_typeerror("preventExtensions");
     }
     crate::object::js_object_prevent_extensions(target);
-    nanbox_bool(true)
-}
-
-/// `Reflect.setPrototypeOf(target, proto)` (#2761).
-///
-/// Returns a boolean: `true` when the prototype change is applied, `false`
-/// when it is rejected (target is non-extensible and the proto actually
-/// changes). Throws `TypeError` for a non-object target or a proto that is
-/// neither an object nor `null`.
-///
-/// Proxy `setPrototypeOf` traps are out of scope (no trap dispatch); a proxy
-/// target reports `true` after recording the change on its underlying target.
-#[no_mangle]
-pub extern "C" fn js_reflect_set_prototype_of(target: f64, proto: f64) -> f64 {
-    // Resolve a proxy to its underlying target. A proxy's target can itself be
-    // a proxy, so unwrap to the innermost non-proxy object — operating on a
-    // proxy via the ordinary `obj_value_no_extend` / set-prototype helpers below
-    // would deref the fake pointer and segfault. (setPrototypeOf trap dispatch
-    // is out of scope; this just avoids the crash.)
-    let mut real = target;
-    for _ in 0..64 {
-        match lookup(real) {
-            Some(id) => {
-                real = PROXIES.with(|p| {
-                    p.borrow()
-                        .get(id as usize)
-                        .and_then(|o| o.as_ref())
-                        .map(|e| e.target)
-                        .unwrap_or(f64::from_bits(TAG_UNDEFINED))
-                });
-            }
-            None => break,
-        }
-    }
-
-    // Target must be an object.
-    if !reflect_value_is_object(real) {
-        return reflect_non_object_typeerror("setPrototypeOf");
-    }
-
-    // Proto must be an object or null.
-    let proto_bits = proto.to_bits();
-    let proto_ok = proto_bits == TAG_NULL || reflect_value_is_object(proto);
-    if !proto_ok {
-        return throw_type_error("Object prototype may only be an Object or null");
-    }
-
-    // #2761: a non-extensible target rejects a *changing* prototype. If the
-    // current prototype already equals `proto`, the no-op set still succeeds.
-    if crate::object::obj_value_no_extend(real) {
-        let current = crate::object::js_object_get_prototype_of(real);
-        if current.to_bits() != proto_bits {
-            return nanbox_bool(false);
-        }
-        return nanbox_bool(true);
-    }
-
-    // Apply via the shared Object-side helper (records in the side-table).
-    crate::object::js_object_set_prototype_of(real, proto);
     nanbox_bool(true)
 }
 
