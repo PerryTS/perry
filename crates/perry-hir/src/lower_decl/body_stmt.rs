@@ -549,7 +549,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     };
                     if let Some(key_ast) = computed_key {
                         let lowered = lower_expr(ctx, key_ast)?;
-                        result.push(Stmt::Expr(lowered));
+                        // ComputedPropertyName is `ToPropertyKey(GetValue(eval))`
+                        // — apply ToPropertyKey too so a non-primitive key with
+                        // no callable toString/valueOf (e.g. `Object.create(null)`)
+                        // throws TypeError, matching the non-deduped registration
+                        // path (Test262 computed-err-to-prop-key).
+                        result.push(Stmt::Expr(Expr::Call {
+                            callee: Box::new(Expr::ExternFuncRef {
+                                name: "js_to_property_key".to_string(),
+                                param_types: vec![Type::Any],
+                                return_type: Type::Any,
+                            }),
+                            args: vec![lowered],
+                            type_args: Vec::new(),
+                        }));
                     }
                 }
             }

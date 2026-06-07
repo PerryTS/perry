@@ -66,9 +66,18 @@ unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
         // Custom toString returned a non-primitive (object): per spec, fall
         // through to `valueOf`.
         MethodOutcome::NonPrimitive => {}
-        // No callable custom toString — this is the default
-        // `Object.prototype.toString` → `"[object Object]"`. Stop here.
-        MethodOutcome::Absent => return None,
+        // No callable custom toString. For an ordinary object this stands in
+        // for the default `Object.prototype.toString` → `"[object Object]"`
+        // (stop here). But a null-`[[Prototype]]` object (`Object.create(null)`)
+        // genuinely has NO toString/valueOf, so OrdinaryToPrimitive must fall
+        // through to `valueOf` and, finding none, throw — matching Node
+        // (`String(Object.create(null))` throws; Test262 ToPropertyKey on a
+        // null-proto computed key).
+        MethodOutcome::Absent => {
+            if !value_is_null_proto_object(value) {
+                return None;
+            }
+        }
     }
 
     match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
@@ -82,6 +91,28 @@ unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
         // custom `toString` never reaches this throw.
         MethodOutcome::NonPrimitive | MethodOutcome::Absent => throw_cannot_convert_to_primitive(),
     }
+}
+
+/// True iff `value` is a heap object stamped `OBJ_FLAG_NULL_PROTO`
+/// (`Object.create(null)` and friends) — i.e. it has no `[[Prototype]]`, so it
+/// does not inherit the default `Object.prototype.toString`/`valueOf`.
+unsafe fn value_is_null_proto_object(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let obj = jsval.as_pointer::<crate::ObjectHeader>();
+    if obj.is_null() || (obj as usize) < 0x10000 {
+        return false;
+    }
+    if !crate::object::is_valid_obj_ptr(obj as *const u8) {
+        return false;
+    }
+    if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
 }
 
 #[cold]
