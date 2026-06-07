@@ -1161,6 +1161,21 @@ pub unsafe extern "C" fn js_register_prototype_method(
         Ok(s) => s.to_string(),
         Err(_) => return,
     };
+    // `C.prototype.X = v` where X is an instance accessor on the class must
+    // invoke the setter, not overwrite the accessor with a data method. This
+    // write was lowered as a prototype-method monkey-patch because computed-key
+    // accessors (`set [expr](v)`) aren't known at compile time, so the
+    // recogniser couldn't route it to the ordinary setter path. If X has a
+    // setter, invoke it with `this` = the prototype ref; if it's a getter-only
+    // accessor, the (non-strict) assignment is a silent no-op rather than a
+    // clobber (Test262 accessor-name-*/computed setters).
+    let proto_ref = class_prototype_ref_value(class_id);
+    if class_instance_setter_apply(class_id, &name, proto_ref, value) {
+        return;
+    }
+    if class_has_instance_getter(class_id, &name) {
+        return;
+    }
     class_prototype_method_root_store(class_id, name, value.to_bits());
     // Ensure the receiver class can be `typeof`-detected. Method-less
     // classes that only get extended via `Class.prototype.m = fn`
@@ -4059,6 +4074,33 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
 /// Returns `true` if a setter was found and called. Used when a write targets
 /// a class prototype ref (`C.prototype[key] = v`) whose `key` is an accessor
 /// defined on the prototype itself (Test262 accessor-name-inst setters).
+/// Whether the class (or an ancestor) has an instance `get name()` accessor.
+pub(crate) fn class_has_instance_getter(class_id: u32, name: &str) -> bool {
+    let Ok(guard) = CLASS_VTABLE_REGISTRY.read() else {
+        return false;
+    };
+    let Some(reg) = guard.as_ref() else {
+        return false;
+    };
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while cid != 0 && depth < 32 {
+        if let Some(vt) = reg.get(&cid) {
+            if vt.getters.contains_key(name) {
+                return true;
+            }
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
 pub(crate) unsafe fn class_instance_setter_apply(
     class_id: u32,
     name: &str,
