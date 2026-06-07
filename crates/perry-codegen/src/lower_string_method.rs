@@ -363,11 +363,21 @@ pub(crate) fn lower_string_method(
             // Detect a string literal that includes $<name> back-refs
             // so we route to the named-group-aware runtime variant.
             let repl_has_named = matches!(&args[1], Expr::String(s) if s.contains("$<"));
+            // A non-RegExp, non-static-string `searchValue` is `ToString`-coerced
+            // (running user `toString`/`valueOf`, may throw) BEFORE the
+            // replacement is coerced, per ECMA-262 §22.1.3.19. Likewise a
+            // non-function, non-static-string `replaceValue`.
+            let needle_is_str = is_string_expr(ctx, &args[0]);
+            let repl_is_str = is_string_expr(ctx, &args[1]);
             let needle_box = lower_expr(ctx, &args[0])?;
             let repl_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let needle_handle = unbox_str_handle(blk, &needle_box);
+            let needle_handle = if needle_is_regex || needle_is_str {
+                unbox_str_handle(blk, &needle_box)
+            } else {
+                blk.call(I64, "js_string_coerce", &[(DOUBLE, &needle_box)])
+            };
             if repl_is_function {
                 // repl_box is a NaN-boxed closure pointer (double).
                 // The callback helpers take the callback as f64.
@@ -388,8 +398,13 @@ pub(crate) fn lower_string_method(
                 );
                 return Ok(nanbox_string_inline(blk, &result));
             }
-            // Issue #214: SSO-safe unbox of replacement string.
-            let repl_handle = unbox_str_handle(blk, &repl_box);
+            // Issue #214: SSO-safe unbox of replacement string; a non-static-
+            // string replacement is `ToString`-coerced (after `searchValue`).
+            let repl_handle = if repl_is_str {
+                unbox_str_handle(blk, &repl_box)
+            } else {
+                blk.call(I64, "js_string_coerce", &[(DOUBLE, &repl_box)])
+            };
             let runtime_fn = if needle_is_regex {
                 if property == "replaceAll" {
                     if repl_has_named {
@@ -542,11 +557,16 @@ pub(crate) fn lower_string_method(
                 );
             }
             let len_d = lower_expr(ctx, &args[0])?;
-            // Optional pad string; defaults to " " when missing.
+            // Optional pad string; defaults to " " when missing. A provided
+            // fill is `ToString`-coerced (ECMA-262 §22.1.3.16) via
+            // `js_string_pad_fill` — `undefined` → null handle (runtime falls
+            // back to " "), otherwise ToString — so non-string fills (numbers,
+            // booleans, `null`, `{ toString }`) render correctly instead of
+            // being bit-cast and dropped.
             let pad_handle = if args.len() == 2 {
                 let pad_box = lower_expr(ctx, &args[1])?;
                 let blk = ctx.block();
-                unbox_str_handle(blk, &pad_box)
+                blk.call(I64, "js_string_pad_fill", &[(DOUBLE, &pad_box)])
             } else {
                 let sp_idx = ctx.strings.intern(" ");
                 let sp_global = format!("@{}", ctx.strings.entry(sp_idx).handle_global);
@@ -749,14 +769,22 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(blk, &result))
         }
         "concat" => {
-            // str.concat(s1, s2, …) = str + s1 + s2 + … . Sequential
-            // js_string_concat calls; each op returns a new handle.
+            // str.concat(s1, s2, …) = str + ToString(s1) + ToString(s2) + … .
+            // Each arg is `ToString`-coerced (ECMA-262 §22.1.3.5) — a non-string
+            // arg (`undefined`, a boolean, a `{ toString }` object) must render
+            // as its string form, not be bit-cast as a string handle (which
+            // dropped `undefined`/booleans). A static string arg skips coercion.
             let blk = ctx.block();
             let mut acc_handle = unbox_str_handle(blk, &recv_box);
             for a in args {
+                let a_is_str = is_string_expr(ctx, a);
                 let s_box = lower_expr(ctx, a)?;
                 let blk = ctx.block();
-                let s_handle = unbox_str_handle(blk, &s_box);
+                let s_handle = if a_is_str {
+                    unbox_str_handle(blk, &s_box)
+                } else {
+                    blk.call(I64, "js_string_coerce", &[(DOUBLE, &s_box)])
+                };
                 acc_handle = blk.call(
                     I64,
                     "js_string_concat",

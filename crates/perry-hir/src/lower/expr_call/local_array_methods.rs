@@ -44,10 +44,20 @@ pub(super) fn try_local_array_methods(
                     type_info,
                     Some(Type::Union(variants)) if variants.iter().any(|v| matches!(v, Type::String))
                 );
+                // A boxed `String` wrapper (`new String("x")`, type `Named("String")`)
+                // is NOT an array: the ambiguous methods shared with Array
+                // (`indexOf`/`includes`/`slice`/`lastIndexOf`) must route to the
+                // string dispatch (which `ToString`-coerces the wrapper), not to
+                // `ArrayIndexOf`/`ArrayIncludes` (which read it as an array and
+                // return -1/false). `search`/`match`/`split` already bypass this
+                // file because they aren't Array methods.
+                let is_boxed_string_wrapper =
+                    matches!(type_info, Some(Type::Named(n)) if n == "String");
                 let is_known_string = type_info
                     .map(|ty| matches!(ty, Type::String))
                     .unwrap_or(false)
-                    || is_union_with_string;
+                    || is_union_with_string
+                    || is_boxed_string_wrapper;
                 // A user-defined class instance is NOT an array — must skip the array
                 // fast path so user-defined methods like Stack<T>.push() are dispatched
                 // to the class method, not runtime js_array_push. Map/Set/Promise are

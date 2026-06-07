@@ -9,6 +9,27 @@ pub extern "C" fn js_string_alloc_space() -> *mut StringHeader {
     js_string_from_bytes(" ".as_ptr(), 1)
 }
 
+/// Coerce a `padStart`/`padEnd` `fillString` argument (ECMA-262 §22.1.3.16
+/// `StringPad`): `undefined` keeps the default — returned as a null pointer so
+/// `js_string_pad_*` substitutes `" "` — while any other value is
+/// `ToString`-coerced (a number/boolean/null/`{ toString }` object renders to
+/// its string form, may run user code and throw). A raw `unbox_str_handle` of
+/// such an arg bit-cast it as a string handle, dropping non-string fills.
+#[no_mangle]
+pub extern "C" fn js_string_pad_fill(value: f64) -> *mut StringHeader {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return std::ptr::null_mut();
+    }
+    crate::builtins::js_string_coerce(value)
+}
+
+// `#[used]` keepalive: `js_string_pad_fill` is reached only from generated
+// `.o`, so the whole-program auto-optimize bitcode rebuild would dead-strip it
+// without an anchor (see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_PAD_FILL: extern "C" fn(f64) -> *mut StringHeader = js_string_pad_fill;
+
 /// Maximum string length Perry/V8 supports as a single `String`. This
 /// mirrors the value Node v25 reports via `buffer.constants.MAX_STRING_LENGTH`
 /// (536_870_888 = `(1 << 29) - 24` on this V8 build). `padStart`/`padEnd`

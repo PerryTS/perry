@@ -1821,7 +1821,11 @@ pub unsafe extern "C" fn js_native_call_method(
                     let regex_val =
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
                     let i32_v = crate::regex::js_string_search_value(s_ptr, regex_val);
-                    return f64::from_bits(JSValue::int32(i32_v).bits());
+                    // Return a RAW `f64` (not NaN-boxed INT32_TAG): a boxed-int
+                    // result fails `aString.search(x) === 5` strict-equality
+                    // against a plain number literal. Mirrors the `indexOf`
+                    // arm's `as f64` convention.
+                    return i32_v as f64;
                 }
                 // Refs #421 — common string methods on any-typed receivers.
                 // Hono's compiled JS (and most npm packages with stripped TS
