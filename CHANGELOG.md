@@ -2,6 +2,18 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1141 — Node streams honor `emitClose` / `autoDestroy` close-lifecycle options
+
+`new Readable/Writable/Duplex({ emitClose: false })` now suppresses the `'close'`
+event on `destroy()` (previously it fired regardless), and `autoDestroy: false`
+is honored, matching Node's stream close lifecycle. Verified:
+`Readable({ emitClose: false })` → close listener does **not** fire on
+`destroy()`, while the default (`emitClose: true`) still fires it. Option keys
+are read from the constructor options and stored as hidden stream state
+(`node_stream_keys.rs` / `node_stream_constructors.rs` / `node_stream_readwrite.rs`
+/ `node_stream_destroy_state.rs`); covered by new `node_stream_tests_extra.rs`
+unit tests.
+
 ## v0.5.1140 — `http`/`https` Agent drops the bogus `close` method (matches Node)
 
 Node's `http.Agent`/`https.Agent` has no `close()` method — only `destroy()`.
