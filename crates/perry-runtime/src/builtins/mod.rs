@@ -50,8 +50,8 @@ mod table;
 // `crate::builtins::js_*` path).
 
 pub use arithmetic::{
-    js_add, js_div, js_eq, js_ge, js_gt, js_le, js_loose_eq, js_lt, js_mod, js_mul, js_sub,
-    js_value_typeof,
+    js_add, js_div, js_eq, js_ge, js_gt, js_le, js_loose_eq, js_lt, js_mod, js_mul, js_rel_ge,
+    js_rel_gt, js_rel_le, js_rel_lt, js_sub, js_value_typeof,
 };
 
 pub use console::{

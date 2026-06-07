@@ -125,24 +125,233 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     JSValue::bool(false)
 }
 
+// ----------------------------------------------------------------------------
+// Abstract Relational Comparison (ES2024 §7.2.13: `IsLessThan(x, y, LeftFirst)`)
+// ----------------------------------------------------------------------------
+//
+// The previous `js_lt`/`le`/`gt`/`ge` did a bare `a.to_number() < b.to_number()`,
+// which is wrong for every non-numeric operand: it never runs `ToPrimitive`
+// (`{ valueOf() {…} } < 1`), never lexicographically compares two strings, and
+// derefs BigInt / object operands as raw doubles (NaN → unordered → always
+// `false`). The codegen keeps a bare-`fcmp` fast path for *statically numeric*
+// operands; everything else now routes through `js_rel_{lt,le,gt,ge}` which call
+// the full abstract relational comparison below.
+
+const REL_FALSE: i32 = 0;
+const REL_TRUE: i32 = 1;
+const REL_UNDEFINED: i32 = 2;
+
+const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+const TAG_FALSE_BITS: u64 = 0x7FFC_0000_0000_0003;
+
+#[inline]
+fn rel_bool_f64(b: bool) -> f64 {
+    f64::from_bits(if b { TAG_TRUE_BITS } else { TAG_FALSE_BITS })
+}
+
+/// `ToPrimitive(value, NUMBER)` returning the primitive as a NaN-boxed `f64`.
+/// A `Date` coerces to its millisecond timestamp; an object with no usable
+/// `valueOf`/`toString` primitive falls back to the ordinary `ToString`
+/// (`"[object Object]"`, a function's source, …). Propagates any user
+/// exception or `TypeError` by unwinding.
+unsafe fn rel_to_primitive(value: f64) -> f64 {
+    if crate::date::is_date_value(value) {
+        // ToPrimitive(date, number) → Date.prototype.valueOf → the ms timestamp,
+        // which is itself a Number (a plain `f64` is its own NaN-box).
+        return crate::date::js_date_coerce_number(value);
+    }
+    match crate::value::to_primitive_number(value) {
+        crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
+        crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {
+            let s = crate::value::js_jsvalue_to_string(value);
+            crate::value::js_nanbox_string(s as i64)
+        }
+        crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+            crate::collection_iter::throw_type_error("Cannot convert object to primitive value")
+        }
+    }
+}
+
+/// Lexicographic (byte-order) compare of two already-`ToPrimitive`'d string
+/// values. Returns `< 0`, `0`, `> 0` like `memcmp`. (Lone-surrogate / true
+/// UTF-16 code-unit ordering is a separate pre-existing WTF-8 gap.)
+unsafe fn rel_string_compare(a: f64, b: f64) -> i32 {
+    let pa = crate::value::js_get_string_pointer_unified(a) as *const crate::string::StringHeader;
+    let pb = crate::value::js_get_string_pointer_unified(b) as *const crate::string::StringHeader;
+    crate::string::js_string_compare(pa, pb)
+}
+
+/// `IsLessThan(x, y, LeftFirst)` — the abstract relational comparison.
+/// `x_first` is `LeftFirst`: it controls only the order in which `ToPrimitive`
+/// runs on the two operands (observable when a `valueOf`/`toString` has side
+/// effects). Returns [`REL_TRUE`], [`REL_FALSE`], or [`REL_UNDEFINED`].
+unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
+    let (px, py) = if x_first {
+        let px = rel_to_primitive(x);
+        let py = rel_to_primitive(y);
+        (px, py)
+    } else {
+        let py = rel_to_primitive(y);
+        let px = rel_to_primitive(x);
+        (px, py)
+    };
+
+    let vx = JSValue::from_bits(px.to_bits());
+    let vy = JSValue::from_bits(py.to_bits());
+
+    // Both String → code-unit (byte) compare; never `undefined`.
+    if vx.is_any_string() && vy.is_any_string() {
+        return if rel_string_compare(px, py) < 0 {
+            REL_TRUE
+        } else {
+            REL_FALSE
+        };
+    }
+
+    let x_big = vx.is_bigint();
+    let y_big = vy.is_bigint();
+
+    // BigInt vs String / String vs BigInt: parse the string as a BigInt
+    // (StringToBigInt); a non-numeric string makes the comparison `undefined`.
+    if x_big && vy.is_any_string() {
+        let s = string_content_for_bigint(py);
+        return match crate::bigint::string_to_bigint(&s) {
+            None => REL_UNDEFINED,
+            Some(ny) => {
+                if crate::bigint::js_bigint_cmp(vx.as_bigint_ptr(), ny) < 0 {
+                    REL_TRUE
+                } else {
+                    REL_FALSE
+                }
+            }
+        };
+    }
+    if vx.is_any_string() && y_big {
+        let s = string_content_for_bigint(px);
+        return match crate::bigint::string_to_bigint(&s) {
+            None => REL_UNDEFINED,
+            Some(nx) => {
+                if crate::bigint::js_bigint_cmp(nx, vy.as_bigint_ptr()) < 0 {
+                    REL_TRUE
+                } else {
+                    REL_FALSE
+                }
+            }
+        };
+    }
+
+    // Both BigInt → exact integer compare.
+    if x_big && y_big {
+        return if crate::bigint::js_bigint_cmp(vx.as_bigint_ptr(), vy.as_bigint_ptr()) < 0 {
+            REL_TRUE
+        } else {
+            REL_FALSE
+        };
+    }
+
+    // BigInt vs Number (mixed): exact mathematical compare. `js_number_coerce`
+    // is `ToNumber` and throws on a Symbol operand, as the spec requires.
+    if x_big {
+        let yn = js_number_coerce(py);
+        return match crate::bigint::bigint_cmp_f64(vx.as_bigint_ptr(), yn) {
+            2 => REL_UNDEFINED,
+            c if c < 0 => REL_TRUE,
+            _ => REL_FALSE,
+        };
+    }
+    if y_big {
+        let xn = js_number_coerce(px);
+        // `bigint_cmp_f64(y, xn)` is the sign of (y − x); x < y ⇔ that is positive.
+        return match crate::bigint::bigint_cmp_f64(vy.as_bigint_ptr(), xn) {
+            2 => REL_UNDEFINED,
+            c if c > 0 => REL_TRUE,
+            _ => REL_FALSE,
+        };
+    }
+
+    // Both Number (after ToNumber). NaN on either side → undefined.
+    let xn = js_number_coerce(px);
+    let yn = js_number_coerce(py);
+    if xn.is_nan() || yn.is_nan() {
+        return REL_UNDEFINED;
+    }
+    if xn < yn {
+        REL_TRUE
+    } else {
+        REL_FALSE
+    }
+}
+
+/// Materialize a string primitive's bytes into an owned `String` for
+/// `StringToBigInt`. Handles both heap (`STRING_TAG`) and inline SSO strings.
+unsafe fn string_content_for_bigint(value: f64) -> String {
+    let ptr =
+        crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader;
+    if ptr.is_null() {
+        return String::new();
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// `x < y` — codegen routes here for any relational `<` whose operands are not
+/// both statically numeric. Returns a NaN-boxed boolean (`f64`).
+#[no_mangle]
+pub extern "C" fn js_rel_lt(x: f64, y: f64) -> f64 {
+    rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_TRUE)
+}
+
+/// `x > y` ⇔ `IsLessThan(y, x, false)` is true (right operand `ToPrimitive`'d first).
+#[no_mangle]
+pub extern "C" fn js_rel_gt(x: f64, y: f64) -> f64 {
+    rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_TRUE)
+}
+
+/// `x <= y` ⇔ `IsLessThan(y, x, false)` is `false` (not `true`, not `undefined`).
+#[no_mangle]
+pub extern "C" fn js_rel_le(x: f64, y: f64) -> f64 {
+    rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_FALSE)
+}
+
+/// `x >= y` ⇔ `IsLessThan(x, y, true)` is `false` (not `true`, not `undefined`).
+#[no_mangle]
+pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
+    rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_FALSE)
+}
+
+// The `js_rel_*` helpers are reached only from Perry-emitted LLVM (the relational
+// fallthrough in codegen), so a bitcode/auto-optimize link can dead-strip them
+// and leave `undefined _js_rel_lt …`. Pin them with `#[used]` statics — same
+// pattern as the write-barrier roots in `gc/barrier.rs`.
+#[used]
+static KEEP_REL_LT: extern "C" fn(f64, f64) -> f64 = js_rel_lt;
+#[used]
+static KEEP_REL_GT: extern "C" fn(f64, f64) -> f64 = js_rel_gt;
+#[used]
+static KEEP_REL_LE: extern "C" fn(f64, f64) -> f64 = js_rel_le;
+#[used]
+static KEEP_REL_GE: extern "C" fn(f64, f64) -> f64 = js_rel_ge;
+
 #[no_mangle]
 pub extern "C" fn js_lt(a: JSValue, b: JSValue) -> JSValue {
-    JSValue::bool(a.to_number() < b.to_number())
+    JSValue::from_bits(js_rel_lt(f64::from_bits(a.bits()), f64::from_bits(b.bits())).to_bits())
 }
 
 #[no_mangle]
 pub extern "C" fn js_le(a: JSValue, b: JSValue) -> JSValue {
-    JSValue::bool(a.to_number() <= b.to_number())
+    JSValue::from_bits(js_rel_le(f64::from_bits(a.bits()), f64::from_bits(b.bits())).to_bits())
 }
 
 #[no_mangle]
 pub extern "C" fn js_gt(a: JSValue, b: JSValue) -> JSValue {
-    JSValue::bool(a.to_number() > b.to_number())
+    JSValue::from_bits(js_rel_gt(f64::from_bits(a.bits()), f64::from_bits(b.bits())).to_bits())
 }
 
 #[no_mangle]
 pub extern "C" fn js_ge(a: JSValue, b: JSValue) -> JSValue {
-    JSValue::bool(a.to_number() >= b.to_number())
+    JSValue::from_bits(js_rel_ge(f64::from_bits(a.bits()), f64::from_bits(b.bits())).to_bits())
 }
 
 /// Return the typeof a value as a string

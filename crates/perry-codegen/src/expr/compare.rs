@@ -53,7 +53,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // are unordered under fcmp (NaN), so `a > b` on two bigints
             // always returns false. Route through js_bigint_cmp which
             // returns -1/0/1 for the three bigint ordering outcomes.
-            if is_bigint_expr(ctx, left) || is_bigint_expr(ctx, right) {
+            //
+            // For RELATIONAL ops (`<`, `<=`, `>`, `>=`) this direct cmp is only
+            // valid when BOTH operands are statically BigInt — `js_bigint_cmp`
+            // dereferences both as BigInt pointers. A *mixed* relational like
+            // `1n < Infinity` or `0n < "1"` needs the full abstract relational
+            // comparison (BigInt-vs-Number / BigInt-vs-String coercion), so it
+            // falls through to `js_rel_*` below. Equality (`===`/`==`) keeps the
+            // either-side gate (its own cross-type handling is unchanged).
+            let is_relational_op = matches!(
+                op,
+                CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+            );
+            let bigint_fast_path = if is_relational_op {
+                is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right)
+            } else {
+                is_bigint_expr(ctx, left) || is_bigint_expr(ctx, right)
+            };
+            if bigint_fast_path {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;
                 let blk = ctx.block();
@@ -370,18 +387,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(blk.bitcast_i64_to_double(&result_bits));
             }
 
-            // #2089: an ordered relational compare (`<`, `<=`, `>`, `>=`)
-            // whose operands aren't statically numeric may be Date values —
-            // NaN-boxed `DateCell` pointers whose raw bits are NaN, so a bare
-            // `fcmp` would be unordered (always false). Coerce each operand to
-            // its ms timestamp via `js_date_coerce_number` first; plain numbers
-            // pass through unchanged, so the statically-numeric case keeps its
-            // bare `fcmp` fast path (no call emitted).
-            let coerce_relational_dates = matches!(
-                op,
-                CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
-            ) && !(is_numeric_expr(ctx, left)
-                && is_numeric_expr(ctx, right));
+            // An ordered relational compare (`<`, `<=`, `>`, `>=`) whose
+            // operands aren't BOTH statically numeric needs the full ECMAScript
+            // Abstract Relational Comparison: ToPrimitive (`{valueOf}`/`Date`),
+            // lexicographic string compare, BigInt-vs-Number/String coercion,
+            // and null/boolean/string ToNumber. A bare `fcmp` mishandles all of
+            // these (NaN-boxed operands are unordered → always `false`). Route
+            // through the runtime `js_rel_*` helpers, which return a NaN-boxed
+            // boolean. The statically-numeric case keeps the bare `fcmp` fast
+            // path below (and Dates are subsumed — they aren't numeric_expr).
+            let both_numeric = is_numeric_expr(ctx, left)
+                && is_numeric_expr(ctx, right)
+                && !is_bigint_expr(ctx, left)
+                && !is_bigint_expr(ctx, right);
+            if is_relational_op && !both_numeric {
+                let l = lower_expr(ctx, left)?;
+                let r = lower_expr(ctx, right)?;
+                let blk = ctx.block();
+                let fname = match op {
+                    CompareOp::Lt => "js_rel_lt",
+                    CompareOp::Le => "js_rel_le",
+                    CompareOp::Gt => "js_rel_gt",
+                    CompareOp::Ge => "js_rel_ge",
+                    _ => unreachable!(),
+                };
+                let res = blk.call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
+                return Ok(res);
+            }
             let l = lower_expr(ctx, left)?;
             let r = lower_expr(ctx, right)?;
             let pred = match op {
@@ -399,13 +431,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 CompareOp::LooseEq | CompareOp::LooseNe => unreachable!(),
             };
             let blk = ctx.block();
-            let (l, r) = if coerce_relational_dates {
-                let lc = blk.call(DOUBLE, "js_date_coerce_number", &[(DOUBLE, &l)]);
-                let rc = blk.call(DOUBLE, "js_date_coerce_number", &[(DOUBLE, &r)]);
-                (lc, rc)
-            } else {
-                (l, r)
-            };
             let bit = blk.fcmp(pred, &l, &r);
             let tag_true_i64 = crate::nanbox::TAG_TRUE_I64;
             let tag_false_i64 = crate::nanbox::TAG_FALSE_I64;

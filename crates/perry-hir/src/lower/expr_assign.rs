@@ -234,10 +234,22 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
     }
 
+    // NamedEvaluation also applies to logical assignment (`x ||= function(){}`,
+    // `x &&= () => {}`, `x ??= class {}`): when the LHS is a plain identifier and
+    // the RHS is an anonymous function/class, the function's `.name` becomes the
+    // identifier (ES2024 §13.15.2). Plain compound assignments (`+=`, `*=`, …)
+    // are NOT NamedEvaluation contexts, so they stay name-less.
+    let inferred_name_op = matches!(
+        assign.op,
+        ast::AssignOp::Assign
+            | ast::AssignOp::AndAssign
+            | ast::AssignOp::OrAssign
+            | ast::AssignOp::NullishAssign
+    );
     let rhs = lower_rhs_with_assignment_name(
         ctx,
         &assign.right,
-        (assign.op == ast::AssignOp::Assign)
+        inferred_name_op
             .then(|| assignment_target_inferred_name(&assign.left))
             .flatten(),
     )?;
