@@ -533,10 +533,8 @@ pub(super) fn build_and_run_link(
                 for wk in &well_known_libs {
                     cmd.arg(wk);
                 }
-                // Also link runtime to supply symbols that may be DCE'd from stdlib's
-                // bundled perry-runtime (e.g. js_closure_unbind_this, js_string_addref).
-                // On tier-3 the runtime is first stripped of every object stdlib
-                // already provides (no-op elsewhere); see dedup_runtime_for_tier3.
+                // Also link runtime for symbols DCE'd from stdlib's bundled
+                // perry-runtime; on tier-3 it's first stripped of stdlib's objects.
                 if !is_android && !is_windows {
                     cmd.arg(&dedup_runtime_for_tier3(target, runtime_lib, stdlib));
                 }
