@@ -79,6 +79,22 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     result
 }
 
+/// Read a callable's own `name` *property* as a Rust `String`, if present and a
+/// String value. Covers names installed by `Object.defineProperty(fn, "name",
+/// …)` and the `"bound …"` name a prior `.bind()` stores, neither of which is
+/// visible through the declared-name func-ptr registry. Returns `None` when no
+/// such property exists or it isn't a String.
+unsafe fn read_function_name_property(closure_ptr: usize) -> Option<String> {
+    use crate::value::JSValue;
+    let name_val = crate::closure::closure_get_dynamic_prop(closure_ptr, "name");
+    let name_jv = JSValue::from_bits(name_val.to_bits());
+    if !name_jv.is_any_string() {
+        return None;
+    }
+    let hdr = crate::builtins::js_string_coerce(name_val);
+    crate::object::has_own_helpers::str_from_string_header(hdr).map(str::to_owned)
+}
+
 /// `Function.prototype.bind(thisArg, ...boundArgs)` — create a distinct bound
 /// function closure. Captures the target closure value, the bound `this`, and
 /// the partial-applied leading args (as a JS array). The returned closure uses
@@ -136,8 +152,15 @@ pub unsafe extern "C" fn js_function_bind(
     let bound_len = target_len.saturating_sub(bound_arg_count as u32);
     crate::object::set_builtin_closure_length(bound as usize, bound_len);
 
-    // Spec `.name` = "bound " + target.name.
-    let target_name = crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize)
+    // Spec `.name` = "bound " + targetName, where targetName is `Get(Target,
+    // "name")` (the empty string when that is not a String). Read the target's
+    // `name` *property* first — it reflects an `Object.defineProperty(fn,
+    // "name", …)` override and a previous `.bind()`'s `"bound …"` name (so
+    // `f.bind().bind().name` chains to `"bound bound …"`). Fall back to the
+    // declared name from the func-ptr registry for plain named functions, which
+    // don't materialize a `name` data property.
+    let target_name = read_function_name_property(target_closure as usize)
+        .or_else(|| crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize))
         .unwrap_or_default();
     let bound_name = format!("bound {target_name}");
     let name_ptr =

@@ -2078,4 +2078,31 @@ mod tests {
             assert!(!re.is_null(), "pattern failed to construct: {pat}");
         }
     }
+
+    #[test]
+    fn surrogate_pairs_fold_to_astral_scalars() {
+        // High escape + low class → contiguous astral range.
+        assert_eq!(
+            js_regex_to_rust(r"\uD800[\uDC00-\uDC0B]"),
+            r"[\x{10000}-\x{1000b}]"
+        );
+        // Two consecutive surrogate escapes → single astral scalar.
+        assert_eq!(js_regex_to_rust(r"\uD83D\uDE00"), r"\x{1f600}");
+        // High class + full low class → coalesced astral block.
+        assert_eq!(
+            js_regex_to_rust(r"[\uD80C\uD81C-\uD820][\uDC00-\uDFFF]"),
+            r"[\x{13000}-\x{133ff}\x{17000}-\x{183ff}]"
+        );
+        // Non-surrogate escapes and ordinary classes are untouched.
+        assert_eq!(js_regex_to_rust(r"[ˁ\xAA]"), r"[ˁ\xAA]");
+        assert_eq!(js_regex_to_rust(r"[A-Za-z]"), r"[A-Za-z]");
+        // A lone high surrogate (no following low unit) is left as-is.
+        assert_eq!(js_regex_to_rust(r"\uD800x"), r"\uD800x");
+
+        // The Test262 `nativeFunctionMatcher.js` ID regexes must now compile.
+        let pat = r"(?:[A-Za-z\xAA]|\uD800[\uDC00-\uDC0B\uDC0D-\uDC26]|\uD801[\uDC00-\uDC9D])";
+        let flags = make_string("");
+        let re = js_regexp_new(make_string(pat), flags);
+        assert!(!re.is_null(), "ID_Start-shaped pattern failed to construct");
+    }
 }

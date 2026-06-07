@@ -210,12 +210,175 @@ pub(super) fn has_invalid_repeated_quantifier(pattern: &str) -> bool {
     false
 }
 
+#[inline]
+fn is_surrogate(v: u32) -> bool {
+    (0xD800..=0xDFFF).contains(&v)
+}
+#[inline]
+fn is_high_surrogate(v: u32) -> bool {
+    (0xD800..=0xDBFF).contains(&v)
+}
+#[inline]
+fn is_low_surrogate(v: u32) -> bool {
+    (0xDC00..=0xDFFF).contains(&v)
+}
+
+/// Parse a `\uXXXX` (exactly four hex digits, no braces) escape at `chars[i]`.
+/// Returns the code-unit value and the index just past the escape.
+fn parse_u4_escape(chars: &[char], i: usize) -> Option<(u32, usize)> {
+    if chars.get(i) != Some(&'\\') || chars.get(i + 1) != Some(&'u') {
+        return None;
+    }
+    let mut v = 0u32;
+    for k in 0..4 {
+        let d = chars.get(i + 2 + k)?.to_digit(16)?;
+        v = v * 16 + d;
+    }
+    Some((v, i + 6))
+}
+
+/// Parse a "surrogate unit" at `chars[i]`: either a single `\uXXXX` escape or a
+/// `[...]` class whose every element is a `\uXXXX` escape (singletons or
+/// `\uA-\uB` ranges). Returns the code-unit ranges and the index just past the
+/// unit — but ONLY when *every* code unit is a UTF-16 surrogate
+/// (`0xD800..=0xDFFF`). Returns `None` for anything else, so ordinary escapes
+/// and character classes pass through `fold_surrogate_pairs` untouched.
+fn parse_surrogate_unit(chars: &[char], i: usize) -> Option<(Vec<(u32, u32)>, usize)> {
+    if let Some((v, j)) = parse_u4_escape(chars, i) {
+        return is_surrogate(v).then_some((vec![(v, v)], j));
+    }
+    if chars.get(i) != Some(&'[') {
+        return None;
+    }
+    let mut k = i + 1;
+    if chars.get(k) == Some(&'^') {
+        return None; // negated class is never a plain surrogate set
+    }
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    while chars.get(k).is_some_and(|c| *c != ']') {
+        let (lo, k2) = parse_u4_escape(chars, k)?;
+        if chars.get(k2) == Some(&'-') && chars.get(k2 + 1) == Some(&'\\') {
+            let (hi, k3) = parse_u4_escape(chars, k2 + 1)?;
+            ranges.push((lo, hi));
+            k = k3;
+        } else {
+            ranges.push((lo, lo));
+            k = k2;
+        }
+    }
+    if chars.get(k) != Some(&']') || ranges.is_empty() {
+        return None;
+    }
+    ranges
+        .iter()
+        .all(|(a, b)| is_surrogate(*a) && is_surrogate(*b))
+        .then_some((ranges, k + 1))
+}
+
+/// Combine adjacent high-surrogate ranges with low-surrogate ranges into the
+/// equivalent astral (supplementary-plane) scalar ranges, coalescing the
+/// result. `cp = 0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00)`.
+fn combine_surrogate_ranges(hi: &[(u32, u32)], lo: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut pts: Vec<(u32, u32)> = Vec::new();
+    for &(h1, h2) in hi {
+        for h in h1..=h2 {
+            let base = 0x10000 + (h - 0xD800) * 0x400;
+            for &(l1, l2) in lo {
+                pts.push((base + (l1 - 0xDC00), base + (l2 - 0xDC00)));
+            }
+        }
+    }
+    pts.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::new();
+    for (a, b) in pts {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 + 1 => {
+                if b > last.1 {
+                    last.1 = b;
+                }
+            }
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
+}
+
+/// Emit astral scalar ranges as a Rust-regex `\x{..}` class (or a bare `\x{..}`
+/// for a single scalar).
+fn emit_astral_class(out: &mut String, ranges: &[(u32, u32)]) {
+    if let [(a, b)] = ranges {
+        if a == b {
+            out.push_str(&format!("\\x{{{a:x}}}"));
+            return;
+        }
+    }
+    out.push('[');
+    for &(a, b) in ranges {
+        if a == b {
+            out.push_str(&format!("\\x{{{a:x}}}"));
+        } else {
+            out.push_str(&format!("\\x{{{a:x}}}-\\x{{{b:x}}}"));
+        }
+    }
+    out.push(']');
+}
+
+/// Rewrite UTF-16 surrogate-pair escape sequences into the astral scalar values
+/// they encode, so the Rust `regex` crate (which works on Unicode scalars and
+/// rejects lone-surrogate code points) can compile them.
+///
+/// JS regexes that target the supplementary planes without the `u` flag spell
+/// each astral code point as a high-surrogate escape immediately followed by a
+/// low-surrogate escape — either as bare `\uXXXX` escapes or as `[...]` classes
+/// of them, e.g. `\uD800[\uDC00-\uDC0B]` or
+/// `[\uD80C\uD81C-\uD820][\uDC00-\uDFFF]`. Test262's `nativeFunctionMatcher.js`
+/// (the `\p{ID_Start}` / `\p{ID_Continue}` shims used across `built-ins/`)
+/// relies on this form; before this fold every `Function.prototype.toString`
+/// conformance case threw `SyntaxError: invalid pattern` at regex-literal
+/// evaluation. The transform only fires when a high-surrogate unit is directly
+/// followed by a low-surrogate unit (a genuine pair); anything else is left
+/// byte-for-byte unchanged, so patterns that compile today are unaffected.
+fn fold_surrogate_pairs(pattern: &str) -> String {
+    if !pattern.contains("\\u") {
+        return pattern.to_string();
+    }
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(pattern.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let at_unit_start = (chars[i] == '\\' && chars.get(i + 1) == Some(&'u')) || chars[i] == '[';
+        if at_unit_start {
+            if let Some((hi, j)) = parse_surrogate_unit(&chars, i) {
+                if hi
+                    .iter()
+                    .all(|(a, b)| is_high_surrogate(*a) && is_high_surrogate(*b))
+                {
+                    if let Some((lo, k)) = parse_surrogate_unit(&chars, j) {
+                        if lo
+                            .iter()
+                            .all(|(a, b)| is_low_surrogate(*a) && is_low_surrogate(*b))
+                        {
+                            emit_astral_class(&mut out, &combine_surrogate_ranges(&hi, &lo));
+                            i = k;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
 /// Handles JS-specific escape sequences not supported by the Rust regex crate.
 /// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
 pub(super) fn js_regex_to_rust(pattern: &str) -> String {
-    let mut result = String::with_capacity(pattern.len());
-    let chars: Vec<char> = pattern.chars().collect();
+    let folded = fold_surrogate_pairs(pattern);
+    let mut result = String::with_capacity(folded.len());
+    let chars: Vec<char> = folded.chars().collect();
     let capture_spans = collect_capture_spans(&chars);
     let mut i = 0;
     // Track whether we're inside a `[...]` character class. JS and the Rust
