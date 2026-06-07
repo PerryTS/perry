@@ -1068,14 +1068,36 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
     }
 }
 
-/// Collect the elements of a `TypedArray.prototype.set` source value into a
-/// `Vec<f64>` (numeric, not NaN-boxed). Handles three source shapes:
-///   - another typed array (read via its per-kind `load_at`),
-///   - a plain `Array` (each element coerced through `jsvalue_to_f64`),
-///   - an array-like object (`{ length, 0, 1, … }`).
-/// Returns `None` for null/undefined (caller throws TypeError) and an empty
-/// vec for unrecognized non-iterable values (Node coerces those to length 0).
-unsafe fn collect_typed_array_set_source(source_value: f64, dst_kind: u8) -> Option<Vec<f64>> {
+/// Classified source for `TypedArray.prototype.set`. A typed-array / Buffer
+/// source is coercion-free and is read into a `Vec` up front so an overlapping
+/// source copies correctly (#2879). An array-like source is left unmaterialized
+/// so the caller can interleave Get + ToNumber/ToBigInt + Set per element
+/// (§23.2.3.24.1 SetTypedArrayFromArrayLike), which is observable: a throwing
+/// element coercion must leave earlier elements written.
+enum SetSource {
+    /// Numeric source already read into f64 element values (typed array / Buffer).
+    Buffered(Vec<f64>),
+    /// Plain JS `Array` source — read+coerce each slot lazily.
+    Array(*const ArrayHeader, usize),
+    /// Array-like object source — `length` already coerced; read keys lazily.
+    ArrayLike(*const crate::object::ObjectHeader, usize),
+    /// Recognized but contributes no elements (ArrayBuffer / primitive → len 0).
+    Empty,
+}
+
+/// `ToLength` clamped to `usize`: NaN/≤0 → 0, else `min(⌊n⌋, 2^53-1)`.
+fn to_length_usize(n: f64) -> usize {
+    if n.is_nan() || n <= 0.0 {
+        0
+    } else {
+        n.trunc().min(9007199254740991.0) as usize
+    }
+}
+
+/// Classify a `TypedArray.prototype.set` source. Returns `None` only for
+/// null/undefined (caller throws TypeError). `dst_kind` validates BigInt/Number
+/// copy rules up front for typed-array / Buffer sources.
+unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSource> {
     let v = crate::value::JSValue::from_bits(source_value.to_bits());
     if v.is_null() || v.is_undefined() {
         return None;
@@ -1087,10 +1109,10 @@ unsafe fn collect_typed_array_set_source(source_value: f64, dst_kind: u8) -> Opt
     } else if top16 == 0 && bits >= 0x10000 {
         bits as usize
     } else {
-        return Some(Vec::new());
+        return Some(SetSource::Empty);
     };
 
-    // Source is another typed array.
+    // Source is another typed array (coercion-free; buffered for overlap safety).
     if lookup_typed_array_kind(addr).is_some() {
         let src = addr as *const TypedArrayHeader;
         bigint::validate_copy_kinds(dst_kind, (*src).kind);
@@ -1099,15 +1121,14 @@ unsafe fn collect_typed_array_set_source(source_value: f64, dst_kind: u8) -> Opt
         for i in 0..len {
             out.push(load_at(src, i));
         }
-        return Some(out);
+        return Some(SetSource::Buffered(out));
     }
 
     // Perry's Uint8Array is Buffer-backed; treat it as a numeric typed-array
-    // source for inter-kind copy/coercion instead of reading its bytes as f64
-    // array slots.
+    // source instead of reading its bytes as f64 array slots.
     if crate::buffer::is_registered_buffer(addr) {
         if crate::buffer::is_any_array_buffer(addr) {
-            return Some(Vec::new());
+            return Some(SetSource::Empty);
         }
         if bigint::is_bigint_kind(dst_kind) {
             bigint::throw_bigint_number_mix();
@@ -1118,10 +1139,9 @@ unsafe fn collect_typed_array_set_source(source_value: f64, dst_kind: u8) -> Opt
         for i in 0..len {
             out.push(crate::buffer::js_buffer_get(src, i as i32) as f64);
         }
-        return Some(out);
+        return Some(SetSource::Buffered(out));
     }
 
-    // Source is a plain Array (boxed f64 element slots).
     if addr >= crate::gc::GC_HEADER_SIZE + 0x1000
         && crate::object::is_valid_obj_ptr(addr as *const u8)
     {
@@ -1131,40 +1151,19 @@ unsafe fn collect_typed_array_set_source(source_value: f64, dst_kind: u8) -> Opt
         if obj_type == crate::gc::GC_TYPE_ARRAY {
             let arr = addr as *const ArrayHeader;
             let len = crate::array::js_array_length(arr) as usize;
-            let mut out = Vec::with_capacity(len);
-            for i in 0..len {
-                out.push(bigint::coerce_for_kind(
-                    dst_kind,
-                    crate::array::js_array_get_f64(arr, i as u32),
-                ));
-            }
-            return Some(out);
+            return Some(SetSource::Array(arr, len));
         }
         if obj_type == crate::gc::GC_TYPE_OBJECT {
-            // Array-like object: read `.length` then numeric-keyed fields.
+            // Array-like object: LengthOfArrayLike = ToLength(ToNumber(Get(o,"length"))).
             let obj = addr as *const crate::object::ObjectHeader;
             let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-            let len_num = crate::object::js_object_get_field_by_name(obj, len_key).to_number();
-            let len = if len_num.is_finite() && len_num > 0.0 {
-                len_num.floor() as usize
-            } else {
-                0
-            };
-            let mut out = Vec::with_capacity(len);
-            for i in 0..len {
-                let key = i.to_string();
-                let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-                let field = crate::object::js_object_get_field_by_name(obj, key_ptr);
-                out.push(bigint::coerce_for_kind(
-                    dst_kind,
-                    f64::from_bits(field.bits()),
-                ));
-            }
-            return Some(out);
+            let len_field = crate::object::js_object_get_field_by_name(obj, len_key);
+            let len_num = crate::builtins::js_number_coerce(f64::from_bits(len_field.bits()));
+            return Some(SetSource::ArrayLike(obj, to_length_usize(len_num)));
         }
     }
 
-    Some(Vec::new())
+    Some(SetSource::Empty)
 }
 
 /// `TypedArray.prototype.set(source, offset?)` — bulk-copy/coerce the source
@@ -1182,24 +1181,71 @@ pub extern "C" fn js_typed_array_set_from(
     if ta.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let offset_num = jsvalue_to_f64(offset_value);
-    let offset = if offset_num.is_finite() {
-        offset_num.trunc()
-    } else {
+    // targetOffset = ToIntegerOrInfinity(offset): ToNumber (valueOf-aware),
+    // NaN → 0, ±Infinity preserved so a negative/out-of-range infinite offset
+    // still throws RangeError below.
+    let offset_num = crate::builtins::js_number_coerce(offset_value);
+    let offset = if offset_num.is_nan() {
         0.0
+    } else {
+        offset_num.trunc()
     };
     unsafe {
-        let elems = match collect_typed_array_set_source(source_value, (*ta).kind) {
-            Some(e) => e,
+        let source = match classify_set_source(source_value, (*ta).kind) {
+            Some(s) => s,
             None => throw_type_error(b"Cannot convert undefined or null to object"),
         };
-        let target_len = (*ta).length as i64;
-        if offset < 0.0 || offset as i64 + elems.len() as i64 > target_len {
+        let target_len = (*ta).length as f64;
+        let src_len = match &source {
+            SetSource::Buffered(v) => v.len(),
+            SetSource::Array(_, n) | SetSource::ArrayLike(_, n) => *n,
+            SetSource::Empty => 0,
+        };
+        // Range validation precedes any element write (RangeError). ±Inf offsets
+        // are handled naturally by the f64 comparison.
+        if offset < 0.0 || offset + src_len as f64 > target_len {
             throw_range_error(b"offset is out of bounds");
         }
         let base = offset as usize;
-        for (i, v) in elems.into_iter().enumerate() {
-            store_at(ta, base + i, v);
+        let is_bigint = bigint::is_bigint_kind((*ta).kind);
+        match source {
+            // Coercion-free numeric source: bulk store (already overlap-buffered).
+            SetSource::Buffered(elems) => {
+                for (i, v) in elems.into_iter().enumerate() {
+                    store_at(ta, base + i, v);
+                }
+            }
+            // SetTypedArrayFromArrayLike: interleave Get + ToNumber/ToBigInt + Set
+            // per element so a throwing element coercion leaves earlier elements
+            // written ("values are set until exception").
+            SetSource::Array(arr, len) => {
+                for k in 0..len {
+                    let raw = crate::array::js_array_get_f64(arr, k as u32);
+                    let v = if is_bigint {
+                        bigint::to_bigint_for_store(raw)
+                    } else {
+                        crate::builtins::js_number_coerce(raw)
+                    };
+                    store_at(ta, base + k, v);
+                }
+            }
+            SetSource::ArrayLike(obj, len) => {
+                for k in 0..len {
+                    let key = k.to_string();
+                    let key_ptr =
+                        crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+                    let raw = f64::from_bits(
+                        crate::object::js_object_get_field_by_name(obj, key_ptr).bits(),
+                    );
+                    let v = if is_bigint {
+                        bigint::to_bigint_for_store(raw)
+                    } else {
+                        crate::builtins::js_number_coerce(raw)
+                    };
+                    store_at(ta, base + k, v);
+                }
+            }
+            SetSource::Empty => {}
         }
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
