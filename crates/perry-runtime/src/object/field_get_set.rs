@@ -4614,20 +4614,32 @@ pub extern "C" fn js_object_get_field_ic_miss(
             }
         }
     }
-    unsafe {
-        if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
-            return val;
-        }
-        // Buffers have no GcHeader. The generic IC-miss object path below may
-        // inspect GC/object metadata, so mirror js_object_get_field_by_name's
-        // buffer-first dispatch here.
-        if crate::buffer::is_registered_buffer(obj as usize) {
-            let value = js_object_get_field_by_name(obj, key);
-            return f64::from_bits(value.bits());
-        }
-        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
-            let value = js_object_get_field_by_name(obj, key);
-            return f64::from_bits(value.bits());
+    // Only run the closure / buffer / typedarray probes on real heap
+    // receivers (>= 0x100000). A Web-Fetch handle (Headers/Request/Response/
+    // Blob, id in [0x40000, 0x100000)) or any other small native handle is NOT
+    // a heap pointer; `closure_dynamic_prop_by_key` reaches `is_closure_ptr`,
+    // which dereferences `[obj + 12]` for CLOSURE_MAGIC and SIGSEGVs on the
+    // handle's unmapped low address (hit by hono's logger reading a property
+    // off a Response/Headers handle). Small handles fall through to the
+    // `< 0x100000` proxy / HANDLE_PROPERTY_DISPATCH routing below — matching
+    // the ordering in `js_object_get_field_by_name`. The macOS heap floor
+    // (0x200_0000_0000 in is_valid_obj_ptr) masked this; Linux's is 0x1000.
+    if (obj as usize) >= 0x100000 {
+        unsafe {
+            if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
+                return val;
+            }
+            // Buffers have no GcHeader. The generic IC-miss object path below may
+            // inspect GC/object metadata, so mirror js_object_get_field_by_name's
+            // buffer-first dispatch here.
+            if crate::buffer::is_registered_buffer(obj as usize) {
+                let value = js_object_get_field_by_name(obj, key);
+                return f64::from_bits(value.bits());
+            }
+            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+                let value = js_object_get_field_by_name(obj, key);
+                return f64::from_bits(value.bits());
+            }
         }
     }
     // Issue #340: small-handle receivers (axios, fastify, ioredis,
