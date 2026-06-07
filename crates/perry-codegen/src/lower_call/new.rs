@@ -9,7 +9,7 @@ use perry_hir::{Expr, Param};
 use perry_types::Type as HirType;
 
 use super::lower_builtin_new;
-use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
+use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
@@ -304,6 +304,43 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     let class = match ctx.classes.get(class_name).copied() {
         Some(c) => c,
         None => {
+            // #4698: `new <importedFn>()` where `<importedFn>` is a function —
+            // or a `const`/`let` holding a closure — imported from another
+            // module (e.g. `import { Dep } from "./m"`). The name is not a
+            // registered class, so without this it would fall through to the
+            // empty-object placeholder below and the constructor body would
+            // never run (so `this.x = …` / `Object.defineProperty(this, …)`
+            // writes are lost — the zod-v4 `ch._zod.onattach` crash for bare
+            // named imports). When the name resolves to an imported binding
+            // (`import_function_prefixes`) that isn't a V8-fallback specifier,
+            // lower it as an `ExternFuncRef` value and construct it via
+            // `js_new_function_construct`, which binds `this`, runs the body,
+            // and returns the populated instance. Imported *classes* are
+            // registered in `ctx.classes` and take the construction path above,
+            // so they never reach here; a non-callable value still falls back
+            // to a class_id=0 empty object inside the runtime helper.
+            if ctx.import_function_prefixes.contains_key(class_name)
+                && !ctx.import_function_v8_specifiers.contains_key(class_name)
+            {
+                let func_double = lower_expr(
+                    ctx,
+                    &Expr::ExternFuncRef {
+                        name: class_name.to_string(),
+                        param_types: Vec::new(),
+                        return_type: HirType::Any,
+                    },
+                )?;
+                let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered_args.push(lower_expr(ctx, a)?);
+                }
+                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_new_function_construct",
+                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                ));
+            }
             // Built-in / native class (Promise, Error, Date, etc.) with
             // no dedicated lower_builtin_new handler — lower args for
             // side effects (closures, string literal interning) and

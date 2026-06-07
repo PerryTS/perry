@@ -466,6 +466,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let routes_through_function_construct = matches!(
                 callee.as_ref(),
                 Expr::FuncRef(_)
+                    | Expr::ExternFuncRef { .. }
                     | Expr::LocalGet(_)
                     | Expr::PropertyGet { .. }
                     | Expr::IndexGet { .. }

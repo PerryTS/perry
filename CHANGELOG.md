@@ -2,6 +2,52 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1144 — `new <imported-function>()` runs the constructor body (zod v4 checks; #4698)
+
+`new F(args)` where `F` is a **function (or a `const`/`let` holding a closure
+value) imported from another module** silently produced an empty object — the
+constructor body never ran, so `this.x = …` and `Object.defineProperty(this,
+…)` writes were lost. This is the zod-v4 `TypeError: Cannot read properties of
+undefined (reading 'onattach')` crash (#4698): every string/number schema with
+a check (`.min`, `.max`, `.length`, `.regex`, numeric `.gt`/`.lt`, …) builds its
+`$ZodCheckMinLength`-style check via `new checks.$ZodCheckMinLength(def)` across
+the `core/checks.ts` → `core/api.ts` module boundary, and the check instance came
+back with its non-enumerable `_zod` property (and everything else) gone because
+the constructor body was skipped.
+
+Root cause was two gaps; an imported binding that isn't a registered class fell
+through to an empty-object placeholder instead of the `js_new_function_construct`
+helper that binds `this`, runs the body, and returns the populated instance. The
+fix lives entirely in codegen — at HIR-lowering time an imported class and an
+imported function are indistinguishable (both unknown to `lookup_class`), and the
+cross-module class-inline machinery in `collect_modules` relies on
+`new <ImportedClass>()` staying as `Expr::New { class_name }`, so HIR must not
+reroute it:
+
+- **Codegen (`lower_call/new.rs`)** — bare `new <importedFn>()` (`import { Fn }
+  from "./m"`). When `lower_new` finds no class for the name but the name
+  resolves to an imported binding (`import_function_prefixes`, excluding
+  V8-fallback specifiers), it now lowers the name as an `ExternFuncRef` value and
+  constructs via `js_new_function_construct` instead of returning the empty
+  placeholder. Imported classes are registered in `ctx.classes` and take the
+  construction path, so they never reach this fallback (the
+  `dependency_is_transformed_before_importer_for_cross_module_inline` test
+  guards this).
+- **Codegen (`expr/v8_interop.rs::try_static_class_name` + `expr/new_dynamic.rs`)**
+  — `new ns.Foo()` over a namespace import (zod's actual path: `new
+  checks.$ZodCheckMinLength(def)`, where `checks` is `import * as`). It now only
+  takes the class-construction path when `Foo` actually names a known class; a
+  closure-valued `const` export falls through to the NewDynamic
+  function-construct route (`ExternFuncRef` added to its callee set). Real
+  namespace-imported classes (in `ctx.classes`) and re-exported builtins
+  (intercepted by `js_new_function_construct`'s global thunks) are unaffected.
+
+The exact repro `z.string().min(2).parse("hello")` now prints `hello`; `.max` /
+`.length` / `.regex` / numeric `.gt` / `.lt` and nested object schemas with
+checks all match Node byte-for-byte. The `safeParse` error-path / `.email()`
+error-formatting failures noted in #4698 are a separate, still-open issue. Refs
+#793.
+
 ## v0.5.1143 — Class destructuring (dstr) + default-parameter parity (test262)
 
 Brought `language/{statements,expressions}/class/dstr` from 512→664 passing (41.6%→53.9%) with **zero regressions**, and lifted the wider `built-ins`+`language` sweep by ~6–9% per shard (0 regressions across sampled shards). These are method/constructor/accessor parameter-destructuring tests across plain, generator, async-generator, static, and private class methods.

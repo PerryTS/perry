@@ -280,27 +280,35 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
             if is_global_object_expr(object.as_ref()) {
                 return Some(property.as_str());
             }
-            // Namespace import via local: `import * as ns from 'm'; new ns.Foo()`.
-            // The local binding shows up as `LocalGet(id)` here; we map id →
-            // name via `local_id_to_name`, then check `namespace_imports`.
-            if let Expr::LocalGet(id) = object.as_ref() {
-                if let Some(name) = ctx.local_id_to_name.get(id) {
-                    if ctx.namespace_imports.contains(name) {
-                        return Some(property.as_str());
-                    }
-                }
-            }
-            // Namespace import via ExternFuncRef: the HIR's
-            // `ast::Expr::Ident` lowering at `crates/perry-hir/src/lower.rs`
-            // lifts a namespace identifier to `Expr::ExternFuncRef { name: "ns" }`
-            // when the name resolves to a `import * as ns from 'm'` binding
-            // (rather than a local let). The property access then becomes
-            // `PropertyGet { object: ExternFuncRef("ns"), property: "Foo" }`.
-            // Check `namespace_imports` directly with the ExternFuncRef name.
-            if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
-                if ctx.namespace_imports.contains(name) {
-                    return Some(property.as_str());
-                }
+            // Namespace import: `import * as ns from 'm'; new ns.Foo()`.
+            // The namespace object surfaces either as `LocalGet(id)` (mapped to
+            // its name via `local_id_to_name`) or directly as
+            // `ExternFuncRef { name: "ns" }` (the HIR's `ast::Expr::Ident`
+            // lowering at `crates/perry-hir/src/lower.rs` lifts a namespace
+            // identifier this way). In both forms the property access becomes
+            // `PropertyGet { object, property: "Foo" }`.
+            //
+            // #4698: only treat the member as a class when `property` actually
+            // names a known class. A namespace can equally re-export a
+            // closure-valued `const` (zod's `$ZodCheckMinLength =
+            // $constructor(...)`); for those, returning `Some(property)` routes
+            // through `lower_new`, which finds no matching class and emits an
+            // empty-object placeholder whose constructor body never runs (so
+            // `Object.defineProperty(this, …)` writes are lost). Falling
+            // through to `None` instead lets the NewDynamic dispatcher read the
+            // member as a closure value and run it via
+            // `js_new_function_construct` (which also intercepts the builtin
+            // global thunks, so re-exported builtins keep working).
+            let object_is_namespace = match object.as_ref() {
+                Expr::LocalGet(id) => ctx
+                    .local_id_to_name
+                    .get(id)
+                    .is_some_and(|name| ctx.namespace_imports.contains(name)),
+                Expr::ExternFuncRef { name, .. } => ctx.namespace_imports.contains(name),
+                _ => false,
+            };
+            if object_is_namespace && ctx.classes.contains_key(property.as_str()) {
+                return Some(property.as_str());
             }
             None
         }

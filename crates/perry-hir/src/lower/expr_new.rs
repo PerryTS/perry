@@ -1591,6 +1591,21 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         args,
                     });
                 }
+                // #4698: `new <imported-binding>()` where the binding is a
+                // function (or a `const`/`let` holding a closure) imported from
+                // another module is intentionally NOT rerouted here. At lowering
+                // time (single collect_modules pass) an imported class and an
+                // imported function are indistinguishable — both are unknown to
+                // `lookup_class`/`lookup_func` and both appear in the imported
+                // bindings — and the cross-module class-inline machinery in
+                // `collect_modules` relies on `new <ImportedClass>()` staying as
+                // `Expr::New { class_name }`. Rerouting to `NewDynamic` here
+                // broke that (the `dependency_is_transformed_before_importer…`
+                // test). Instead, the codegen `lower_new` fallback detects an
+                // imported *function/closure* value (a name that is NOT a
+                // registered class but IS an imported binding) and constructs it
+                // via `js_new_function_construct` — see
+                // `perry-codegen/src/lower_call/new.rs`.
             }
             // Issue #212: classes nested in a function may capture
             // enclosing-scope locals. `lower_class_decl` extended the
