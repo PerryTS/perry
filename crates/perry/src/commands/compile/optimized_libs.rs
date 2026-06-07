@@ -49,6 +49,23 @@ pub(crate) fn android_global_dynamic_tls_rustflag(cmd: &mut Command) -> &'static
     }
 }
 
+#[cfg(windows)]
+fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{}", rest))
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+
+#[cfg(not(windows))]
+fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 pub struct OptimizedLibs {
     /// Path to the rebuilt `libperry_runtime.a` (or `perry_runtime.lib`).
     /// `None` means "fall back to the prebuilt one in target/release/".
@@ -587,7 +604,8 @@ pub(super) fn build_optimized_libs(
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
     }
-    let target_dir = workspace_root.join(format!("target/perry-auto-{:016x}", hash));
+    let target_dir =
+        cargo_target_dir_path(workspace_root.join(format!("target/perry-auto-{:016x}", hash)));
 
     if matches!(format, OutputFormat::Text) {
         let panic_str = if panic_abort_safe { "abort" } else { "unwind" };
@@ -1448,6 +1466,26 @@ mod tests {
             libs.well_known_libs.contains(&ws_lib),
             "expected no-auto well-known libs to include {ws_lib:?}, got {:?}",
             libs.well_known_libs
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cargo_target_dir_strips_windows_verbatim_prefixes() {
+        let drive = cargo_target_dir_path(PathBuf::from(
+            r"\\?\D:\Projects\perry\target\perry-auto-deadbeef",
+        ));
+        assert_eq!(
+            drive,
+            PathBuf::from(r"D:\Projects\perry\target\perry-auto-deadbeef")
+        );
+
+        let unc = cargo_target_dir_path(PathBuf::from(
+            r"\\?\UNC\server\share\perry\target\perry-auto-deadbeef",
+        ));
+        assert_eq!(
+            unc,
+            PathBuf::from(r"\\server\share\perry\target\perry-auto-deadbeef")
         );
     }
 

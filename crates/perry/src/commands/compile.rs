@@ -123,6 +123,62 @@ impl NativeObjectArtifact {
     }
 }
 
+fn native_object_file_stem(module_name: &str) -> String {
+    let mut stem = module_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+
+    if stem.is_empty() {
+        stem.push('_');
+    }
+
+    #[cfg(windows)]
+    if is_windows_reserved_file_stem(&stem) {
+        stem.push('_');
+    }
+
+    stem
+}
+
+#[cfg(windows)]
+fn is_windows_reserved_file_stem(stem: &str) -> bool {
+    let lower = stem.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
+    )
+}
+
 fn canonical_class_source_prefix(
     class: &perry_hir::Class,
     class_canonical_path: &HashMap<perry_hir::ClassId, String>,
@@ -179,6 +235,27 @@ mod tests {
             ),
             "node_modules_rxjs_src_internal_Observable_ts"
         );
+    }
+
+    #[test]
+    fn native_object_file_stem_sanitizes_module_names() {
+        assert_eq!(
+            native_object_file_stem("table-parser/lib/index"),
+            "table_parser_lib_index"
+        );
+        assert_eq!(native_object_file_stem("///"), "_");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_object_file_stem_avoids_windows_reserved_names() {
+        assert_eq!(native_object_file_stem("con"), "con_");
+        assert_eq!(
+            native_object_file_stem("connected-domain"),
+            "connected_domain"
+        );
+        assert_eq!(native_object_file_stem("aux"), "aux_");
+        assert_eq!(native_object_file_stem("COM1"), "COM1_");
     }
 }
 
@@ -3856,11 +3933,7 @@ pub fn run_with_parse_cache(
             } else {
                 (None, None)
             };
-            let obj_name = hir_module
-                .name
-                .replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
-                .trim_matches('_')
-                .to_string();
+            let obj_name = native_object_file_stem(&hir_module.name);
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
             let obj_path = object_output_dir.join(format!("{}.{}", obj_name, ext));
@@ -3998,21 +4071,24 @@ pub fn run_with_parse_cache(
         .map(NativeObjectArtifact::materialized_bytes)
         .sum();
 
-    let write_results: Vec<Result<(), std::io::Error>> = artifacts
+    let write_results: Vec<Result<(), (PathBuf, std::io::Error)>> = artifacts
         .par_iter()
         .filter_map(|artifact| {
-            artifact
-                .bytes
-                .as_ref()
-                .map(|bytes| fs::write(&artifact.path, bytes))
+            artifact.bytes.as_ref().map(|bytes| {
+                fs::write(&artifact.path, bytes).map_err(|err| (artifact.path.clone(), err))
+            })
         })
         .collect();
 
     // Bail on first write failure (I/O errors are usually disk-full /
     // permission, not per-file recoverable).
     for r in write_results {
-        if let Err(e) = r {
-            return Err(e.into());
+        if let Err((path, e)) = r {
+            return Err(anyhow!(
+                "failed to write object file {}: {}",
+                path.display(),
+                e
+            ));
         }
     }
 
