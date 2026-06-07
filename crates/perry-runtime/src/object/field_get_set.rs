@@ -2424,6 +2424,12 @@ pub extern "C" fn js_object_get_field_by_name(
                             )
                         }
                         b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
+                        b"constructor" => {
+                            let name = crate::typedarray::name_for_kind(kind);
+                            let v =
+                                super::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                            return JSValue::from_bits(v.to_bits());
+                        }
                         _ => {}
                     }
                 } else {
@@ -3360,6 +3366,16 @@ pub extern "C" fn js_object_get_field_by_name(
                         ) as f64)
                     }
                     b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
+                    // `ta.constructor` (no own override) resolves through the
+                    // prototype chain to the intrinsic constructor for this
+                    // element kind (e.g. `Uint8Array`). Mirrors the `Array` arm;
+                    // needed so a default-`SpeciesCreate`d result reports
+                    // `result.constructor === TA`.
+                    b"constructor" => {
+                        let name = crate::typedarray::name_for_kind(kind);
+                        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                        return JSValue::from_bits(v.to_bits());
+                    }
                     _ => {}
                 }
             }

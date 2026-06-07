@@ -51,6 +51,40 @@ unsafe fn typed_array_owner_length(owner: usize) -> u32 {
     }
 }
 
+/// `[[ArrayLength]]` of a typed-array / Uint8Array-buffer owner address.
+/// Exposed for `TypedArraySpeciesCreate` (the length validation in
+/// `TypedArrayCreate`) and the species element-store path.
+pub(crate) unsafe fn owner_length(owner: usize) -> u32 {
+    typed_array_owner_length(owner)
+}
+
+/// Integer-indexed `[[Set]]` used to fill a species-created result. Handles
+/// both the `TypedArrayHeader` and Uint8Array-buffer representations and the
+/// per-kind `ToNumber`/`ToBigInt` element coercion (a bad BigInt coercion
+/// throws). Writes past the result length are silently dropped (a species ctor
+/// may return a shorter array; the callback still ran for those indices).
+pub(crate) unsafe fn species_result_store(owner: usize, index: usize, raw: f64) {
+    if index >= typed_array_owner_length(owner) as usize {
+        return;
+    }
+    match typed_array_owner_kind(owner) {
+        Some(TypedArrayOwnerKind::TypedArray) => {
+            let ta = owner as *mut TypedArrayHeader;
+            let kind = (*ta).kind;
+            crate::typedarray::species::store_coerced(ta, index, kind, raw);
+        }
+        Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
+            let n = crate::typedarray::species::to_number(raw);
+            crate::buffer::js_buffer_set(
+                owner as *mut crate::buffer::BufferHeader,
+                index as i32,
+                n as i32,
+            );
+        }
+        None => {}
+    }
+}
+
 unsafe fn typed_array_owner_get(owner: usize, index: u32) -> f64 {
     match typed_array_owner_kind(owner) {
         Some(TypedArrayOwnerKind::TypedArray) => {

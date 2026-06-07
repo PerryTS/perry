@@ -275,6 +275,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             "Event" => crate::event_target::CLASS_ID_EVENT,
             "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
             "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
+            // TypedArray constructors used as runtime *values* (a dynamic
+            // `x instanceof TA` where `TA` is a variable — e.g. test262's
+            // `testWithTypedArrayConstructors`). Mirrors the per-kind synthetic
+            // ids the compile-time `instanceof Float64Array` operator resolves.
+            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+            | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+            | "BigInt64Array" | "BigUint64Array" => crate::typedarray::kind_for_name(name)
+                .map(crate::typedarray::class_id_for_kind)
+                .unwrap_or(0),
             _ => 0,
         };
         if class_id != 0 {

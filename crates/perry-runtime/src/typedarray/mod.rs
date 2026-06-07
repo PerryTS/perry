@@ -19,6 +19,7 @@ use crate::typedarray_half::{f16_bits_to_f64, f64_to_f16_bits};
 
 pub(crate) mod bigint;
 mod format;
+pub(crate) mod species;
 pub use format::format_typed_array;
 
 // Element kind tags. Match the order used by HIR/codegen.
@@ -1632,13 +1633,20 @@ pub extern "C" fn js_typed_array_map(
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
-        let out = typed_array_alloc(kind, len as u32);
+        // 23.2.3.20 step 5: A is TypedArraySpeciesCreate(O, « len ») — BEFORE
+        // the callback loop (so a throwing constructor/@@species getter aborts
+        // before any callback runs).
+        let choice = species::species_constructor(ta as usize, kind);
+        let result = species::species_create_length(&choice, kind, len);
+        let Some(result_addr) = crate::typedarray_props::typed_array_addr_from_value(result) else {
+            return species::result_as_ptr(result);
+        };
         for i in 0..len {
             let v = load_at(ta, i);
             let r = crate::closure::js_closure_call3(callback, v, i as f64, recv);
-            store_at(out, i, bigint::coerce_for_kind(kind, r));
+            crate::typedarray_props::species_result_store(result_addr, i, r);
         }
-        out
+        species::result_as_ptr(result)
     }
 }
 
@@ -1657,6 +1665,9 @@ pub extern "C" fn js_typed_array_filter(
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
         let recv = ta_receiver_value(ta);
+        // 23.2.3.10: the callback runs for every element FIRST (collecting the
+        // kept values), THEN A = TypedArraySpeciesCreate(O, « captured »). The
+        // @@species getter is therefore observed after all callbacks.
         let mut kept: Vec<f64> = Vec::new();
         for i in 0..len {
             let v = load_at(ta, i);
@@ -1665,11 +1676,15 @@ pub extern "C" fn js_typed_array_filter(
                 kept.push(v);
             }
         }
-        let out = typed_array_alloc(kind, kept.len() as u32);
+        let choice = species::species_constructor(ta as usize, kind);
+        let result = species::species_create_length(&choice, kind, kept.len());
+        let Some(result_addr) = crate::typedarray_props::typed_array_addr_from_value(result) else {
+            return species::result_as_ptr(result);
+        };
         for (i, v) in kept.into_iter().enumerate() {
-            store_at(out, i, v);
+            crate::typedarray_props::species_result_store(result_addr, i, v);
         }
-        out
+        species::result_as_ptr(result)
     }
 }
 
@@ -1956,11 +1971,24 @@ pub extern "C" fn js_typed_array_slice(
             (end as u32).min(len as u32)
         };
         let slice_len = end_idx.saturating_sub(start_idx);
-        let out = typed_array_alloc(kind, slice_len);
-        for i in 0..slice_len as usize {
-            store_at(out, i, load_at(ta, start_idx as usize + i));
+        // 23.2.3.27 step 10: A = TypedArraySpeciesCreate(O, « count »).
+        let choice = species::species_constructor(ta as usize, kind);
+        let result = species::species_create_length(&choice, kind, slice_len as usize);
+        if slice_len > 0 {
+            if let species::SpeciesChoice::Default = choice {
+                // Fast same-kind path: raw byte-copy preserves exact element
+                // bits — e.g. Float NaN payloads (`slice/bit-precision`), which
+                // a load→f64→store round-trip would canonicalize.
+                let out = species::result_as_ptr(result);
+                let esz = elem_size_for_kind(kind);
+                let src = (data_ptr(ta) as *const u8).add(start_idx as usize * esz);
+                let dst = data_ptr_mut(out);
+                ptr::copy_nonoverlapping(src, dst, slice_len as usize * esz);
+            } else {
+                species::copy_range_into(result, ta, start_idx as usize, slice_len as usize);
+            }
         }
-        out
+        species::result_as_ptr(result)
     }
 }
 
@@ -2070,20 +2098,59 @@ pub extern "C" fn js_typed_array_subarray(
         return typed_array_alloc(KIND_FLOAT64, 0);
     }
     unsafe {
+        let kind = (*ta).kind;
         let len = (*ta).length as i32;
+        // `ToIntegerOrInfinity` + RelativeIndex clamp. `js_number_coerce`
+        // performs `ToNumber` (running a `valueOf`/`Symbol.toPrimitive`, which
+        // may throw) — done BEFORE the species lookup, per spec order.
         let norm = |has: i32, v: f64, default: i32| -> i32 {
-            if has == 0 || v.is_nan() {
+            // Absent OR explicit `undefined` → the default (begin→0, end→len).
+            if has == 0 || crate::value::JSValue::from_bits(v.to_bits()).is_undefined() {
                 return default;
             }
-            let mut x = v as i32;
+            let n = crate::builtins::js_number_coerce(v);
+            if n.is_nan() {
+                return 0;
+            }
+            let mut x = if !n.is_finite() {
+                if n > 0.0 {
+                    len
+                } else {
+                    i32::MIN
+                }
+            } else {
+                n.trunc() as i32
+            };
             if x < 0 {
-                x += len;
+                x = x.saturating_add(len);
             }
             x.clamp(0, len)
         };
         let b = norm(has_begin, begin, 0);
         let e = norm(has_end, end, len);
-        js_typed_array_slice(ta, b, e)
+        let count = (e - b).max(0) as u32;
+        // 23.2.3.30: SpeciesCreate(O, « buffer, beginByteOffset, newLength »).
+        // A subarray is a VIEW sharing the backing buffer (default and custom).
+        let choice = species::species_constructor(ta as usize, kind);
+        let elem = elem_size_for_kind(kind) as u32;
+        let buffer = crate::typedarray_view::js_typed_array_backing_buffer(ta);
+        let byte_offset =
+            crate::typedarray_view::js_typed_array_byte_offset(ta) + (b as u32) * elem;
+        let buffer_val = crate::value::js_nanbox_pointer(buffer as i64);
+        let off_val = byte_offset as f64;
+        let len_val = count as f64;
+        match choice {
+            species::SpeciesChoice::Default => crate::typedarray_view::js_typed_array_view(
+                kind as i32,
+                buffer_val,
+                off_val,
+                len_val,
+            ),
+            species::SpeciesChoice::Custom(c) => {
+                let result = species::species_create_args(c, &[buffer_val, off_val, len_val]);
+                species::result_as_ptr(result)
+            }
+        }
     }
 }
 

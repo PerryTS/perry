@@ -881,13 +881,31 @@ pub(super) unsafe fn dispatch_typed_array_method(
             f64::from_bits(JSValue::string_ptr(s).bits())
         }
         "slice" => {
-            let start = if args_len >= 1 && !args_ptr.is_null() && !(*args_ptr).is_nan() {
-                *args_ptr as i32
+            // `ToIntegerOrInfinity` each index (runs `valueOf`/`Symbol.toPrimitive`,
+            // which may throw) — `js_typed_array_slice` then does the relative-index
+            // clamp. `end` absent / `undefined` → slice to the end (`i32::MAX`).
+            let to_idx = |v: f64| -> i32 {
+                let n = crate::builtins::js_number_coerce(v);
+                if n.is_nan() {
+                    0
+                } else if n >= i32::MAX as f64 {
+                    i32::MAX
+                } else if n <= i32::MIN as f64 {
+                    i32::MIN
+                } else {
+                    n.trunc() as i32
+                }
+            };
+            let start = if args_len >= 1 && !args_ptr.is_null() {
+                to_idx(*args_ptr)
             } else {
                 0
             };
-            let end = if args_len >= 2 && !args_ptr.is_null() && !(*args_ptr.add(1)).is_nan() {
-                *args_ptr.add(1) as i32
+            let end = if args_len >= 2
+                && !args_ptr.is_null()
+                && !JSValue::from_bits((*args_ptr.add(1)).to_bits()).is_undefined()
+            {
+                to_idx(*args_ptr.add(1))
             } else {
                 i32::MAX
             };
