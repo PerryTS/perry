@@ -352,7 +352,8 @@ pub(super) fn emit_string_pool(
     // symbols for those live in the defining module's object file.
     // Each module's init registers its own classes; the linker
     // ensures all init functions run before main.
-    let mut method_triples: Vec<(u32, String, String, u32, bool, bool)> = Vec::new();
+    // (class_id, name, llvm_symbol, total_param_count, has_synth_args, has_rest, spec_length)
+    let mut method_triples: Vec<(u32, String, String, u32, bool, bool, u32)> = Vec::new();
     // #1788: (cid, static-method name, perry_static_* symbol, param_count,
     // has_rest). Registered into the runtime CLASS_STATIC_METHODS table so a
     // subclass whose parent is a class-expression value inherits the parent's
@@ -412,6 +413,16 @@ pub(super) fn emit_string_pool(
                 .last()
                 .map(|p| p.is_rest && p.arguments_object.is_none())
                 .unwrap_or(false);
+            // Spec `.length`: count leading formal params before the first one
+            // with a default or rest (and excluding the synthesized `arguments`
+            // slot). Distinct from the total param_count used for call dispatch.
+            let mut spec_length = 0u32;
+            for p in &method.params {
+                if p.arguments_object.is_some() || p.is_rest || p.default.is_some() {
+                    break;
+                }
+                spec_length += 1;
+            }
             method_triples.push((
                 cid,
                 method.name.clone(),
@@ -419,6 +430,7 @@ pub(super) fn emit_string_pool(
                 method.params.len() as u32,
                 has_synth_args,
                 has_rest,
+                spec_length,
             ));
         }
         // #1788: static methods are emitted as `perry_static_*` (no `this`
@@ -453,7 +465,9 @@ pub(super) fn emit_string_pool(
         ));
     }
     method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count, has_synth_args, has_rest) in method_triples {
+    for (cid, method_name, llvm_name, param_count, has_synth_args, has_rest, spec_length) in
+        method_triples
+    {
         // The pre-intern pass before `emit_string_pool` ensured every
         // method name has a string pool entry; look it up here without
         // mutating the pool.
@@ -482,6 +496,17 @@ pub(super) fn emit_string_pool(
                 (I64, &param_count.to_string()),
                 (I64, has_synth_args_str),
                 (I64, has_rest_str),
+            ],
+        );
+        // Record the default-aware spec `.length` so `C.prototype.m.length`
+        // reflects params-before-first-default, not the raw param count.
+        blk.call_void(
+            "js_register_class_method_bind_length",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, &spec_length.to_string()),
             ],
         );
     }

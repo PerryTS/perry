@@ -144,6 +144,15 @@ pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usi
 pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (usize, usize)>>>> =
     RwLock::new(None);
 
+/// Spec `Function.prototype.length` per (class_id, method/accessor name) — the
+/// count of formal parameters before the first one with a default or a rest.
+/// The vtable only records the *total* param count (needed for call dispatch),
+/// which overcounts methods with default-valued params; codegen computes the
+/// real `.length` at registration and stashes it here so `C.prototype.m.length`
+/// is exact (Test262 .../class/*/dflt-params-trailing-comma).
+pub static CLASS_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
+    RwLock::new(None);
+
 pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
     RwLock::new(None);
 
@@ -3015,6 +3024,39 @@ static KEEP_REGISTER_STATIC_GETTER: unsafe extern "C" fn(i64, *const u8, i64, i6
 static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_static_setter;
 
+/// Record the spec `.length` (params before the first default/rest) for a class
+/// method or accessor. Codegen emits one call per method at module init.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_method_bind_length(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    length: i64,
+) {
+    if name_ptr.is_null() || name_len < 0 {
+        return;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    let mut guard = match CLASS_METHOD_BIND_LENGTHS.write() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .insert((class_id as u32, name), length as u32);
+}
+
+#[used]
+static KEEP_REGISTER_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
+    js_register_class_method_bind_length;
+
 unsafe fn register_class_static_accessor_half(
     class_id: i64,
     name_ptr: *const u8,
@@ -4063,6 +4105,26 @@ pub(crate) unsafe fn class_instance_setter_apply(
 /// record the first-default position); methods with defaults already reported
 /// the wrong length, so this is a strict improvement, never a regression.
 pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32> {
+    // Exact spec length (default-aware) when codegen recorded it; walk the
+    // parent chain so an inherited method's `.length` resolves too.
+    if let Ok(guard) = CLASS_METHOD_BIND_LENGTHS.read() {
+        if let Some(map) = guard.as_ref() {
+            let mut cid = class_id;
+            let mut depth = 0usize;
+            while cid != 0 && depth < 32 {
+                if let Some(&len) = map.get(&(cid, name.to_string())) {
+                    return Some(len);
+                }
+                match get_parent_class_id(cid) {
+                    Some(p) if p != 0 && p != cid => {
+                        cid = p;
+                        depth += 1;
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
     if let Ok(guard) = CLASS_VTABLE_REGISTRY.read() {
         if let Some(reg) = guard.as_ref() {
             let mut cid = class_id;
