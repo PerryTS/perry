@@ -11,6 +11,7 @@
 mod block;
 mod body_stmt;
 mod class_captures;
+mod class_computed;
 mod class_decl;
 mod class_members;
 mod class_validation;

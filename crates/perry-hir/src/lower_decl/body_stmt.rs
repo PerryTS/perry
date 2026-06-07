@@ -11,40 +11,11 @@ use crate::lower::{
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
+use super::class_computed::{
+    class_computed_member_registration_expr, push_deduped_class_computed_keys,
+};
 use super::helpers::{async_iterator_method_call, is_filehandle_readlines_for_await_target};
 use super::*;
-
-fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
-    match member.kind {
-        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
-            class_name: class_name.to_string(),
-            key_expr: Box::new(member.key_expr.clone()),
-            method_name: member.function.name.clone(),
-            is_static: member.is_static,
-            param_count: member.function.params.len() as u32,
-            has_rest: member
-                .function
-                .params
-                .last()
-                .map(|p| p.is_rest)
-                .unwrap_or(false),
-        },
-        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
-            class_name: class_name.to_string(),
-            key_expr: Box::new(member.key_expr.clone()),
-            getter_name: Some(member.function.name.clone()),
-            setter_name: None,
-            is_static: member.is_static,
-        },
-        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
-            class_name: class_name.to_string(),
-            key_expr: Box::new(member.key_expr.clone()),
-            getter_name: None,
-            setter_name: Some(member.function.name.clone()),
-            is_static: member.is_static,
-        },
-    }
-}
 
 mod nested_fn_decl;
 
@@ -525,46 +496,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 }
                 ctx.pending_classes.push(class);
             } else {
-                // The class is name-deduped against an earlier same-named class
-                // (Perry's codegen is name-keyed; #336). But ECMA-262
-                // ClassDefinitionEvaluation still evaluates every `class`
-                // expression's ComputedPropertyName in source order, so a
-                // computed member key with side effects (a throw, an
-                // assignment, a call) must still run — e.g. two
-                // `assert.throws(() => { class C { set [unresolvable](_) {} } })`
-                // helpers both named `C` (Test262 accessor-name-*/computed-err).
-                // Evaluate just the key expressions; the (duplicate) class body
-                // itself stays deduped.
-                for member in &class_decl.class.body {
-                    let computed_key = match member {
-                        ast::ClassMember::Method(m) => match &m.key {
-                            ast::PropName::Computed(c) => Some(c.expr.as_ref()),
-                            _ => None,
-                        },
-                        ast::ClassMember::ClassProp(p) => match &p.key {
-                            ast::PropName::Computed(c) => Some(c.expr.as_ref()),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
-                    if let Some(key_ast) = computed_key {
-                        let lowered = lower_expr(ctx, key_ast)?;
-                        // ComputedPropertyName is `ToPropertyKey(GetValue(eval))`
-                        // — apply ToPropertyKey too so a non-primitive key with
-                        // no callable toString/valueOf (e.g. `Object.create(null)`)
-                        // throws TypeError, matching the non-deduped registration
-                        // path (Test262 computed-err-to-prop-key).
-                        result.push(Stmt::Expr(Expr::Call {
-                            callee: Box::new(Expr::ExternFuncRef {
-                                name: "js_to_property_key".to_string(),
-                                param_types: vec![Type::Any],
-                                return_type: Type::Any,
-                            }),
-                            args: vec![lowered],
-                            type_args: Vec::new(),
-                        }));
-                    }
-                }
+                // Duplicate same-named class: still evaluate its computed
+                // member keys for their spec-mandated side effects. See
+                // `push_deduped_class_computed_keys`.
+                push_deduped_class_computed_keys(ctx, &class_decl.class, &mut result)?;
             }
         }
         ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) => {
