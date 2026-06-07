@@ -257,8 +257,66 @@ pub(crate) fn prop_name_to_string(name: &ast::PropName) -> String {
     match name {
         ast::PropName::Ident(ident) => ident.sym.to_string(),
         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-        ast::PropName::Num(n) => format!("{}", n.value),
+        ast::PropName::Num(n) => number_to_js_key(n.value),
         _ => String::new(),
+    }
+}
+
+/// ECMA-262 `Number::toString(m)` (base 10) — the canonical property-key
+/// spelling of a numeric literal member/key. Rust's `f64::to_string` never uses
+/// exponential notation, so `0.0000001` would stringify to `"0.0000001"` while
+/// JS (and Perry's runtime key coercion, `js_jsvalue_to_string`) produces
+/// `"1e-7"`. A numeric-keyed member registered under the Rust spelling would
+/// then be unreachable via `obj[0.0000001]`. This matches the runtime so the
+/// two agree (Test262 .../accessor-name-*/literal-numeric-non-canonical etc.).
+pub(crate) fn number_to_js_key(m: f64) -> String {
+    if m.is_nan() {
+        return "NaN".to_string();
+    }
+    if m == 0.0 {
+        return "0".to_string(); // both +0 and -0 → "0"
+    }
+    if m < 0.0 {
+        return format!("-{}", number_to_js_key(-m));
+    }
+    if m.is_infinite() {
+        return "Infinity".to_string();
+    }
+    // Rust's `{:e}` yields the shortest round-tripping mantissa with a base-10
+    // exponent: `d[.ddd]e<exp>` (exp has no leading '+'). Reconstruct ECMA's
+    // (digits k, point position n) from it.
+    let sci = format!("{:e}", m);
+    let (mant, exp_str) = match sci.split_once('e') {
+        Some(parts) => parts,
+        None => return sci,
+    };
+    let big_e: i32 = exp_str.parse().unwrap_or(0);
+    let digits: String = mant.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    let n = big_e + 1;
+    if k <= n && n <= 21 {
+        let mut s = digits;
+        for _ in 0..(n - k) {
+            s.push('0');
+        }
+        s
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        let mut s = String::from("0.");
+        for _ in 0..(-n) {
+            s.push('0');
+        }
+        s.push_str(&digits);
+        s
+    } else {
+        let exp = n - 1;
+        let sign = if exp >= 0 { "+" } else { "-" };
+        if k == 1 {
+            format!("{}e{}{}", digits, sign, exp.abs())
+        } else {
+            format!("{}.{}e{}{}", &digits[..1], &digits[1..], sign, exp.abs())
+        }
     }
 }
 

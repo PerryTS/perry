@@ -2872,7 +2872,9 @@ pub unsafe extern "C" fn js_register_class_method(
     has_synthetic_arguments: i64,
     has_rest: i64,
 ) {
-    let name = if name_ptr.is_null() || name_len <= 0 {
+    // `name_len == 0` is a legal empty-string member key (`get ''()`), so only
+    // reject a negative length / null pointer.
+    let name = if name_ptr.is_null() || name_len < 0 {
         return;
     } else {
         match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
@@ -2910,7 +2912,9 @@ pub unsafe extern "C" fn js_register_class_getter(
     name_len: i64,
     func_ptr: i64,
 ) {
-    let name = if name_ptr.is_null() || name_len <= 0 {
+    // `name_len == 0` is a legal empty-string member key (`get ''()`), so only
+    // reject a negative length / null pointer.
+    let name = if name_ptr.is_null() || name_len < 0 {
         return;
     } else {
         match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
@@ -2950,7 +2954,9 @@ pub unsafe extern "C" fn js_register_class_setter(
     name_len: i64,
     func_ptr: i64,
 ) {
-    let name = if name_ptr.is_null() || name_len <= 0 {
+    // `name_len == 0` is a legal empty-string member key (`get ''()`), so only
+    // reject a negative length / null pointer.
+    let name = if name_ptr.is_null() || name_len < 0 {
         return;
     } else {
         match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {

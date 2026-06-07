@@ -413,7 +413,7 @@ pub fn lower_class_method(
         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
         // Numeric-literal method name (`42() {}`): the registration key (and
         // func name) is the canonical ToString of the value.
-        ast::PropName::Num(n) => n.value.to_string(),
+        ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
         ast::PropName::Computed(computed) if is_symbol_iterator_key(&computed.expr) => {
             "@@iterator".to_string()
         }

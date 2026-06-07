@@ -66,7 +66,7 @@ fn resolve_keyvalue_key(ctx: &mut LoweringContext, key: &ast::PropName) -> KeyRe
     match key {
         ast::PropName::Ident(ident) => KeyResolution::Static(ident.sym.to_string()),
         ast::PropName::Str(s) => KeyResolution::Static(s.value.as_str().unwrap_or("").to_string()),
-        ast::PropName::Num(n) => KeyResolution::Static(n.value.to_string()),
+        ast::PropName::Num(n) => KeyResolution::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => {
             // Handle computed property keys like [ChainName.ETHEREUM]
             // Try to resolve enum member access to string keys first.
@@ -347,7 +347,7 @@ fn lower_accessor_prop(
     let accessor_key = match key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
         ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
-        ast::PropName::Num(n) => MethodKeyKind::Static(n.value.to_string()),
+        ast::PropName::Num(n) => MethodKeyKind::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => match lower_expr(ctx, computed.expr.as_ref()) {
             Ok(e) => MethodKeyKind::Computed(e),
             Err(_) => return Ok(None),
@@ -515,7 +515,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     let key = match &kv.key {
                         ast::PropName::Ident(ident) => ident.sym.to_string(),
                         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                        ast::PropName::Num(n) => n.value.to_string(),
+                        ast::PropName::Num(n) => super::number_to_js_key(n.value),
                         _ => unreachable!(),
                     };
                     if !seen.insert(key.clone()) {
