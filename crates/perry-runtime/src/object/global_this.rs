@@ -2153,9 +2153,9 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     // the function is async; on the closure-identity path we read the async
     // brand from the function's registration (the `async function*` wrapper
     // symbol is recorded via `js_register_closure_async_generator_function`).
-    if crate::closure::is_registered_async_generator_function(
-        crate::closure::get_valid_func_ptr(closure),
-    ) {
+    if crate::closure::is_registered_async_generator_function(crate::closure::get_valid_func_ptr(
+        closure,
+    )) {
         super::async_generator_queue::wrap_async_generator_instance(obj_ptr as *mut ObjectHeader);
     }
 

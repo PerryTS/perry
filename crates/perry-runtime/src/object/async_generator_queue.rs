@@ -323,7 +323,10 @@ fn make_return_step_wrapper(
     wrapper
 }
 
-extern "C" fn async_generator_return_step_fulfill(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn async_generator_return_step_fulfill(
+    closure: *const ClosureHeader,
+    value: f64,
+) -> f64 {
     if let Some(state_id) = state_id_from_wrapper(closure) {
         let original = js_closure_get_capture_ptr(closure, 1) as *const ClosureHeader;
         let out = js_closure_get_capture_ptr(closure, 2) as *mut Promise;
@@ -336,7 +339,10 @@ extern "C" fn async_generator_return_step_fulfill(closure: *const ClosureHeader,
     value
 }
 
-extern "C" fn async_generator_return_step_reject(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn async_generator_return_step_reject(
+    closure: *const ClosureHeader,
+    reason: f64,
+) -> f64 {
     if let Some(state_id) = state_id_from_wrapper(closure) {
         let out = js_closure_get_capture_ptr(closure, 2) as *mut Promise;
         // Await(v) threw: reject this request and resume the queue without
