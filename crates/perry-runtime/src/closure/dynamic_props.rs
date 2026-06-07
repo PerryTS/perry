@@ -548,6 +548,28 @@ mod tests_1802 {
             props.remove(&owner);
         }
     }
+
+    /// #4740: `is_closure_ptr` must NOT dereference an address in the
+    /// `[0x10000, 0x100000)` native-handle band. Web Fetch response handles
+    /// (`0x40000+`), node:http / axios / fastify ids live there and are not
+    /// real pointers — probing `*(ptr + 12)` for `CLOSURE_MAGIC` on one reads
+    /// a tiny unmapped address (the reported `0x4000c`) and SIGSEGVs on the
+    /// IC-miss property-lookup path. With the floor at `0x100000` the probe is
+    /// skipped and these return `false` without touching memory. Complements
+    /// the #4739 own-field-probe integration repro with a direct unit assertion
+    /// on the predicate's floor.
+    #[test]
+    fn small_handle_band_is_not_a_closure_ptr() {
+        // These would have dereferenced 0x4000c / 0x40014 / 0xF000c under the
+        // old 0x10000 floor; under the fix they short-circuit to false.
+        for handle in [0x10000usize, 0x40000, 0x40008, 0x4_0000, 0xF_0000, 0xF_FFF8] {
+            assert!(
+                !is_closure_ptr(handle),
+                "is_closure_ptr({handle:#x}) must be false (small-handle band) \
+                 without dereferencing the handle as a pointer",
+            );
+        }
+    }
 }
 
 /// Issue #450: clone an accessor closure (from `Object.defineProperty(obj, k, { get, set })`)
