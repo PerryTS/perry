@@ -2,6 +2,38 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1129 — fix(windows): `perry update` extracts the `.zip` artifact instead of failing with "invalid gzip header" (#4715)
+
+`perform_self_update` in `crates/perry/src/update_checker.rs` always decoded the
+downloaded release archive with `flate2::GzDecoder` + `tar::Archive`, regardless
+of platform. The Windows release artifact (`perry-windows-x86_64.zip`) is a real
+ZIP, not a gzip stream, so `perry update` on Windows bailed out with:
+
+```
+Error: Failed to extract archive
+Caused by:
+    0: failed to iterate over archive
+    1: invalid gzip header
+```
+
+Two fixes:
+
+- **Extraction now dispatches on the artifact extension.** Factored the inline
+  decode into a testable `extract_archive(bytes, artifact_name, dest)` helper:
+  `.zip` → `zip::ZipArchive::extract`, everything else → gzip/tar as before. The
+  extension (not the host `cfg`) chooses the decoder.
+- **Binary lookup is now platform-aware.** The post-extract step searched for a
+  file named exactly `perry`, but the Windows zip ships `perry.exe`, so the swap
+  would have failed with "Perry binary not found in archive" even once extraction
+  succeeded. Windows now looks for `perry.exe`.
+
+Added `test_extract_zip_artifact` and `test_extract_targz_artifact` unit tests
+that round-trip an in-memory archive of each kind through `extract_archive`.
+
+Not addressed here: the npm/`npmx.dev` "two 0.5.1125 versions / latest shows
+0.5.1122" registry confusion the reporter also noted is a publishing-pipeline
+issue, not a compiler bug.
+
 ## v0.5.1128 — fix(string): generic-`this` for all String.prototype methods + slice/substring index coercion (built-ins/String 60.2%→79.3%)
 
 Extends the generic-`this` work started in #4713 (which only covered the
