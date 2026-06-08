@@ -64,6 +64,59 @@ unsafe fn materialize_match_all_results(
     let str_data = string_as_str(s);
     let search_start = char_index_to_byte(str_data, start_char_index);
     let search_str = &str_data[search_start..];
+
+    // Fancy-regex fallback (lookbehind/backreferences): the never-match
+    // placeholder in `regex_ptr` would yield an empty iterator otherwise.
+    // Mirrors the standard-engine loop below, including named-group `groups`.
+    if let Some(fre) = super::lookup_fancy_regex(re) {
+        let mut all_caps: Vec<fancy_regex::Captures> = Vec::new();
+        let mut it = fre.captures_iter(search_str);
+        while let Some(Ok(c)) = it.next() {
+            all_caps.push(c);
+        }
+        let outer = crate::array::js_array_alloc(all_caps.len() as u32);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let outer_handle = scope.root_raw_mut_ptr(outer);
+        (*outer_handle.get_raw_mut_ptr::<ArrayHeader>()).length = all_caps.len() as u32;
+
+        for (i, caps) in all_caps.iter().enumerate() {
+            let inner = crate::array::js_array_alloc(caps.len() as u32);
+            let inner_handle = scope.root_raw_mut_ptr(inner);
+            (*inner_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
+
+            for j in 0..caps.len() {
+                let value = if let Some(m) = caps.get(j) {
+                    let str_ptr = js_string_from_str(m.as_str());
+                    js_nanbox_string(str_ptr as i64)
+                } else {
+                    f64::from_bits(TAG_UNDEFINED)
+                };
+                let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
+                crate::array::store_array_slot(inner, j, value.to_bits());
+            }
+
+            let match_index = caps
+                .get(0)
+                .map(|m| byte_index_to_char_index(str_data, search_start + m.start()))
+                .unwrap_or_else(|| start_char_index as f64);
+            let inner = inner_handle.get_raw_mut_ptr::<ArrayHeader>();
+            set_exec_array_metadata(inner, str_data, match_index);
+            let groups_ptr = super::build_fancy_groups(&fre, caps, &scope);
+            let groups_value = if groups_ptr.is_null() {
+                f64::from_bits(TAG_UNDEFINED)
+            } else {
+                js_nanbox_pointer(groups_ptr as i64)
+            };
+            set_match_all_groups(inner, groups_value);
+
+            let inner_boxed = js_nanbox_pointer(inner as i64);
+            let outer = outer_handle.get_raw_mut_ptr::<ArrayHeader>();
+            crate::array::store_array_slot(outer, i, inner_boxed.to_bits());
+        }
+
+        return outer_handle.get_raw_mut_ptr::<ArrayHeader>();
+    }
+
     let regex = &*(*re).regex_ptr;
     let all_caps: Vec<regex::Captures<'_>> = regex.captures_iter(search_str).collect();
     let outer = crate::array::js_array_alloc(all_caps.len() as u32);

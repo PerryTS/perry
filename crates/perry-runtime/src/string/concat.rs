@@ -21,6 +21,100 @@ use super::*;
 /// result fit SSO (≤ 5 bytes total), there's literally zero heap
 /// allocation. Result is returned NaN-boxed so callers don't need a
 /// follow-up wrap.
+/// Canonicalize a freshly-built concatenation result for WTF-8: a lone high
+/// surrogate immediately followed by a lone low surrogate (which can newly
+/// arise when two surrogate-bearing strings are joined, e.g.
+/// `String.fromCharCode(0xD83D) + String.fromCharCode(0xDE00)` or
+/// `"\uD83D" + "\uDE00"`) must be stored as the astral code point's 4-byte
+/// UTF-8, so `codePointAt` / console output match JS. Each surrogate is a
+/// 3-byte WTF-8 sequence: high = `ED A0..AF 80..BF`, low = `ED B0..BF 80..BF`.
+///
+/// Cheap-gated by the caller on `STRING_FLAG_HAS_LONE_SURROGATES`: ordinary
+/// (ASCII / valid-UTF-8) concatenations never reach here. When no adjacent
+/// pair exists (a genuinely lone surrogate), the input pointer is returned
+/// unchanged; only an actual merge allocates a new string. `utf16_len` is
+/// unaffected (a pair and its astral form are both 2 code units). (#4793)
+pub(crate) fn canonicalize_surrogate_pairs(ptr: *mut StringHeader) -> *mut StringHeader {
+    if !is_valid_string_ptr(ptr) {
+        return ptr;
+    }
+    let (blen, u16len, flags) = unsafe { ((*ptr).byte_len, (*ptr).utf16_len, (*ptr).flags) };
+    if flags & STRING_FLAG_HAS_LONE_SURROGATES == 0 || blen < 6 {
+        return ptr;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(string_data(ptr), blen as usize) };
+
+    // First pass: is there any adjacent high→low surrogate pair? Avoid all
+    // allocation for the common single-lone-surrogate result.
+    let is_high = |s: &[u8]| s[0] == 0xED && (0xA0..=0xAF).contains(&s[1]);
+    let is_low = |s: &[u8]| s[0] == 0xED && (0xB0..=0xBF).contains(&s[1]);
+    let mut has_pair = false;
+    let mut i = 0usize;
+    while i + 6 <= bytes.len() {
+        if is_high(&bytes[i..]) && is_low(&bytes[i + 3..]) {
+            has_pair = true;
+            break;
+        }
+        i += 1;
+    }
+    if !has_pair {
+        return ptr;
+    }
+
+    // Second pass: rebuild, merging each high→low pair into 4-byte UTF-8 and
+    // tracking whether any surrogate remains lone (to keep the flag accurate).
+    let mut out: Vec<u8> = Vec::with_capacity(blen as usize);
+    let mut still_has_lone = false;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let rem = &bytes[i..];
+        if rem.len() >= 3 && rem[0] == 0xED && (0xA0..=0xBF).contains(&rem[1]) {
+            // A surrogate sequence. Try to pair a high with a following low.
+            if is_high(rem) && rem.len() >= 6 && is_low(&rem[3..]) {
+                let hi = ((rem[0] as u32 & 0x0F) << 12)
+                    | ((rem[1] as u32 & 0x3F) << 6)
+                    | (rem[2] as u32 & 0x3F);
+                let lo = ((rem[3] as u32 & 0x0F) << 12)
+                    | ((rem[4] as u32 & 0x3F) << 6)
+                    | (rem[5] as u32 & 0x3F);
+                let astral = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                let ch = unsafe { char::from_u32_unchecked(astral) };
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                i += 6;
+                continue;
+            }
+            // Lone surrogate — copy verbatim, remember the flag stays set.
+            still_has_lone = true;
+            out.extend_from_slice(&rem[..3]);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    let new_flags = if still_has_lone {
+        STRING_FLAG_HAS_LONE_SURROGATES
+    } else {
+        0
+    };
+    js_string_from_bytes_known_utf16(out.as_ptr(), out.len() as u32, u16len, new_flags)
+}
+
+/// True when the `len` bytes at `data` are all ASCII (`< 0x80`), or the slice
+/// is empty/null. Used to decide whether a concat result may be stored inline
+/// as an SSO value (whose length tag doubles as the JS `.length`).
+#[inline]
+fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
+    if data.is_null() || len == 0 {
+        return true;
+    }
+    unsafe { std::slice::from_raw_parts(data, len as usize) }
+        .iter()
+        .all(|&b| b < 0x80)
+}
+
 #[no_mangle]
 pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     let mut scratch_l = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -29,9 +123,16 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     let r = str_bytes_from_jsvalue(r_value, &mut scratch_r).unwrap_or((std::ptr::null(), 0));
     let total_blen = l.1 + r.1;
 
+    // SSO encodes its length tag as the JS `.length`, so it is only sound for
+    // ASCII operands (byte length == UTF-16 length). A non-ASCII operand —
+    // multi-byte UTF-8 or a WTF-8 lone surrogate — must take the heap path so
+    // the result's `utf16_len` is computed, not assumed equal to `byte_len`
+    // (#4793: `("é"+"x").length` was 3, `("\uD800"+"x").length` was 4).
+    let both_ascii = bytes_all_ascii(l.0, l.1) && bytes_all_ascii(r.0, r.1);
+
     // SSO fast path — assemble the result inline when it fits (≤ 5
     // bytes). Pure bit arithmetic, no heap touch.
-    if total_blen as usize <= crate::value::SHORT_STRING_MAX_LEN {
+    if both_ascii && total_blen as usize <= crate::value::SHORT_STRING_MAX_LEN {
         unsafe {
             let mut payload: u64 = 0;
             for i in 0..l.1 as usize {
@@ -65,26 +166,40 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
         } else {
             &[]
         };
-        let utf16_len = if l_slice.is_ascii() && r_slice.is_ascii() {
-            total_blen
+        let (utf16_len, flags) = if l_slice.is_ascii() && r_slice.is_ascii() {
+            (total_blen, 0)
         } else {
+            // Sum each operand's UTF-16 length independently (concatenating two
+            // strings never merges code units across the boundary). Carry the
+            // lone-surrogate flag forward when an operand is WTF-8 so
+            // `isWellFormed()` / `JSON.stringify` stay correct on the result.
             let mut u16 = 0u32;
+            let mut flags = 0u32;
             if !l_slice.is_empty() {
                 u16 += compute_utf16_len(l.0, l.1);
+                if str::from_utf8(l_slice).is_err() {
+                    flags |= STRING_FLAG_HAS_LONE_SURROGATES;
+                }
             }
             if !r_slice.is_empty() {
                 u16 += compute_utf16_len(r.0, r.1);
+                if str::from_utf8(r_slice).is_err() {
+                    flags |= STRING_FLAG_HAS_LONE_SURROGATES;
+                }
             }
-            u16
+            (u16, flags)
         };
 
-        init_string_header(ptr, utf16_len, total_blen, total_blen, 0, 0);
+        init_string_header(ptr, utf16_len, total_blen, total_blen, 0, flags);
         if !l_slice.is_empty() {
             ptr::copy_nonoverlapping(l.0, data_ptr, l.1 as usize);
         }
         if !r_slice.is_empty() {
             ptr::copy_nonoverlapping(r.0, data_ptr.add(l.1 as usize), r.1 as usize);
         }
+        // Merge any surrogate pair newly formed across the join boundary
+        // (no-op unless the result carries the lone-surrogate flag).
+        let ptr = canonicalize_surrogate_pairs(ptr);
         // NaN-box as STRING_TAG.
         f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
     }
@@ -174,7 +289,7 @@ pub extern "C" fn js_string_concat(
             );
         }
 
-        ptr
+        canonicalize_surrogate_pairs(ptr)
     }
 }
 
@@ -462,7 +577,7 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
             }
         }
 
-        ptr
+        canonicalize_surrogate_pairs(ptr)
     }
 }
 
