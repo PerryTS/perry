@@ -121,6 +121,27 @@ pub fn init_vm(vm: JavaVM) {
     let _ = JAVA_VM.set(vm);
 }
 
+/// Ensure the global JavaVM is cached, deriving it from a live `JNIEnv` when
+/// Perry's own `JNI_OnLoad` never ran.
+///
+/// This happens when the final `.so` also links a native library that defines
+/// its own `JNI_OnLoad` (a Bloom-engine game is the canonical case). ELF allows
+/// only one `JNI_OnLoad` symbol, and `-Wl,--allow-multiple-definition` keeps
+/// whichever the linker saw first — which may be the third-party library's, not
+/// Perry's. Perry's JNI entry points are bound by direct export name (the
+/// `Java_com_perry_app_PerryBridge_*` `#[no_mangle]` fns), not via
+/// `RegisterNatives`, so they still resolve regardless. But the JavaVM cache
+/// that `JNI_OnLoad` would have populated gets skipped. Calling this from
+/// `nativeInit` (which always runs, on a thread with a valid env) recovers it.
+pub fn ensure_vm(env: &JNIEnv) {
+    if JAVA_VM.get().is_some() {
+        return;
+    }
+    if let Ok(vm) = env.get_java_vm() {
+        let _ = JAVA_VM.set(vm);
+    }
+}
+
 /// Get a JNIEnv for the current thread.
 pub fn get_env() -> JNIEnv<'static> {
     let vm = JAVA_VM.get().expect("JavaVM not initialized");
