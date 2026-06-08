@@ -459,7 +459,7 @@ fn default_output_path(args: &CompileArgs) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("output");
     let stem = crate::commands::sanitize::sanitize_for_linker_argv(raw_stem);
-    if matches!(args.target.as_deref(), Some("windows"))
+    if matches!(args.target.as_deref(), Some("windows") | Some("windows-winui"))
         || (args.target.is_none() && cfg!(target_os = "windows"))
     {
         PathBuf::from(format!("{stem}.exe"))

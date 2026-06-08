@@ -33,7 +33,8 @@ Use `--target` to cross-compile:
 | `wearos-tile` | Wear OS Tile | Wear OS Tile (TileService) |
 | `wasm` | WebAssembly | Self-contained HTML with WASM or raw `.wasm` binary |
 | `web` | Web | Outputs HTML file with JS |
-| `windows` | Windows | Win32 executable |
+| `windows` | Windows | Win32/GDI executable (default Windows backend) |
+| `windows-winui` | Windows (Fluent) | Opt-in WinUI 3 / Fluent backend (#4680). **Scaffold:** currently renders via Win32 while the XAML widget mapping lands incrementally; selects the `perry-ui-windows-winui` static library. Build that lib first: `cargo build --release -p perry-ui-windows-winui`. |
 | `linux` | Linux | GTK4 executable |
 
 ## Output Types

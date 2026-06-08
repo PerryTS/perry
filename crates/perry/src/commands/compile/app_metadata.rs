@@ -17,7 +17,8 @@ pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str
         Some("tvos") | Some("tvos-simulator") => Some("tvos"),
         Some("android") => Some("android"),
         Some("macos") => Some("macos"),
-        Some("windows") => Some("windows"),
+        // WinUI shares the [windows] perry.toml section (#4680).
+        Some("windows") | Some("windows-winui") => Some("windows"),
         Some("linux") => Some("linux"),
         None if cfg!(target_os = "macos") => Some("macos"),
         None if cfg!(target_os = "windows") => Some("windows"),
@@ -161,7 +162,7 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("android") => Some("aarch64-linux-android"),
         Some("linux") | Some("linux-x86_64") => Some("x86_64-unknown-linux-gnu"),
         Some("linux-arm64") | Some("linux-aarch64") => Some("aarch64-unknown-linux-gnu"),
-        Some("windows") => Some("x86_64-pc-windows-msvc"),
+        Some("windows") | Some("windows-winui") => Some("x86_64-pc-windows-msvc"),
         Some("macos") => Some("aarch64-apple-darwin"),
         _ => None,
     }

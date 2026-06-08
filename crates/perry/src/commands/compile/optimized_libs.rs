@@ -549,7 +549,9 @@ pub(super) fn build_optimized_libs(
         None => {
             if matches!(format, OutputFormat::Text) && verbose > 0 {
                 let (rt_name, std_name) = match target {
-                    Some("windows") => ("perry_runtime.lib", "perry_stdlib.lib"),
+                    Some("windows") | Some("windows-winui") => {
+                        ("perry_runtime.lib", "perry_stdlib.lib")
+                    }
                     None if cfg!(target_os = "windows") => {
                         ("perry_runtime.lib", "perry_stdlib.lib")
                     }
@@ -804,13 +806,13 @@ pub(super) fn build_optimized_libs(
 
     // Resolve both archive paths.
     let runtime_name = match target {
-        Some("windows") => "perry_runtime.lib",
+        Some("windows") | Some("windows-winui") => "perry_runtime.lib",
         #[cfg(target_os = "windows")]
         None => "perry_runtime.lib",
         _ => "libperry_runtime.a",
     };
     let stdlib_name = match target {
-        Some("windows") => "perry_stdlib.lib",
+        Some("windows") | Some("windows-winui") => "perry_stdlib.lib",
         #[cfg(target_os = "windows")]
         None => "perry_stdlib.lib",
         _ => "libperry_stdlib.a",
@@ -1033,6 +1035,7 @@ pub(super) fn build_optimized_libs(
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
                 Some("linux") => "perry-ui-gtk4",
+                Some("windows-winui") => "perry-ui-windows-winui",
                 Some("windows") => "perry-ui-windows",
                 Some("macos") => "perry-ui-macos",
                 _ => {

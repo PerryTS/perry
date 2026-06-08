@@ -6177,6 +6177,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-ui-windows-winui"
+version = "0.5.1145"
+dependencies = [
+ "perry-ui-windows",
+]
+
+[[package]]
 name = "perry-updater"
 version = "0.5.1145"
 dependencies = [
