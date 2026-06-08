@@ -725,7 +725,17 @@ pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) ->
 /// `js_native_call_method`, so they should be driven directly rather than via the
 /// (now inherited) `[Symbol.iterator]` method.
 pub(crate) fn is_builtin_iterator_class_id(raw_ptr: usize) -> bool {
-    if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // Native handle ids (Web-Fetch Headers/Request/Response, streams, ws, DB,
+    // …) are NaN-boxed POINTER values in the small-handle band `[1, 0x100000)`:
+    // registry indices, NOT heap pointers. Dereferencing `raw_ptr - 8` as a
+    // GcHeader for one of them reads unmapped memory and segfaults — e.g.
+    // `for (const [k, v] of response.headers)`, where the lazy `for…of`
+    // protocol (#4786) routes the Headers handle (id >= 0x40000) through
+    // `js_get_iterator`, which calls this check. Reject the whole handle band,
+    // matching the `< 0x100000` floor used by `Array.isArray` and
+    // `try_dispatch_instance_method_value`. A real built-in iterator is always a
+    // heap object well above this floor, so this never loses a true match.
+    if raw_ptr < 0x100000 {
         return false;
     }
     unsafe {
