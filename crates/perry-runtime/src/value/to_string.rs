@@ -965,18 +965,28 @@ pub extern "C" fn js_jsvalue_to_string_radix(
         return js_jsvalue_to_string(result);
     }
 
-    // Coerce + validate the radix once up front. `None` → default radix 10.
-    let radix = match unsafe { coerce_validate_radix(radix_value) } {
-        Some(r) => r,
-        None => 10,
-    };
+    // Numeric receivers (Number / BigInt / Int32 / boxed Number): the second
+    // argument is a radix — coerce + validate it (throws on out-of-range). Other
+    // object receivers (Date, user `toString(opts)` methods) reach this with a
+    // non-radix argument, so we lazily validate the radix only on the numeric
+    // arms and otherwise dispatch the receiver's own `toString` with the
+    // argument forwarded — never ToNumber-coercing an options object as a radix.
+    macro_rules! radix {
+        () => {
+            match unsafe { coerce_validate_radix(radix_value) } {
+                Some(r) => r,
+                None => 10,
+            }
+        };
+    }
 
     if jsval.is_bigint() {
         let ptr = jsval.as_bigint_ptr();
-        crate::bigint::js_bigint_to_string_radix(ptr, radix)
+        crate::bigint::js_bigint_to_string_radix(ptr, radix!())
     } else if jsval.is_string() {
         jsval.as_string_ptr() as *mut crate::string::StringHeader
     } else if jsval.is_int32() {
+        let radix = radix!();
         let n = jsval.as_int32();
         if radix == 10 {
             let s = n.to_string();
@@ -985,21 +995,44 @@ pub extern "C" fn js_jsvalue_to_string_radix(
         let s = double_to_radix_string(n as f64, radix as u32);
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     } else if jsval.is_number() {
-        number_to_radix_string(value, radix)
+        number_to_radix_string(value, radix!())
     } else {
         // Pointer / object receiver. `Number.prototype.toString` brand
         // semantics (ECMA-262 21.1.3): a boxed `Number` exposes its
         // [[NumberData]]; `Number.prototype` itself has [[NumberData]] +0;
-        // any other object has no number value and falls back to ordinary
-        // ToString (Object.prototype.toString, [object Object], etc.).
+        // any other object has no number value and dispatches its own
+        // `toString` with the argument forwarded (so a Temporal/Date receiver
+        // honours its options bag instead of treating it as a radix).
         const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
         if let Some((cid, payload)) = crate::builtins::boxed_primitive_payload(value) {
             if cid == CLASS_ID_BOXED_NUMBER {
-                return number_to_radix_string(payload, radix);
+                return number_to_radix_string(payload, radix!());
             }
         }
         if value.to_bits() == crate::object::builtin_prototype_value("Number").to_bits() {
-            return number_to_radix_string(0.0, radix);
+            return number_to_radix_string(0.0, radix!());
+        }
+        // Forward the argument to the receiver's own `toString`. A Temporal
+        // value routes to its options-aware `toString`; a plain object falls
+        // back to `Object.prototype.toString` ([object Object]).
+        if jsval.is_pointer() {
+            let args = [radix_value];
+            let result = unsafe {
+                crate::object::js_native_call_method(
+                    value,
+                    b"toString".as_ptr() as *const i8,
+                    8,
+                    args.as_ptr(),
+                    1,
+                )
+            };
+            let rjv = JSValue::from_bits(result.to_bits());
+            if rjv.is_string() {
+                return rjv.as_string_ptr() as *mut crate::string::StringHeader;
+            }
+            if rjv.is_short_string() {
+                return crate::string::js_string_materialize_to_heap(result);
+            }
         }
         js_jsvalue_to_string(value)
     }

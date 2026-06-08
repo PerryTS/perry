@@ -6,7 +6,6 @@
 use super::dispatch::{self, boolean, ok_or_throw, raw_arg, string, undefined};
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
-use temporal_rs::options::DifferenceSettings;
 use temporal_rs::{Calendar, PlainDate, PlainTime, TimeZone};
 
 const TYPE_NAME: &str = "Temporal.PlainDate";
@@ -155,11 +154,11 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
         )),
         "until" => super::duration::wrap(ok_or_throw(d.until(
             &coerce_date(raw_arg(args, 0)),
-            DifferenceSettings::default(),
+            super::options::difference_settings(raw_arg(args, 1)),
         ))),
         "since" => super::duration::wrap(ok_or_throw(d.since(
             &coerce_date(raw_arg(args, 0)),
-            DifferenceSettings::default(),
+            super::options::difference_settings(raw_arg(args, 1)),
         ))),
         "equals" => {
             let other = coerce_date(raw_arg(args, 0));

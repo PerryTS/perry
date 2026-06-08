@@ -8,7 +8,6 @@ use super::dispatch::{
 };
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
-use temporal_rs::options::DifferenceSettings;
 use temporal_rs::{Calendar, PlainDateTime};
 
 const TYPE_NAME: &str = "Temporal.PlainDateTime";
@@ -151,12 +150,14 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
         "subtract" => wrap(ok_or_throw(
             dt.subtract(&super::duration::coerce_duration(raw_arg(args, 0)), None),
         )),
-        "until" => super::duration::wrap(ok_or_throw(
-            dt.until(&coerce_dt(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
-        "since" => super::duration::wrap(ok_or_throw(
-            dt.since(&coerce_dt(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
+        "until" => super::duration::wrap(ok_or_throw(dt.until(
+            &coerce_dt(raw_arg(args, 0)),
+            super::options::difference_settings(raw_arg(args, 1)),
+        ))),
+        "since" => super::duration::wrap(ok_or_throw(dt.since(
+            &coerce_dt(raw_arg(args, 0)),
+            super::options::difference_settings(raw_arg(args, 1)),
+        ))),
         "equals" => {
             let other = coerce_dt(raw_arg(args, 0));
             dispatch::boolean(
