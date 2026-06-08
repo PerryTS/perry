@@ -695,7 +695,11 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         if let Some(class_id) = super::class_ref_id(obj_value) {
             let present = super::has_own_helpers::str_from_string_header(key_str)
                 .map(|key| {
-                    if super::class_registry::class_is_key_deleted(class_id, key) {
+                    if key.starts_with('#') {
+                        // Private static elements are never reflectable own
+                        // properties of the class constructor.
+                        false
+                    } else if super::class_registry::class_is_key_deleted(class_id, key) {
                         false
                     } else if matches!(key, "length" | "prototype") {
                         true
@@ -806,6 +810,16 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                 .as_deref()
                 .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
+        // Private elements (`#x`) sit in a class instance's keys_array but are
+        // never reflectable own properties. Plain literals keep class_id 0.
+        if (*obj).class_id != 0 {
+            if let Some(key) = super::has_own_helpers::str_from_string_header(key_str) {
+                if key.starts_with('#') {
+                    return f64::from_bits(TAG_FALSE);
+                }
+            }
         }
 
         if own_key_present(obj, key_str) {

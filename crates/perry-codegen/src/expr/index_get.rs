@@ -144,6 +144,29 @@ pub(crate) fn index_object_is_class_or_proto_ref(ctx: &FnCtx<'_>, object: &Expr)
     }
 }
 
+/// Compute the receiver handle to pass to `js_object_get_field_by_name`-family
+/// helpers from a NaN-boxed receiver value (`obj_bits`). Heap objects must be
+/// masked to a raw pointer, but an INT32-tagged class ref (`0x7FFE`) must keep
+/// its tag bits so the runtime routes to the static field / method / accessor
+/// tables. When the receiver's class-ref-ness is known at compile time
+/// (`static_known`), pass full bits unconditionally; otherwise branch at runtime
+/// on the tag so a runtime class-ref value (e.g. a function parameter bound to a
+/// class — `function f(C, k){ return C[k]; }`) is handled too. (test262
+/// class/elements propertyHelper `isWritable(C, name)` does `C[name]`.)
+pub(crate) fn classref_preserving_handle(
+    blk: &mut crate::block::LlBlock,
+    obj_bits: &str,
+    static_known: bool,
+) -> String {
+    if static_known {
+        return obj_bits.to_string();
+    }
+    let top16 = blk.lshr(I64, obj_bits, "48");
+    let is_classref = blk.icmp_eq(I64, &top16, "32766"); // 0x7FFE
+    let masked = blk.and(I64, obj_bits, POINTER_MASK_I64);
+    blk.select(crate::types::I1, &is_classref, I64, obj_bits, &masked)
+}
+
 fn lower_class_method_bind(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -812,11 +835,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle = if preserve_class_ref_bits {
-                    obj_bits
-                } else {
-                    blk.and(I64, &obj_bits, POINTER_MASK_I64)
-                };
+                let obj_handle =
+                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -844,11 +864,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_box = lower_expr(ctx, index)?;
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle = if preserve_class_ref_bits {
-                    obj_bits
-                } else {
-                    blk.and(I64, &obj_bits, POINTER_MASK_I64)
-                };
+                let obj_handle =
+                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
                 let key_handle = unbox_str_handle(blk, &key_box);
                 let site_id = emit_typed_feedback_register_site(
                     ctx,
@@ -871,11 +888,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let idx_box = lower_expr(ctx, index)?;
             let blk = ctx.block();
             let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-            let obj_handle = if preserve_class_ref_bits {
-                obj_bits
-            } else {
-                blk.and(I64, &obj_bits, POINTER_MASK_I64)
-            };
+            let obj_handle = classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
             let is_sym_i32 = blk.call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
             let is_sym_bit = blk.icmp_ne(I32, &is_sym_i32, "0");
             let sym_idx = ctx.new_block("iget.sym");

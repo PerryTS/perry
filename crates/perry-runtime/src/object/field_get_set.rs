@@ -1683,7 +1683,12 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 None => j as u32,
             }
         };
-        if !has_descriptors {
+        // Private elements (`#x`) are stored in a class instance's keys_array
+        // but are never enumerable/reflectable properties. Take the filtering
+        // path for class instances (class_id != 0) so they are dropped. Plain
+        // object literals keep class_id 0, so `{"#fff": 1}` stays visible.
+        let hide_private = (*obj).class_id != 0;
+        if !has_descriptors && !hide_private {
             let out = crate::array::js_array_alloc(len as u32);
             for j in 0..len {
                 let key_val = crate::array::js_array_get(keys, pos(j));
@@ -1691,7 +1696,7 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
             }
             return out;
         }
-        // Slow path: filter out non-enumerable keys.
+        // Slow path: filter out non-enumerable and private (`#`) keys.
         let filtered = crate::array::js_array_alloc(len as u32);
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..len {
@@ -1707,10 +1712,15 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 Ok(s) => s,
                 Err(_) => continue,
             };
+            if hide_private && key_str.starts_with('#') {
+                continue;
+            }
             // If a descriptor explicitly marks this key non-enumerable, skip it.
-            if let Some(attrs) = get_property_attrs(obj as usize, key_str) {
-                if !attrs.enumerable() {
-                    continue;
+            if has_descriptors {
+                if let Some(attrs) = get_property_attrs(obj as usize, key_str) {
+                    if !attrs.enumerable() {
+                        continue;
+                    }
                 }
             }
             crate::array::js_array_push_f64(filtered, f64::from_bits(key_val.bits()));
@@ -1720,6 +1730,23 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
 }
 
 /// Get the values of an object as an array
+/// True when `obj` is a class instance (`class_id != 0`) and `key_val` names a
+/// private element (`#x`). Private elements physically live in the instance
+/// keys_array but are never enumerable/reflectable properties. Plain object
+/// literals keep `class_id == 0`, so `{"#fff": 1}` stays visible.
+pub(crate) unsafe fn instance_private_key_hidden(
+    obj: *const ObjectHeader,
+    key_val: crate::JSValue,
+) -> bool {
+    if obj.is_null() || (*obj).class_id == 0 {
+        return false;
+    }
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    crate::string::js_string_key_bytes(key_val, &mut buf)
+        .map(|b| b.first() == Some(&b'#'))
+        .unwrap_or(false)
+}
+
 /// Returns an array of the object's field values
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
@@ -1810,7 +1837,14 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
             }
         };
         for j in 0..count {
-            let value = js_object_get_field(obj as *mut ObjectHeader, pos(j));
+            let i = pos(j);
+            if !keys.is_null() && i < crate::array::js_array_length(keys) {
+                let key_val = crate::array::js_array_get(keys, i);
+                if instance_private_key_hidden(obj, key_val) {
+                    continue;
+                }
+            }
+            let value = js_object_get_field(obj as *mut ObjectHeader, i);
             crate::array::js_array_push_f64(result, f64::from_bits(value.bits()));
         }
 
@@ -1942,6 +1976,12 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
         };
         for j in 0..count {
             let i = pos(j);
+            if !keys.is_null() && i < crate::array::js_array_length(keys) {
+                let key_val = crate::array::js_array_get(keys, i);
+                if instance_private_key_hidden(obj, key_val) {
+                    continue;
+                }
+            }
             // Create a pair array [key, value]
             let pair = crate::array::js_array_alloc(2);
 

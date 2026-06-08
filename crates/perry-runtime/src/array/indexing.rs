@@ -560,6 +560,19 @@ pub extern "C" fn js_array_set_string_key(
     if arr.is_null() || key.is_null() {
         return arr;
     }
+    // A class-ref value (INT32 tag 0x7FFE) reaching this polymorphic setter
+    // (`C[name] = v` where `C` is a runtime class-ref value) is not an array —
+    // its high bits are set, so the `is_array` GC-header probe below would
+    // dereference unmapped memory. Route to the by-name object setter, which
+    // detects the class-ref tag and stores into the static-field tables.
+    if (arr as u64) >> 48 == 0x7FFE {
+        crate::object::js_object_set_field_by_name(
+            arr as *mut crate::object::ObjectHeader,
+            key,
+            value,
+        );
+        return arr;
+    }
     // Issue #637: also called from polymorphic IndexSet — detect the
     // receiver's gc_type and route accordingly. For Object/Closure
     // (non-array) receivers, just call the object setter directly so

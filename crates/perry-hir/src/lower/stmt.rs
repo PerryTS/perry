@@ -694,12 +694,61 @@ pub(crate) fn lower_stmt(
                                                 parent_expr: p,
                                             })
                                         });
+                                    // Inline static field/element initializers and
+                                    // static blocks at the class-expression's source
+                                    // position, exactly as the `Decl::Class` arm does
+                                    // for declarations. Without this the `var C =
+                                    // class { static x = 1 }` fast path relied solely
+                                    // on the late `init_static_fields_late` codegen
+                                    // pass, which runs AFTER the surrounding top-level
+                                    // statements — so `C.x` read immediately after the
+                                    // binding saw the uninitialized (0.0) slot, and a
+                                    // static method's `this.#priv` read undefined.
+                                    let static_field_inits: Vec<Stmt> = lowered_class
+                                        .static_fields
+                                        .iter()
+                                        .filter_map(|sf| {
+                                            sf.init.as_ref().map(|init| {
+                                                if let Some(key) = sf.key_expr.as_ref() {
+                                                    Stmt::Expr(Expr::ClassStaticSymbolSet {
+                                                        class_name: bind_name.clone(),
+                                                        key: Box::new(key.clone()),
+                                                        value: Box::new(init.clone()),
+                                                    })
+                                                } else {
+                                                    Stmt::Expr(Expr::StaticFieldSet {
+                                                        class_name: bind_name.clone(),
+                                                        field_name: sf.name.clone(),
+                                                        value: Box::new(init.clone()),
+                                                    })
+                                                }
+                                            })
+                                        })
+                                        .collect();
+                                    let static_block_calls: Vec<Stmt> = lowered_class
+                                        .static_methods
+                                        .iter()
+                                        .filter(|m| m.name.starts_with("__perry_static_init_"))
+                                        .map(|m| {
+                                            Stmt::Expr(Expr::StaticMethodCall {
+                                                class_name: bind_name.clone(),
+                                                method_name: m.name.clone(),
+                                                args: Vec::new(),
+                                            })
+                                        })
+                                        .collect();
                                     push_class_dedup(module, lowered_class);
                                     if let Some(reg) = parent_register {
                                         module.init.push(reg);
                                     }
                                     for reg in computed_member_registrations {
                                         module.init.push(Stmt::Expr(reg));
+                                    }
+                                    for s in static_field_inits {
+                                        module.init.push(s);
+                                    }
+                                    for s in static_block_calls {
+                                        module.init.push(s);
                                     }
                                     // Register the alias so `new X()` → `new X()`
                                     // (no-op lookup, but marks the binding as a class).

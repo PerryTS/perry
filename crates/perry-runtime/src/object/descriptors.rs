@@ -122,6 +122,29 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             return crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
         }
 
+        // Private elements (`#x`) are stored on the static side / in a class
+        // instance's keys_array but are never reflectable own properties, so
+        // their descriptor is always undefined. (Plain `{"#fff": 1}` literals
+        // carry class_id 0 and are handled by the ordinary path below.)
+        {
+            let kjv = crate::JSValue::from_bits(key_value.to_bits());
+            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            if let Some(b) = crate::string::js_string_key_bytes(kjv, &mut buf) {
+                if b.first() == Some(&b'#') {
+                    let is_class = class_ref_id(obj_value).is_some() || {
+                        let obj = extract_obj_ptr(obj_value);
+                        !obj.is_null()
+                            && (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
+                            && crate::object::is_valid_obj_ptr(obj as *const u8)
+                            && (*obj).class_id != 0
+                    };
+                    if is_class {
+                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    }
+                }
+            }
+        }
+
         // #2818: string primitives box to String objects whose own
         // properties are the index keys "0".."len-1" (writable:false,
         // enumerable:true, configurable:false) plus "length"
@@ -839,6 +862,10 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                     }
                 });
             }
+            // Private elements (`#x`) live on the static side / prototype
+            // vtable under `#`-prefixed keys but are never reflectable own
+            // properties of `C` or `C.prototype`.
+            names.retain(|n| !n.starts_with('#'));
             sort_property_names_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {
@@ -969,9 +996,21 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 None => j as u32,
             }
         };
+        // Private elements (`#x`) live in a class instance's keys_array but are
+        // never reflectable own properties. Drop them for class instances
+        // (class_id != 0); plain `{"#fff": 1}` literals keep class_id 0.
+        let hide_private = (*obj).class_id != 0;
         let result = crate::array::js_array_alloc(len as u32);
+        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, pos(i));
+            if hide_private {
+                if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+                    if b.first() == Some(&b'#') {
+                        continue;
+                    }
+                }
+            }
             crate::array::js_array_push_f64(result, f64::from_bits(key_val.bits()));
         }
         f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000)
