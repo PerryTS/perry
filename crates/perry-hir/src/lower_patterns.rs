@@ -102,10 +102,16 @@ pub(crate) fn lower_assign_target_to_expr(
             if let Some(id) = ctx.lookup_local(&name) {
                 Ok(Expr::LocalGet(id))
             } else {
-                Err(anyhow!(
-                    "Undefined variable in compound assignment: {}",
-                    name
-                ))
+                // Unresolved / global compound-assignment target. The current
+                // value is obtained via GetValue on the reference, so the read
+                // must follow the same resolution as a bare identifier read:
+                // known globals resolve to their value, while a truly
+                // unresolvable name lowers to a runtime ReferenceError throw
+                // (GetValue on an unresolvable Reference always throws, in both
+                // strict and sloppy mode — e.g. `x *= 1` with `x` undeclared).
+                // Previously this hard-errored at compile time, turning a
+                // catchable ReferenceError into a SyntaxError.
+                lower_expr(ctx, &ast::Expr::Ident(ident.id.clone()))
             }
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {

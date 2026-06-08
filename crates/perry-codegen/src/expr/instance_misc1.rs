@@ -608,9 +608,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 Expr::PropertyGet { object, property } => {
                     let obj_box = lower_expr(ctx, object)?;
+                    // `delete null.x` / `delete undefined.x` → TypeError. The
+                    // `delete` algorithm calls `ToObject(GetBase)` on a property
+                    // reference, which throws for a nullish base.
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
@@ -620,19 +626,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_field",
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 Expr::IndexGet { object, index } if is_string_expr(ctx, index) => {
                     let obj_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;
+                    // `delete null[k]` / `delete undefined[k]` → TypeError, after
+                    // the key expression is evaluated (spec
+                    // EvaluatePropertyAccessWithExpressionKey: RequireObjectCoercible
+                    // runs after ToPropertyKey's operand is evaluated).
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     // SSO-safe key unbox — `js_object_delete_field`
@@ -643,15 +648,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_field",
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 // delete obj[expr] — route dynamic keys through the runtime so
                 // string-valued locals (for example `delete fn[name]`) still
@@ -660,6 +657,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Expr::IndexGet { object, index } => {
                     let obj_box = lower_expr(ctx, object)?;
                     let idx_box = lower_expr(ctx, index)?;
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     let i32_v = blk.call(
@@ -667,15 +667,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_dynamic",
                         &[(I64, &obj_handle), (DOUBLE, &idx_box)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
