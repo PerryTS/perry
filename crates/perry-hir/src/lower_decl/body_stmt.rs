@@ -7,7 +7,7 @@ use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
     collect_for_of_pattern_leaves, emit_for_of_pattern_binding, insert_iterator_close_on_abrupt,
-    iterator_next_call, lazy_or_index_elem, lower_expr, LoweringContext,
+    lazy_iter_for_stmt, lazy_or_index_elem, lower_expr, LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
@@ -1320,11 +1320,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             if for_of_stmt.is_await && needs_runtime_iterator {
                 return lower_runtime_for_await_iterator_body(ctx, for_of_stmt, arr_expr);
             }
-            // Lazy iterator protocol for generic/untyped iterables — see the
-            // matching comment in `lower/stmt_loops.rs`. Drives the loop with
-            // `__iter.next()` and runs IteratorClose on abrupt completion so a
-            // `break`/`return` closes a generator instead of draining it.
-            // `is_await` is already handled by the early return above.
+            // Lazy iterator protocol for generic iterables (see stmt_loops.rs).
             let use_lazy_iter = needs_runtime_iterator;
             let arr_expr = if is_iterable_map {
                 if map_kv_fastpath {
@@ -1407,8 +1403,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     Type::Any
                 }
             } else if use_lazy_iter {
-                // Holds the iterator object, not an array.
-                Type::Any
+                Type::Any // holds the iterator, not an array
             } else if let Some(ref elem) = inferred_elem_type {
                 Type::Array(Box::new(elem.clone()))
             } else {
@@ -1431,16 +1426,12 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 .push((format!("__arr_{}", arr_id), arr_id, holder_type.clone()));
             ctx.locals
                 .push((format!("__idx_{}", idx_id), idx_id, Type::Number));
-
-            // Lazy iterator path: `arr_id` holds the iterator, `result_id` the
-            // most recent `__iter.next()` result.
+            // Lazy path: `arr_id` holds the iterator, `result_id` the last next().
             let result_id = ctx.fresh_local();
             if use_lazy_iter {
                 ctx.locals
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
             }
-
-            // Store array reference (or `let __iter = GetIterator(..)`).
             result.push(Stmt::Let {
                 id: arr_id,
                 name: format!("__arr_{}", arr_id),
@@ -1544,22 +1535,16 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         // [Promise.resolve(1), …]) sum += x` binds `x` to a
                         // raw Promise object and `sum += x` produces NaN.
                         // Mirrors the same fix in `lower.rs::lower_stmt`'s
-                        // module-init for-of arm.
-                        let item_expr = if use_lazy_iter {
-                            Expr::PropertyGet {
-                                object: Box::new(Expr::LocalGet(result_id)),
-                                property: "value".to_string(),
-                            }
-                        } else {
+                        // module-init for-of arm. `use_lazy_iter` implies
+                        // `!is_await`, so the await arm is always the index path.
+                        let item_expr = if for_of_stmt.is_await {
                             let raw_item_expr = Expr::IndexGet {
                                 object: Box::new(Expr::LocalGet(arr_id)),
                                 index: Box::new(Expr::LocalGet(idx_id)),
                             };
-                            if for_of_stmt.is_await {
-                                Expr::Await(Box::new(raw_item_expr))
-                            } else {
-                                raw_item_expr
-                            }
+                            Expr::Await(Box::new(raw_item_expr))
+                        } else {
+                            lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
                         };
 
                         match &decl.name {
@@ -1767,43 +1752,16 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 _ => return Err(anyhow!("Unsupported for-of left-hand side")),
             };
 
-            // Lazy iterator path: run IteratorClose on abrupt completions.
+            // Lazy path: run IteratorClose on abrupt completions.
             if use_lazy_iter {
                 insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
             }
-
             // Prepend the binding statements to the loop body
             for (i, stmt) in binding_stmts.into_iter().enumerate() {
                 loop_body.insert(i, stmt);
             }
-
             if use_lazy_iter {
-                // Modeled as a `for` so `continue` re-pulls the iterator via the
-                // update clause (see the matching comment in stmt_loops.rs):
-                //   for (let __result = __iter.next();
-                //        !__result.done;
-                //        __result = __iter.next()) { bindings; body }
-                result.push(Stmt::For {
-                    init: Some(Box::new(Stmt::Let {
-                        id: result_id,
-                        name: format!("__result_{}", result_id),
-                        ty: Type::Any,
-                        mutable: true,
-                        init: Some(iterator_next_call(arr_id)),
-                    })),
-                    condition: Some(Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(result_id)),
-                            property: "done".to_string(),
-                        }),
-                    }),
-                    update: Some(Expr::LocalSet(
-                        result_id,
-                        Box::new(iterator_next_call(arr_id)),
-                    )),
-                    body: loop_body,
-                });
+                result.push(lazy_iter_for_stmt(arr_id, result_id, loop_body));
                 ctx.pop_block_scope(for_scope_mark);
                 return Ok(result);
             }

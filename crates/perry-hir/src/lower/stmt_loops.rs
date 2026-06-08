@@ -340,6 +340,41 @@ pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
     }
 }
 
+/// The lazy `for...of` driver loop, modeled as a `for` so `continue` re-pulls
+/// the iterator via the update clause (a `while` with the advance at the body
+/// tail would skip it on `continue` and spin):
+///   for (let __result = __iter.next();
+///        !__result.done;
+///        __result = __iter.next()) { <loop_body> }
+/// `iter_id` holds the iterator, `result_id` the latest `{ value, done }`.
+pub(crate) fn lazy_iter_for_stmt(
+    iter_id: LocalId,
+    result_id: LocalId,
+    loop_body: Vec<Stmt>,
+) -> Stmt {
+    Stmt::For {
+        init: Some(Box::new(Stmt::Let {
+            id: result_id,
+            name: format!("__result_{}", result_id),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(iterator_next_call(iter_id)),
+        })),
+        condition: Some(Expr::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(result_id)),
+                property: "done".to_string(),
+            }),
+        }),
+        update: Some(Expr::LocalSet(
+            result_id,
+            Box::new(iterator_next_call(iter_id)),
+        )),
+        body: loop_body,
+    }
+}
+
 /// Spec IteratorClose, guarded: `if (__iter.return != null) __iter.return();`.
 /// Array iterators have no `return` method, so the guard makes close a no-op
 /// for them (closing an array iterator is a spec no-op); generators / custom
@@ -1744,33 +1779,9 @@ pub(crate) fn lower_stmt_for_of(
     }
 
     if use_lazy_iter {
-        // Lazy iterator loop, modeled as a `for` so the advance lives in the
-        // update clause and `continue` re-pulls the iterator (a `while` with
-        // the advance at the body tail would skip it on `continue` and spin):
-        //   for (let __result = __iter.next();
-        //        !__result.done;
-        //        __result = __iter.next()) { bindings; body }
-        module.init.push(Stmt::For {
-            init: Some(Box::new(Stmt::Let {
-                id: result_id,
-                name: format!("__result_{}", result_id),
-                ty: Type::Any,
-                mutable: true,
-                init: Some(iterator_next_call(arr_id)),
-            })),
-            condition: Some(Expr::Unary {
-                op: UnaryOp::Not,
-                operand: Box::new(Expr::PropertyGet {
-                    object: Box::new(Expr::LocalGet(result_id)),
-                    property: "done".to_string(),
-                }),
-            }),
-            update: Some(Expr::LocalSet(
-                result_id,
-                Box::new(iterator_next_call(arr_id)),
-            )),
-            body: loop_body,
-        });
+        module
+            .init
+            .push(lazy_iter_for_stmt(arr_id, result_id, loop_body));
         ctx.pop_block_scope(for_scope_mark);
         return Ok(());
     }
