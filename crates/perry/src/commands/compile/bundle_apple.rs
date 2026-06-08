@@ -120,9 +120,11 @@ pub(super) fn bundle_for_watchos(
 /// Create a tvOS `.app` bundle. Same shape as `bundle_for_watchos`
 /// but with the Apple TV `UIDeviceFamily` (3), `MinimumOSVersion`
 /// 17.0, and a UI-thread principal class of `BloomApplication` (the
-/// runtime's UIApplication subclass on tvOS). No project-resource
-/// copy in this path — tvOS apps consume assets via the metallib /
-/// embedded JS bundle.
+/// runtime's UIApplication subclass on tvOS). Project resource
+/// directories (assets/levels/sounds/…) are copied into the bundle so
+/// games that read files at runtime via bloom_read_file /
+/// bloom_load_texture can resolve relative paths against the bundle's
+/// resourcePath — same as the watchOS/visionOS/iOS paths.
 pub(super) fn bundle_for_tvos(
     exe_path: &Path,
     stem: &str,
@@ -179,6 +181,18 @@ pub(super) fn bundle_for_tvos(
 
     compile_metallib_for_bundle(ctx, target, &app_dir, format)?;
     stage_native_library_artifacts(ctx, &app_dir, format)?;
+
+    // Copy project resource directories into the bundle so
+    // bloom_load_texture / load_sound / read_file can resolve relative
+    // asset paths via [[NSBundle mainBundle] resourcePath].
+    if let Some(src_dir) = input
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        let project_root = find_project_root_for_resources(&src_dir, true);
+        copy_bundle_resource_dirs(&project_root, &app_dir);
+    }
 
     match format {
         OutputFormat::Text => {
