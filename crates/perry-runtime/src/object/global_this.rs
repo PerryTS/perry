@@ -5814,10 +5814,14 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             );
         }
         "RegExp" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[("exec", 1), ("test", 1), ("toString", 0), ("compile", 2)],
-            );
+            // Real accessor getters (`source`/`flags`/`global`/…) so reflection
+            // (`getOwnPropertyDescriptor(RegExp.prototype, "source").get`) and
+            // brand-checked `.call(this)` work, and instances inherit them.
+            super::regex_proto_thunks::install_regex_proto_accessors(proto_obj);
+            // Real brand-checking `exec`/`test`/`toString`; `compile` stays a
+            // no-op (Annex B).
+            super::regex_proto_thunks::install_regex_proto_methods(proto_obj);
+            install_noop_proto_methods(proto_obj, &[("compile", 2)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "URLPattern" => {

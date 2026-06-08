@@ -1163,11 +1163,27 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         _ => None,
                     })
                     .unwrap_or_default();
+                // Only take the constant-folded literal path when the flags
+                // argument is absent or itself a string literal. If a flags
+                // argument is present but NOT a string literal (e.g. an object
+                // `{ toString() {…} }`, a variable, or a number), it must be
+                // `ToString`-coerced at runtime — and a throwing `toString`
+                // must propagate — so fall through to `RegExpDynamic`. Folding
+                // those to `Expr::RegExp` here silently dropped the flags.
+                let flags_arg_is_string_literal_or_absent = match args_ast {
+                    Some(args) => match args.get(1) {
+                        None => true,
+                        Some(a) => matches!(a.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(_))),
+                    },
+                    None => true,
+                };
                 if let Some(pattern) = pattern_lit {
-                    return Ok(Expr::RegExp {
-                        pattern,
-                        flags: flags_lit,
-                    });
+                    if flags_arg_is_string_literal_or_absent {
+                        return Ok(Expr::RegExp {
+                            pattern,
+                            flags: flags_lit,
+                        });
+                    }
                 }
                 // Dynamic-arg `new RegExp(...)`: pattern (or flags) is
                 // a runtime value. Fold to the same `RegExpDynamic`

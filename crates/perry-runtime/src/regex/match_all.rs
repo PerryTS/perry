@@ -206,7 +206,7 @@ pub extern "C" fn js_string_match_all_value(
             if !(*re).global {
                 throw_match_all_non_global_regex();
             }
-            (re, (*re).last_index as usize)
+            (re, crate::regex::regex_last_index_offset(re))
         }
     } else {
         (
@@ -233,7 +233,8 @@ pub extern "C" fn js_string_match_all(
         if !(*re).global {
             throw_match_all_non_global_regex();
         }
-        let matches = materialize_match_all_results(s, re, (*re).last_index as usize);
+        let matches =
+            materialize_match_all_results(s, re, crate::regex::regex_last_index_offset(re));
         alloc_regexp_string_iterator(matches)
     }
 }

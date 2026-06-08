@@ -451,11 +451,24 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
             if in_class {
                 result.push('\\');
                 result.push('[');
+                i += 1;
+            } else if chars.get(i + 1) == Some(&']') {
+                // JS: `[]` is an *empty* character class that never matches
+                // (the `]` immediately after `[` closes the class). The Rust
+                // `regex` crate rejects `[]`, so emit an unsatisfiable class.
+                result.push_str("[^\\s\\S]");
+                i += 2;
+            } else if chars.get(i + 1) == Some(&'^') && chars.get(i + 2) == Some(&']') {
+                // JS: `[^]` is a negated empty class — it matches *any* code
+                // point, including line terminators. Rust rejects `[^]`, so
+                // emit the equivalent `[\s\S]`.
+                result.push_str("[\\s\\S]");
+                i += 3;
             } else {
                 in_class = true;
                 result.push('[');
+                i += 1;
             }
-            i += 1;
         } else if chars[i] == ']' {
             // An unescaped `]` closes the current class (an escaped `\]` was
             // consumed by the backslash branch above and never reaches here).

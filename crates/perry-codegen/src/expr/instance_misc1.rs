@@ -1031,10 +1031,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
             let regex_handle = unbox_to_i64(blk, &regex_box);
-            // String pointer extraction goes through the unified
-            // helper because the receiver may be a literal, a local,
-            // or a concat result.
-            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            // Per spec `RegExp.prototype.test` does `ToString(argument)`, so a
+            // String wrapper (`re.test(new String("x"))`), a number
+            // (`re.test(123)`), or an object with a custom `toString` must be
+            // coerced — and a throwing `toString`/`valueOf` must propagate.
+            // `js_get_string_pointer_unified` only unwraps real strings, so use
+            // the coercing ToString that dispatches `toString` on objects.
+            let str_handle = blk.call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_regexp_test",
@@ -1052,7 +1055,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
             let regex_handle = unbox_to_i64(blk, &regex_box);
-            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            // `RegExp.prototype.exec` does `ToString(argument)` — coerce String
+            // wrappers / numbers / objects (and propagate a throwing toString)
+            // rather than only unwrapping real strings (see RegExpTest above).
+            let str_handle = blk.call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
             let result = blk.call(
                 I64,
                 "js_regexp_exec",

@@ -215,23 +215,26 @@ pub(super) fn lower_builtin_new(
             )))
         }
         "RegExp" => {
+            // Pass the NaN-boxed pattern/flags straight to the full constructor
+            // so a RegExp pattern (flag override / copy), an `undefined` pattern,
+            // or an object `flags` (ToString → SyntaxError) are all handled per
+            // spec. Defaults are `undefined` (NOT 0.0) so `new RegExp()` builds
+            // an empty source.
             let pattern_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?
             } else {
-                double_literal(0.0)
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let flags_box = if args.len() > 1 {
                 lower_expr(ctx, &args[1])?
             } else {
-                double_literal(0.0)
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let blk = ctx.block();
-            let pattern_handle = unbox_to_i64(blk, &pattern_box);
-            let flags_handle = unbox_to_i64(blk, &flags_box);
             let handle = blk.call(
                 I64,
-                "js_regexp_new",
-                &[(I64, &pattern_handle), (I64, &flags_handle)],
+                "js_regexp_construct",
+                &[(DOUBLE, &pattern_box), (DOUBLE, &flags_box)],
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
