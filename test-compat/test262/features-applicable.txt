@@ -57,12 +57,16 @@ numeric-separator-literal
 Reflect
 Proxy
 
+# --- shared memory (#4794) ---
+# Single-thread SAB construction + non-agent Atomics ops are in scope; the
+# agent-coordinated cases skip out via the $262.agent host dep / CanBlock flags.
+SharedArrayBuffer
+Atomics
+
 # --- explicit non-targets (commented for visibility) ---
 # eval                         — Perry is AOT
 # Function-prototype-toString  — Perry does not retain source text
 # Intl                         — out of scope (no ICU)
-# SharedArrayBuffer            — Perry threads do not share heap
-# Atomics                      — no SharedArrayBuffer
 # top-level-await              — partial; semantics depend on loader
 # regexp-lookbehind            — Rust regex crate lacks lookbehind
 # resizable-arraybuffer        — not implemented

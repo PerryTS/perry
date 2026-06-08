@@ -1630,6 +1630,64 @@ extern "C" fn array_buffer_byte_length_getter_thunk(
     }
 }
 
+/// Receiver-address resolver for the `SharedArrayBuffer.prototype.byteLength`
+/// getter. Mirrors `array_buffer_receiver_addr` but accepts only buffers in the
+/// shared registry, so the getter rejects a plain `ArrayBuffer` `this`
+/// (test262 SharedArrayBuffer/prototype/byteLength/this-is-arraybuffer).
+fn shared_array_buffer_receiver_addr() -> Option<usize> {
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let raw = if this_jsv.is_pointer() {
+        (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
+        this_bits as usize
+    } else {
+        return None;
+    };
+    if crate::buffer::is_registered_buffer(raw) && crate::buffer::is_shared_array_buffer(raw) {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+extern "C" fn shared_array_buffer_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match shared_array_buffer_receiver_addr() {
+        Some(addr) => {
+            let buf = addr as *const crate::buffer::BufferHeader;
+            f64::from_bits(
+                crate::value::JSValue::number(crate::buffer::js_buffer_length(buf) as f64).bits(),
+            )
+        }
+        None => super::object_ops::throw_object_type_error(
+            b"Method get SharedArrayBuffer.prototype.byteLength called on incompatible receiver",
+        ),
+    }
+}
+
+/// `SharedArrayBuffer.prototype.slice(start, end)`. The brand check (the `this`
+/// value must be a SharedArrayBuffer, never a plain ArrayBuffer or a
+/// non-object) lives here so `SharedArrayBuffer.prototype.slice.call(notSab)`
+/// throws a TypeError; the actual byte copy + ToIntegerOrInfinity arg coercion
+/// is shared with the instance dispatch in `buffer_dispatch`.
+extern "C" fn shared_array_buffer_slice_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    match shared_array_buffer_receiver_addr() {
+        Some(addr) => unsafe {
+            let args = [start, end];
+            super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
+        },
+        None => super::object_ops::throw_object_type_error(
+            b"Method SharedArrayBuffer.prototype.slice called on incompatible receiver",
+        ),
+    }
+}
+
 extern "C" fn array_buffer_is_view_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -3578,7 +3636,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     install_reflect_namespace_members(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "Reflect");
                 }
-                "Atomics" => install_atomics_namespace_members(ns_obj),
+                "Atomics" => {
+                    install_atomics_namespace_members(ns_obj);
+                    set_intrinsic_to_string_tag(ns_obj, "Atomics");
+                }
                 "Intl" => crate::intl::install_intl_namespace(ns_obj),
                 "Temporal" => {
                     install_temporal_namespace(ns_obj);
@@ -5397,6 +5458,47 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     );
                 }
             }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "SharedArrayBuffer" => {
+            // Mirror the ArrayBuffer.prototype shape: a brand-checking `slice`
+            // (instances dispatch through buffer_dispatch; `.call(notSab)`
+            // throws here), a `byteLength` accessor whose getter brand-checks
+            // the shared registry, and the `Symbol.toStringTag`.
+            install_proto_method(
+                proto_obj,
+                "slice",
+                shared_array_buffer_slice_thunk as *const u8,
+                2,
+            );
+            unsafe {
+                crate::closure::js_register_closure_arity(
+                    shared_array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                let getter = crate::closure::js_closure_alloc(
+                    shared_array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                if !getter.is_null() {
+                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
+                    set_accessor_descriptor(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        AccessorDescriptor {
+                            get: getter_bits,
+                            set: 0,
+                        },
+                    );
+                    set_property_attrs(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        PropertyAttrs::new(true, false, true),
+                    );
+                }
+            }
+            set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "DataView" => {

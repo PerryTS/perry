@@ -106,13 +106,15 @@ _PATH_SKIP = re.compile(
     r"(?:^|/)(?:"
     r"intl402|staging|"
     r"eval|"  # dynamic eval — Perry is AOT
-    r"Atomics|SharedArrayBuffer|"  # no shared heap
     # NB: Temporal is intentionally NOT skipped — Perry implements it but the
     # Node oracle does not, so it is judged in self-validating mode (#4792).
     # (Temporal under intl402/ stays out: intl402 is skipped wholesale above.)
     r"RegExp/(?:lookbehind|property-escapes)"  # Rust regex crate gaps
     r")(?:/|$)"
 )
+# NB: Atomics/SharedArrayBuffer are now in scope (#4794). The agent-based cases
+# (the bulk of them) still skip out via _HOST_DEP (`$262.agent`) and the
+# CanBlock* flags in _SKIP_FLAGS, so only the single-thread cases run here.
 
 # Cases that lean on $262 host intrinsics we don't provide: they'd throw under
 # BOTH runtimes (a false "both reject" pass), so we skip them outright.

@@ -661,13 +661,15 @@ fn array_buffer_to_index(value: f64) -> i32 {
         crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
     }
     let n = crate::builtins::js_number_coerce(value);
-    if n.is_nan() {
-        return 0;
-    }
-    if n < 0.0 || n > i32::MAX as f64 {
+    // ToIndex truncates toward zero (ToIntegerOrInfinity) BEFORE the range
+    // check, so a fractional value in (-1, 0] like `-0.1` or `-0.99999` maps to
+    // +0 rather than tripping the negativity guard (test262
+    // SharedArrayBuffer/toindex-length). NaN → 0.
+    let integer = if n.is_nan() { 0.0 } else { n.trunc() };
+    if integer < 0.0 || integer > i32::MAX as f64 {
         throw_array_buffer_range_error();
     }
-    n.trunc() as i32
+    integer as i32
 }
 
 /// `new ArrayBuffer(size)` — allocate a zero-filled buffer of `size` bytes.

@@ -27,12 +27,6 @@ fn throw_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn throw_type_error_string(message: String) -> ! {
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
 fn throw_range_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_rangeerror_new(msg);
@@ -173,61 +167,56 @@ fn atomics_wait_notify_view_arg(value: f64) -> AtomicView {
 }
 
 fn atomics_to_index(index: f64, length: i32) -> i32 {
-    let mut n = JSValue::from_bits(index.to_bits()).to_number();
-    if n.is_nan() {
-        n = 0.0;
+    // ECMA-262 ToIndex(index): ToNumber(index) → ToIntegerOrInfinity → range
+    // check. `js_number_coerce` is the full ToNumber — it runs an object's
+    // `Symbol.toPrimitive`/`valueOf`/`toString` (so the harness's
+    // `{ valueOf: () => 125 }` indices actually evaluate) and throws TypeError
+    // on a Symbol. A BigInt index is a ToNumber TypeError. The truncation must
+    // happen BEFORE the negativity check so a fractional in-bounds index like
+    // `-0.9` maps to +0 (ToIntegerOrInfinity) instead of wrongly throwing.
+    let js = JSValue::from_bits(index.to_bits());
+    if js.is_bigint() {
+        throw_type_error(b"Cannot convert a BigInt value to a number");
     }
-    if n < 0.0 || n > 9_007_199_254_740_991.0 {
+    let num = crate::builtins::js_number_coerce(index);
+    let integer = if num.is_nan() { 0.0 } else { num.trunc() };
+    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
         throw_range_error(b"Invalid atomic access index");
     }
-    let i = n.trunc();
-    if i >= length as f64 {
+    if integer >= length as f64 {
         throw_range_error(b"Invalid atomic access index");
     }
-    i as i32
+    integer as i32
 }
 
 fn number_arg(value: f64) -> f64 {
+    // ToNumber for the integer-view value / count / timeout arguments. A BigInt
+    // is a ToNumber TypeError; everything else (objects with `valueOf`, strings,
+    // booleans, Symbols-throw) is handled by the shared ToNumber.
     let js = JSValue::from_bits(value.to_bits());
     if js.is_bigint() {
         throw_type_error(b"Cannot convert a BigInt value to a number");
     }
-    if js.is_any_string() {
-        let ptr = crate::value::js_get_string_pointer_unified(value)
-            as *const crate::string::StringHeader;
-        if ptr.is_null() {
-            f64::NAN
-        } else {
-            unsafe {
-                let len = (*ptr).byte_len as usize;
-                let data =
-                    (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-                match std::str::from_utf8(std::slice::from_raw_parts(data, len)) {
-                    Ok(s) => match s.trim() {
-                        "Infinity" | "+Infinity" => f64::INFINITY,
-                        "-Infinity" => f64::NEG_INFINITY,
-                        other => other.parse::<f64>().unwrap_or(f64::NAN),
-                    },
-                    Err(_) => f64::NAN,
-                }
-            }
-        }
-    } else {
-        js.to_number()
-    }
+    crate::builtins::js_number_coerce(value)
 }
 
 fn numeric_arg(value: f64) -> f64 {
     let n = number_arg(value);
     if n.is_finite() {
-        n.trunc()
+        // ToIntegerOrInfinity: truncate toward zero and normalize -0 to +0
+        // (the `+ 0.0` collapses -0.0). `Atomics.store(i32a, 0, -0)` must
+        // therefore return +0 (test262 store/expected-return-value-negative-zero).
+        n.trunc() + 0.0
     } else {
         0.0
     }
 }
 
-fn coerce_for_kind(kind: u8, value: f64) -> f64 {
-    let n = numeric_arg(value);
+/// Narrow an already-ToInteger'd number to the element kind (the modular
+/// reduction in `SetValueInBuffer`/`ToRawBytes`). Takes the integer directly so
+/// callers that already coerced the argument (and must observe `valueOf` only
+/// once) don't double-coerce.
+fn clamp_integer_for_kind(kind: u8, n: f64) -> f64 {
     match kind {
         KIND_INT8 => (n as i32 as i8) as f64,
         KIND_UINT8 => (n as i64).rem_euclid(256) as f64,
@@ -237,6 +226,10 @@ fn coerce_for_kind(kind: u8, value: f64) -> f64 {
         KIND_UINT32 => (n as i64 as u32) as f64,
         _ => n,
     }
+}
+
+fn coerce_for_kind(kind: u8, value: f64) -> f64 {
+    clamp_integer_for_kind(kind, numeric_arg(value))
 }
 
 fn to_uint32_bits(value: f64) -> u32 {
@@ -255,64 +248,26 @@ fn bitwise_result_for_kind(kind: u8, bits: u32) -> f64 {
     }
 }
 
-fn format_number_label(value: f64) -> String {
-    if value.is_nan() {
-        return "NaN".to_string();
-    }
-    if value.is_infinite() {
-        return if value.is_sign_negative() {
-            "-Infinity".to_string()
-        } else {
-            "Infinity".to_string()
-        };
-    }
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    if value.fract() == 0.0 && value.abs() < 1e21 {
-        return format!("{value:.0}");
-    }
-    format!("{value}")
-}
-
-fn throw_number_to_bigint_error(value: f64, js: JSValue) -> ! {
-    let label = if js.is_int32() {
-        js.as_int32().to_string()
-    } else {
-        format_number_label(value)
-    };
-    throw_type_error_string(format!("Cannot convert {label} to a BigInt"))
-}
-
+/// `ToBigInt(value)` for the BigInt-view Atomics arguments. Delegates to the
+/// shared TypedArray store coercion, which runs `Symbol.toPrimitive`/`valueOf`/
+/// `toString` on objects and throws the spec TypeErrors (Number/undefined/null/
+/// Symbol → "Cannot convert … to a BigInt").
 fn bigint_value(value: f64) -> f64 {
-    let js = JSValue::from_bits(value.to_bits());
-    if js.is_bigint() {
-        return value;
-    }
-    if js.is_int32() || js.is_number() {
-        throw_number_to_bigint_error(value, js);
-    }
-    if js.is_bool() || js.is_any_string() {
-        let ptr = crate::bigint::js_bigint_from_f64(value);
-        return f64::from_bits(JSValue::bigint_ptr(ptr).bits());
-    }
-    if js.is_undefined() {
-        throw_type_error(b"Cannot convert undefined to a BigInt");
-    }
-    if js.is_null() {
-        throw_type_error(b"Cannot convert null to a BigInt");
-    }
-    throw_type_error(b"Cannot convert value to a BigInt");
+    crate::typedarray::bigint::to_bigint_for_store(value)
 }
 
-fn bigint_bits(value: f64) -> u64 {
-    let coerced = bigint_value(value);
+/// Low 64 bits of an already-coerced BigInt value (its limb-0 magnitude bits).
+fn bigint_limb0(coerced: f64) -> u64 {
     let ptr = JSValue::from_bits(coerced.to_bits()).as_bigint_ptr();
     let ptr = crate::bigint::clean_bigint_ptr(ptr);
     if ptr.is_null() {
         return 0;
     }
     unsafe { (*ptr).limbs[0] }
+}
+
+fn bigint_bits(value: f64) -> u64 {
+    bigint_limb0(bigint_value(value))
 }
 
 fn bigint_result_for_kind(kind: u8, bits: u64) -> f64 {
@@ -443,8 +398,11 @@ pub extern "C" fn js_atomics_load(_closure: *const ClosureHeader, view: f64, ind
 
 #[no_mangle]
 pub extern "C" fn js_atomics_is_lock_free(_closure: *const ClosureHeader, size: f64) -> f64 {
-    let n = number_arg(size);
-    nanbox_bool(n.is_finite() && n.trunc() == n && matches!(n as i32, 1 | 2 | 4 | 8))
+    // ToIntegerOrInfinity(size) (runs `valueOf`/`toString`, so `'1'`, `true`,
+    // `{valueOf:()=>1}` and `3.14`→3 all behave like Node), then a membership
+    // test over the lock-free element widths.
+    let n = numeric_arg(size);
+    nanbox_bool(matches!(n as i64, 1 | 2 | 4 | 8))
 }
 
 #[no_mangle]
@@ -456,12 +414,18 @@ pub extern "C" fn js_atomics_store(
 ) -> f64 {
     let (view, idx) = slot(view, index);
     if view.is_bigint() {
+        // ToBigInt runs the value's coercion hook exactly once; spec returns the
+        // coerced BigInt itself.
         let stored = bigint_value(value);
-        view.set_bigint_bits(idx, bigint_bits(stored));
+        view.set_bigint_bits(idx, bigint_limb0(stored));
         return stored;
     }
-    view.set_numeric(idx, coerce_for_kind(view.kind(), value));
-    view.get_numeric(idx)
+    // ToIntegerOrInfinity once (observes `valueOf` a single time). Atomics.store
+    // returns that integer — NOT the element-narrowed read-back — so e.g.
+    // `Atomics.store(int8, 0, 300)` returns 300 even though the slot holds 44.
+    let n = numeric_arg(value);
+    view.set_numeric(idx, clamp_integer_for_kind(view.kind(), n));
+    n
 }
 
 #[no_mangle]
@@ -608,10 +572,14 @@ pub extern "C" fn js_atomics_wait(
     expected: f64,
     timeout: f64,
 ) -> f64 {
-    let (view, idx) = wait_notify_slot(view, index);
+    // Spec order: validate the view, then the shared-buffer check throws BEFORE
+    // ValidateAtomicAccess coerces the index — so a poisoned `valueOf` index on
+    // a non-shared view must not run (test262 wait/non-shared-bufferdata-throws).
+    let view = atomics_wait_notify_view_arg(view);
     if !view.has_shared_backing() {
         throw_type_error(b"Atomics.wait requires a shared typed array");
     }
+    let idx = atomics_to_index(index, view.length());
     if view.kind() == KIND_BIGINT64 {
         let expected = bigint_bits(expected);
         if view.get_bigint_bits(idx) != expected {
@@ -636,10 +604,11 @@ pub extern "C" fn js_atomics_wait_async(
     expected: f64,
     timeout: f64,
 ) -> f64 {
-    let (view, idx) = wait_notify_slot(view, index);
+    let view = atomics_wait_notify_view_arg(view);
     if !view.has_shared_backing() {
         throw_type_error(b"Atomics.waitAsync requires a shared typed array");
     }
+    let idx = atomics_to_index(index, view.length());
     let kind = view.kind();
     let expected_bigint_bits = if kind == KIND_BIGINT64 {
         bigint_bits(expected)
