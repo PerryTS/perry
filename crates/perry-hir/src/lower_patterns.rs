@@ -836,6 +836,15 @@ pub(crate) fn predeclare_implicit_assignment_targets(
 
     let mut stmts = Vec::new();
     for name in names {
+        // Inside a `with` body, an assignment to an otherwise-undeclared name
+        // must route through the with object's environment record (lowered to
+        // `WithSet`), not be hoisted as an implicit local that would shadow the
+        // with env and capture the write locally. `WithSet` itself falls back
+        // to the outer scope when the object lacks the property, so skipping
+        // predeclaration here is safe for the not-on-object case too.
+        if !ctx.active_with_envs_for_ident(&name).is_empty() {
+            continue;
+        }
         // Inside a closure (scope_depth > 0), an assignment to a name that
         // resolves to a MODULE-LEVEL binding (e.g. a `var` declared later at
         // module scope) must NOT be re-declared as a closure-local: doing so

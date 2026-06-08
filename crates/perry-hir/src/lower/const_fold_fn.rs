@@ -493,6 +493,13 @@ pub(crate) fn try_eval_function_call_fold(
             call.span,
         );
     }
+    if id.sym.as_ref() == "eval"
+        && ctx.lookup_local("eval").is_none()
+        && ctx.lookup_func("eval").is_none()
+        && ctx.lookup_imported_func("eval").is_none()
+    {
+        return try_const_fold_eval(ctx, &call.args, call.span);
+    }
     Ok(None)
 }
 
@@ -511,4 +518,216 @@ fn extract_fn_expr(module: &ast::Module) -> Option<&ast::FnExpr> {
         ast::Expr::Fn(fn_expr) => Some(fn_expr),
         _ => None,
     }
+}
+
+/// Owning variant of [`extract_fn_expr`] — consumes the module so the caller
+/// can mutate the function body before lowering.
+fn extract_fn_expr_owned(module: ast::Module) -> Option<ast::FnExpr> {
+    let item = module.body.into_iter().next()?;
+    let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) = item else {
+        return None;
+    };
+    let mut e = *expr_stmt.expr;
+    loop {
+        match e {
+            ast::Expr::Paren(p) => e = *p.expr,
+            ast::Expr::Fn(fn_expr) => return Some(fn_expr),
+            _ => return None,
+        }
+    }
+}
+
+/// Build `__perry_cv = <value>` by cloning a parsed `__perry_cv = undefined`
+/// assignment template and swapping its right-hand side. Avoids hand-building
+/// version-sensitive SWC `AssignExpr` nodes.
+fn cv_assign_from_template(reset_template: &ast::Stmt, value: Box<ast::Expr>) -> Box<ast::Expr> {
+    let ast::Stmt::Expr(es) = reset_template else {
+        // Caller guarantees the template is an expression statement.
+        return value;
+    };
+    let mut assign = es.expr.clone();
+    if let ast::Expr::Assign(a) = assign.as_mut() {
+        a.right = value;
+    }
+    assign
+}
+
+/// Statements whose ECMAScript completion value is `UpdateEmpty(..., undefined)`
+/// or accumulates from `undefined` — i.e. evaluating them resets the running
+/// statement-list completion value to `undefined` before their inner
+/// (value-producing) statements may overwrite it. See §13/§14 of the spec
+/// (IfStatement / IterationStatement / SwitchStatement / TryStatement all wrap
+/// their result in `UpdateEmpty(_, undefined)`).
+fn stmt_resets_completion(stmt: &ast::Stmt) -> bool {
+    matches!(
+        stmt,
+        ast::Stmt::If(_)
+            | ast::Stmt::While(_)
+            | ast::Stmt::DoWhile(_)
+            | ast::Stmt::For(_)
+            | ast::Stmt::ForIn(_)
+            | ast::Stmt::ForOf(_)
+            | ast::Stmt::Switch(_)
+            | ast::Stmt::Try(_)
+    )
+}
+
+/// Recurse into a single nested statement, treating it as a one-element
+/// statement list. If completion tracking inserts statements (e.g. a reset),
+/// the result is re-wrapped in a block so it remains a single `Stmt`.
+fn track_completion_single(stmt: &mut ast::Stmt, reset_template: &ast::Stmt) {
+    let placeholder = ast::Stmt::Empty(ast::EmptyStmt {
+        span: swc_common::DUMMY_SP,
+    });
+    let mut list = vec![std::mem::replace(stmt, placeholder)];
+    track_completion(&mut list, reset_template);
+    if list.len() == 1 {
+        *stmt = list.pop().unwrap();
+    } else {
+        *stmt = ast::Stmt::Block(ast::BlockStmt {
+            span: swc_common::DUMMY_SP,
+            ctxt: Default::default(),
+            stmts: list,
+        });
+    }
+}
+
+/// Recurse into the nested statement lists / bodies of a compound statement so
+/// their expression statements are tracked too. The `finally` block is
+/// intentionally skipped: a normally-completing `finally` does not contribute
+/// to the `try` statement's completion value.
+fn track_completion_inner(stmt: &mut ast::Stmt, reset_template: &ast::Stmt) {
+    match stmt {
+        ast::Stmt::Block(b) => track_completion(&mut b.stmts, reset_template),
+        ast::Stmt::If(s) => {
+            track_completion_single(&mut s.cons, reset_template);
+            if let Some(alt) = s.alt.as_mut() {
+                track_completion_single(alt, reset_template);
+            }
+        }
+        ast::Stmt::While(s) => track_completion_single(&mut s.body, reset_template),
+        ast::Stmt::DoWhile(s) => track_completion_single(&mut s.body, reset_template),
+        ast::Stmt::For(s) => track_completion_single(&mut s.body, reset_template),
+        ast::Stmt::ForIn(s) => track_completion_single(&mut s.body, reset_template),
+        ast::Stmt::ForOf(s) => track_completion_single(&mut s.body, reset_template),
+        ast::Stmt::Labeled(s) => track_completion_single(&mut s.body, reset_template),
+        ast::Stmt::Switch(s) => {
+            for case in s.cases.iter_mut() {
+                track_completion(&mut case.cons, reset_template);
+            }
+        }
+        ast::Stmt::Try(s) => {
+            track_completion(&mut s.block.stmts, reset_template);
+            if let Some(handler) = s.handler.as_mut() {
+                track_completion(&mut handler.body.stmts, reset_template);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Rewrite a statement list so that, after evaluation, `__perry_cv` holds the
+/// list's ECMAScript completion value. Each `ExpressionStatement e` becomes
+/// `__perry_cv = e`; each statement whose completion value is
+/// `UpdateEmpty(_, undefined)` is preceded by a `__perry_cv = undefined` reset;
+/// declarations / empty statements leave `__perry_cv` unchanged. Recurses into
+/// nested statement lists so the rule holds at every depth.
+fn track_completion(stmts: &mut Vec<ast::Stmt>, reset_template: &ast::Stmt) {
+    let mut out: Vec<ast::Stmt> = Vec::with_capacity(stmts.len());
+    for mut stmt in stmts.drain(..) {
+        let resets = stmt_resets_completion(&stmt);
+        track_completion_inner(&mut stmt, reset_template);
+        if let ast::Stmt::Expr(es) = &mut stmt {
+            let inner = std::mem::replace(
+                &mut es.expr,
+                Box::new(ast::Expr::Invalid(ast::Invalid {
+                    span: swc_common::DUMMY_SP,
+                })),
+            );
+            es.expr = cv_assign_from_template(reset_template, inner);
+        }
+        if resets {
+            out.push(reset_template.clone());
+        }
+        out.push(stmt);
+    }
+    *stmts = out;
+}
+
+/// #1679: fold a direct `eval("<constant string>")` into a scope-capturing
+/// IIFE — `(function () { var __perry_cv; <tracked body>; return __perry_cv })()`
+/// — so the program runs the code string AOT and yields its ECMAScript
+/// completion value. The wrapper is lowered in sloppy mode (the eval body may
+/// use `with`, undeclared assignments, etc.) and captures the enclosing scope,
+/// so `eval("with(o){p=1}")` mutates the surrounding `o`. Only single
+/// string-constant arguments fold; everything else bails to the runtime path.
+fn try_const_fold_eval(
+    ctx: &mut LoweringContext,
+    args: &[ast::ExprOrSpread],
+    span: swc_common::Span,
+) -> Result<Option<Expr>> {
+    if args.len() != 1 || args[0].spread.is_some() {
+        return Ok(None);
+    }
+    let Some(body_src) = const_string_of(&args[0].expr) else {
+        return Ok(None);
+    };
+
+    // Parse the eval body as sloppy-mode statements (`.cjs` → script, not
+    // module, so `with` is allowed). A parse failure is a runtime SyntaxError.
+    let body_module = match perry_parser::parse_typescript(&body_src, "<eval body>.cjs") {
+        Ok(m) => m,
+        Err(_) => return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some),
+    };
+    let mut body_stmts: Vec<ast::Stmt> = Vec::with_capacity(body_module.body.len());
+    for item in body_module.body {
+        match item {
+            ast::ModuleItem::Stmt(s) => body_stmts.push(s),
+            // `import` / `export` inside eval is a SyntaxError.
+            _ => return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some),
+        }
+    }
+
+    // Wrapper template: stmts == [var __perry_cv = undefined;
+    //                            __perry_cv = undefined;   (reset/assign template)
+    //                            return __perry_cv;]
+    let template_src = "(function () {\nvar __perry_cv = undefined;\n__perry_cv = undefined;\nreturn __perry_cv;\n});\n";
+    let template_module = match perry_parser::parse_typescript(template_src, "<eval wrapper>.cjs")
+    {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+    let Some(mut fn_expr) = extract_fn_expr_owned(template_module) else {
+        return Ok(None);
+    };
+    let Some(body) = fn_expr.function.body.as_mut() else {
+        return Ok(None);
+    };
+    if body.stmts.len() != 3 {
+        return Ok(None);
+    }
+    let reset_template = body.stmts.remove(1);
+
+    // Track completion values, then splice the tracked body before `return`.
+    track_completion(&mut body_stmts, &reset_template);
+    let mut insert_at = 1; // after the `var __perry_cv` decl
+    for s in body_stmts {
+        body.stmts.insert(insert_at, s);
+        insert_at += 1;
+    }
+
+    // Lower the wrapper (sloppy) and immediately call it: `(function(){…})()`.
+    let outer_strict = ctx.current_strict;
+    ctx.current_strict = false;
+    let lowered = lower_fn_expr(ctx, &fn_expr);
+    ctx.current_strict = outer_strict;
+    let closure = match lowered {
+        Ok(l) => l,
+        Err(_) => return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some),
+    };
+    Ok(Some(Expr::Call {
+        callee: Box::new(closure),
+        args: vec![],
+        type_args: vec![],
+    }))
 }
