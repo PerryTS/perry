@@ -1616,8 +1616,8 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // actually has descriptor entries, so the common all-default
                 // array stays on the fast path.
                 let owner = stripped as usize;
-                let has_idx_descriptors = PROPERTY_DESCRIPTORS
-                    .with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == owner));
+                let has_idx_descriptors =
+                    PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == owner));
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
                     if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {

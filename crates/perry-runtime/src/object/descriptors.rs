@@ -993,7 +993,8 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
         }
         {
-            let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let gc =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
                 let empty = crate::array::js_array_alloc(0);
                 return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
