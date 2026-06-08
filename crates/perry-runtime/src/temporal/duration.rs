@@ -79,12 +79,28 @@ pub(crate) fn coerce_duration(v: f64) -> Duration {
         if !obj.is_null() {
             let mut vals = [0i128; 10];
             let mut any = false;
-            for (i, name) in FIELD_NAMES.iter().enumerate() {
+            // Spec `ToTemporalDurationRecord` reads the fields in *alphabetical*
+            // order (days, hours, microseconds, …), each immediately coerced via
+            // ToNumber — the order-of-operations tests observe this exact
+            // interleaving. `slot` maps each name back to its positional index.
+            const ALPHA_FIELDS: [(&str, usize); 10] = [
+                ("days", 3),
+                ("hours", 4),
+                ("microseconds", 8),
+                ("milliseconds", 7),
+                ("minutes", 5),
+                ("months", 1),
+                ("nanoseconds", 9),
+                ("seconds", 6),
+                ("weeks", 2),
+                ("years", 0),
+            ];
+            for (name, slot) in ALPHA_FIELDS {
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                 let raw = crate::object::js_object_get_field_by_name_f64(obj, key);
                 if !is_undefined(raw) {
                     any = true;
-                    vals[i] = to_integer_if_integral(raw);
+                    vals[slot] = to_integer_if_integral(raw);
                 }
             }
             if !any {
