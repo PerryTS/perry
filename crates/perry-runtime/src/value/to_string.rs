@@ -952,6 +952,19 @@ pub extern "C" fn js_jsvalue_to_string_radix(
 ) -> *mut crate::string::StringHeader {
     let jsval = JSValue::from_bits(value.to_bits());
 
+    // A Temporal value's `toString` takes an *options object*, not a radix —
+    // the codegen routes any single-arg `.toString(x)` here. Dispatch back to
+    // the Temporal method router so the options bag flows through, instead of
+    // ToNumber-coercing it as a radix (which throws a spurious RangeError).
+    if crate::temporal::is_temporal_value(value) {
+        let result = crate::temporal::dispatch::call_method(value, "toString", &[radix_value]);
+        let rv = JSValue::from_bits(result.to_bits());
+        if rv.is_string() {
+            return rv.as_string_ptr() as *mut crate::string::StringHeader;
+        }
+        return js_jsvalue_to_string(result);
+    }
+
     // Coerce + validate the radix once up front. `None` → default radix 10.
     let radix = match unsafe { coerce_validate_radix(radix_value) } {
         Some(r) => r,

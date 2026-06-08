@@ -1284,6 +1284,20 @@ pub unsafe extern "C" fn js_native_call_value(
         return crate::value::js_nanbox_pointer(arr as i64);
     }
 
+    // A closure with a registered rest param must bundle EVERY argument into
+    // its rest array. The per-arity `match` below caps at `js_closure_call8`
+    // (passing only `arg_at(0..7)`), so a rest closure invoked with >8 args
+    // (e.g. `new Temporal.Duration(y,mo,w,d,h,mi,s,ms,us,ns)` — 10 positional
+    // args) would silently drop the overflow. Route through the rest-bundler
+    // with the full slice up front. (The arity-specific `js_closure_callN`
+    // helpers do their own rest check, but only see the truncated arg list.)
+    if !func_ptr.is_null() {
+        if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
+            let all: Vec<f64> = (0..args_len).map(arg_at).collect();
+            return dispatch_rest_bundled(closure, func_ptr, &all, fixed_arity, synth);
+        }
+    }
+
     // Call with the appropriate arity
     match dispatch_args_len {
         0 => js_closure_call0(closure),

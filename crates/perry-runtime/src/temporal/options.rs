@@ -14,9 +14,10 @@ use temporal_rs::fields::{
     CalendarFields, DateTimeFields, YearMonthCalendarFields, ZonedDateTimeFields,
 };
 use temporal_rs::options::{
-    Disambiguation, OffsetDisambiguation, Overflow, RelativeTo, RoundingIncrement, RoundingMode,
-    RoundingOptions, Unit,
+    DifferenceSettings, Disambiguation, OffsetDisambiguation, Overflow, RelativeTo,
+    RoundingIncrement, RoundingMode, RoundingOptions, ToStringRoundingOptions, Unit,
 };
+use temporal_rs::parsers::Precision;
 use temporal_rs::partial::PartialTime;
 use temporal_rs::provider::TransitionDirection;
 use temporal_rs::{MonthCode, PlainTime, TimeZone, TinyAsciiStr};
@@ -66,6 +67,29 @@ fn str_field(obj: *const crate::object::ObjectHeader, name: &str) -> Option<Stri
         return None;
     }
     Some(read_string(raw))
+}
+
+/// `obj.<name>` as a **ToString-coerced** string option (spec `GetOption` with
+/// `type: string`). `undefined` → `None` (use the default); a Symbol throws
+/// `TypeError`; everything else (number, boolean, bigint, null, object) is
+/// coerced via abstract `ToString` (so an object's `toString` runs, a number
+/// becomes its decimal string, etc.). The coerced string then flows into the
+/// enum parser, which throws `RangeError` for an unrecognized value — matching
+/// `checkStringOptionWrongType`.
+fn str_field_coerce(obj: *const crate::object::ObjectHeader, name: &str) -> Option<String> {
+    let raw = field(obj, name);
+    if is_undefined(raw) {
+        return None;
+    }
+    let jv = JSValue::from_bits(raw.to_bits());
+    if jv.is_string() {
+        return Some(read_string(raw));
+    }
+    if unsafe { crate::symbol::js_is_symbol(raw) } != 0 {
+        type_error("Cannot convert a Symbol value to a string".to_string());
+    }
+    let sh = crate::value::js_jsvalue_to_string_coerce(raw);
+    Some(read_string(crate::value::js_nanbox_string(sh as i64)))
 }
 
 #[inline]
@@ -134,20 +158,22 @@ pub fn rounding_options(arg: f64) -> RoundingOptions {
     }
     match as_obj(arg) {
         Some(obj) => {
-            if let Some(s) = str_field(obj, "smallestUnit") {
+            if let Some(s) = str_field_coerce(obj, "smallestUnit") {
                 o.smallest_unit = Some(parse_unit(&s));
             }
-            if let Some(s) = str_field(obj, "largestUnit") {
+            if let Some(s) = str_field_coerce(obj, "largestUnit") {
                 o.largest_unit = Some(parse_unit(&s));
             }
-            if let Some(s) = str_field(obj, "roundingMode") {
+            if let Some(s) = str_field_coerce(obj, "roundingMode") {
                 o.rounding_mode = Some(parse_rounding_mode(&s));
             }
             if let Some(n) = num_field(obj, "roundingIncrement") {
                 o.increment = Some(parse_increment(n));
             }
         }
-        None => range("round requires a unit string or an options object"),
+        // GetOptionsObject: a non-string, non-object `roundTo` (number, boolean,
+        // bigint, null, undefined, symbol) is a TypeError.
+        None => type_error("round requires a unit string or an options object".to_string()),
     }
     o
 }
@@ -161,14 +187,76 @@ pub fn total_options(arg: f64) -> (Unit, Option<RelativeTo>) {
     }
     match as_obj(arg) {
         Some(obj) => {
-            let unit = match str_field(obj, "unit") {
+            let unit = match str_field_coerce(obj, "unit") {
                 Some(s) => parse_unit(&s),
                 None => range("total requires a unit"),
             };
             (unit, relative_to_field(obj))
         }
-        None => range("total requires a unit string or an options object"),
+        None => type_error("total requires a unit string or an options object".to_string()),
     }
+}
+
+/// Marshal a `toString(options)` argument into [`ToStringRoundingOptions`] —
+/// the `fractionalSecondDigits` / `smallestUnit` / `roundingMode` trio shared by
+/// every Temporal type's `toString`. A missing/`undefined` arg yields the
+/// spec-default (auto precision, no smallest-unit override).
+pub fn to_string_rounding_options(arg: f64) -> ToStringRoundingOptions {
+    let mut o = ToStringRoundingOptions::default();
+    let obj = match as_obj(arg) {
+        Some(o) => o,
+        None => return o, // undefined / non-object → defaults
+    };
+    if let Some(s) = str_field_coerce(obj, "smallestUnit") {
+        o.smallest_unit = Some(parse_unit(&s));
+    }
+    if let Some(s) = str_field_coerce(obj, "roundingMode") {
+        o.rounding_mode = Some(parse_rounding_mode(&s));
+    }
+    // GetTemporalFractionalSecondDigitsOption: "auto" or an integer 0..=9.
+    let raw = field(obj, "fractionalSecondDigits");
+    if !is_undefined(raw) {
+        let jv = JSValue::from_bits(raw.to_bits());
+        if jv.is_string() {
+            if read_string(raw) != "auto" {
+                range("fractionalSecondDigits must be \"auto\" or an integer 0-9");
+            }
+            o.precision = Precision::Auto;
+        } else {
+            let n = jv.to_number();
+            if !n.is_finite() {
+                range("fractionalSecondDigits must be \"auto\" or an integer 0-9");
+            }
+            let d = n.floor();
+            if !(0.0..=9.0).contains(&d) {
+                range("fractionalSecondDigits must be between 0 and 9");
+            }
+            o.precision = Precision::Digit(d as u8);
+        }
+    }
+    o
+}
+
+/// Marshal an `until`/`since` options argument into [`DifferenceSettings`] —
+/// the `largestUnit` / `smallestUnit` / `roundingMode` / `roundingIncrement`
+/// quartet. An `undefined` / absent arg yields the default (auto units).
+pub fn difference_settings(arg: f64) -> DifferenceSettings {
+    let mut s = DifferenceSettings::default();
+    if let Some(obj) = as_obj(arg) {
+        if let Some(u) = str_field_coerce(obj, "largestUnit") {
+            s.largest_unit = Some(parse_unit(&u));
+        }
+        if let Some(u) = str_field_coerce(obj, "smallestUnit") {
+            s.smallest_unit = Some(parse_unit(&u));
+        }
+        if let Some(m) = str_field_coerce(obj, "roundingMode") {
+            s.rounding_mode = Some(parse_rounding_mode(&m));
+        }
+        if let Some(n) = num_field(obj, "roundingIncrement") {
+            s.increment = Some(parse_increment(n));
+        }
+    }
+    s
 }
 
 /// Read an optional `relativeTo` from a `round`/`total` options object.
@@ -212,19 +300,19 @@ fn relative_to_field(obj: *const crate::object::ObjectHeader) -> Option<Relative
 /// Read an optional `overflow` (`"constrain"` | `"reject"`) from an options arg.
 pub fn overflow(arg: f64) -> Option<Overflow> {
     let obj = as_obj(arg)?;
-    str_field(obj, "overflow").map(|s| parse_overflow(&s))
+    str_field_coerce(obj, "overflow").map(|s| parse_overflow(&s))
 }
 
 /// Read an optional `disambiguation` from an options arg.
 pub fn disambiguation(arg: f64) -> Option<Disambiguation> {
     let obj = as_obj(arg)?;
-    str_field(obj, "disambiguation").map(|s| parse_disambiguation(&s))
+    str_field_coerce(obj, "disambiguation").map(|s| parse_disambiguation(&s))
 }
 
 /// Read an optional `offset` (offset-disambiguation) from an options arg.
 pub fn offset_option(arg: f64) -> Option<OffsetDisambiguation> {
     let obj = as_obj(arg)?;
-    str_field(obj, "offset").map(|s| parse_offset_option(&s))
+    str_field_coerce(obj, "offset").map(|s| parse_offset_option(&s))
 }
 
 // ---- fields objects (`with` partials) -------------------------------------
@@ -369,6 +457,18 @@ pub fn optional_plain_time(v: f64) -> Option<PlainTime> {
     None
 }
 
+/// Read an optional `timeZone` from `Temporal.Instant.prototype.toString`'s
+/// options bag — when present the instant is rendered with that zone's offset
+/// (rather than the default `Z`). Absent / `undefined` → `None`.
+pub fn optional_instant_timezone(arg: f64) -> Option<TimeZone> {
+    let obj = as_obj(arg)?;
+    let v = field(obj, "timeZone");
+    if is_undefined(v) {
+        return None;
+    }
+    Some(timezone(v))
+}
+
 /// Resolve a time-zone argument — a tz-identifier string or a
 /// `Temporal.ZonedDateTime` whose zone is reused.
 pub fn timezone(v: f64) -> TimeZone {
@@ -387,7 +487,7 @@ pub fn transition_direction(v: f64) -> TransitionDirection {
     let s = if JSValue::from_bits(v.to_bits()).is_string() {
         read_string(v)
     } else if let Some(obj) = as_obj(v) {
-        match str_field(obj, "direction") {
+        match str_field_coerce(obj, "direction") {
             Some(s) => s,
             None => range("getTimeZoneTransition requires a direction"),
         }

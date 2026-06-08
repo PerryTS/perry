@@ -141,7 +141,17 @@ fn lower_new_spread_args(
 fn callee_is_generic_construct_shape(_ctx: &LoweringContext, callee: &ast::Expr) -> bool {
     matches!(
         callee,
-        ast::Expr::Fn(_) | ast::Expr::Class(_) | ast::Expr::Arrow(_) | ast::Expr::Call(_)
+        ast::Expr::Fn(_)
+            | ast::Expr::Class(_)
+            | ast::Expr::Arrow(_)
+            | ast::Expr::Call(_)
+            // Member-expression callees (`new Temporal.Duration(...args)`,
+            // `new ns.Ctor(...args)`) also route through the generic
+            // construct path, whose argument lowering otherwise collapses a
+            // spread into a single array argument. The handful of specially
+            // lowered member constructors (URL, TextEncoder, …) are never
+            // invoked with a spread in practice.
+            | ast::Expr::Member(_)
     )
 }
 

@@ -70,6 +70,33 @@ pub enum TemporalKind {
     ZonedDateTime = 7,
 }
 
+/// Reserved `instanceof` class IDs for the 8 Temporal reference types. A
+/// Temporal value is a NaN-boxed pointer to a `TemporalCell` (no ObjectHeader /
+/// class chain), so `instanceof` resolves these via a brand-kind probe rather
+/// than the class-id walk. Keep in sync with the codegen `cid` match in
+/// `perry-codegen/src/expr/instance_misc1.rs` and `object/instanceof.rs`.
+pub const CLASS_ID_TEMPORAL_FIRST: u32 = 0xFFFF_0200;
+pub const CLASS_ID_TEMPORAL_LAST: u32 = 0xFFFF_0207;
+
+impl TemporalKind {
+    /// The reserved `instanceof` class id for this brand kind.
+    #[inline]
+    pub fn class_id(self) -> u32 {
+        CLASS_ID_TEMPORAL_FIRST + self as u32
+    }
+}
+
+/// True if `value` is a Temporal cell whose brand kind matches the reserved
+/// Temporal `class_id` (`CLASS_ID_TEMPORAL_FIRST..=CLASS_ID_TEMPORAL_LAST`).
+/// Returns `false` for non-Temporal values or a mismatched kind.
+#[inline]
+pub fn temporal_value_matches_class_id(value: f64, class_id: u32) -> bool {
+    match temporal_kind(value) {
+        Some(k) => k.class_id() == class_id,
+        None => false,
+    }
+}
+
 impl TemporalValue {
     #[inline]
     pub fn kind(&self) -> TemporalKind {

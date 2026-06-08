@@ -155,7 +155,10 @@ pub(crate) fn create_project_tarball(
         if builtin_exclude_dirs.iter().any(|ex| name == *ex) {
             return false;
         }
-        if extra_excludes.iter().any(|ex| exclude_matches(ex, e.path(), project_dir)) {
+        if extra_excludes
+            .iter()
+            .any(|ex| exclude_matches(ex, e.path(), project_dir))
+        {
             return false;
         }
         if name.ends_with(".app") {
@@ -299,11 +302,7 @@ mod force_include_tests {
         ));
         // A leading slash is an explicit root anchor, equivalent to the bare name.
         assert!(exclude_matches("/jump", Path::new("/proj/jump"), root));
-        assert!(!exclude_matches(
-            "/jump",
-            Path::new("/proj/a/jump"),
-            root
-        ));
+        assert!(!exclude_matches("/jump", Path::new("/proj/a/jump"), root));
         // Path patterns match the named subtree from the project root.
         assert!(exclude_matches(
             "android/app/build",
@@ -351,9 +350,9 @@ mod force_include_tests {
             "root `jump` artifact should be excluded, got {entries:?}"
         );
         assert!(
-            entries.iter().any(|p| p.ends_with(
-                "com/bloomengine/jump/BloomActivity.kt"
-            )),
+            entries
+                .iter()
+                .any(|p| p.ends_with("com/bloomengine/jump/BloomActivity.kt")),
             "deep jump/ package must be kept, got {entries:?}"
         );
     }

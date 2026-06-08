@@ -432,6 +432,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "PerformanceObserverEntryList" => 0xFFFF008Fu32,
                 "PerformanceResourceTiming" => 0xFFFF008Du32,
                 "Console" => 0xFFFF0083u32,
+                // Temporal reference types. A Temporal value is a NaN-boxed
+                // brand-tagged cell; the runtime resolves these reserved ids via
+                // a brand-kind probe in object/instanceof.rs. Keep in sync with
+                // perry-runtime/src/temporal/mod.rs (CLASS_ID_TEMPORAL_*).
+                "Temporal.Duration" => 0xFFFF0200u32,
+                "Temporal.Instant" => 0xFFFF0201u32,
+                "Temporal.PlainDate" => 0xFFFF0202u32,
+                "Temporal.PlainTime" => 0xFFFF0203u32,
+                "Temporal.PlainDateTime" => 0xFFFF0204u32,
+                "Temporal.PlainYearMonth" => 0xFFFF0205u32,
+                "Temporal.PlainMonthDay" => 0xFFFF0206u32,
+                "Temporal.ZonedDateTime" => 0xFFFF0207u32,
                 "Event" | "globalThis.Event" => 0xFFFF2403u32,
                 "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
                 "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,

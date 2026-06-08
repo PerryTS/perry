@@ -59,6 +59,33 @@ pub(crate) fn field_u16(v: i64) -> u16 {
     }
 }
 
+/// Spec `ToIntegerIfIntegral(value)` for Temporal numeric fields: `ToNumber`
+/// the value, then throw a `RangeError` if the result is not an integral
+/// Number (non-finite or fractional). Used by the `Temporal.Duration`
+/// constructor and `ToTemporalDuration`'s fields path, where a fractional /
+/// infinite field is a `RangeError`, not a silent truncation.
+pub(crate) fn to_integer_if_integral(raw: f64) -> i128 {
+    let n = JSValue::from_bits(raw.to_bits()).to_number();
+    if !n.is_finite() || n.fract() != 0.0 {
+        crate::fs::validate::throw_range_error_with_code(
+            "Temporal duration fields must be integers",
+        );
+    }
+    n as i128
+}
+
+/// `ToIntegerIfIntegral(args[i])`, defaulting an absent / `undefined` argument
+/// to `0` (Temporal constructors treat missing fields as zero).
+#[inline]
+pub(crate) fn integral_arg(args: &[f64], i: usize) -> i128 {
+    let raw = raw_arg(args, i);
+    if is_undefined(raw) {
+        0
+    } else {
+        to_integer_if_integral(raw)
+    }
+}
+
 /// Raw argument value (NaN-boxed) at `i`, or `undefined`.
 #[inline]
 pub(crate) fn raw_arg(args: &[f64], i: usize) -> f64 {
