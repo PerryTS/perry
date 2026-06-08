@@ -4344,8 +4344,9 @@ pub fn run_with_parse_cache(
             .or_else(|| find_runtime_library(target.as_deref()).ok());
         let stdlib_lib_path = stdlib_lib_resolved.clone();
         // Check if stdlib will be linked - if so, it provides perry_runtime symbols (no stubs needed)
-        let target_is_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
-            || (cfg!(target_os = "windows") && target.is_none());
+        let target_is_windows =
+            matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                || (cfg!(target_os = "windows") && target.is_none());
         let will_link_stdlib = (ctx.needs_stdlib || target_is_windows) && stdlib_lib_path.is_some();
         // Issue #76 — when the wasm host is
         // being linked, scan its archive so the `perry_wasm_host_*` symbols
@@ -4933,8 +4934,9 @@ pub fn run_with_parse_cache(
     // emits `perry_module_init` instead of `main` (see is_dylib branch in
     // codegen/entry.rs, which now also covers `staticlib`).
     if is_staticlib {
-        let is_windows_target = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
-            || (target.is_none() && cfg!(target_os = "windows"));
+        let is_windows_target =
+            matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                || (target.is_none() && cfg!(target_os = "windows"));
         // Best-effort: drop a stale archive first so `ar` doesn't append to a
         // previous build's contents.
         let _ = fs::remove_file(&exe_path);

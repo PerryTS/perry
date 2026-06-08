@@ -1190,7 +1190,9 @@ pub(super) fn find_geisterhand_lib(name: &str, target: Option<&str>) -> Option<P
 }
 
 pub(super) fn find_geisterhand_library(target: Option<&str>) -> Option<PathBuf> {
-    let name = if matches!(target, Some("windows") | Some("windows-winui")) || cfg!(target_os = "windows") {
+    let name = if matches!(target, Some("windows") | Some("windows-winui"))
+        || cfg!(target_os = "windows")
+    {
         "perry_ui_geisterhand.lib"
     } else {
         "libperry_ui_geisterhand.a"
@@ -1199,7 +1201,9 @@ pub(super) fn find_geisterhand_library(target: Option<&str>) -> Option<PathBuf> 
 }
 
 pub(super) fn find_geisterhand_runtime(target: Option<&str>) -> Option<PathBuf> {
-    let name = if matches!(target, Some("windows") | Some("windows-winui")) || cfg!(target_os = "windows") {
+    let name = if matches!(target, Some("windows") | Some("windows-winui"))
+        || cfg!(target_os = "windows")
+    {
         "perry_runtime.lib"
     } else {
         "libperry_runtime.a"
@@ -1217,7 +1221,9 @@ pub(super) fn find_geisterhand_stdlib(target: Option<&str>) -> Option<PathBuf> {
     // so we never select the auto-optimized stdlib, whose feature set is
     // computed from the app's TS imports and omits async-runtime when the async
     // surface comes from a native binding — the #1383 link failure.
-    let name = if matches!(target, Some("windows") | Some("windows-winui")) || cfg!(target_os = "windows") {
+    let name = if matches!(target, Some("windows") | Some("windows-winui"))
+        || cfg!(target_os = "windows")
+    {
         "perry_stdlib.lib"
     } else {
         "libperry_stdlib.a"
