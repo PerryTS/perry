@@ -1402,6 +1402,43 @@ extern "C" fn object_prototype_property_is_enumerable_thunk(
     super::js_object_property_is_enumerable(this_value, key)
 }
 
+// Annex B §B.2.2 Object.prototype accessor methods — real thunks so reflective
+// access (`Object.prototype.__defineGetter__.call(o, k, fn)`, `typeof`) works,
+// not just the direct `o.__defineGetter__(...)` native-dispatch path.
+extern "C" fn object_prototype_define_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+    getter: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_define_getter(this_value, key, getter)
+}
+
+extern "C" fn object_prototype_define_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+    setter: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_define_setter(this_value, key, setter)
+}
+
+extern "C" fn object_prototype_lookup_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_lookup_getter(this_value, key)
+}
+
+extern "C" fn object_prototype_lookup_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_lookup_setter(this_value, key)
+}
+
 extern "C" fn error_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -2940,6 +2977,165 @@ fn build_temporal_now_namespace() -> f64 {
 /// `install_constructor_static`, it does NOT mark the closure non-constructable
 /// — `new Temporal.<name>(...)` must dispatch through the generic construct
 /// path and use the returned cell.
+/// Generic accessor-getter thunk shared by every `Temporal.<Type>.prototype`
+/// getter. The property name and expected brand kind are stored on the closure
+/// instance (`__tname` / `__tkind`); the receiver comes from `IMPLICIT_THIS`.
+/// Throws `TypeError` on a non-Temporal or wrong-brand receiver (the getter
+/// `branding.js` tests: `blank.call(undefined)`, `years.call({})`, …).
+extern "C" fn temporal_proto_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
+    let recv = super::js_implicit_this_get();
+    let cl = closure as usize;
+    let kind = crate::closure::closure_get_dynamic_prop(cl, "__tkind");
+    let expected = crate::value::JSValue::from_bits(kind.to_bits()).to_number() as u8;
+    let name = crate::temporal::dispatch::read_string(crate::closure::closure_get_dynamic_prop(
+        cl, "__tname",
+    ));
+    match crate::temporal::temporal_kind(recv) {
+        Some(k) if k as u8 == expected => crate::temporal::dispatch::get_property(recv, &name)
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+        _ => crate::object::throw_object_type_error(
+            b"Temporal getter called on an incompatible receiver",
+        ),
+    }
+}
+
+/// Generic method thunk shared by every `Temporal.<Type>.prototype` method.
+/// Rest-ABI (fixed arity 0): all args arrive in `rest`. Brand-checks the
+/// `IMPLICIT_THIS` receiver, then forwards to the per-type dispatch router —
+/// used when a prototype method is invoked through indirection
+/// (`Temporal.Duration.prototype.add.call(d, x)`); the normal `d.add(x)` path
+/// is the brand arm in `js_native_call_method`.
+extern "C" fn temporal_proto_method_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let recv = super::js_implicit_this_get();
+    let cl = closure as usize;
+    let kind = crate::closure::closure_get_dynamic_prop(cl, "__tkind");
+    let expected = crate::value::JSValue::from_bits(kind.to_bits()).to_number() as u8;
+    let name = crate::temporal::dispatch::read_string(crate::closure::closure_get_dynamic_prop(
+        cl, "__tname",
+    ));
+    match crate::temporal::temporal_kind(recv) {
+        Some(k) if k as u8 == expected => {
+            let args = global_this_rest_array_values(rest);
+            crate::temporal::dispatch::call_method(recv, &name, &args)
+        }
+        _ => crate::object::throw_object_type_error(
+            b"Temporal method called on an incompatible receiver",
+        ),
+    }
+}
+
+/// Install a brand-checked accessor getter (`{ get, set: undefined,
+/// enumerable: false, configurable: true }`) on a Temporal prototype.
+fn install_temporal_proto_getter(proto: *mut ObjectHeader, kind: u8, name: &str) {
+    let c = crate::closure::js_closure_alloc(temporal_proto_getter_thunk as *const u8, 0);
+    if c.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(temporal_proto_getter_thunk as *const u8, 0);
+    let cl = c as usize;
+    crate::closure::closure_set_dynamic_prop(cl, "__tkind", kind as f64);
+    crate::closure::closure_set_dynamic_prop(
+        cl,
+        "__tname",
+        crate::temporal::dispatch::string(name),
+    );
+    super::native_module::set_bound_native_closure_name(c, &format!("get {name}"));
+    super::native_module::set_builtin_closure_length(cl, 0);
+    super::native_module::set_builtin_closure_non_constructable(cl);
+    unsafe {
+        install_builtin_getter(
+            proto,
+            name,
+            crate::value::js_nanbox_pointer(c as i64).to_bits(),
+        );
+    }
+}
+
+/// Install a brand-checked method (`{ writable: true, enumerable: false,
+/// configurable: true }`, non-constructable, with spec `.name`/`.length`) on a
+/// Temporal prototype.
+fn install_temporal_proto_method(proto: *mut ObjectHeader, kind: u8, name: &str, spec_length: u32) {
+    let c = crate::closure::js_closure_alloc(temporal_proto_method_thunk as *const u8, 0);
+    if c.is_null() {
+        return;
+    }
+    // Rest ABI so every argument is bundled regardless of the shared thunk's
+    // fixed signature.
+    crate::closure::js_register_closure_rest(temporal_proto_method_thunk as *const u8, 0);
+    let cl = c as usize;
+    crate::closure::closure_set_dynamic_prop(cl, "__tkind", kind as f64);
+    crate::closure::closure_set_dynamic_prop(
+        cl,
+        "__tname",
+        crate::temporal::dispatch::string(name),
+    );
+    super::native_module::set_bound_native_closure_name(c, name);
+    super::native_module::set_builtin_closure_length(cl, spec_length);
+    super::native_module::set_builtin_closure_non_constructable(cl);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(proto, key, crate::value::js_nanbox_pointer(c as i64));
+    super::set_builtin_property_attrs(
+        proto as usize,
+        name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+    super::set_builtin_property_attrs(
+        cl,
+        "name".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+    super::set_builtin_property_attrs(
+        cl,
+        "length".to_string(),
+        super::PropertyAttrs::new(false, false, true),
+    );
+}
+
+/// Build and wire a `Temporal.<Type>.prototype` object: a real object carrying
+/// the type's accessor getters and methods (for reflection + indirect `.call`),
+/// linked to its constructor via `ctor.prototype` / `proto.constructor`.
+fn install_temporal_prototype(
+    ctor: *mut crate::closure::ClosureHeader,
+    kind: u8,
+    getters: &[&str],
+    methods: &[(&str, u32)],
+) {
+    if ctor.is_null() {
+        return;
+    }
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+    for g in getters {
+        install_temporal_proto_getter(proto, kind, g);
+    }
+    for (m, len) in methods {
+        install_temporal_proto_method(proto, kind, m, *len);
+    }
+    // ctor.prototype = proto  ({ writable:false, enumerable:false, configurable:false })
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
+    super::set_builtin_property_attrs(
+        ctor as usize,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(false, false, false),
+    );
+    // proto.constructor = ctor  ({ writable:true, enumerable:false, configurable:true })
+    let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
+    let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    js_object_set_field_by_name(proto, ctor_key, ctor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        "constructor".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
 fn install_temporal_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
@@ -2992,6 +3188,37 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             0,
             true,
         );
+        install_temporal_prototype(
+            duration,
+            crate::temporal::TemporalKind::Duration as u8,
+            &[
+                "years",
+                "months",
+                "weeks",
+                "days",
+                "hours",
+                "minutes",
+                "seconds",
+                "milliseconds",
+                "microseconds",
+                "nanoseconds",
+                "sign",
+                "blank",
+            ],
+            &[
+                ("with", 1),
+                ("negated", 0),
+                ("abs", 0),
+                ("add", 1),
+                ("subtract", 1),
+                ("round", 1),
+                ("total", 1),
+                ("toString", 0),
+                ("toJSON", 0),
+                ("toLocaleString", 0),
+                ("valueOf", 0),
+            ],
+        );
     }
 
     // Temporal.Instant (#4690)
@@ -3022,6 +3249,24 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             1,
             0,
             true,
+        );
+        install_temporal_prototype(
+            instant,
+            crate::temporal::TemporalKind::Instant as u8,
+            &["epochMilliseconds", "epochNanoseconds"],
+            &[
+                ("add", 1),
+                ("subtract", 1),
+                ("until", 1),
+                ("since", 1),
+                ("round", 1),
+                ("equals", 1),
+                ("toZonedDateTimeISO", 1),
+                ("toString", 0),
+                ("toJSON", 0),
+                ("toLocaleString", 0),
+                ("valueOf", 0),
+            ],
         );
     }
 
@@ -5296,6 +5541,11 @@ fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u3
     for (name, arity) in methods.iter().copied() {
         let func_ptr = match name {
             "isPrototypeOf" => object_prototype_is_prototype_of_thunk as *const u8,
+            // Annex B accessor methods get real thunks (reflective `.call`).
+            "__defineGetter__" => object_prototype_define_getter_thunk as *const u8,
+            "__defineSetter__" => object_prototype_define_setter_thunk as *const u8,
+            "__lookupGetter__" => object_prototype_lookup_getter_thunk as *const u8,
+            "__lookupSetter__" => object_prototype_lookup_setter_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         install_proto_method(proto_obj, name, func_ptr, arity);
@@ -5347,6 +5597,11 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     ("propertyIsEnumerable", 1),
     ("toLocaleString", 0),
     ("valueOf", 0),
+    // Annex B §B.2.2 legacy accessor helpers.
+    ("__defineGetter__", 2),
+    ("__defineSetter__", 2),
+    ("__lookupGetter__", 1),
+    ("__lookupSetter__", 1),
     // `toString` is installed separately on Object/typed arrays etc. with
     // dedicated thunks; do not include it here to avoid clobbering those.
 ];

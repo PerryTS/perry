@@ -1560,13 +1560,32 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 (prop.clone(), prop)
                             }
                             ast::Expr::OptChain(inner) => match &*inner.base {
-                                // Chained `foo?.bar?.(args)`: check the receiver
-                                // (foo) so the inner `?.` short-circuit still works,
-                                // AND flag that the function value (foo.bar) needs
-                                // its own null-check before the call (added in the
-                                // final assembly below).
+                                // The callee is itself an optional chain. Two
+                                // distinct shapes land here, told apart by whether
+                                // THIS chain link's call is optional
+                                // (`opt_chain.optional`, the `?.(` token):
+                                //
+                                //  • `foo?.bar?.(args)` (optional call): check the
+                                //    receiver (foo) so the inner `?.` short-circuit
+                                //    works, AND flag that the function value
+                                //    (foo.bar) needs its own null-check before the
+                                //    call (#4699 — an `undefined` property must
+                                //    short-circuit, not throw "X is not a function").
+                                //
+                                //  • `foo?.bar(args)` (non-optional call, only the
+                                //    member is optional): this is an ordinary method
+                                //    call guarded by the receiver. It must NOT get a
+                                //    function-value guard — `s?.at(-1)` reads `s.at`
+                                //    as a bare PropertyGet, which is `undefined` for
+                                //    builtin (string/array) methods that only resolve
+                                //    through the call path, so the guard would wrongly
+                                //    short-circuit the whole call (#4814). Leaving
+                                //    `callee_from_chain` false yields the plain
+                                //    `recv == null ? undefined : recv.method(args)`,
+                                //    and codegen binds `this` from the PropertyGet
+                                //    callee + dispatches the builtin normally.
                                 ast::OptChainBase::Member(m) => {
-                                    callee_from_chain = true;
+                                    callee_from_chain = opt_chain.optional;
                                     lower_member_flat(m)?
                                 }
                                 _ => {

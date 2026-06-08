@@ -1284,6 +1284,20 @@ pub unsafe extern "C" fn js_native_call_value(
         return crate::value::js_nanbox_pointer(arr as i64);
     }
 
+    // A closure with a registered rest param must bundle EVERY argument into
+    // its rest array. The per-arity `match` below caps at `js_closure_call8`
+    // (passing only `arg_at(0..7)`), so a rest closure invoked with >8 args
+    // (e.g. `new Temporal.Duration(y,mo,w,d,h,mi,s,ms,us,ns)` — 10 positional
+    // args) would silently drop the overflow. Route through the rest-bundler
+    // with the full slice up front. (The arity-specific `js_closure_callN`
+    // helpers do their own rest check, but only see the truncated arg list.)
+    if !func_ptr.is_null() {
+        if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
+            let all: Vec<f64> = (0..args_len).map(arg_at).collect();
+            return dispatch_rest_bundled(closure, func_ptr, &all, fixed_arity, synth);
+        }
+    }
+
     // Call with the appropriate arity
     match dispatch_args_len {
         0 => js_closure_call0(closure),
@@ -1318,7 +1332,7 @@ pub unsafe extern "C" fn js_native_call_value(
             arg_at(5),
             arg_at(6),
         ),
-        _ => js_closure_call8(
+        8 => js_closure_call8(
             closure,
             arg_at(0),
             arg_at(1),
@@ -1328,6 +1342,135 @@ pub unsafe extern "C" fn js_native_call_value(
             arg_at(5),
             arg_at(6),
             arg_at(7),
+        ),
+        9 => js_closure_call9(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+        ),
+        10 => js_closure_call10(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+            arg_at(9),
+        ),
+        11 => js_closure_call11(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+            arg_at(9),
+            arg_at(10),
+        ),
+        12 => js_closure_call12(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+            arg_at(9),
+            arg_at(10),
+            arg_at(11),
+        ),
+        13 => js_closure_call13(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+            arg_at(9),
+            arg_at(10),
+            arg_at(11),
+            arg_at(12),
+        ),
+        14 => js_closure_call14(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+            arg_at(9),
+            arg_at(10),
+            arg_at(11),
+            arg_at(12),
+            arg_at(13),
+        ),
+        15 => js_closure_call15(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+            arg_at(9),
+            arg_at(10),
+            arg_at(11),
+            arg_at(12),
+            arg_at(13),
+            arg_at(14),
+        ),
+        // 16+ positional args: the closure-call ABI tops out at
+        // `js_closure_call16`. Functions with more must be reached through a
+        // rest-bundling path (handled above for closures with a registered
+        // rest param); plain functions with >16 positional params are
+        // vanishingly rare, so the surplus is truncated here.
+        _ => js_closure_call16(
+            closure,
+            arg_at(0),
+            arg_at(1),
+            arg_at(2),
+            arg_at(3),
+            arg_at(4),
+            arg_at(5),
+            arg_at(6),
+            arg_at(7),
+            arg_at(8),
+            arg_at(9),
+            arg_at(10),
+            arg_at(11),
+            arg_at(12),
+            arg_at(13),
+            arg_at(14),
+            arg_at(15),
         ),
     }
 }

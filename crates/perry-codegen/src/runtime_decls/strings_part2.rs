@@ -145,6 +145,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    // Annex B §B.2.2 accessor helpers — `Object.prototype.__defineGetter__`
+    // etc., reached via the `.call(obj, key[, fn])` rewrite.
+    module.declare_function("js_object_define_getter", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_object_define_setter", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_object_lookup_getter", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_object_lookup_setter", DOUBLE, &[DOUBLE, DOUBLE]);
     // Issue #620: own-property override probe used by class-method dispatch.
     // Returns the stored value if `name` is in obj's own keys_array (data
     // property only — no vtable getter walk), else TAG_UNDEFINED. Lets

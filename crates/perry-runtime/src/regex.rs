@@ -15,11 +15,13 @@ use crate::value::js_nanbox_string;
 
 use crate::object::ObjectHeader;
 
+mod compile;
 mod escape;
 mod grammar;
 mod match_all;
 mod replace_expand;
 mod replace_fn;
+pub use compile::js_regexp_compile_value;
 pub use escape::js_regexp_escape;
 use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
 pub use match_all::{

@@ -200,12 +200,21 @@ pub(crate) unsafe fn desc_read_field(descriptor_value: f64, name: &[u8]) -> crat
             return crate::value::JSValue::from_bits(crate::value::TAG_UNDEFINED);
         }
     }
-    let desc_ptr = extract_obj_ptr(descriptor_value);
-    if desc_ptr.is_null() {
+    // The descriptor may be ANY object — a Date, array, RegExp, boxed
+    // primitive, typed array, class instance — not just a plain `ObjectHeader`.
+    // A raw `js_object_get_field_by_name(ptr as ObjectHeader)` bit-casts e.g. a
+    // Date's cell to an `ObjectHeader` and segfaults (test262
+    // Object/create/15.2.3.5-4-* and defineProperties exotic-descriptor cases).
+    // Read through the value-level `[[Get]]`, which dispatches on the receiver's
+    // real type and — matching `desc_has_field`'s `HasProperty` and the spec
+    // `ToPropertyDescriptor` — walks the prototype chain and fires accessors.
+    if !value_is_object_like(descriptor_value) {
         return crate::value::JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_get_field_by_name(desc_ptr as *const ObjectHeader, key)
+    let key_f64 = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
+    let v = crate::object::js_object_get_property_key(descriptor_value, key_f64);
+    crate::value::JSValue::from_bits(v.to_bits())
 }
 
 /// Validate a property descriptor object per ES `ToPropertyDescriptor`
@@ -1910,6 +1919,96 @@ pub(crate) unsafe fn own_key_present(
         }
     }
     false
+}
+
+/// `Object.prototype.__defineGetter__(key, getter)` (Annex B §B.2.2.2).
+/// Installs an accessor with the given getter and `enumerable: true,
+/// configurable: true`. A non-callable getter throws a TypeError. Returns
+/// `undefined`.
+#[no_mangle]
+pub extern "C" fn js_object_define_getter(this: f64, key: f64, getter: f64) -> f64 {
+    unsafe { define_accessor_annexb(this, key, getter, true) }
+}
+
+/// `Object.prototype.__defineSetter__(key, setter)` (Annex B §B.2.2.3).
+#[no_mangle]
+pub extern "C" fn js_object_define_setter(this: f64, key: f64, setter: f64) -> f64 {
+    unsafe { define_accessor_annexb(this, key, setter, false) }
+}
+
+/// Shared `__defineGetter__`/`__defineSetter__` body. Builds an accessor
+/// descriptor `{ [get|set]: func, enumerable: true, configurable: true }` and
+/// delegates to `js_object_define_property`, so the function's `this`-binding
+/// and the closure/class-ref/symbol-key paths all behave like a normal
+/// accessor define.
+unsafe fn define_accessor_annexb(this: f64, key: f64, func: f64, is_getter: bool) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if !value_is_callable(func) {
+        let which = if is_getter {
+            "__defineGetter__"
+        } else {
+            "__defineSetter__"
+        };
+        throw_object_type_error(format!("Object.prototype.{which}: Expecting function").as_bytes());
+    }
+    let desc = js_object_alloc(0, 3);
+    if desc.is_null() {
+        return undef;
+    }
+    let field = if is_getter { "get" } else { "set" };
+    let fkey = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    js_object_set_field_by_name(desc, fkey, func);
+    let true_v = f64::from_bits(crate::value::JSValue::bool(true).bits());
+    let enum_key = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+    js_object_set_field_by_name(desc, enum_key, true_v);
+    let cfg_key = crate::string::js_string_from_bytes(b"configurable".as_ptr(), 12);
+    js_object_set_field_by_name(desc, cfg_key, true_v);
+    let desc_val = f64::from_bits(crate::value::JSValue::pointer(desc as *const u8).bits());
+    js_object_define_property(this, key, desc_val);
+    undef
+}
+
+/// `Object.prototype.__lookupGetter__(key)` (Annex B §B.2.2.4). Walks the
+/// receiver's own + prototype chain; returns the getter of the first own
+/// accessor property found (or `undefined`).
+#[no_mangle]
+pub extern "C" fn js_object_lookup_getter(this: f64, key: f64) -> f64 {
+    unsafe { lookup_accessor_annexb(this, key, true) }
+}
+
+/// `Object.prototype.__lookupSetter__(key)` (Annex B §B.2.2.5).
+#[no_mangle]
+pub extern "C" fn js_object_lookup_setter(this: f64, key: f64) -> f64 {
+    unsafe { lookup_accessor_annexb(this, key, false) }
+}
+
+/// Shared `__lookupGetter__`/`__lookupSetter__` body. Walks own + proto chain
+/// via `getOwnPropertyDescriptor`/`getPrototypeOf`; the first own property
+/// found stops the walk — its `get`/`set` field is returned (`undefined` for a
+/// data property or the opposite-only accessor case).
+unsafe fn lookup_accessor_annexb(this: f64, key: f64, want_getter: bool) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let field = if want_getter { "get" } else { "set" };
+    let fkey = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    let mut cur = this;
+    // Cap the walk so a pathological/cyclic prototype can't spin forever.
+    for _ in 0..100_000 {
+        let jv = crate::value::JSValue::from_bits(cur.to_bits());
+        if jv.is_null() || jv.is_undefined() {
+            return undef;
+        }
+        let desc = js_object_get_own_property_descriptor(cur, key);
+        if !crate::value::JSValue::from_bits(desc.to_bits()).is_undefined() {
+            let desc_ptr = extract_obj_ptr(desc);
+            if desc_ptr.is_null() {
+                return undef;
+            }
+            let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, fkey);
+            return f64::from_bits(v.bits());
+        }
+        cur = js_object_get_prototype_of(cur);
+    }
+    undef
 }
 
 /// Issue #620: returns the OWN-property value at `name` if one exists in the

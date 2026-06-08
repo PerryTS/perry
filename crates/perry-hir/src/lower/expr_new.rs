@@ -138,10 +138,32 @@ fn lower_new_spread_args(
 /// dedicated per-constructor lowering, whose argument marshalling (rest
 /// parameters, default values, …) the generic construct helper does not
 /// replicate. `callee` must already be peeled (see `peel_new_callee`).
-fn callee_is_generic_construct_shape(_ctx: &LoweringContext, callee: &ast::Expr) -> bool {
+fn callee_is_generic_construct_shape(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
+    // A bare-identifier callee that resolves to a *local* binding (a parameter
+    // or `let`/`const` holding a runtime constructor value, e.g. test262's
+    // `checkSubclassingIgnored`'s `new construct(...constructArgs)`) has no
+    // dedicated per-constructor lowering — it falls through to the generic
+    // construct path, which otherwise collapses a spread into one array arg.
+    // Route it through `NewDynamicSpread`. Top-level class/function names keep
+    // their dedicated lowering (they aren't local bindings).
+    if let ast::Expr::Ident(ident) = callee {
+        if ctx.lookup_local(ident.sym.as_ref()).is_some() {
+            return true;
+        }
+    }
     matches!(
         callee,
-        ast::Expr::Fn(_) | ast::Expr::Class(_) | ast::Expr::Arrow(_) | ast::Expr::Call(_)
+        ast::Expr::Fn(_)
+            | ast::Expr::Class(_)
+            | ast::Expr::Arrow(_)
+            | ast::Expr::Call(_)
+            // Member-expression callees (`new Temporal.Duration(...args)`,
+            // `new ns.Ctor(...args)`) also route through the generic
+            // construct path, whose argument lowering otherwise collapses a
+            // spread into a single array argument. The handful of specially
+            // lowered member constructors (URL, TextEncoder, …) are never
+            // invoked with a spread in practice.
+            | ast::Expr::Member(_)
     )
 }
 

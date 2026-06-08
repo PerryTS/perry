@@ -136,7 +136,13 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
         "toPlainDateTime" => {
             alloc_temporal_cell(TemporalValue::PlainDateTime(z.to_plain_date_time()))
         }
-        "toString" | "toJSON" | "toLocaleString" => string(&z.to_string()),
+        "toString" => string(&ok_or_throw(z.to_ixdtf_string(
+            super::options::display_offset(raw_arg(args, 0)),
+            super::options::display_time_zone(raw_arg(args, 0)),
+            super::options::display_calendar(raw_arg(args, 0)),
+            super::options::to_string_rounding_options(raw_arg(args, 0)),
+        ))),
+        "toJSON" | "toLocaleString" => string(&z.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

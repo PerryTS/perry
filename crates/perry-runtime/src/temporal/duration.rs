@@ -6,7 +6,8 @@
 //! `temporal_rs`, this module is marshalling glue.
 
 use super::dispatch::{
-    self, boolean, int_arg, is_undefined, number_i128, ok_or_throw, raw_arg, string,
+    self, boolean, integral_arg, is_undefined, number_i128, ok_or_throw, raw_arg, string,
+    to_integer_if_integral,
 };
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
@@ -39,16 +40,16 @@ pub(crate) fn wrap(d: Duration) -> f64 {
 /// is an optional integer defaulting to 0.
 pub fn construct(args: &[f64]) -> f64 {
     let d = ok_or_throw(Duration::new(
-        int_arg(args, 0),         // years
-        int_arg(args, 1),         // months
-        int_arg(args, 2),         // weeks
-        int_arg(args, 3),         // days
-        int_arg(args, 4),         // hours
-        int_arg(args, 5),         // minutes
-        int_arg(args, 6),         // seconds
-        int_arg(args, 7),         // milliseconds
-        int_arg(args, 8) as i128, // microseconds
-        int_arg(args, 9) as i128, // nanoseconds
+        integral_arg(args, 0) as i64, // years
+        integral_arg(args, 1) as i64, // months
+        integral_arg(args, 2) as i64, // weeks
+        integral_arg(args, 3) as i64, // days
+        integral_arg(args, 4) as i64, // hours
+        integral_arg(args, 5) as i64, // minutes
+        integral_arg(args, 6) as i64, // seconds
+        integral_arg(args, 7) as i64, // milliseconds
+        integral_arg(args, 8),        // microseconds
+        integral_arg(args, 9),        // nanoseconds
     ));
     wrap(d)
 }
@@ -69,35 +70,62 @@ pub(crate) fn coerce_duration(v: f64) -> Duration {
         let s = super::dispatch::read_string(v);
         return ok_or_throw(Duration::from_utf8(s.as_bytes()));
     }
-    // Object → read each duration field (missing = 0).
+    // Object → read each duration field (`ToTemporalDurationRecord`). A missing
+    // field defaults to 0, a present one goes through `ToIntegerIfIntegral`
+    // (RangeError on a fractional / infinite value), and an object carrying
+    // *no* recognized duration field at all is a TypeError.
     if jv.is_pointer() {
         let obj = jv.as_pointer::<crate::object::ObjectHeader>();
         if !obj.is_null() {
-            let f = |name: &str| -> i64 {
+            let mut vals = [0i128; 10];
+            let mut any = false;
+            // Spec `ToTemporalDurationRecord` reads the fields in *alphabetical*
+            // order (days, hours, microseconds, …), each immediately coerced via
+            // ToNumber — the order-of-operations tests observe this exact
+            // interleaving. `slot` maps each name back to its positional index.
+            const ALPHA_FIELDS: [(&str, usize); 10] = [
+                ("days", 3),
+                ("hours", 4),
+                ("microseconds", 8),
+                ("milliseconds", 7),
+                ("minutes", 5),
+                ("months", 1),
+                ("nanoseconds", 9),
+                ("seconds", 6),
+                ("weeks", 2),
+                ("years", 0),
+            ];
+            for (name, slot) in ALPHA_FIELDS {
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                 let raw = crate::object::js_object_get_field_by_name_f64(obj, key);
-                let n = JSValue::from_bits(raw.to_bits()).to_number();
-                if n.is_finite() {
-                    n.trunc() as i64
-                } else {
-                    0
+                if !is_undefined(raw) {
+                    any = true;
+                    vals[slot] = to_integer_if_integral(raw);
                 }
-            };
+            }
+            if !any {
+                crate::object::throw_object_type_error(
+                    b"Temporal.Duration-like object must have at least one duration property",
+                );
+            }
             return ok_or_throw(Duration::new(
-                f("years"),
-                f("months"),
-                f("weeks"),
-                f("days"),
-                f("hours"),
-                f("minutes"),
-                f("seconds"),
-                f("milliseconds"),
-                f("microseconds") as i128,
-                f("nanoseconds") as i128,
+                vals[0] as i64,
+                vals[1] as i64,
+                vals[2] as i64,
+                vals[3] as i64,
+                vals[4] as i64,
+                vals[5] as i64,
+                vals[6] as i64,
+                vals[7] as i64,
+                vals[8],
+                vals[9],
             ));
         }
     }
-    crate::fs::validate::throw_range_error_with_code("Cannot convert value to a Temporal.Duration")
+    // A non-object, non-string primitive (number, boolean, bigint, symbol,
+    // undefined, null) is never a Duration — `ToTemporalDuration` throws a
+    // TypeError before the string-parse step.
+    crate::object::throw_object_type_error(b"Cannot convert value to a Temporal.Duration")
 }
 
 // ---- statics (installed on the constructor) -------------------------------
@@ -114,7 +142,13 @@ pub fn from_static(args: &[f64]) -> f64 {
 pub fn compare_static(args: &[f64]) -> f64 {
     let a = coerce_duration(raw_arg(args, 0));
     let b = coerce_duration(raw_arg(args, 1));
-    let ord = ok_or_throw(a.compare(&b, None));
+    // The `{ relativeTo }` option anchors calendar-unit (years/months/weeks)
+    // comparison; the options bag itself must be an object or undefined
+    // (TypeError otherwise), and a malformed `relativeTo` string is a RangeError
+    // — both before the early-equal return.
+    super::options::require_options_object(raw_arg(args, 2));
+    let rel = super::options::relative_to(raw_arg(args, 2));
+    let ord = ok_or_throw(a.compare(&b, rel));
     match ord {
         std::cmp::Ordering::Less => -1.0,
         std::cmp::Ordering::Equal => 0.0,
@@ -175,7 +209,13 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
         "add" => wrap(ok_or_throw(d.add(&coerce_duration(raw_arg(args, 0))))),
         "subtract" => wrap(ok_or_throw(d.subtract(&coerce_duration(raw_arg(args, 0))))),
         "with" => with(d, raw_arg(args, 0)),
-        "toString" | "toJSON" | "toLocaleString" => string(&super::temporal_value_iso_string(
+        // `toString` honors a `{ fractionalSecondDigits, smallestUnit,
+        // roundingMode }` options bag; `toJSON`/`toLocaleString` always use the
+        // default precision.
+        "toString" => string(&ok_or_throw(d.as_temporal_string(
+            super::options::to_string_rounding_options(raw_arg(args, 0)),
+        ))),
+        "toJSON" | "toLocaleString" => string(&super::temporal_value_iso_string(
             &TemporalValue::Duration(*d),
         )),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),

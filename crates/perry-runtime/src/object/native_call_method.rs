@@ -1778,6 +1778,24 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // `RegExp.prototype.compile(pattern, flags)` (Annex B) re-initializes the
+    // receiver in place. Needs both args, so it is dispatched here rather than
+    // through the single-arg `dispatch_regex_receiver_method`.
+    if method_name == "compile" && jsval.is_pointer() {
+        let p = jsval.as_pointer::<u8>();
+        if crate::regex::is_regex_pointer(p) {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let args = refreshed_args();
+            let pat = args.first().copied().unwrap_or(undef);
+            let flags = args.get(1).copied().unwrap_or(undef);
+            return crate::regex::js_regexp_compile_value(
+                p as *mut crate::regex::RegExpHeader,
+                pat,
+                flags,
+            );
+        }
+    }
+
     // Node timer handles are represented in Perry as small integer ids
     // NaN-boxed as pointers. Provide the common Timeout/Immediate methods
     // directly so `timeout.ref().unref().hasRef()` style probes behave like
@@ -2572,6 +2590,44 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 "toWellFormed" => {
                     let r = crate::string::js_string_to_well_formed(receiver_string());
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                // Annex B §B.2.2 HTML wrapper methods. No-arg tag wrappers;
+                // the receiver body is never escaped.
+                "big" | "blink" | "bold" | "fixed" | "italics" | "small" | "strike" | "sub"
+                | "sup" => {
+                    let s = receiver_string();
+                    let r = match method_name {
+                        "big" => crate::string::js_string_big(s),
+                        "blink" => crate::string::js_string_blink(s),
+                        "bold" => crate::string::js_string_bold(s),
+                        "fixed" => crate::string::js_string_fixed(s),
+                        "italics" => crate::string::js_string_italics(s),
+                        "small" => crate::string::js_string_small(s),
+                        "strike" => crate::string::js_string_strike(s),
+                        "sub" => crate::string::js_string_sub(s),
+                        "sup" => crate::string::js_string_sup(s),
+                        _ => unreachable!(),
+                    };
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                // Annex B §B.2.2 HTML wrappers that take an attribute value;
+                // a missing arg coerces `undefined` -> "undefined", and `"`
+                // in the value is escaped to `&quot;`.
+                "anchor" | "link" | "fontcolor" | "fontsize" => {
+                    let value = crate::builtins::js_string_coerce(
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
+                    );
+                    let value_h = root_scope.root_string_ptr(value);
+                    let s = receiver_string();
+                    let v = value_h.get_raw_const_ptr::<crate::StringHeader>();
+                    let r = match method_name {
+                        "anchor" => crate::string::js_string_anchor(s, v),
+                        "link" => crate::string::js_string_link(s, v),
+                        "fontcolor" => crate::string::js_string_fontcolor(s, v),
+                        "fontsize" => crate::string::js_string_fontsize(s, v),
+                        _ => unreachable!(),
+                    };
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 _ => {} // not a handled string method — fall through to TypeError catch-all
@@ -4124,6 +4180,39 @@ pub unsafe extern "C" fn js_native_call_method(
             return f64::from_bits(
                 JSValue::bool(js_object_is_prototype_of_value(object, arg)).bits(),
             );
+        }
+
+        // Annex B §B.2.2 Object.prototype accessor helpers.
+        "__defineGetter__" | "__defineSetter__" => {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let key = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let func = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            return if method_name == "__defineGetter__" {
+                super::js_object_define_getter(object, key, func)
+            } else {
+                super::js_object_define_setter(object, key, func)
+            };
+        }
+        "__lookupGetter__" | "__lookupSetter__" => {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let key = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            return if method_name == "__lookupGetter__" {
+                super::js_object_lookup_getter(object, key)
+            } else {
+                super::js_object_lookup_setter(object, key)
+            };
         }
 
         // `Object.prototype.valueOf` returns the receiver after ToObject.

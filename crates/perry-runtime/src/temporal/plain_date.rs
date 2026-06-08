@@ -164,7 +164,10 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
                     && d.calendar().identifier() == other.calendar().identifier(),
             )
         }
-        "toString" | "toJSON" | "toLocaleString" => string(&d.to_string()),
+        "toString" => {
+            string(&d.to_ixdtf_string(super::options::display_calendar(raw_arg(args, 0))))
+        }
+        "toJSON" | "toLocaleString" => string(&d.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

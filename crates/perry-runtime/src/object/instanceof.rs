@@ -544,6 +544,19 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             }
         }
     }
+    // Temporal reference types (`d instanceof Temporal.Duration`, …). A Temporal
+    // value is a NaN-boxed pointer to a brand-tagged cell, not an ObjectHeader
+    // with a class chain, so probe the cell's brand kind directly. Keep the band
+    // in sync with perry-runtime/src/temporal/mod.rs.
+    if (crate::temporal::CLASS_ID_TEMPORAL_FIRST..=crate::temporal::CLASS_ID_TEMPORAL_LAST)
+        .contains(&class_id)
+    {
+        return if crate::temporal::temporal_value_matches_class_id(value, class_id) {
+            true_val
+        } else {
+            false_val
+        };
+    }
     // `value instanceof Function` — true for any callable value. Per
     // `OrdinaryHasInstance`, every Perry function (declaration, expression,
     // arrow, method, bound function, native handle, built-in constructor)
