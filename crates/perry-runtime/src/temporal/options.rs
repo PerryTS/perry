@@ -141,7 +141,10 @@ fn field(obj: *const crate::object::ObjectHeader, name: &str) -> f64 {
     crate::object::js_object_get_field_by_name_f64(obj, key)
 }
 
-/// `obj.<name>` as a finite number, or `None` if absent / undefined / non-finite.
+/// `obj.<name>` as a finite number, or `None` if absent / `undefined`. A present
+/// field whose `ToNumber` is non-finite (`Infinity`/`-Infinity`/`NaN`) is a
+/// `RangeError` per `ToIntegerWithTruncation` — Temporal numeric fields reject
+/// non-finite input (e.g. `{ year: Infinity }`), they do not silently drop it.
 fn num_field(obj: *const crate::object::ObjectHeader, name: &str) -> Option<f64> {
     let raw = field(obj, name);
     if is_undefined(raw) {
@@ -151,7 +154,7 @@ fn num_field(obj: *const crate::object::ObjectHeader, name: &str) -> Option<f64>
     if n.is_finite() {
         Some(n)
     } else {
-        None
+        range("Temporal field cannot be Infinity or NaN");
     }
 }
 
