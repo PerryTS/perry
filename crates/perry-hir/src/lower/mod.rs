@@ -48,7 +48,10 @@ pub(crate) use context::*;
 mod stmt;
 pub(crate) use stmt::*;
 mod stmt_loops;
-pub(crate) use stmt_loops::{lower_stmt_for_in, lower_stmt_for_of};
+pub(crate) use stmt_loops::{
+    insert_iterator_close_on_abrupt, iterator_close_guarded_stmt, iterator_next_call,
+    lazy_or_index_elem, lower_stmt_for_in, lower_stmt_for_of,
+};
 mod module_decl;
 pub(crate) use module_decl::*;
 mod misc;

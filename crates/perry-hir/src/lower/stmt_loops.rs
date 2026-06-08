@@ -307,6 +307,232 @@ fn insert_iterator_return_before_abrupts(
     *stmts = rewritten;
 }
 
+/// Element source for a `for...of` binding: `__result.value` on the lazy
+/// iterator path, `__arr[__idx]` on the materialized-array path.
+pub(crate) fn lazy_or_index_elem(
+    use_lazy_iter: bool,
+    arr_id: LocalId,
+    idx_id: LocalId,
+    result_id: LocalId,
+) -> Expr {
+    if use_lazy_iter {
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(result_id)),
+            property: "value".to_string(),
+        }
+    } else {
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(arr_id)),
+            index: Box::new(Expr::LocalGet(idx_id)),
+        }
+    }
+}
+
+/// `__iter.next()`.
+pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(iter_id)),
+            property: "next".to_string(),
+        }),
+        args: vec![],
+        type_args: vec![],
+    }
+}
+
+/// Spec IteratorClose, guarded: `if (__iter.return != null) __iter.return();`.
+/// Array iterators have no `return` method, so the guard makes close a no-op
+/// for them (closing an array iterator is a spec no-op); generators / custom
+/// iterators run their `return` (which executes pending `finally` blocks).
+pub(crate) fn iterator_close_guarded_stmt(iter_id: LocalId) -> Stmt {
+    Stmt::If {
+        condition: Expr::Compare {
+            op: CompareOp::LooseNe,
+            left: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(iter_id)),
+                property: "return".to_string(),
+            }),
+            right: Box::new(Expr::Null),
+        },
+        then_branch: vec![Stmt::Expr(iterator_return_call(iter_id, false))],
+        else_branch: None,
+    }
+}
+
+/// Rewrite a synchronous `for...of` body so every abrupt completion that
+/// escapes the loop runs IteratorClose first. Per spec ForIn/OfBodyEvaluation:
+/// an unlabeled `break` that targets this loop, a labeled `break`/`continue`
+/// that targets an enclosing construct, and a `return` all close the iterator.
+/// Unlabeled `continue` (next iteration) and `break`/`continue` captured by a
+/// loop/switch nested *within* the body do not. `throw` is intentionally not
+/// rewritten here: a `throw` caught by an in-body `try/catch` must not close,
+/// and the uncaught case is handled separately.
+///
+/// `break_capture_depth` counts enclosing loops/switches inside the body (which
+/// capture an unlabeled `break`); `inner_labels` are labels declared within the
+/// body (which capture a matching labeled `break`/`continue`).
+pub(crate) fn insert_iterator_close_on_abrupt(
+    stmts: &mut Vec<Stmt>,
+    iter_id: LocalId,
+    break_capture_depth: usize,
+    inner_labels: &[String],
+) {
+    let mut rewritten = Vec::with_capacity(stmts.len());
+    for stmt in stmts.drain(..) {
+        match stmt {
+            Stmt::Break if break_capture_depth == 0 => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::Break);
+            }
+            Stmt::LabeledBreak(label) if !inner_labels.contains(&label) => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::LabeledBreak(label));
+            }
+            Stmt::LabeledContinue(label) if !inner_labels.contains(&label) => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::LabeledContinue(label));
+            }
+            Stmt::Return(value) => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::Return(value));
+            }
+            Stmt::If {
+                condition,
+                mut then_branch,
+                mut else_branch,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut then_branch,
+                    iter_id,
+                    break_capture_depth,
+                    inner_labels,
+                );
+                if let Some(else_stmts) = else_branch.as_mut() {
+                    insert_iterator_close_on_abrupt(
+                        else_stmts,
+                        iter_id,
+                        break_capture_depth,
+                        inner_labels,
+                    );
+                }
+                rewritten.push(Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                });
+            }
+            Stmt::Try {
+                mut body,
+                mut catch,
+                mut finally,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth,
+                    inner_labels,
+                );
+                if let Some(c) = catch.as_mut() {
+                    insert_iterator_close_on_abrupt(
+                        &mut c.body,
+                        iter_id,
+                        break_capture_depth,
+                        inner_labels,
+                    );
+                }
+                if let Some(f) = finally.as_mut() {
+                    insert_iterator_close_on_abrupt(
+                        f,
+                        iter_id,
+                        break_capture_depth,
+                        inner_labels,
+                    );
+                }
+                rewritten.push(Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                });
+            }
+            Stmt::While {
+                condition,
+                mut body,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth + 1,
+                    inner_labels,
+                );
+                rewritten.push(Stmt::While { condition, body });
+            }
+            Stmt::DoWhile {
+                mut body,
+                condition,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth + 1,
+                    inner_labels,
+                );
+                rewritten.push(Stmt::DoWhile { body, condition });
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                mut body,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth + 1,
+                    inner_labels,
+                );
+                rewritten.push(Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                });
+            }
+            Stmt::Switch {
+                discriminant,
+                mut cases,
+            } => {
+                for case in cases.iter_mut() {
+                    insert_iterator_close_on_abrupt(
+                        &mut case.body,
+                        iter_id,
+                        break_capture_depth + 1,
+                        inner_labels,
+                    );
+                }
+                rewritten.push(Stmt::Switch {
+                    discriminant,
+                    cases,
+                });
+            }
+            Stmt::Labeled { label, mut body } => {
+                let mut labels = inner_labels.to_vec();
+                labels.push(label.clone());
+                let mut body_vec = vec![*body];
+                insert_iterator_close_on_abrupt(
+                    &mut body_vec,
+                    iter_id,
+                    break_capture_depth,
+                    &labels,
+                );
+                body = Box::new(body_vec.into_iter().next().unwrap());
+                rewritten.push(Stmt::Labeled { label, body });
+            }
+            other => rewritten.push(other),
+        }
+    }
+    *stmts = rewritten;
+}
+
 fn lower_runtime_for_await_iterator(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -1058,6 +1284,16 @@ pub(crate) fn lower_stmt_for_of(
     if for_of_stmt.is_await && needs_runtime_iterator {
         return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr);
     }
+    // #for-of lazy iterator protocol: a generic/untyped iterable (custom
+    // iterator, generator object, any-typed value) must be driven lazily —
+    // pull one element via `__iter.next()` per iteration and run IteratorClose
+    // (`__iter.return()`) on an abrupt completion (break / labeled break /
+    // labeled continue escaping the loop / return). The previous
+    // `ForOfToArray` materialization eagerly drained the iterator up front,
+    // which (a) runs a generator past the point a `break` should have closed
+    // it and (b) made IteratorClose impossible. `is_await` is already handled
+    // by the early return above, so this is always the synchronous path.
+    let use_lazy_iter = needs_runtime_iterator;
     let arr_expr = if is_iterable_map {
         if let Some(args) = map_type_args.as_ref() {
             if args.len() >= 2 {
@@ -1078,12 +1314,9 @@ pub(crate) fn lower_stmt_for_of(
         }
     } else if is_iterable_typed_array {
         Expr::ArrayFrom(Box::new(arr_expr))
-    } else if needs_runtime_iterator {
-        if for_of_stmt.is_await {
-            Expr::Await(Box::new(Expr::ForAwaitToArray(Box::new(arr_expr))))
-        } else {
-            Expr::ForOfToArray(Box::new(arr_expr))
-        }
+    } else if use_lazy_iter {
+        // GetIterator(obj): obj[Symbol.iterator](). Drives the lazy loop below.
+        Expr::GetIterator(Box::new(arr_expr))
     } else {
         arr_expr
     };
@@ -1133,6 +1366,9 @@ pub(crate) fn lower_stmt_for_of(
             base: "Set".to_string(),
             type_args: vec![elem_type.clone()],
         }
+    } else if use_lazy_iter {
+        // Holds the iterator object, not an array.
+        Type::Any
     } else {
         Type::Array(Box::new(elem_type.clone()))
     };
@@ -1146,7 +1382,15 @@ pub(crate) fn lower_stmt_for_of(
     ctx.locals
         .push((format!("__idx_{}", idx_id), idx_id, Type::Number));
 
-    // Store array reference: let __arr = arr
+    // For the lazy iterator path `arr_id` holds the iterator and `result_id`
+    // holds the most recent `__iter.next()` result `{ value, done }`.
+    let result_id = ctx.fresh_local();
+    if use_lazy_iter {
+        ctx.locals
+            .push((format!("__result_{}", result_id), result_id, Type::Any));
+    }
+
+    // Store array reference: let __arr = arr (or `let __iter = GetIterator(..)`).
     module.init.push(Stmt::Let {
         id: arr_id,
         name: format!("__arr_{}", arr_id),
@@ -1252,14 +1496,22 @@ pub(crate) fn lower_stmt_for_of(
                 // wraps the `__iter.next()` call in `Expr::Await` for
                 // async generators; this brings the array-iteration
                 // path to parity.
-                let raw_item_expr = Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(arr_id)),
-                    index: Box::new(Expr::LocalGet(idx_id)),
-                };
-                let item_expr = if for_of_stmt.is_await {
-                    Expr::Await(Box::new(raw_item_expr))
+                let item_expr = if use_lazy_iter {
+                    // Lazy path: the element is `__result.value`.
+                    Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(result_id)),
+                        property: "value".to_string(),
+                    }
                 } else {
-                    raw_item_expr
+                    let raw_item_expr = Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(arr_id)),
+                        index: Box::new(Expr::LocalGet(idx_id)),
+                    };
+                    if for_of_stmt.is_await {
+                        Expr::Await(Box::new(raw_item_expr))
+                    } else {
+                        raw_item_expr
+                    }
                 };
 
                 match &decl.name {
@@ -1459,10 +1711,12 @@ pub(crate) fn lower_stmt_for_of(
                             name,
                             ty: Type::Any,
                             mutable: false,
-                            init: Some(Expr::IndexGet {
-                                object: Box::new(Expr::LocalGet(arr_id)),
-                                index: Box::new(Expr::LocalGet(idx_id)),
-                            }),
+                            init: Some(lazy_or_index_elem(
+                                use_lazy_iter,
+                                arr_id,
+                                idx_id,
+                                result_id,
+                            )),
                         }]
                     }
                 }
@@ -1477,18 +1731,55 @@ pub(crate) fn lower_stmt_for_of(
                 name,
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(arr_id)),
-                    index: Box::new(Expr::LocalGet(idx_id)),
-                }),
+                init: Some(lazy_or_index_elem(
+                    use_lazy_iter,
+                    arr_id,
+                    idx_id,
+                    result_id,
+                )),
             }]
         }
         _ => return Err(anyhow!("Unsupported for-of left-hand side")),
     };
 
+    // Lazy iterator path: rewrite the user body so every abrupt completion
+    // escaping the loop runs IteratorClose (`__iter.return()`) first.
+    if use_lazy_iter {
+        insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
+    }
+
     // Prepend the binding statements to the loop body
     for (i, stmt) in binding_stmts.into_iter().enumerate() {
         loop_body.insert(i, stmt);
+    }
+
+    if use_lazy_iter {
+        // Lazy iterator loop, modeled as a `for` so the advance lives in the
+        // update clause and `continue` re-pulls the iterator (a `while` with
+        // the advance at the body tail would skip it on `continue` and spin):
+        //   for (let __result = __iter.next();
+        //        !__result.done;
+        //        __result = __iter.next()) { bindings; body }
+        module.init.push(Stmt::For {
+            init: Some(Box::new(Stmt::Let {
+                id: result_id,
+                name: format!("__result_{}", result_id),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(iterator_next_call(arr_id)),
+            })),
+            condition: Some(Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(result_id)),
+                    property: "done".to_string(),
+                }),
+            }),
+            update: Some(Expr::LocalSet(result_id, Box::new(iterator_next_call(arr_id)))),
+            body: loop_body,
+        });
+        ctx.pop_block_scope(for_scope_mark);
+        return Ok(());
     }
 
     // Loop bound. Map/Set fast paths read `.size` (lowered by
