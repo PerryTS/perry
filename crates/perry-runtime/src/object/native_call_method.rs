@@ -543,9 +543,7 @@ unsafe fn try_disposable_stack_method_dispatch(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    use crate::disposable::{
-        CLASS_ID_ASYNC_DISPOSABLE_STACK, CLASS_ID_DISPOSABLE_STACK,
-    };
+    use crate::disposable::{CLASS_ID_ASYNC_DISPOSABLE_STACK, CLASS_ID_DISPOSABLE_STACK};
     let obj = object_ptr_from_value(object)?;
     let class_id = (*obj).class_id;
     let is_async = class_id == CLASS_ID_ASYNC_DISPOSABLE_STACK;
@@ -572,9 +570,7 @@ unsafe fn try_disposable_stack_method_dispatch(
         "disposeAsync" if is_async => {
             crate::disposable::js_async_disposable_stack_dispose_async(obj)
         }
-        "@@__perry_wk_dispose" if !is_async => {
-            crate::disposable::js_disposable_stack_dispose(obj)
-        }
+        "@@__perry_wk_dispose" if !is_async => crate::disposable::js_disposable_stack_dispose(obj),
         "@@__perry_wk_asyncDispose" if is_async => {
             crate::disposable::js_async_disposable_stack_dispose_async(obj)
         }
@@ -1352,9 +1348,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // and would fall through to "is not a function". Resolve the symbol-keyed
     // disposer here, with the spec async→sync fallback, before that happens.
     if matches!(method_name, "__perry_dispose__" | "__perry_async_dispose__") {
-        if let Some(result) =
-            try_symbol_dispose_dispatch(object, method_name, args_ptr, args_len)
-        {
+        if let Some(result) = try_symbol_dispose_dispatch(object, method_name, args_ptr, args_len) {
             return result;
         }
     }
@@ -1363,9 +1357,8 @@ pub unsafe extern "C" fn js_native_call_method(
     // (spec `CreateDisposableResource` / `GetDisposeMethod`), before the block
     // body runs — not later at disposal time.
     if method_name == "__perry_using_check__" {
-        let want_async = args_len > 0 && !args_ptr.is_null() && {
-            crate::value::js_is_truthy(*args_ptr) != 0
-        };
+        let want_async =
+            args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object, want_async);
     }
     // #4795: dynamic dispatch for `DisposableStack` / `AsyncDisposableStack`
@@ -1377,8 +1370,14 @@ pub unsafe extern "C" fn js_native_call_method(
     // `object_ptr_from_value` class-id probe.
     if matches!(
         method_name,
-        "use" | "adopt" | "defer" | "move" | "dispose" | "disposeAsync"
-            | "@@__perry_wk_dispose" | "@@__perry_wk_asyncDispose"
+        "use"
+            | "adopt"
+            | "defer"
+            | "move"
+            | "dispose"
+            | "disposeAsync"
+            | "@@__perry_wk_dispose"
+            | "@@__perry_wk_asyncDispose"
     ) {
         if let Some(result) =
             try_disposable_stack_method_dispatch(object, method_name, args_ptr, args_len)

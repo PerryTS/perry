@@ -175,11 +175,7 @@ fn install_disposed_getter(proto_obj: *mut ObjectHeader, func_ptr: *const u8) {
 
 /// Install a well-known-symbol method alias (`[Symbol.dispose]` /
 /// `[Symbol.asyncDispose]`) pointing at the already-installed `method_value`.
-fn install_symbol_dispose_alias(
-    proto_obj: *mut ObjectHeader,
-    short_sym: &str,
-    method_value: f64,
-) {
+fn install_symbol_dispose_alias(proto_obj: *mut ObjectHeader, short_sym: &str, method_value: f64) {
     if proto_obj.is_null() || method_value.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }

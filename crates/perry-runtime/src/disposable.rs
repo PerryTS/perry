@@ -322,7 +322,9 @@ fn disposable_stack_use_impl(stack: *mut ObjectHeader, resource: f64, want_async
         } else {
             "Symbol.dispose"
         };
-        throw_type_error(&format!("The value used with `using` must have a {sym} method"));
+        throw_type_error(&format!(
+            "The value used with `using` must have a {sym} method"
+        ));
     }
     if !is_callable_value(method) {
         throw_type_error("The Symbol.dispose / Symbol.asyncDispose property must be callable");

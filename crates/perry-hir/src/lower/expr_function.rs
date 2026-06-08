@@ -715,32 +715,32 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         if has_using {
             crate::lower_decl::lower_stmts_using_aware(ctx, &block.stmts)?
         } else {
-        let mut func_decls = Vec::new();
-        let mut exec_stmts = Vec::new();
-        for stmt in &block.stmts {
-            let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
-            match stmt {
-                ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
-                _ => exec_stmts.extend(lowered),
+            let mut func_decls = Vec::new();
+            let mut exec_stmts = Vec::new();
+            for stmt in &block.stmts {
+                let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
+                match stmt {
+                    ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
+                    _ => exec_stmts.extend(lowered),
+                }
             }
-        }
-        let mut combined: Vec<Stmt> = Vec::with_capacity(func_decls.len() + exec_stmts.len());
-        combined.extend(func_decls);
-        combined.extend(exec_stmts);
-        // Issue #633: prealloc-box for sibling/forward captures.
-        if !hoisted_id_set.is_empty() {
-            let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
-                &combined,
-                &hoisted_id_set,
-            );
-            if !prealloc.is_empty() {
-                let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
-                with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
-                with_prealloc.extend(combined);
-                combined = with_prealloc;
+            let mut combined: Vec<Stmt> = Vec::with_capacity(func_decls.len() + exec_stmts.len());
+            combined.extend(func_decls);
+            combined.extend(exec_stmts);
+            // Issue #633: prealloc-box for sibling/forward captures.
+            if !hoisted_id_set.is_empty() {
+                let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
+                    &combined,
+                    &hoisted_id_set,
+                );
+                if !prealloc.is_empty() {
+                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
+                    with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
+                    with_prealloc.extend(combined);
+                    combined = with_prealloc;
+                }
             }
-        }
-        combined
+            combined
         }
     } else {
         Vec::new()
