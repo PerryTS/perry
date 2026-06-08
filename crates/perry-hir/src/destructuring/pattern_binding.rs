@@ -44,6 +44,38 @@ fn fresh_destruct_local(ctx: &mut LoweringContext, ty: Type) -> (LocalId, String
     (id, name)
 }
 
+/// Lower a destructuring-default initializer, applying NamedEvaluation when the
+/// binding target is a single name and the initializer is an anonymous function
+/// / arrow / class. Per spec (SingleNameBinding / KeyedBindingInitialization),
+/// `let { x = function(){} } = {}` and `let [ x = () => {} ] = []` name the
+/// function after `x` (`x.name === "x"`). The closure-lowering paths read
+/// `ctx.assignment_inferred_name`; a named function expression ignores it, so
+/// `[ xFn = function x(){} ]` correctly keeps `"x"`.
+fn lower_default_named(
+    ctx: &mut LoweringContext,
+    default_expr: &ast::Expr,
+    binding_name: Option<&str>,
+) -> Result<Expr> {
+    if let Some(name) = binding_name {
+        if crate::lower::expr_assign::rhs_accepts_assignment_name(default_expr) {
+            let old = ctx.assignment_inferred_name.replace(name.to_string());
+            let result = lower_expr(ctx, default_expr);
+            ctx.assignment_inferred_name = old;
+            return result;
+        }
+    }
+    lower_expr(ctx, default_expr)
+}
+
+/// The binding name to use for NamedEvaluation of a `Pat::Assign` target — only
+/// a single `BindingIdentifier` qualifies (nested array/object patterns don't).
+fn single_name_target(pat: &ast::Pat) -> Option<String> {
+    match pat {
+        ast::Pat::Ident(ident) => Some(ident.id.sym.to_string()),
+        _ => None,
+    }
+}
+
 /// Build a call into the runtime iterator-protocol helpers (same dispatch the
 /// assignment-destructuring path uses).
 fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
@@ -206,7 +238,11 @@ fn lower_array_pattern_binding(
                 // A `Pat::Assign` element carries a default initializer that is
                 // evaluated lazily, only when the pulled value is `undefined`.
                 if let ast::Pat::Assign(assign_pat) = elem_pat {
-                    let default_val = lower_expr(ctx, &assign_pat.right)?;
+                    let default_val = lower_default_named(
+                        ctx,
+                        &assign_pat.right,
+                        single_name_target(&assign_pat.left).as_deref(),
+                    )?;
                     let with_default = Expr::Conditional {
                         condition: Box::new(is_strictly_undefined(Expr::LocalGet(value_id))),
                         then_expr: Box::new(default_val),
@@ -331,7 +367,11 @@ pub(crate) fn lower_pattern_binding_into(
                 mutable: false,
                 init: Some(source),
             });
-            let default_val = lower_expr(ctx, &assign_pat.right)?;
+            let default_val = lower_default_named(
+                ctx,
+                &assign_pat.right,
+                single_name_target(&assign_pat.left).as_deref(),
+            )?;
             // A destructuring default applies only when the source is strictly
             // `undefined` (not a genuine NaN value — `let [a = 1] = [NaN]` → NaN).
             let with_default = Expr::Conditional {
@@ -485,7 +525,8 @@ pub(crate) fn lower_pattern_binding_into(
                                     property: name.clone(),
                                 }),
                             });
-                            let default_val = lower_expr(ctx, default_expr)?;
+                            let default_val =
+                                lower_default_named(ctx, default_expr, Some(name.as_str()))?;
                             Expr::Conditional {
                                 condition: Box::new(is_strictly_undefined(Expr::LocalGet(
                                     val_tmp_id,

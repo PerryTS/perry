@@ -35,7 +35,7 @@
 // - `expr_member.rs` / `expr_assign.rs` / `expr_new.rs` (v0.5.339):
 //   property access, assignment, and `new C()` constructor calls.
 mod context;
-mod expr_assign;
+pub(crate) mod expr_assign;
 mod expr_call;
 mod expr_function;
 pub(crate) use expr_function::{capture_function_source, lower_fn_expr};

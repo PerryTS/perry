@@ -243,9 +243,18 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             is_rest,
             arguments_object: None,
         });
-        // Track destructuring patterns to generate extraction statements
-        if is_destructuring_pattern(param) {
-            destructuring_params.push((param_id, param.clone()));
+        // Track destructuring patterns to generate extraction statements. A
+        // `([x, y] = [1, 2]) =>` param is a `Pat::Assign` wrapping the array/
+        // object pattern; unwrap it so the destructuring binding is still
+        // emitted (the `= [1,2]` default is handled separately via
+        // `get_param_default`). Mirrors `lower_fn_decl`.
+        let inner_pat = if let ast::Pat::Assign(assign) = param {
+            assign.left.as_ref()
+        } else {
+            param
+        };
+        if is_destructuring_pattern(inner_pat) {
+            destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
 
@@ -493,9 +502,20 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             arguments_object: None,
         });
         default_param_pats.push(param.pat.clone());
-        // Track destructuring patterns to generate extraction statements
-        if is_destructuring_pattern(&param.pat) {
-            destructuring_params.push((param_id, param.pat.clone()));
+        // Track destructuring patterns to generate extraction statements. A
+        // `function*([x, y] = [1, 2]) {}` param is a `Pat::Assign` wrapping the
+        // array/object pattern; unwrap it so the destructuring binding is still
+        // emitted (the `= [1,2]` default is applied via `get_param_default`).
+        // Mirrors `lower_fn_decl`. Without this, an async-generator EXPRESSION
+        // with a destructured-default param dropped the binding and `x`/`y`
+        // lowered to `js_throw_reference_error_unresolved_get`.
+        let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
+            assign.left.as_ref()
+        } else {
+            &param.pat
+        };
+        if is_destructuring_pattern(inner_pat) {
+            destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {

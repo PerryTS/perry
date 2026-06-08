@@ -43,7 +43,7 @@ fn anonymous_class_without_own_static_name(class: &ast::ClassExpr) -> bool {
     })
 }
 
-fn rhs_accepts_assignment_name(expr: &ast::Expr) -> bool {
+pub(crate) fn rhs_accepts_assignment_name(expr: &ast::Expr) -> bool {
     match expr {
         ast::Expr::Arrow(_) => true,
         ast::Expr::Fn(fn_expr) => fn_expr.ident.is_none(),

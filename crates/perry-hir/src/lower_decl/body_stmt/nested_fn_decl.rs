@@ -68,8 +68,17 @@ pub(super) fn lower_nested_fn_decl(
             arguments_object: None,
         });
         default_param_pats.push(param.pat.clone());
-        if is_destructuring_pattern(&param.pat) {
-            destructuring_params.push((param_id, param.pat.clone()));
+        // Unwrap a `Pat::Assign` (destructured param with a default, e.g.
+        // `function f([x, y] = [1, 2]) {}`) so the destructuring binding is
+        // still emitted; the default is applied via `get_param_default`.
+        // Mirrors `lower_fn_decl`.
+        let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
+            assign.left.as_ref()
+        } else {
+            &param.pat
+        };
+        if is_destructuring_pattern(inner_pat) {
+            destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
