@@ -559,12 +559,16 @@ pub fn optional_instant_timezone(arg: f64) -> Option<TimeZone> {
 /// `Temporal.ZonedDateTime` whose zone is reused.
 pub fn timezone(v: f64) -> TimeZone {
     if JSValue::from_bits(v.to_bits()).is_string() {
+        // A string identifier: an invalid one is a `RangeError`.
         return ok_or_throw(TimeZone::try_from_str(&read_string(v)));
     }
     if let Some(super::TemporalValue::ZonedDateTime(z)) = super::temporal_value_ref(v) {
         return *z.time_zone();
     }
-    range("expected a time-zone identifier string");
+    // `ToTemporalTimeZoneIdentifier`: a non-string, non-Temporal value (symbol,
+    // plain object, number, boolean, null, bigint) is never a valid time-zone
+    // identifier and cannot convert to one → `TypeError` (not `RangeError`).
+    type_error("time zone must be a string identifier or Temporal.ZonedDateTime".to_string());
 }
 
 /// Parse a `getTimeZoneTransition` direction argument — a `"next"`/`"previous"`

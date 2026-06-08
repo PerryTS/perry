@@ -18,13 +18,35 @@ fn wrap(z: ZonedDateTime) -> f64 {
     alloc_temporal_cell(TemporalValue::ZonedDateTime(z))
 }
 
+/// `ToBigInt(epochNanoseconds)` for the constructor's first argument: a BigInt
+/// passes through, a boolean coerces to `0n`/`1n`, a string parses; a Number /
+/// `undefined` / `null` / Symbol all throw `TypeError` (ToBigInt never accepts a
+/// Number, even an integer one).
 fn require_ns(v: f64) -> i128 {
-    match read_bigint_i128(v) {
-        Some(n) => n,
-        None => crate::fs::validate::throw_range_error_with_code(
-            "Temporal.ZonedDateTime requires a BigInt epoch-nanoseconds value",
-        ),
+    let jv = JSValue::from_bits(v.to_bits());
+    if jv.is_bigint() {
+        return read_bigint_i128(v).unwrap_or_else(|| {
+            crate::fs::validate::throw_range_error_with_code("Invalid epoch-nanoseconds BigInt")
+        });
     }
+    match v.to_bits() {
+        b if b == crate::value::TAG_TRUE => return 1,
+        b if b == crate::value::TAG_FALSE => return 0,
+        _ => {}
+    }
+    if jv.is_string() {
+        return dispatch::read_string(v)
+            .trim()
+            .parse::<i128>()
+            .unwrap_or_else(|_| {
+                crate::fs::validate::throw_range_error_with_code(
+                    "Cannot convert string to a BigInt epoch-nanoseconds value",
+                )
+            });
+    }
+    crate::object::throw_object_type_error(
+        b"Temporal.ZonedDateTime epochNanoseconds must be a BigInt",
+    )
 }
 
 fn timezone_arg(v: f64) -> TimeZone {
