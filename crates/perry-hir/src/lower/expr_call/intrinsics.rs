@@ -1145,7 +1145,22 @@ fn is_string_prototype_generic_method(recv: &ast::Expr, method: &str) -> bool {
             // as the generic `string_proto_generic_thunk`. Keep in lock-step with
             // `string_proto_thunks::GENERIC_STRING_PROTO_METHODS`. Excluded:
             // `toString`/`valueOf` (brand-checked, not ToString-coercing).
-            "at" | "charAt"
+            // Annex B §B.2.2 HTML wrappers.
+            "anchor"
+                | "big"
+                | "blink"
+                | "bold"
+                | "fixed"
+                | "fontcolor"
+                | "fontsize"
+                | "italics"
+                | "link"
+                | "small"
+                | "strike"
+                | "sub"
+                | "sup"
+                | "at"
+                | "charAt"
                 | "charCodeAt"
                 | "codePointAt"
                 | "concat"

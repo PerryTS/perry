@@ -522,6 +522,22 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_trim", I64, &[I64]);
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
+    // Annex B §B.2.2 HTML wrappers. No-arg tag wrappers take only the receiver;
+    // anchor/link/fontcolor/fontsize take an already-coerced attribute-value
+    // string handle as the 2nd arg.
+    module.declare_function("js_string_big", I64, &[I64]);
+    module.declare_function("js_string_blink", I64, &[I64]);
+    module.declare_function("js_string_bold", I64, &[I64]);
+    module.declare_function("js_string_fixed", I64, &[I64]);
+    module.declare_function("js_string_italics", I64, &[I64]);
+    module.declare_function("js_string_small", I64, &[I64]);
+    module.declare_function("js_string_strike", I64, &[I64]);
+    module.declare_function("js_string_sub", I64, &[I64]);
+    module.declare_function("js_string_sup", I64, &[I64]);
+    module.declare_function("js_string_anchor", I64, &[I64, I64]);
+    module.declare_function("js_string_link", I64, &[I64, I64]);
+    module.declare_function("js_string_fontcolor", I64, &[I64, I64]);
+    module.declare_function("js_string_fontsize", I64, &[I64, I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
     // #3987: `s[key]` canonical-index read — returns the char (NaN-boxed string)
     // for a valid array index, else NaN-boxed `undefined`. Takes the raw key.

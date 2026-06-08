@@ -1402,6 +1402,43 @@ extern "C" fn object_prototype_property_is_enumerable_thunk(
     super::js_object_property_is_enumerable(this_value, key)
 }
 
+// Annex B §B.2.2 Object.prototype accessor methods — real thunks so reflective
+// access (`Object.prototype.__defineGetter__.call(o, k, fn)`, `typeof`) works,
+// not just the direct `o.__defineGetter__(...)` native-dispatch path.
+extern "C" fn object_prototype_define_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+    getter: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_define_getter(this_value, key, getter)
+}
+
+extern "C" fn object_prototype_define_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+    setter: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_define_setter(this_value, key, setter)
+}
+
+extern "C" fn object_prototype_lookup_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_lookup_getter(this_value, key)
+}
+
+extern "C" fn object_prototype_lookup_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_lookup_setter(this_value, key)
+}
+
 extern "C" fn error_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -5296,6 +5333,11 @@ fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u3
     for (name, arity) in methods.iter().copied() {
         let func_ptr = match name {
             "isPrototypeOf" => object_prototype_is_prototype_of_thunk as *const u8,
+            // Annex B accessor methods get real thunks (reflective `.call`).
+            "__defineGetter__" => object_prototype_define_getter_thunk as *const u8,
+            "__defineSetter__" => object_prototype_define_setter_thunk as *const u8,
+            "__lookupGetter__" => object_prototype_lookup_getter_thunk as *const u8,
+            "__lookupSetter__" => object_prototype_lookup_setter_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         install_proto_method(proto_obj, name, func_ptr, arity);
@@ -5347,6 +5389,11 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     ("propertyIsEnumerable", 1),
     ("toLocaleString", 0),
     ("valueOf", 0),
+    // Annex B §B.2.2 legacy accessor helpers.
+    ("__defineGetter__", 2),
+    ("__defineSetter__", 2),
+    ("__lookupGetter__", 1),
+    ("__lookupSetter__", 1),
     // `toString` is installed separately on Object/typed arrays etc. with
     // dedicated thunks; do not include it here to avoid clobbering those.
 ];

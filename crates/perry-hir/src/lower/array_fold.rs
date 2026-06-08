@@ -186,6 +186,11 @@ pub(crate) fn is_known_object_prototype_method(name: &str) -> bool {
             | "toString"
             | "valueOf"
             | "constructor"
+            // Annex B §B.2.2 legacy accessor helpers.
+            | "__defineGetter__"
+            | "__defineSetter__"
+            | "__lookupGetter__"
+            | "__lookupSetter__"
     )
 }
 

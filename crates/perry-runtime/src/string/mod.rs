@@ -25,6 +25,7 @@ mod char_ops;
 mod compare;
 mod concat;
 mod format;
+mod html;
 mod intern;
 mod io;
 mod iter_object;
@@ -71,6 +72,11 @@ pub(crate) use format::js_format_f64;
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
     scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
+};
+pub use html::{
+    js_string_anchor, js_string_big, js_string_blink, js_string_bold, js_string_fixed,
+    js_string_fontcolor, js_string_fontsize, js_string_italics, js_string_link, js_string_small,
+    js_string_strike, js_string_sub, js_string_sup,
 };
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 pub use io::{js_string_error, js_string_print, js_string_warn};

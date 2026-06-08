@@ -65,6 +65,21 @@ pub(super) fn install_string_proto_methods(
 /// the reflective path reaches the thunk instead of being folded to
 /// `receiver.<m>()` (which would dispatch on the receiver's own type).
 const GENERIC_STRING_PROTO_METHODS: &[(&str, u32)] = &[
+    // Annex B §B.2.2 HTML wrappers. Attribute-taking ones (anchor/link/
+    // fontcolor/fontsize) have spec `.length` 1; the no-arg tag wrappers 0.
+    ("anchor", 1),
+    ("big", 0),
+    ("blink", 0),
+    ("bold", 0),
+    ("fixed", 0),
+    ("fontcolor", 1),
+    ("fontsize", 1),
+    ("italics", 0),
+    ("link", 1),
+    ("small", 0),
+    ("strike", 0),
+    ("sub", 0),
+    ("sup", 0),
     ("concat", 1),
     ("endsWith", 1),
     ("includes", 1),
