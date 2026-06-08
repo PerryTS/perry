@@ -4110,7 +4110,9 @@ pub extern "C" fn js_object_get_field_by_name(
                         return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                     }
                     b"lastIndex" => {
-                        return JSValue::number((*re).last_index as f64);
+                        // lastIndex stores the raw NaN-boxed value (usually a
+                        // number, but any value is assignable).
+                        return JSValue::from_bits((*re).last_index);
                     }
                     b"global" => {
                         return JSValue::bool((*re).global);
@@ -4136,7 +4138,26 @@ pub extern "C" fn js_object_get_field_by_name(
                     b"hasIndices" => {
                         return JSValue::bool((*re).has_indices);
                     }
-                    _ => return JSValue::undefined(),
+                    // Inherited `RegExp.prototype` members read off an instance
+                    // (`re.constructor`, `re.exec`, `re.toString`, a user-added
+                    // `RegExp.prototype.x`) resolve through the prototype chain.
+                    // The RegExpHeader isn't a plain object, so walk to
+                    // %RegExp.prototype% and return its own data field — this is
+                    // what makes `re.constructor === RegExp` and reflective
+                    // method reads work. `source`/`flags`/the flag accessors are
+                    // handled by the arms above and never reach here, so we never
+                    // return an un-invoked getter closure.
+                    _ => {
+                        let proto = crate::object::builtin_prototype_value("RegExp");
+                        let proto_ptr =
+                            crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
+                        if !proto_ptr.is_null() {
+                            if let Some(v) = own_data_field_by_name(proto_ptr, key) {
+                                return v;
+                            }
+                        }
+                        return JSValue::undefined();
+                    }
                 }
             }
             return JSValue::undefined();

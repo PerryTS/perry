@@ -22,6 +22,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_jsvalue_to_string", I64, &[DOUBLE]);
     // #3146: nullish-guarded `.toString()` member-call variant.
     module.declare_function("js_jsvalue_to_string_method", I64, &[DOUBLE]);
+    // ToString coercion (undefined→"undefined", null→"null", objects dispatch
+    // toString) — used by RegExp exec/test arg + constructor coercion.
+    module.declare_function("js_jsvalue_to_string_coerce", I64, &[DOUBLE]);
 
     // Fused string+value concat (issue #58): collapses js_jsvalue_to_string +
     // js_string_concat into a single allocation for number operands.
@@ -995,6 +998,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, I32, DOUBLE],
     );
     module.declare_function("js_regexp_new", I64, &[I64, I64]);
+    // Full ECMAScript RegExp constructor: NaN-boxed pattern + flags in, handles
+    // RegExp/undefined/object patterns and ToString-coerced flags.
+    module.declare_function("js_regexp_construct", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
     module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);

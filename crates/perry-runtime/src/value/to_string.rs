@@ -799,6 +799,25 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
     js_jsvalue_to_string(value)
 }
 
+/// Spec `ToString(value)` for argument coercion (e.g. `RegExp.prototype.exec`'s
+/// `ToString(string)`, the RegExp constructor's pattern/flags). Unlike
+/// [`js_jsvalue_to_string_method`] — which models an explicit `x.toString()`
+/// method call and therefore throws on `undefined`/`null` — `ToString(undefined)`
+/// is `"undefined"` and `ToString(null)` is `"null"`. For every other value it
+/// defers to the method path so object receivers dispatch their own
+/// `toString`/`valueOf` (and a throwing one propagates).
+#[no_mangle]
+pub extern "C" fn js_jsvalue_to_string_coerce(value: f64) -> *mut crate::string::StringHeader {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() {
+        return crate::string::js_string_from_bytes(b"undefined".as_ptr(), 9);
+    }
+    if jsval.is_null() {
+        return crate::string::js_string_from_bytes(b"null".as_ptr(), 4);
+    }
+    js_jsvalue_to_string_method(value)
+}
+
 fn throw_radix_range_error() -> ! {
     // Node/V8 message verbatim: includes the word "argument" (#3146).
     let message = b"toString() radix argument must be between 2 and 36";

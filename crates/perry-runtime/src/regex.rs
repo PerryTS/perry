@@ -15,10 +15,12 @@ use crate::value::js_nanbox_string;
 
 use crate::object::ObjectHeader;
 
+mod escape;
 mod grammar;
 mod match_all;
 mod replace_expand;
 mod replace_fn;
+pub use escape::js_regexp_escape;
 use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
@@ -156,8 +158,32 @@ pub struct RegExpHeader {
     pub dot_all: bool,
     pub unicode: bool,
     pub has_indices: bool,
-    /// lastIndex for global/sticky regexes (byte offset into the string for stateful exec)
-    pub last_index: u32,
+    /// `lastIndex` is a writable data property holding an *arbitrary* JSValue
+    /// (spec: `Set(R, "lastIndex", v)` with no coercion on write). Stored as the
+    /// raw NaN-boxed bits; `exec`/`test` apply `ToLength` on read to derive the
+    /// match offset. Initialized to the number `0`.
+    pub last_index: u64,
+}
+
+/// `ToLength(Get(R, "lastIndex"))` → a non-negative integer match offset. The
+/// stored value may be any JSValue (e.g. `re.lastIndex = { valueOf() {…} }`), so
+/// coerce via `ToNumber` (which invokes `valueOf`/`toString`), then `ToInteger`,
+/// clamped to ≥ 0.
+pub(crate) fn regex_last_index_offset(re: *const RegExpHeader) -> usize {
+    let stored = f64::from_bits(unsafe { (*re).last_index });
+    let n = crate::builtins::js_number_coerce(stored);
+    if n.is_nan() || n <= 0.0 {
+        0
+    } else {
+        n.floor() as usize
+    }
+}
+
+#[inline]
+fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
+    unsafe {
+        (*re).last_index = crate::value::JSValue::number(n as f64).bits();
+    }
 }
 
 /// Check if a pointer is valid (not null and not a small invalid value from bad NaN-unboxing)
@@ -416,7 +442,7 @@ pub extern "C" fn js_regexp_new(
         (*ptr).dot_all = dot_all;
         (*ptr).unicode = unicode;
         (*ptr).has_indices = has_indices;
-        (*ptr).last_index = 0;
+        (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
 
         // Record the pointer so that js_string_split can detect
         // `s.split(regex)` without a dedicated runtime decl.
@@ -437,6 +463,64 @@ pub extern "C" fn js_regexp_new(
     }
 }
 
+/// ECMA-262 RegExp constructor (`new RegExp(pattern, flags)`), spec 22.2.4.
+/// Handles every argument shape the string/string `js_regexp_new` cannot:
+///
+///   * `pattern` is a RegExp → reuse its `[[OriginalSource]]`; if `flags` is
+///     `undefined`, reuse its `[[OriginalFlags]]`, else `ToString(flags)`.
+///   * `pattern` is `undefined` → empty source.
+///   * `pattern` is anything else → `ToString(pattern)`.
+///   * `flags` is `undefined` → empty (unless inherited from a RegExp pattern);
+///     anything else → `ToString(flags)` (so `{}` becomes `"[object Object]"`,
+///     which `js_regexp_new` then rejects with a SyntaxError).
+///
+/// `ToString` runs through the coercing method path so a throwing
+/// `toString`/`valueOf` propagates.
+#[no_mangle]
+pub extern "C" fn js_regexp_construct(pattern: f64, flags: f64) -> *mut RegExpHeader {
+    let pv = crate::value::JSValue::from_bits(pattern.to_bits());
+    let fv = crate::value::JSValue::from_bits(flags.to_bits());
+    let flags_undef = fv.is_undefined();
+
+    let pattern_is_regex = pv.is_pointer() && is_registered_regex(pv.as_pointer::<u8>() as usize);
+
+    let (source_string, inherited_flags) = if pattern_is_regex {
+        let re = pv.as_pointer::<RegExpHeader>();
+        let entry = REGEX_SOURCE_TABLE.with(|t| t.borrow().get(&(re as usize)).cloned());
+        match entry {
+            Some((pat, fl)) => (pat, Some(fl)),
+            None => (String::new(), Some(String::new())),
+        }
+    } else if pv.is_undefined() {
+        (String::new(), None)
+    } else {
+        let s = crate::value::js_jsvalue_to_string_coerce(pattern);
+        (
+            if is_valid_ptr(s) {
+                string_as_str(s).to_string()
+            } else {
+                String::new()
+            },
+            None,
+        )
+    };
+
+    let flags_string = if flags_undef {
+        inherited_flags.unwrap_or_default()
+    } else {
+        let s = crate::value::js_jsvalue_to_string_coerce(flags);
+        if is_valid_ptr(s) {
+            string_as_str(s).to_string()
+        } else {
+            String::new()
+        }
+    };
+
+    let pat_ptr = js_string_from_str(&source_string);
+    let flags_ptr = js_string_from_str(&flags_string);
+    js_regexp_new(pat_ptr, flags_ptr)
+}
+
 /// Test if a string matches the regex pattern
 /// regex.test(string) -> boolean
 #[no_mangle]
@@ -448,6 +532,15 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
     let str_data = string_as_str(s);
 
     unsafe {
+        // For global/sticky regexes `test` is stateful — it must consult and
+        // advance `lastIndex` (and anchor for sticky) exactly like `exec`. Route
+        // through `exec` so the lastIndex bookkeeping stays in one place; `test`
+        // just reports whether a match was produced.
+        if (*re).global || (*re).sticky {
+            let arr = js_regexp_exec(re as *mut RegExpHeader, s);
+            return if arr.is_null() { 0 } else { 1 };
+        }
+
         if let Some(fre) = lookup_fancy_regex(re) {
             return match fre.is_match(str_data) {
                 Ok(true) => 1,
@@ -1171,9 +1264,21 @@ pub extern "C" fn js_regexp_exec(
     unsafe {
         let regex = &*(*re).regex_ptr;
         let global = (*re).global;
-        let last_index = (*re).last_index as usize;
+        let sticky = (*re).sticky;
+        // Per spec RegExpBuiltinExec, `lastIndex` drives the search start for
+        // BOTH global and sticky regexes (and lastIndex is reset/updated for
+        // either). A sticky match must additionally *anchor* at lastIndex.
+        let use_last_index = global || sticky;
+        // Spec: for non-global/non-sticky, lastIndex is treated as 0 and NOT
+        // read (so a `valueOf`-bearing lastIndex isn't observed). Only consult
+        // (and ToLength-coerce) it when stateful.
+        let last_index = if use_last_index {
+            regex_last_index_offset(re)
+        } else {
+            0
+        };
 
-        let search_start_byte = if global && last_index > 0 {
+        let search_start_byte = if use_last_index && last_index > 0 {
             let mut byte_off = 0;
             let mut char_count = 0;
             for ch in str_data.chars() {
@@ -1189,8 +1294,8 @@ pub extern "C" fn js_regexp_exec(
         };
 
         if search_start_byte > str_data.len() {
-            if global {
-                (*re).last_index = 0;
+            if use_last_index {
+                store_last_index_number(re, 0);
             }
             LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
             LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -1207,6 +1312,11 @@ pub extern "C" fn js_regexp_exec(
             if let Some(fre) = fc.get(&(pat.to_string(), flags_str.to_string())) {
                 if let Ok(Some(caps)) = fre.captures(search_str) {
                     let full = caps.get(0).unwrap();
+                    // Sticky (`y`) requires the match to start exactly at
+                    // lastIndex — i.e. offset 0 of the sliced search string.
+                    if sticky && full.start() != 0 {
+                        return Some(ptr::null_mut());
+                    }
                     let match_byte_offset = full.start() + search_start_byte;
                     let match_char_offset = str_data[..match_byte_offset].chars().count();
                     let arr = crate::array::js_array_alloc(caps.len() as u32);
@@ -1226,9 +1336,9 @@ pub extern "C" fn js_regexp_exec(
                             crate::array::store_array_slot(arr, i, undefined.to_bits());
                         }
                     }
-                    if global {
+                    if use_last_index {
                         let match_str = full.as_str();
-                        (*re).last_index = (match_char_offset + match_str.chars().count()) as u32;
+                        store_last_index_number(re, match_char_offset + match_str.chars().count());
                     }
                     set_exec_array_metadata(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
@@ -1250,8 +1360,8 @@ pub extern "C" fn js_regexp_exec(
         });
         if let Some(result) = fancy_captures {
             if result.is_null() {
-                if global {
-                    (*re).last_index = 0;
+                if use_last_index {
+                    store_last_index_number(re, 0);
                 }
                 LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
                 LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -1260,15 +1370,20 @@ pub extern "C" fn js_regexp_exec(
             return result;
         }
 
-        match regex.captures(search_str) {
+        let standard_caps = regex.captures(search_str).filter(|caps| {
+            // Sticky (`y`) requires the match to start at lastIndex (offset 0 of
+            // the slice); a leftmost match further in does not count.
+            !sticky || caps.get(0).map(|m| m.start() == 0).unwrap_or(false)
+        });
+        match standard_caps {
             Some(caps) => {
                 let match_byte_offset = caps.get(0).unwrap().start() + search_start_byte;
                 let match_char_offset = str_data[..match_byte_offset].chars().count();
 
-                if global {
+                if use_last_index {
                     let match_end_byte = caps.get(0).unwrap().end() + search_start_byte;
                     let match_end_char = str_data[..match_end_byte].chars().count();
-                    (*re).last_index = match_end_char as u32;
+                    store_last_index_number(re, match_end_char);
                 }
 
                 // Create match array: [fullMatch, group1, group2, ...]
@@ -1349,8 +1464,8 @@ pub extern "C" fn js_regexp_exec(
                 arr_handle.get_raw_mut_ptr::<ArrayHeader>()
             }
             None => {
-                if global {
-                    (*re).last_index = 0;
+                if use_last_index {
+                    store_last_index_number(re, 0);
                 }
                 LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
                 LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -1457,24 +1572,72 @@ pub(crate) fn test_last_exec_groups() -> usize {
 #[no_mangle]
 pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHeader {
     if !is_valid_regex_ptr(re) {
-        return js_string_from_str("");
+        return js_string_from_str("(?:)");
     }
     // Issue #637: prefer the side-tabled owned copy so we survive GC
     // of the input StringHeader (e.g. template-literal temporary).
     if let Some(pat) =
         REGEX_SOURCE_TABLE.with(|t| t.borrow().get(&(re as usize)).map(|(p, _)| p.clone()))
     {
-        return js_string_from_str(&pat);
+        return js_string_from_str(&escape_regexp_source(&pat));
     }
     unsafe {
         if is_valid_ptr((*re).pattern_ptr) {
             // Return a copy of the pattern string
             let pattern_str = string_as_str((*re).pattern_ptr);
-            js_string_from_str(pattern_str)
+            js_string_from_str(&escape_regexp_source(pattern_str))
         } else {
-            js_string_from_str("")
+            js_string_from_str("(?:)")
         }
     }
+}
+
+/// `RegExp.prototype.source` for the prototype object itself (no
+/// `[[OriginalSource]]`) returns the canonical empty source `"(?:)"`.
+#[no_mangle]
+pub extern "C" fn js_regexp_empty_source() -> *mut StringHeader {
+    js_string_from_str("(?:)")
+}
+
+/// ECMA-262 22.2.6.10 EscapeRegExpPattern: produce a string that, placed
+/// between two `/` characters, parses as the same pattern. An empty pattern
+/// becomes `"(?:)"`; an unescaped `/` outside a character class becomes `\/`;
+/// the four LineTerminators become their `\n`/`\r`/` `/` ` escapes
+/// (even inside a character class). A backslash escapes the following code
+/// point, which is copied verbatim.
+fn escape_regexp_source(pattern: &str) -> String {
+    if pattern.is_empty() {
+        return "(?:)".to_string();
+    }
+    let mut out = String::with_capacity(pattern.len() + 2);
+    let mut in_class = false;
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                out.push('\\');
+                if let Some(&next) = chars.peek() {
+                    out.push(next);
+                    chars.next();
+                }
+            }
+            '[' if !in_class => {
+                in_class = true;
+                out.push('[');
+            }
+            ']' if in_class => {
+                in_class = false;
+                out.push(']');
+            }
+            '/' if !in_class => out.push_str("\\/"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Get regex.flags — returns the flags string
@@ -1510,165 +1673,27 @@ pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHea
     js_string_from_str(&out)
 }
 
-/// Get regex.lastIndex — returns the current lastIndex value as f64
+/// Get regex.lastIndex — returns the stored value (NaN-boxed JSValue bits as
+/// f64). Usually a number, but `re.lastIndex = obj` round-trips the object.
 #[no_mangle]
 pub extern "C" fn js_regexp_get_last_index(re: *const RegExpHeader) -> f64 {
     if !is_valid_regex_ptr(re) {
         return 0.0;
     }
-    unsafe { (*re).last_index as f64 }
+    unsafe { f64::from_bits((*re).last_index) }
 }
 
-/// Set regex.lastIndex
+/// Set regex.lastIndex — stores the value verbatim (no coercion on write, per
+/// spec `Set(R, "lastIndex", v)`).
 #[no_mangle]
 pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
     if !is_valid_regex_ptr(re) {
         return;
     }
     unsafe {
-        (*re).last_index = value as u32;
+        (*re).last_index = value.to_bits();
     }
 }
-
-// ============================================================================
-// RegExp.escape (TC39 proposal, shipped in Node 24+) — issue #2899
-// ============================================================================
-
-/// ECMAScript `WhiteSpace` set: TAB/VT/FF/SP, NBSP, ZWNBSP, and all
-/// Unicode `Space_Separator` (Zs) code points. (TAB/VT/FF are handled by
-/// the named control-escape table first; included here for completeness.)
-fn regexp_escape_is_whitespace(cp: u32) -> bool {
-    matches!(
-        cp,
-        0x0009 // TAB
-            | 0x000B // VT
-            | 0x000C // FF
-            | 0x0020 // SP
-            | 0x00A0 // NBSP
-            | 0xFEFF // ZWNBSP
-            // Unicode Space_Separator (Zs):
-            | 0x1680
-            | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000
-    )
-}
-
-/// ECMAScript `LineTerminator` set: LF, CR, LS (U+2028), PS (U+2029).
-fn regexp_escape_is_line_terminator(cp: u32) -> bool {
-    matches!(cp, 0x000A | 0x000D | 0x2028 | 0x2029)
-}
-
-/// `EncodeForRegExpEscape` unicode-escape emitter: `\xHH` for ≤ 0xFF,
-/// `\uHHHH` otherwise (callers only pass BMP code units here).
-fn regexp_escape_unicode(out: &mut String, unit: u16) {
-    if unit <= 0xFF {
-        out.push_str(&format!("\\x{:02x}", unit));
-    } else {
-        out.push_str(&format!("\\u{:04x}", unit));
-    }
-}
-
-/// `RegExp.escape(str)` — escape `str` so it can be embedded literally in a
-/// regular expression pattern without changing match semantics. Operates on
-/// UTF-16 code units to match JS string semantics. The argument MUST be a
-/// string (TypeError otherwise). Returns a NaN-boxed string.
-#[no_mangle]
-pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
-    let jsv = crate::value::JSValue::from_bits(input.to_bits());
-    if !jsv.is_any_string() {
-        let msg = js_string_from_str("input argument must be a string");
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
-    }
-
-    let str_ptr = crate::value::js_get_string_pointer_unified(input) as *const StringHeader;
-    let s = string_as_str(str_ptr);
-
-    // Encode to UTF-16 code units: JS escaping is defined per code unit.
-    let units: Vec<u16> = s.encode_utf16().collect();
-    let mut out = String::with_capacity(units.len() * 2);
-
-    for (i, &unit) in units.iter().enumerate() {
-        let c = char::from_u32(unit as u32);
-
-        // First code unit: if ASCII alphanumeric, force a unicode escape so a
-        // leading letter/digit can't combine with a preceding backslash when
-        // concatenated (e.g. avoid forming `\c`, `\1`, etc.).
-        if i == 0 {
-            if let Some(ch) = c {
-                if ch.is_ascii_alphanumeric() {
-                    regexp_escape_unicode(&mut out, unit);
-                    continue;
-                }
-            }
-        }
-
-        match c {
-            // Syntax characters and `/` → backslash escape.
-            Some('^') | Some('$') | Some('\\') | Some('.') | Some('*') | Some('+') | Some('?')
-            | Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('|')
-            | Some('/') => {
-                out.push('\\');
-                out.push(c.unwrap());
-            }
-            // Named control escapes.
-            Some('\t') => out.push_str("\\t"),
-            Some('\n') => out.push_str("\\n"),
-            Some('\u{000B}') => out.push_str("\\v"),
-            Some('\u{000C}') => out.push_str("\\f"),
-            Some('\r') => out.push_str("\\r"),
-            _ => {
-                let cp = unit as u32;
-                let is_other_punctuator = matches!(
-                    c,
-                    Some(',')
-                        | Some('-')
-                        | Some('=')
-                        | Some('<')
-                        | Some('>')
-                        | Some('#')
-                        | Some('&')
-                        | Some('!')
-                        | Some('%')
-                        | Some(':')
-                        | Some(';')
-                        | Some('@')
-                        | Some('~')
-                        | Some('\'')
-                        | Some('`')
-                        | Some('"')
-                );
-                if is_other_punctuator
-                    || regexp_escape_is_whitespace(cp)
-                    || regexp_escape_is_line_terminator(cp)
-                {
-                    regexp_escape_unicode(&mut out, unit);
-                } else {
-                    // Pass through. Use the original code unit so lone
-                    // surrogates round-trip (char::from_u32 returns None for
-                    // surrogate halves; push the decoded char when valid).
-                    match c {
-                        Some(ch) => out.push(ch),
-                        None => {
-                            // Lone surrogate: re-encode the single code unit.
-                            let mut buf = [0u16; 1];
-                            buf[0] = unit;
-                            out.push_str(&String::from_utf16_lossy(&buf));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let result = js_string_from_str(&out);
-    js_nanbox_string(result as i64)
-}
-
-/// Keepalive anchor: `js_regexp_escape` is only called from codegen-emitted
-/// `.o`, so the auto-optimize whole-program LLVM rebuild would dead-strip it
-/// without this `#[used]` reference (see #3320).
-#[used]
-static KEEP_REGEXP_ESCAPE: extern "C" fn(f64) -> f64 = js_regexp_escape;
 
 #[cfg(test)]
 mod tests {

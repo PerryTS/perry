@@ -568,6 +568,25 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
         return false;
     }
 
+    // A RegExp's `[[Prototype]]` chain is `RegExp.prototype → Object.prototype`.
+    // The RegExpHeader isn't a plain GC_TYPE_OBJECT with a registered class
+    // prototype, so the generic class-id walk below misses it (which is why
+    // `RegExp.prototype.isPrototypeOf(re)` returned false). Handle it directly.
+    {
+        let tv = JSValue::from_bits(target.to_bits());
+        if tv.is_pointer() && crate::regex::is_regex_pointer(tv.as_pointer::<u8>()) {
+            for name in ["RegExp", "Object"] {
+                let proto = crate::object::builtin_prototype_value(name);
+                if let Some(proto_addr) = heap_addr(proto) {
+                    if proto_addr == receiver_addr {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     let target_jsval = JSValue::from_bits(target.to_bits());
     if !target_jsval.is_pointer() && gc_pointer_and_type_from_value(target).is_none() {
         return false;
