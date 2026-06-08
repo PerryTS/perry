@@ -525,36 +525,28 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // dead-code elimination at link time will remove unused ones.
     for f in &hir.functions {
         let original_name = func_names.get(&f.id).cloned().unwrap();
-        // Wrapper signature: i64 closure_ptr + N doubles for args.
-        // Cap at 5 since js_closure_call only goes up to 5 args.
-        let arity = f.params.len().min(5);
+        // Wrapper signature: i64 closure_ptr + N doubles for args. Cap at 16 to
+        // match the `js_closure_call0..16` dispatch family (the closure-call ABI
+        // tops out at 16 positional args; a function with more must be reached
+        // via a rest-bundling path). Pre-fix this was capped at 5 with a stale
+        // "js_closure_call only goes up to 5 args" comment, so any function
+        // invoked as a closure value (object-literal method, callback, `apply`
+        // target) with 6+ params silently dropped every argument past the 5th
+        // — e.g. test262's `TemporalHelpers.assertDuration(d, y, mo, w, d, h, …)`
+        // (11 args) read `hours` onward as 0.
+        let arity = f.params.len().min(16);
+        let arg_names: Vec<String> = (0..arity).map(|i| format!("%a{}", i)).collect();
         let mut wrap_params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
-        for i in 0..arity {
-            wrap_params.push((DOUBLE, format!("%a{}", i)));
+        for name in &arg_names {
+            wrap_params.push((DOUBLE, name.clone()));
         }
         let wrap_name = format!("__perry_wrap_{}", original_name);
         let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
         let _ = wf.create_block("entry");
         let blk = wf.block_mut(0).unwrap();
         // Call the underlying function with just the arg doubles.
-        let call_args: Vec<(LlvmType, &str)> = (0..arity)
-            .map(|i| {
-                (
-                    DOUBLE,
-                    if i == 0 {
-                        "%a0"
-                    } else if i == 1 {
-                        "%a1"
-                    } else if i == 2 {
-                        "%a2"
-                    } else if i == 3 {
-                        "%a3"
-                    } else {
-                        "%a4"
-                    },
-                )
-            })
-            .collect();
+        let call_args: Vec<(LlvmType, &str)> =
+            arg_names.iter().map(|n| (DOUBLE, n.as_str())).collect();
         let mut result = blk.call(DOUBLE, &original_name, &call_args);
         if function_body_returns_generator_object(&f.body) {
             result = blk.call(
