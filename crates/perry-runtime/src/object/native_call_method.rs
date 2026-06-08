@@ -1161,6 +1161,43 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // A method stored as an own accessor — `{ get next() { return fn } }` or
+    // `Object.defineProperty(o, "next", { get })` — must invoke the getter
+    // (this = receiver) to obtain the method function, then call THAT. The big
+    // dispatch below reads the raw field slot, which holds no callable for an
+    // accessor-only property, so a fused `o.next(args)` mis-resolved to
+    // undefined (decomposed `const f = o.next; f(args)` worked because the read
+    // goes through the getter-aware property path). Hit by `yield*` over a
+    // sync/async iterator whose `next`/`value`/`done` are getters (test262
+    // yield-star-* with `get next()`). `get_accessor_descriptor` is a cheap
+    // keyed HashMap lookup (no deref), gated on the accessor hot-path flag so
+    // non-accessor programs skip it entirely.
+    if jsval.is_pointer() && crate::object::ACCESSORS_IN_USE.with(|c| c.get()) {
+        let obj_usize = crate::value::js_nanbox_get_pointer(object) as usize;
+        if obj_usize >= 0x100000 {
+            if let Some(acc) = crate::object::get_accessor_descriptor(obj_usize, method_name) {
+                if acc.get != 0 {
+                    let getter = (acc.get & crate::value::POINTER_MASK)
+                        as *const crate::closure::ClosureHeader;
+                    if !getter.is_null() {
+                        let prev_getter_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                        let method_fn = crate::closure::js_closure_call0(getter);
+                        let bound =
+                            crate::closure::clone_closure_rebind_this(method_fn.to_bits(), object);
+                        IMPLICIT_THIS.with(|c| c.set(object.to_bits()));
+                        let result = crate::closure::js_native_call_value(
+                            f64::from_bits(bound),
+                            args_ptr,
+                            args_len,
+                        );
+                        IMPLICIT_THIS.with(|c| c.set(prev_getter_this));
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+
     // Check if this is a JS handle (V8 object from JS runtime)
     if crate::value::is_js_handle(object) {
         let func_ptr =
