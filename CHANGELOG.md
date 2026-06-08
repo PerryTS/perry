@@ -2,6 +2,37 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1145 — Win32 Fluent polish: Mica-by-default + WM_DPICHANGED relayout (#4681)
+
+Continues the #4681 Win32/GDI modernization (after #4682 default DWM chrome and
+#4683 comctl32 v6 themed controls). Three remaining items land here:
+
+- **Mica backdrop by default.** `dwm::apply_default_window_chrome` now also
+  requests `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_MAINWINDOW` (Mica) at window
+  creation, alongside the existing rounded corners + theme-aware title bar. On
+  Windows 11 22H2+ the DWM-drawn non-client frame (title bar) picks up the Mica
+  material; older systems reject the attribute (`E_INVALIDARG`) and silently
+  ignore it, same as the corner-preference attribute. This deliberately does
+  **not** make the client area transparent — Perry still paints an opaque client
+  background via the class brush / `WM_ERASEBKGND` root-background path — so it
+  cannot reintroduce the #1542 "black area after resize" regression. Full
+  client-area Mica/Acrylic blur-through (which extends the frame and clears the
+  client) remains the explicit `app.setVibrancy(...)` opt-in.
+
+- **Per-monitor-v2 DPI: `WM_DPICHANGED` handling.** The main window proc now
+  handles `WM_DPICHANGED` (0x02E0): it honors the OS-suggested, DPI-scaled window
+  rect via `SetWindowPos` and relayouts the root (mirroring `WM_SIZE`) instead of
+  letting `DefWindowProc` bitmap-stretch. Windows now stay crisp when dragged
+  between monitors with mixed scaling. DPI awareness was already opted into at
+  startup (`dpi_compat::set_process_dpi_awareness_compat`, per-monitor-v2 →
+  v1 → system fallback chain); this closes the runtime side.
+
+- **Doc accuracy.** Refreshed the stale `geisterhand_style.rs` caveat that
+  described `set_opacity` / `set_border_*` / shadow as "stub-with-state". Those
+  apply paths are real now (layered window, `WM_PAINT` border subclass,
+  `SetWindowRgn` corner clip, parent shadow-paint subclass); #210 and #230 are
+  closed.
+
 ## v0.5.1144 — `new <imported-function>()` runs the constructor body (zod v4 checks; #4698)
 
 `new F(args)` where `F` is a **function (or a `const`/`let` holding a closure

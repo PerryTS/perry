@@ -30,6 +30,12 @@ const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
 /// (full radius) on Windows 11.
 const DWMWCP_ROUND: i32 = 2;
 
+/// `DWM_SYSTEMBACKDROP_TYPE::DWMSBT_MAINWINDOW` — the Mica material, the
+/// recommended default backdrop for long-lived top-level app windows
+/// (Windows 11 22H2+). Older systems reject it (`E_INVALIDARG`) and we
+/// silently ignore that, so requesting it unconditionally is safe.
+const DWMSBT_MAINWINDOW: i32 = 2;
+
 extern "system" {
     fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const i32, size: u32) -> i32;
 }
@@ -65,12 +71,25 @@ pub fn apply_rounded_corners(hwnd: HWND) {
     set_attr_i32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
 }
 
+/// Request the Mica backdrop by default (`DWMSBT_MAINWINDOW`). On Windows 11
+/// 22H2+ this gives the DWM-drawn non-client frame (title bar) the Fluent Mica
+/// material; older systems ignore it. This deliberately does NOT make the
+/// client area transparent — Perry still paints an opaque client background
+/// (the class brush / `WM_ERASEBKGND` root-background path), so this can never
+/// reintroduce the #1542 "black area after resize" regression. Full
+/// client-area Mica blur-through (which requires extending the frame and a
+/// transparent client) remains the explicit `app.setVibrancy(...)` opt-in.
+pub fn apply_default_backdrop(hwnd: HWND) {
+    set_attr_i32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW);
+}
+
 /// The default Fluent-leaning chrome Perry applies to every top-level window:
-/// rounded corners + a theme-aware title bar. Called once at window creation,
-/// before the window is shown.
+/// rounded corners, a theme-aware title bar, and the Mica backdrop. Called once
+/// at window creation, before the window is shown.
 pub fn apply_default_window_chrome(hwnd: HWND) {
     apply_rounded_corners(hwnd);
     apply_titlebar_theme(hwnd);
+    apply_default_backdrop(hwnd);
 }
 
 /// Set the system backdrop material via `DWMWA_SYSTEMBACKDROP_TYPE`

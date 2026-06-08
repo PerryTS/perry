@@ -1086,6 +1086,37 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(0)
         }
+        // WM_DPICHANGED (0x02E0) — fired when the window moves to a monitor with
+        // a different DPI (per-monitor-v2; #4681 DPI task). lparam is a
+        // `*const RECT` with the suggested new window position+size Windows has
+        // already scaled for the target monitor. Honoring it (instead of
+        // letting DefWindowProc bitmap-stretch) keeps text and controls crisp
+        // when the window is dragged across monitors with mixed scaling.
+        x if x == 0x02E0 => {
+            if lparam.0 != 0 {
+                let suggested = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    suggested.left,
+                    suggested.top,
+                    suggested.right - suggested.left,
+                    suggested.bottom - suggested.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            // Relayout the root to the new client size (mirrors WM_SIZE) so
+            // child widgets pick up the new DPI-scaled metrics.
+            let mut client = RECT::default();
+            let _ = GetClientRect(hwnd, &mut client);
+            if let Some(root) = get_root_widget(1) {
+                if let Some(child_hwnd) = crate::widgets::get_hwnd(root) {
+                    let _ = MoveWindow(child_hwnd, 0, 0, client.right, client.bottom, true);
+                    crate::layout::layout_widget(root, client.right, client.bottom);
+                }
+            }
+            LRESULT(0)
+        }
         WM_PAINT => {
             // Main window has no content to paint — just validate the region
             let mut ps = PAINTSTRUCT::default();

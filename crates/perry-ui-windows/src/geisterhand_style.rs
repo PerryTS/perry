@@ -4,15 +4,15 @@
 //! `widgets::set_*` helper. Called on the main thread by the
 //! geisterhand pump.
 //!
-//! Win32 caveat: `set_opacity` / `set_border_color` / `set_border_width`
-//! are stub-with-state on Windows today (#210 wired the storage but
-//! the apply paths flow through layered-window / WM_PAINT subclassing
-//! that's still partial — see `widgets::mod.rs::apply_opacity` /
-//! `ensure_border_subclass`). So an inspector edit on Windows will
-//! update the per-handle state and trigger the layout/paint pipeline,
-//! but the rendered effect mirrors however much the underlying setter
-//! has wired up. Border / opacity are visible per #210; shadow is
-//! still tracked via #230.
+//! Win32 status: all of these now render, not just store state.
+//! `set_opacity` applies via a layered window (`WS_EX_LAYERED` +
+//! `SetLayeredWindowAttributes`), `set_border_color` / `set_border_width`
+//! draw through a per-handle `WM_PAINT` subclass (`ensure_border_subclass`),
+//! `set_corner_radius` clips via `SetWindowRgn`, and drop shadow renders
+//! through the parent's shadow-paint subclass (`apply_shadow` /
+//! `paint_shadow_for_child`). Border / opacity closed #210; shadow closed
+//! #230. So an inspector edit on Windows updates the per-handle state,
+//! triggers the layout/paint pipeline, and the effect is visible.
 
 use crate::widgets;
 
