@@ -67,6 +67,27 @@ pub fn transform_generator_function_with_extra_captures(
     let is_async_generator = func.is_async;
     func.is_async = false;
 
+    // Spec: generator/async-generator parameter binding
+    // (FunctionDeclarationInstantiation) runs *synchronously* when the function
+    // is called — before the generator object is created — so an
+    // iterator/RequireObjectCoercible/TDZ error during destructuring or default
+    // evaluation throws at call time, not on the first `.next()`. Lowering
+    // prepends the param prologue (default guards + destructuring binding) to
+    // the body; here we lift those leading statements out so they run in the
+    // outer wrapper (run-at-call) rather than state 0 of the state machine.
+    // `gen_prologue_len` returns 0 for generators with no destructuring/default
+    // params, leaving this fully inert for the common case.
+    let prologue_len = super::gen_prologue_len(func.id);
+    let param_prologue: Vec<Stmt> = if prologue_len > 0 && prologue_len <= func.body.len() {
+        func.body.drain(..prologue_len).collect()
+    } else {
+        Vec::new()
+    };
+    // Locals the prologue binds (destructured targets + scaffolding temps). They
+    // are written in the outer wrapper but read by the state machine, so they
+    // must be boxed captures like any other cross-state local.
+    let prologue_hoist = collect_hoisted_vars(&param_prologue);
+
     // #321: hoist `yield` / `yield*` that live inside a larger expression
     // (`return (yield 1) + (yield 2)`, call args, array/object literals, etc.)
     // into ordered `let __ygen_N = yield E;` temps so the linearizer below only
@@ -157,8 +178,14 @@ pub fn transform_generator_function_with_extra_captures(
 
     // Collect hoisted var IDs first so we know which Lets to rewrite
     let hoisted_for_rewrite = collect_hoisted_vars(&func.body);
-    let hoisted_ids: std::collections::HashSet<LocalId> =
+    let mut hoisted_ids: std::collections::HashSet<LocalId> =
         hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
+    // The lifted param prologue defines locals (destructured targets + temps)
+    // that the state machine reads; treat them as hoisted so their `Let`s route
+    // through the prealloc box (`js_box_set`) instead of shadowing the capture.
+    for (id, _, _) in &prologue_hoist {
+        hoisted_ids.insert(*id);
+    }
 
     // Rewrite `Let { id, init: Some(expr) }` → `Expr(LocalSet(id, expr))` for hoisted
     // variables inside state bodies. Without this, the Let creates a fresh local that
@@ -387,6 +414,13 @@ pub fn transform_generator_function_with_extra_captures(
     // Hoist variable declarations from the original body — collected
     // here (before the prealloc emit) so the prealloc set is complete.
     let mut hoisted = hoisted_for_rewrite;
+    // Box + capture the lifted prologue's locals so the state machine can read
+    // the destructured param values it bound in the outer wrapper.
+    for v in &prologue_hoist {
+        if !hoisted.iter().any(|(id, _, _)| *id == v.0) {
+            hoisted.push(v.clone());
+        }
+    }
     for route in &catches {
         if let (Some(param_id), Some(param_name)) = (route.param_id, route.param_name.as_ref()) {
             if !hoisted.iter().any(|(id, _, _)| *id == param_id) {
@@ -522,6 +556,18 @@ pub fn transform_generator_function_with_extra_captures(
         mutable: true,
         init: Some(Expr::Undefined),
     });
+
+    // Run the lifted parameter prologue in the outer wrapper, after the box
+    // stubs are in place (so its destructured-target `Let`s route to
+    // `js_box_set` on the prealloc'd boxes the state machine captures) and
+    // before the generator object is built/returned. Any iterator /
+    // RequireObjectCoercible / TDZ error here propagates synchronously out of
+    // the call, matching spec FunctionDeclarationInstantiation order.
+    if !param_prologue.is_empty() {
+        let mut prologue = param_prologue;
+        rewrite_hoisted_lets_in_stmts(&mut prologue, &hoisted_ids);
+        new_body.extend(prologue);
+    }
 
     // Build captures: state, done, sent, params, hoisted vars, extra locals
     let mut captures = vec![state_id, done_id, sent_id, executing_id];

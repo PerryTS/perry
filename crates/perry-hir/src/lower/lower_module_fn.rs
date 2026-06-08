@@ -598,6 +598,10 @@ pub fn lower_module_full(
         for (id, name) in ctx.closure_display_names.drain() {
             module.closure_display_names.insert(id, name);
         }
+        // Flush generator param-prologue lengths (run param binding at call time).
+        for (id, len) in ctx.gen_param_prologue_len.drain() {
+            module.gen_param_prologue_len.insert(id, len);
+        }
         // #4101: flush captured function source text for `fn.toString()`.
         for (id, src) in ctx.closure_source_text.drain() {
             module.closure_source_text.insert(id, src);

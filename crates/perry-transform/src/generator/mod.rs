@@ -65,6 +65,35 @@ pub(crate) use rewrite_returns::{
 thread_local! {
     static ASYNC_GENERATOR_FUNC_IDS: std::cell::RefCell<std::collections::HashSet<FuncId>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+    // Per-generator count of leading param-prologue statements (default guards +
+    // destructuring binding) to lift from the state machine back into the outer
+    // wrapper, so generator param binding runs synchronously at call time (spec
+    // FunctionDeclarationInstantiation). Keyed by func_id. Populated from
+    // `module.gen_param_prologue_len` at the start of `transform_generators`;
+    // the closure handler copies an entry to the synthetic body func_id it
+    // creates so `transform_generator_function_with_extra_captures` can read it
+    // by the function it actually transforms.
+    static GEN_PROLOGUE_LENS: std::cell::RefCell<std::collections::HashMap<FuncId, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Read (and for closures, alias) the recorded param-prologue length for a
+/// generator function id. Returns 0 when none was recorded (the common case —
+/// no destructuring / default params — keeping the lift fully inert).
+pub(crate) fn gen_prologue_len(func_id: FuncId) -> usize {
+    GEN_PROLOGUE_LENS.with(|m| m.borrow().get(&func_id).copied().unwrap_or(0))
+}
+
+/// Copy a recorded prologue length from `from` to `to`. Used by the closure
+/// handler: the original `Expr::Closure` func_id carries the lowering-recorded
+/// length, but the transform runs on a synthetic `Function` with a fresh id.
+fn alias_prologue_len(from: FuncId, to: FuncId) {
+    GEN_PROLOGUE_LENS.with(|m| {
+        let mut m = m.borrow_mut();
+        if let Some(len) = m.get(&from).copied() {
+            m.insert(to, len);
+        }
+    });
 }
 
 /// Record a func_id as belonging to an `async function*` (declaration or
@@ -80,6 +109,15 @@ fn record_async_generator_func(id: FuncId) {
 pub fn transform_generators(module: &mut Module) {
     // #3664: reset the per-thread async-generator accumulator for this module.
     ASYNC_GENERATOR_FUNC_IDS.with(|s| s.borrow_mut().clear());
+    // Load the param-prologue lengths recorded by lowering so the transform can
+    // lift generator param binding into the outer wrapper (run at call time).
+    GEN_PROLOGUE_LENS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        for (id, len) in &module.gen_param_prologue_len {
+            m.insert(*id, *len);
+        }
+    });
 
     // Compute the next available local and func IDs by scanning the module
     let mut next_local_id = compute_max_local_id(module) + 1;
@@ -336,6 +374,10 @@ fn transform_generator_closures_in_stmts(
                             *next_func_id += 1;
                             id
                         };
+                        // The transform reads the prologue length by the func it
+                        // transforms (the synthetic body fn); lowering recorded
+                        // it under the original closure func_id. Alias it across.
+                        alias_prologue_len(*func_id, synth_id);
                         let mut synth = Function {
                             id: synth_id,
                             name: "__gen_closure_body".to_string(),

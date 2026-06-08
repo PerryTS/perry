@@ -257,6 +257,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         let stmts = generate_param_destructuring_stmts(ctx, pat, *param_id)?;
         destructuring_stmts.extend(stmts);
     }
+    let destructuring_prologue_len = destructuring_stmts.len();
 
     let outer_strict = ctx.current_strict;
     let is_strict = outer_strict || function_has_use_strict(&fn_decl.function);
@@ -285,6 +286,17 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // rationale). Without this, cross-module callers that pad missing args
     // with TAG_UNDEFINED read the param as `undefined` instead of its default.
     let default_stmts = build_default_param_stmts(&params);
+    // Record the param-prologue length for generators so the generator
+    // transform can run param binding synchronously at call time (spec
+    // FunctionDeclarationInstantiation order). Prologue = default guards +
+    // destructuring stmts, both prepended below. Only generators need this;
+    // for plain functions / async functions the prologue stays in the body.
+    if fn_decl.function.is_generator {
+        let prologue_len = default_stmts.len() + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.append(&mut body);

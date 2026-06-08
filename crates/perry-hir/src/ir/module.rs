@@ -98,6 +98,18 @@ pub struct Module {
     /// generator registry, which drives `%AsyncGeneratorFunction%` / `%Async
     /// Generator%` intrinsic resolution. Populated by `transform_generators`.
     pub async_generator_funcs: std::collections::HashSet<perry_types::FuncId>,
+    /// Number of leading parameter-prologue statements (default-param guards +
+    /// destructuring binding stmts) in each generator / async-generator
+    /// function body, keyed by func_id. Per spec, generator parameter binding
+    /// (FunctionDeclarationInstantiation) runs *synchronously* when the
+    /// generator function is called — before the generator object is created —
+    /// so an iterator/RequireObjectCoercible/TDZ error during param binding
+    /// throws at call time. Lowering prepends the prologue to the body; the
+    /// generator transform reads this count to lift the prologue back into the
+    /// outer wrapper (run-at-call) instead of state 0 of `.next()`. Absent /
+    /// zero means no prologue (the common case — fully inert). Populated by
+    /// lowering (`lower_fn_decl` / `lower_fn_expr`).
+    pub gen_param_prologue_len: std::collections::HashMap<perry_types::FuncId, usize>,
 }
 
 impl Module {
@@ -128,6 +140,7 @@ impl Module {
             closure_display_names: std::collections::HashMap::new(),
             closure_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
+            gen_param_prologue_len: std::collections::HashMap::new(),
         }
     }
 }

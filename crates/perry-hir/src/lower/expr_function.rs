@@ -573,6 +573,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         let stmts = generate_param_destructuring_stmts(ctx, pat, *param_id)?;
         destructuring_stmts.extend(stmts);
     }
+    let destructuring_prologue_len = destructuring_stmts.len();
 
     // Hoist function declarations: pre-register all function declarations in the body
     // so they can be referenced before their lexical position (JS hoisting semantics).
@@ -739,6 +740,16 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
 
     // Refs #486: same default-param desugar as lower_arrow above.
     let default_stmts = crate::lower_decl::build_default_param_stmts(&params);
+    // Record the param-prologue length for generator function expressions
+    // (`async function*([x] = d){}`) so the generator transform runs param
+    // binding synchronously at call time (spec FunctionDeclarationInstantiation
+    // order). See `Module.gen_param_prologue_len`.
+    if fn_expr.function.is_generator {
+        let prologue_len = default_stmts.len() + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.append(&mut body);

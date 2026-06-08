@@ -197,6 +197,11 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// Per-generator count of leading parameter-prologue statements (default
+    /// guards + destructuring binding stmts) prepended to the body. Flushed
+    /// into `Module.gen_param_prologue_len`; the generator transform uses it to
+    /// run param binding synchronously at call time. See that field's docs.
+    pub(crate) gen_param_prologue_len: HashMap<FuncId, usize>,
     /// Test262 assignment name inference: when lowering `lhs = rhs`, a bare
     /// identifier lhs can provide the `NamedEvaluation` name for an anonymous
     /// function/class rhs. This slot is set only while lowering that rhs.
