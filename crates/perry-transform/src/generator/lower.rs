@@ -72,10 +72,11 @@ fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_id: &mut Loc
                 delegate: false,
             }) => Some(value),
             Stmt::Let {
-                init: Some(Expr::Yield {
-                    value,
-                    delegate: false,
-                }),
+                init:
+                    Some(Expr::Yield {
+                        value,
+                        delegate: false,
+                    }),
                 ..
             } => Some(value),
             Stmt::Return(Some(Expr::Yield {

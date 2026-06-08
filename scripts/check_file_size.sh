@@ -263,6 +263,12 @@ crates/perry-runtime/src/regex.rs
 # %TypedArray%.prototype iterator brand-check + array-like/iterable constructor
 # additions. Splitting per concern is tracked under #1435.
 crates/perry-runtime/src/typedarray/mod.rs
+# Generator/async-generator state-machine lowering core (linearize → states →
+# next/return/throw step closures + async-step driver). Crossed the 2000-line
+# gate after the standalone async-generator parity work: synchronous param-
+# prologue lift (run param binding at call time) + per-yield operand Await.
+# Splitting the state builder from the closure assembly is tracked under #1435.
+crates/perry-transform/src/generator/lower.rs
 EOF
 )
 
