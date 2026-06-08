@@ -155,6 +155,12 @@ pub(super) struct AndroidConfig {
     pub(super) key_alias: Option<String>,
     pub(super) google_play_key: Option<String>,
     pub(super) entry: Option<String>,
+    /// Explicit Android `versionCode`. When set, it overrides the value derived
+    /// from `build_number` (`version_to_code`). Use this to keep `versionCode`
+    /// monotonic across CI/build-number changes, or to clear a higher code
+    /// already on Play, without touching the marketing version. Play requires it
+    /// to be strictly greater than any code previously uploaded (max 2100000000).
+    pub(super) version_code: Option<u32>,
 }
 
 // #854: deserialized [watchos] table; not every key is read.

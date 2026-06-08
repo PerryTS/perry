@@ -109,6 +109,18 @@ pub fn is_inlinable(func: &Function) -> bool {
         return false;
     }
 
+    // Don't inline functions that reference the dynamic `this` / `new.target`
+    // bindings. Those belong to the callee's own invocation, but the inliner
+    // substitutes the body into the CALLER's frame, where `this`/`new.target`
+    // resolve to the caller's binding. A strict callee called as `f()` has
+    // `this === undefined`; inlined into a sloppy caller it would instead read
+    // the caller's `this` (the global object), so `typeof this` flips from
+    // `"undefined"` to `"object"`. Refs test262 language/function-code
+    // `10.4.3-1-*`.
+    if body_references_dynamic_this(&func.body) {
+        return false;
+    }
+
     // Don't inline functions that call themselves. The single-Return-of-Call
     // pattern in `try_inline_simple_call` (and the multi-Let-then-Return
     // pattern) substitutes the body verbatim; when the body is

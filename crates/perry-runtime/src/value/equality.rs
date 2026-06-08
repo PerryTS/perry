@@ -3,6 +3,16 @@
 
 use super::*;
 
+/// True when `bits` decode to a JS Number whose value is NaN — including the
+/// *negative* qNaN (top16 `0xFFF8`) that libm `acosh`/`atanh`/`log`/`sqrt`
+/// return for out-of-domain inputs, not just the positive canonical `0x7FF8`.
+/// `is_number()` already excludes every Perry tag, so this never mis-fires on a
+/// NaN-boxed pointer/string/etc.
+#[inline(always)]
+fn is_number_nan(bits: u64) -> bool {
+    JSValue::from_bits(bits).is_number() && f64::from_bits(bits).is_nan()
+}
+
 /// Compare two NaN-boxed f64 values for equality (JavaScript `===` semantics).
 /// SameValueZero algorithm (ECMA-262) — used by `Array.prototype.includes`,
 /// `Map` / `Set` keys. Same as strict equality except `NaN` is considered
@@ -12,7 +22,7 @@ pub extern "C" fn js_jsvalue_same_value_zero(a: f64, b: f64) -> i32 {
     // NaN-equals-NaN under SameValueZero (the only difference from ===).
     let abits = a.to_bits();
     let bbits = b.to_bits();
-    if (abits >> 48) == 0x7FF8 && (bbits >> 48) == 0x7FF8 {
+    if is_number_nan(abits) && is_number_nan(bbits) {
         return 1;
     }
     js_jsvalue_equals(a, b)
@@ -33,9 +43,12 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
     // routes through this helper, both sides decode to f64::NAN (same
     // bit pattern), and pre-fix the fast path returned 1 (wrongly equal)
     // so indexOf reported index 1 instead of -1.
-    let a_top16 = abits >> 48;
-    let b_top16 = bbits >> 48;
-    if a_top16 == 0x7FF8 && b_top16 == 0x7FF8 {
+    // Any IEEE NaN — positive 0x7FF8 OR the negative 0xFFF8 payload that libm
+    // returns from out-of-domain acosh/atanh/log/sqrt — is unequal to itself
+    // and to every other value under ===. Must precede the bit-pattern fast
+    // path: two identical negative-NaN bit patterns would otherwise compare
+    // equal (`Math.acosh(0) === Math.acosh(0)` wrongly true → `x !== x` false).
+    if is_number_nan(abits) || is_number_nan(bbits) {
         return 0;
     }
 

@@ -113,8 +113,8 @@ pub(crate) use to_string::{
     to_primitive_number, OrdinaryToPrimitiveOutcome,
 };
 pub use to_string::{
-    js_ensure_string_ptr, js_jsvalue_to_string, js_jsvalue_to_string_radix,
-    js_value_to_str_ptr_for_ffi,
+    js_ensure_string_ptr, js_jsvalue_to_string, js_jsvalue_to_string_coerce,
+    js_jsvalue_to_string_method, js_jsvalue_to_string_radix, js_value_to_str_ptr_for_ffi,
 };
 
 // ----- Equality, comparison, SameValueZero, dynamic string equality -----

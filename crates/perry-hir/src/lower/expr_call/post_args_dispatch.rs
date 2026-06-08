@@ -229,7 +229,7 @@ pub(super) fn try_object_prototype_call(
     args: Vec<Expr>,
     has_spread: bool,
 ) -> Result<Expr, Vec<Expr>> {
-    if !has_spread && (args.len() == 1 || args.len() == 2) {
+    if !has_spread && (1..=3).contains(&args.len()) {
         if let ast::Callee::Expr(callee_expr) = &call.callee {
             if let ast::Expr::Member(outer) = callee_expr.as_ref() {
                 if let (ast::MemberProp::Ident(outer_prop), ast::Expr::Member(mid)) =
@@ -246,6 +246,11 @@ pub(super) fn try_object_prototype_call(
                                 ("propertyIsEnumerable", 2) => {
                                     Some("js_object_property_is_enumerable")
                                 }
+                                // Annex B accessor helpers: .call(obj, key[, fn]).
+                                ("__defineGetter__", 3) => Some("js_object_define_getter"),
+                                ("__defineSetter__", 3) => Some("js_object_define_setter"),
+                                ("__lookupGetter__", 2) => Some("js_object_lookup_getter"),
+                                ("__lookupSetter__", 2) => Some("js_object_lookup_setter"),
                                 _ => None,
                             };
                             if let Some(runtime_fn) = runtime_fn {

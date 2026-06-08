@@ -104,7 +104,11 @@ fn hex_digit(b: u8) -> Option<u8> {
 }
 
 fn extract_str_from_nanbox(value: f64) -> String {
-    let str_ptr = crate::value::js_get_string_pointer_unified(value);
+    // Spec: escape/unescape/decodeURI apply `ToString` to the argument, so
+    // `undefined`/`null`/booleans/objects coerce ("undefined", "null", …)
+    // rather than yielding the empty string (`js_get_string_pointer_unified`
+    // only coerces numbers). Strings pass through unchanged.
+    let str_ptr = crate::builtins::js_string_coerce(value);
     if (str_ptr as usize) < 0x1000 {
         return String::new();
     }

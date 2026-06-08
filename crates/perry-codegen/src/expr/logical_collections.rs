@@ -601,29 +601,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `js_regexp_new` always sees a real `StringHeader*`. Followup
         // to #957 / PR #959.
         Expr::RegExpDynamic { pattern, flags } => {
+            // Route through the full ECMAScript constructor: it handles a RegExp
+            // pattern (copy / flag override), an `undefined`/`null` pattern
+            // (`ToString` → `""`/`"null"`), an object pattern, and ToString-
+            // coerced flags (an object flags → `"[object Object]"` → SyntaxError).
+            // Passing the NaN-boxed values verbatim (NOT `unbox_str_handle`,
+            // which mis-reads a non-string pattern as a StringHeader → garbage).
             let pattern_box = lower_expr(ctx, pattern)?;
-            let flags_handle = if let Some(flags_expr) = flags {
-                let flags_box = lower_expr(ctx, flags_expr)?;
-                let blk = ctx.block();
-                unbox_str_handle(blk, &flags_box)
+            let flags_box = if let Some(flags_expr) = flags {
+                lower_expr(ctx, flags_expr)?
             } else {
-                // Intern an empty string and use its handle so the
-                // runtime sees a valid `StringHeader*` (the
-                // `is_valid_ptr` check inside `js_regexp_new` already
-                // accepts null, but the LLVM type system needs a real
-                // i64 here, not a `null` typed `ptr`).
-                let empty_idx = ctx.strings.intern("");
-                let empty_global = format!("@{}", ctx.strings.entry(empty_idx).handle_global);
-                let blk = ctx.block();
-                let empty_box = blk.load(DOUBLE, &empty_global);
-                unbox_to_i64(blk, &empty_box)
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let blk = ctx.block();
-            let pattern_handle = unbox_str_handle(blk, &pattern_box);
             let result = blk.call(
                 I64,
-                "js_regexp_new",
-                &[(I64, &pattern_handle), (I64, &flags_handle)],
+                "js_regexp_construct",
+                &[(DOUBLE, &pattern_box), (DOUBLE, &flags_box)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }

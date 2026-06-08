@@ -37,8 +37,9 @@ pub(crate) use call_inliner::{
 };
 pub(crate) use clamp::{is_clamp3, is_clamp_u8};
 pub(crate) use closure_analysis::{
-    body_contains_closure_capturing, body_contains_super_call, collect_closure_captured_local_ids,
-    find_max_local_id, has_simple_control_flow, is_pure_function,
+    body_contains_closure_capturing, body_contains_super_call, body_references_dynamic_this,
+    collect_closure_captured_local_ids, find_max_local_id, has_simple_control_flow,
+    is_pure_function,
 };
 pub(crate) use cross_module::{
     body_references_class_in_set, collect_nonexported_class_names,

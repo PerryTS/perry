@@ -1402,6 +1402,43 @@ extern "C" fn object_prototype_property_is_enumerable_thunk(
     super::js_object_property_is_enumerable(this_value, key)
 }
 
+// Annex B §B.2.2 Object.prototype accessor methods — real thunks so reflective
+// access (`Object.prototype.__defineGetter__.call(o, k, fn)`, `typeof`) works,
+// not just the direct `o.__defineGetter__(...)` native-dispatch path.
+extern "C" fn object_prototype_define_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+    getter: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_define_getter(this_value, key, getter)
+}
+
+extern "C" fn object_prototype_define_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+    setter: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_define_setter(this_value, key, setter)
+}
+
+extern "C" fn object_prototype_lookup_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_lookup_getter(this_value, key)
+}
+
+extern "C" fn object_prototype_lookup_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    key: f64,
+) -> f64 {
+    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    super::js_object_lookup_setter(this_value, key)
+}
+
 extern "C" fn error_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -1627,6 +1664,64 @@ extern "C" fn array_buffer_byte_length_getter_thunk(
             )
         }
         None => array_buffer_brand_error(),
+    }
+}
+
+/// Receiver-address resolver for the `SharedArrayBuffer.prototype.byteLength`
+/// getter. Mirrors `array_buffer_receiver_addr` but accepts only buffers in the
+/// shared registry, so the getter rejects a plain `ArrayBuffer` `this`
+/// (test262 SharedArrayBuffer/prototype/byteLength/this-is-arraybuffer).
+fn shared_array_buffer_receiver_addr() -> Option<usize> {
+    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_jsv = JSValue::from_bits(this_bits);
+    let raw = if this_jsv.is_pointer() {
+        (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
+        this_bits as usize
+    } else {
+        return None;
+    };
+    if crate::buffer::is_registered_buffer(raw) && crate::buffer::is_shared_array_buffer(raw) {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+extern "C" fn shared_array_buffer_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match shared_array_buffer_receiver_addr() {
+        Some(addr) => {
+            let buf = addr as *const crate::buffer::BufferHeader;
+            f64::from_bits(
+                crate::value::JSValue::number(crate::buffer::js_buffer_length(buf) as f64).bits(),
+            )
+        }
+        None => super::object_ops::throw_object_type_error(
+            b"Method get SharedArrayBuffer.prototype.byteLength called on incompatible receiver",
+        ),
+    }
+}
+
+/// `SharedArrayBuffer.prototype.slice(start, end)`. The brand check (the `this`
+/// value must be a SharedArrayBuffer, never a plain ArrayBuffer or a
+/// non-object) lives here so `SharedArrayBuffer.prototype.slice.call(notSab)`
+/// throws a TypeError; the actual byte copy + ToIntegerOrInfinity arg coercion
+/// is shared with the instance dispatch in `buffer_dispatch`.
+extern "C" fn shared_array_buffer_slice_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    match shared_array_buffer_receiver_addr() {
+        Some(addr) => unsafe {
+            let args = [start, end];
+            super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
+        },
+        None => super::object_ops::throw_object_type_error(
+            b"Method SharedArrayBuffer.prototype.slice called on incompatible receiver",
+        ),
     }
 }
 
@@ -3134,6 +3229,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // `Error` is listed before its subclasses in GLOBAL_THIS_BUILTIN_CONSTRUCTORS,
     // so these are populated before the subclass iterations consume them.
     let mut error_ctor_bits: Option<u64> = None;
+    let mut error_proto_bits: Option<u64> = None;
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
@@ -3339,6 +3435,23 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
             install_error_prototype_data_properties(name, proto_obj);
+            // ECMA-262 20.5.6.3: the [[Prototype]] of each NativeError prototype
+            // object is %Error.prototype% (not %Object.prototype%). `Error` is
+            // listed before its subclasses, so its prototype object is stashed
+            // here and linked into each subclass prototype's chain. Without this
+            // `Object.getPrototypeOf(TypeError.prototype) !== Error.prototype`
+            // (test262 NativeErrors/*/prototype/proto.js).
+            if name == "Error" {
+                error_proto_bits =
+                    Some(crate::value::js_nanbox_pointer(proto_obj as i64).to_bits());
+            } else if is_native_error_subclass_constructor(name) {
+                if let Some(proto_bits) = error_proto_bits {
+                    super::prototype_chain::object_set_static_prototype(
+                        proto_obj as usize,
+                        proto_bits,
+                    );
+                }
+            }
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
             }
@@ -3578,7 +3691,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     install_reflect_namespace_members(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "Reflect");
                 }
-                "Atomics" => install_atomics_namespace_members(ns_obj),
+                "Atomics" => {
+                    install_atomics_namespace_members(ns_obj);
+                    set_intrinsic_to_string_tag(ns_obj, "Atomics");
+                }
                 "Intl" => crate::intl::install_intl_namespace(ns_obj),
                 "Temporal" => {
                     install_temporal_namespace(ns_obj);
@@ -5217,6 +5333,11 @@ fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: &[(&str, u3
     for (name, arity) in methods.iter().copied() {
         let func_ptr = match name {
             "isPrototypeOf" => object_prototype_is_prototype_of_thunk as *const u8,
+            // Annex B accessor methods get real thunks (reflective `.call`).
+            "__defineGetter__" => object_prototype_define_getter_thunk as *const u8,
+            "__defineSetter__" => object_prototype_define_setter_thunk as *const u8,
+            "__lookupGetter__" => object_prototype_lookup_getter_thunk as *const u8,
+            "__lookupSetter__" => object_prototype_lookup_setter_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         install_proto_method(proto_obj, name, func_ptr, arity);
@@ -5268,6 +5389,11 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     ("propertyIsEnumerable", 1),
     ("toLocaleString", 0),
     ("valueOf", 0),
+    // Annex B §B.2.2 legacy accessor helpers.
+    ("__defineGetter__", 2),
+    ("__defineSetter__", 2),
+    ("__lookupGetter__", 1),
+    ("__lookupSetter__", 1),
     // `toString` is installed separately on Object/typed arrays etc. with
     // dedicated thunks; do not include it here to avoid clobbering those.
 ];
@@ -5296,6 +5422,11 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
     // #3662: Map/Set/WeakMap/WeakSet prototypes get brand-checking thunks
     // (own module, to keep this file under the 2000-line gate).
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        return;
+    }
+    // #4795: TC39 explicit-resource-management stacks.
+    if super::disposable_proto_thunks::install_disposable_proto_methods(builtin_name, proto_obj) {
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         return;
     }
@@ -5397,6 +5528,47 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     );
                 }
             }
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        }
+        "SharedArrayBuffer" => {
+            // Mirror the ArrayBuffer.prototype shape: a brand-checking `slice`
+            // (instances dispatch through buffer_dispatch; `.call(notSab)`
+            // throws here), a `byteLength` accessor whose getter brand-checks
+            // the shared registry, and the `Symbol.toStringTag`.
+            install_proto_method(
+                proto_obj,
+                "slice",
+                shared_array_buffer_slice_thunk as *const u8,
+                2,
+            );
+            unsafe {
+                crate::closure::js_register_closure_arity(
+                    shared_array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                let getter = crate::closure::js_closure_alloc(
+                    shared_array_buffer_byte_length_getter_thunk as *const u8,
+                    0,
+                );
+                if !getter.is_null() {
+                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
+                    set_accessor_descriptor(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        AccessorDescriptor {
+                            get: getter_bits,
+                            set: 0,
+                        },
+                    );
+                    set_property_attrs(
+                        proto_obj as usize,
+                        "byteLength".to_string(),
+                        PropertyAttrs::new(true, false, true),
+                    );
+                }
+            }
+            set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "DataView" => {
@@ -5694,10 +5866,14 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             );
         }
         "RegExp" => {
-            install_noop_proto_methods(
-                proto_obj,
-                &[("exec", 1), ("test", 1), ("toString", 0), ("compile", 2)],
-            );
+            // Real accessor getters (`source`/`flags`/`global`/…) so reflection
+            // (`getOwnPropertyDescriptor(RegExp.prototype, "source").get`) and
+            // brand-checked `.call(this)` work, and instances inherit them.
+            super::regex_proto_thunks::install_regex_proto_accessors(proto_obj);
+            // Real brand-checking `exec`/`test`/`toString`; `compile` stays a
+            // no-op (Annex B).
+            super::regex_proto_thunks::install_regex_proto_methods(proto_obj);
+            install_noop_proto_methods(proto_obj, &[("compile", 2)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "URLPattern" => {
@@ -5943,7 +6119,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
 fn install_error_prototype_data_properties(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     let name = match builtin_name {
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
-        | "AggregateError" | "EvalError" | "URIError" => builtin_name,
+        | "AggregateError" | "EvalError" | "URIError" | "SuppressedError" => builtin_name,
         _ => return,
     };
     if proto_obj.is_null() {

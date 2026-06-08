@@ -608,9 +608,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 Expr::PropertyGet { object, property } => {
                     let obj_box = lower_expr(ctx, object)?;
+                    // `delete null.x` / `delete undefined.x` → TypeError. The
+                    // `delete` algorithm calls `ToObject(GetBase)` on a property
+                    // reference, which throws for a nullish base.
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
@@ -620,19 +626,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_field",
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 Expr::IndexGet { object, index } if is_string_expr(ctx, index) => {
                     let obj_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;
+                    // `delete null[k]` / `delete undefined[k]` → TypeError, after
+                    // the key expression is evaluated (spec
+                    // EvaluatePropertyAccessWithExpressionKey: RequireObjectCoercible
+                    // runs after ToPropertyKey's operand is evaluated).
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     // SSO-safe key unbox — `js_object_delete_field`
@@ -643,15 +648,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_field",
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 // delete obj[expr] — route dynamic keys through the runtime so
                 // string-valued locals (for example `delete fn[name]`) still
@@ -660,6 +657,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Expr::IndexGet { object, index } => {
                     let obj_box = lower_expr(ctx, object)?;
                     let idx_box = lower_expr(ctx, index)?;
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     let i32_v = blk.call(
@@ -667,15 +667,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_dynamic",
                         &[(I64, &obj_handle), (DOUBLE, &idx_box)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
@@ -1039,10 +1031,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
             let regex_handle = unbox_to_i64(blk, &regex_box);
-            // String pointer extraction goes through the unified
-            // helper because the receiver may be a literal, a local,
-            // or a concat result.
-            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            // Per spec `RegExp.prototype.test` does `ToString(argument)`, so a
+            // String wrapper (`re.test(new String("x"))`), a number
+            // (`re.test(123)`), or an object with a custom `toString` must be
+            // coerced — and a throwing `toString`/`valueOf` must propagate.
+            // `js_get_string_pointer_unified` only unwraps real strings, so use
+            // the coercing ToString that dispatches `toString` on objects.
+            let str_handle = blk.call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_regexp_test",
@@ -1060,7 +1055,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
             let regex_handle = unbox_to_i64(blk, &regex_box);
-            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            // `RegExp.prototype.exec` does `ToString(argument)` — coerce String
+            // wrappers / numbers / objects (and propagate a throwing toString)
+            // rather than only unwrapping real strings (see RegExpTest above).
+            let str_handle = blk.call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
             let result = blk.call(
                 I64,
                 "js_regexp_exec",

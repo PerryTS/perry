@@ -432,13 +432,196 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
 }
 
 #[inline]
-unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
+pub(crate) unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
     if gc_type == crate::gc::GC_TYPE_OBJECT {
         Some(ptr as *mut ObjectHeader)
     } else {
         None
     }
+}
+
+/// #4795: resolve `obj[Symbol.dispose]` / `obj[Symbol.asyncDispose]` for the
+/// `using`-disposal method names when the disposer is stored under the
+/// well-known-symbol key (object literals, dynamically-assigned). Returns
+/// `None` (so the caller falls through to vtable / native-handle dispatch)
+/// when `object` is not a heap object or has no symbol-keyed disposer.
+unsafe fn try_symbol_dispose_dispatch(
+    object: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    // Only real heap objects store symbol-keyed methods. Native handles and
+    // primitives return None here and fall through to the existing dispatch.
+    let _obj = object_ptr_from_value(object)?;
+    let want_async = method_name == "__perry_async_dispose__";
+    let shorts: &[&str] = if want_async {
+        &["asyncDispose", "dispose"]
+    } else {
+        &["dispose"]
+    };
+    for short in shorts {
+        let sym = crate::symbol::well_known_symbol(short);
+        if sym.is_null() {
+            continue;
+        }
+        let sym_f64 = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
+        let method = crate::symbol::js_object_get_symbol_property(object, sym_f64);
+        let mjsv = JSValue::from_bits(method.to_bits());
+        if method.to_bits() != crate::value::TAG_UNDEFINED && !mjsv.is_null() && mjsv.is_pointer() {
+            let prev = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+            let result = crate::closure::js_native_call_value(method, args_ptr, args_len);
+            IMPLICIT_THIS.with(|c| c.set(prev));
+            return Some(result);
+        }
+    }
+    None
+}
+
+/// Does `obj` (a real heap object) expose a callable disposer? Checks the
+/// well-known-symbol keys, the renamed class-method names, and the class
+/// vtable. `want_async` additionally accepts `[Symbol.asyncDispose]` /
+/// `__perry_async_dispose__` (with the spec sync fallback).
+unsafe fn object_has_dispose_method(obj: *mut ObjectHeader, object: f64, want_async: bool) -> bool {
+    // Symbol-keyed disposers (object literals, dynamic assignment).
+    let syms: &[&str] = if want_async {
+        &["asyncDispose", "dispose"]
+    } else {
+        &["dispose"]
+    };
+    for short in syms {
+        let sym = crate::symbol::well_known_symbol(short);
+        if sym.is_null() {
+            continue;
+        }
+        let sym_f64 = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
+        let m = crate::symbol::js_object_get_symbol_property(object, sym_f64);
+        let mjsv = JSValue::from_bits(m.to_bits());
+        if m.to_bits() != crate::value::TAG_UNDEFINED && !mjsv.is_null() && mjsv.is_pointer() {
+            return true;
+        }
+    }
+    // String-keyed / vtable disposers (class instances). The renamed class
+    // method `[Symbol.dispose]` → `__perry_dispose__` lives in the vtable.
+    let names: &[&str] = if want_async {
+        &["__perry_async_dispose__", "__perry_dispose__"]
+    } else {
+        &["__perry_dispose__"]
+    };
+    let class_id = (*obj).class_id;
+    for name in names {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        if !key.is_null() {
+            let v = js_object_get_field_by_name(obj as *const ObjectHeader, key);
+            if !v.is_undefined() && !v.is_null() {
+                return true;
+            }
+        }
+        if class_id != 0 {
+            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                if let Some(ref reg) = *registry {
+                    if let Some(vtable) = reg.get(&class_id) {
+                        if vtable.methods.contains_key(*name) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// #4795: dispatch a `DisposableStack` / `AsyncDisposableStack` instance method
+/// reached through the generic (dynamic) call path. Returns `None` for
+/// non-stack receivers / unknown methods so the caller continues normal
+/// dispatch.
+unsafe fn try_disposable_stack_method_dispatch(
+    object: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    use crate::disposable::{CLASS_ID_ASYNC_DISPOSABLE_STACK, CLASS_ID_DISPOSABLE_STACK};
+    let obj = object_ptr_from_value(object)?;
+    let class_id = (*obj).class_id;
+    let is_async = class_id == CLASS_ID_ASYNC_DISPOSABLE_STACK;
+    if class_id != CLASS_ID_DISPOSABLE_STACK && !is_async {
+        return None;
+    }
+    let arg0 = if args_len > 0 && !args_ptr.is_null() {
+        *args_ptr
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
+    let arg1 = if args_len > 1 && !args_ptr.is_null() {
+        *args_ptr.add(1)
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
+    let r = match method_name {
+        "use" if is_async => crate::disposable::js_async_disposable_stack_use(obj, arg0),
+        "use" => crate::disposable::js_disposable_stack_use(obj, arg0),
+        "adopt" => crate::disposable::js_disposable_stack_adopt(obj, arg0, arg1),
+        "defer" => crate::disposable::js_disposable_stack_defer(obj, arg0),
+        "move" => crate::disposable::js_disposable_stack_move(obj),
+        "dispose" if !is_async => crate::disposable::js_disposable_stack_dispose(obj),
+        "disposeAsync" if is_async => {
+            crate::disposable::js_async_disposable_stack_dispose_async(obj)
+        }
+        "@@__perry_wk_dispose" if !is_async => crate::disposable::js_disposable_stack_dispose(obj),
+        "@@__perry_wk_asyncDispose" if is_async => {
+            crate::disposable::js_async_disposable_stack_dispose_async(obj)
+        }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// #4795: validate a `using` / `await using` initializer at declaration time.
+/// `null` / `undefined` are accepted (no-op disposal). Any other non-object,
+/// or an object lacking a callable `[Symbol.dispose]` / `[Symbol.asyncDispose]`,
+/// throws `TypeError`. Native runtime handles (timers, sqlite, …) that expose
+/// dispose through name dispatch are accepted.
+unsafe fn js_using_check_disposable(object: f64, want_async: bool) -> f64 {
+    let jsv = JSValue::from_bits(object.to_bits());
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if jsv.is_null() || jsv.is_undefined() {
+        return undef;
+    }
+    let throw_not_object = |kind: &str| -> ! {
+        let msg = format!("Value used in a `using` declaration is not an object: {kind}");
+        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(s);
+        crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    };
+    // Non-object primitives (number / boolean / string / bigint) are never
+    // disposable. Strings are string-tagged (not pointer-tagged) and fall here.
+    if !jsv.is_pointer() {
+        throw_not_object("primitive");
+    }
+    let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if crate::symbol::is_registered_symbol(raw) {
+        throw_not_object("symbol");
+    }
+    if let Some(obj) = object_ptr_from_value(object) {
+        if object_has_dispose_method(obj, object, want_async) {
+            return undef;
+        }
+        let sym = if want_async {
+            "Symbol.asyncDispose"
+        } else {
+            "Symbol.dispose"
+        };
+        let msg = format!("The value used in a `using` declaration must have a {sym} method");
+        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(s);
+        crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    }
+    // Pointer-shaped but not a GC heap object (native runtime handle). These
+    // dispatch dispose through `js_native_call_method` name handling; accept.
+    undef
 }
 
 unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
@@ -566,6 +749,25 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             return proto_addr == receiver_addr;
         }
         return false;
+    }
+
+    // A RegExp's `[[Prototype]]` chain is `RegExp.prototype → Object.prototype`.
+    // The RegExpHeader isn't a plain GC_TYPE_OBJECT with a registered class
+    // prototype, so the generic class-id walk below misses it (which is why
+    // `RegExp.prototype.isPrototypeOf(re)` returned false). Handle it directly.
+    {
+        let tv = JSValue::from_bits(target.to_bits());
+        if tv.is_pointer() && crate::regex::is_regex_pointer(tv.as_pointer::<u8>()) {
+            for name in ["RegExp", "Object"] {
+                let proto = crate::object::builtin_prototype_value(name);
+                if let Some(proto_addr) = heap_addr(proto) {
+                    if proto_addr == receiver_addr {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
     }
 
     let target_jsval = JSValue::from_bits(target.to_bits());
@@ -1136,6 +1338,54 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     };
 
+    // #4795: `using` / `await using` desugars disposal to
+    // `obj.__perry_dispose__()` / `obj.__perry_async_dispose__()`. Class
+    // instances resolve these through the renamed vtable method (handled by
+    // the generic dispatch below) and native handles (timers, sqlite) special-
+    // case the names. But objects that store `[Symbol.dispose]` /
+    // `[Symbol.asyncDispose]` under the well-known-symbol key — object literals
+    // and dynamically-assigned disposers — won't match the string method name
+    // and would fall through to "is not a function". Resolve the symbol-keyed
+    // disposer here, with the spec async→sync fallback, before that happens.
+    if matches!(method_name, "__perry_dispose__" | "__perry_async_dispose__") {
+        if let Some(result) = try_symbol_dispose_dispatch(object, method_name, args_ptr, args_len) {
+            return result;
+        }
+    }
+    // #4795: `using x = e` emits `x.__perry_using_check__(isAsync)` at the
+    // declaration point so a non-disposable resource throws `TypeError` there
+    // (spec `CreateDisposableResource` / `GetDisposeMethod`), before the block
+    // body runs — not later at disposal time.
+    if method_name == "__perry_using_check__" {
+        let want_async =
+            args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
+        return js_using_check_disposable(object, want_async);
+    }
+    // #4795: dynamic dispatch for `DisposableStack` / `AsyncDisposableStack`
+    // instance methods. The codegen fast path handles statically-typed stack
+    // locals, but a stack held in an `any`-typed value — e.g. the result of
+    // `stack.move()` — reaches the generic dispatcher, where the class id has
+    // no user vtable and would otherwise surface "dispose is not a function".
+    // Gated on the method name first so unrelated dynamic calls don't pay the
+    // `object_ptr_from_value` class-id probe.
+    if matches!(
+        method_name,
+        "use"
+            | "adopt"
+            | "defer"
+            | "move"
+            | "dispose"
+            | "disposeAsync"
+            | "@@__perry_wk_dispose"
+            | "@@__perry_wk_asyncDispose"
+    ) {
+        if let Some(result) =
+            try_disposable_stack_method_dispatch(object, method_name, args_ptr, args_len)
+        {
+            return result;
+        }
+    }
+
     {
         let raw_addr = if jsval.is_pointer() {
             crate::value::js_nanbox_get_pointer(object) as usize
@@ -1307,6 +1557,40 @@ pub unsafe extern "C" fn js_native_call_method(
                 let gc = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
                     let s = crate::error::js_error_to_string(raw as *mut crate::error::ErrorHeader);
+                    return f64::from_bits(JSValue::string_ptr(s).bits());
+                }
+            }
+        }
+    }
+
+    // Primitive-wrapper prototypes (`Number.prototype`, `Boolean.prototype`,
+    // `BigInt.prototype`) carry a brand default value (+0 / false / 0n) for
+    // valueOf/toString, matching V8. They are ordinary objects with no
+    // [[*Data]] slot, so `boxed_primitive_payload` below misses them; without
+    // this a fused `Number.prototype.valueOf()` returned the prototype object
+    // itself (test262 Number/prototype/valueOf/S15.7.4.4_*).
+    if jsval.is_pointer() && matches!(method_name, "valueOf" | "toString" | "toLocaleString") {
+        use crate::object::builtin_prototype_value;
+        let ob = object.to_bits();
+        if ob == builtin_prototype_value("Number").to_bits() {
+            match method_name {
+                "valueOf" => return 0.0,
+                _ => {
+                    let radix = if args_len >= 1 && !args_ptr.is_null() {
+                        *args_ptr
+                    } else {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    };
+                    let s = crate::value::js_jsvalue_to_string_radix(0.0, radix);
+                    return f64::from_bits(JSValue::string_ptr(s).bits());
+                }
+            }
+        }
+        if ob == builtin_prototype_value("Boolean").to_bits() {
+            match method_name {
+                "valueOf" => return f64::from_bits(crate::value::TAG_FALSE),
+                _ => {
+                    let s = crate::string::js_string_from_bytes(b"false".as_ptr(), 5);
                     return f64::from_bits(JSValue::string_ptr(s).bits());
                 }
             }
@@ -1491,6 +1775,24 @@ pub unsafe extern "C" fn js_native_call_method(
         let p = jsval.as_pointer::<u8>();
         if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0) {
             return r;
+        }
+    }
+
+    // `RegExp.prototype.compile(pattern, flags)` (Annex B) re-initializes the
+    // receiver in place. Needs both args, so it is dispatched here rather than
+    // through the single-arg `dispatch_regex_receiver_method`.
+    if method_name == "compile" && jsval.is_pointer() {
+        let p = jsval.as_pointer::<u8>();
+        if crate::regex::is_regex_pointer(p) {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let args = refreshed_args();
+            let pat = args.first().copied().unwrap_or(undef);
+            let flags = args.get(1).copied().unwrap_or(undef);
+            return crate::regex::js_regexp_compile_value(
+                p as *mut crate::regex::RegExpHeader,
+                pat,
+                flags,
+            );
         }
     }
 
@@ -2288,6 +2590,44 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
                 "toWellFormed" => {
                     let r = crate::string::js_string_to_well_formed(receiver_string());
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                // Annex B §B.2.2 HTML wrapper methods. No-arg tag wrappers;
+                // the receiver body is never escaped.
+                "big" | "blink" | "bold" | "fixed" | "italics" | "small" | "strike" | "sub"
+                | "sup" => {
+                    let s = receiver_string();
+                    let r = match method_name {
+                        "big" => crate::string::js_string_big(s),
+                        "blink" => crate::string::js_string_blink(s),
+                        "bold" => crate::string::js_string_bold(s),
+                        "fixed" => crate::string::js_string_fixed(s),
+                        "italics" => crate::string::js_string_italics(s),
+                        "small" => crate::string::js_string_small(s),
+                        "strike" => crate::string::js_string_strike(s),
+                        "sub" => crate::string::js_string_sub(s),
+                        "sup" => crate::string::js_string_sup(s),
+                        _ => unreachable!(),
+                    };
+                    return f64::from_bits(JSValue::string_ptr(r).bits());
+                }
+                // Annex B §B.2.2 HTML wrappers that take an attribute value;
+                // a missing arg coerces `undefined` -> "undefined", and `"`
+                // in the value is escaped to `&quot;`.
+                "anchor" | "link" | "fontcolor" | "fontsize" => {
+                    let value = crate::builtins::js_string_coerce(
+                        arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
+                    );
+                    let value_h = root_scope.root_string_ptr(value);
+                    let s = receiver_string();
+                    let v = value_h.get_raw_const_ptr::<crate::StringHeader>();
+                    let r = match method_name {
+                        "anchor" => crate::string::js_string_anchor(s, v),
+                        "link" => crate::string::js_string_link(s, v),
+                        "fontcolor" => crate::string::js_string_fontcolor(s, v),
+                        "fontsize" => crate::string::js_string_fontsize(s, v),
+                        _ => unreachable!(),
+                    };
                     return f64::from_bits(JSValue::string_ptr(r).bits());
                 }
                 _ => {} // not a handled string method — fall through to TypeError catch-all
@@ -3840,6 +4180,39 @@ pub unsafe extern "C" fn js_native_call_method(
             return f64::from_bits(
                 JSValue::bool(js_object_is_prototype_of_value(object, arg)).bits(),
             );
+        }
+
+        // Annex B §B.2.2 Object.prototype accessor helpers.
+        "__defineGetter__" | "__defineSetter__" => {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let key = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let func = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            return if method_name == "__defineGetter__" {
+                super::js_object_define_getter(object, key, func)
+            } else {
+                super::js_object_define_setter(object, key, func)
+            };
+        }
+        "__lookupGetter__" | "__lookupSetter__" => {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let key = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            return if method_name == "__lookupGetter__" {
+                super::js_object_lookup_getter(object, key)
+            } else {
+                super::js_object_lookup_setter(object, key)
+            };
         }
 
         // `Object.prototype.valueOf` returns the receiver after ToObject.

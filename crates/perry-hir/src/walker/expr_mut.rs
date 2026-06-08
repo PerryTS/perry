@@ -276,6 +276,7 @@ where
         | Expr::DateToString(v)
         | Expr::DateToDateString(v)
         | Expr::DateToTimeString(v)
+        | Expr::DateToUTCString(v)
         | Expr::DateToLocaleDateString(v)
         | Expr::DateToLocaleTimeString(v)
         | Expr::DateToLocaleString(v)
@@ -881,6 +882,14 @@ where
             f(callee);
             for a in args {
                 f(a);
+            }
+        }
+        Expr::NewDynamicSpread { callee, args } => {
+            f(callee);
+            for a in args {
+                match a {
+                    CallArg::Expr(e) | CallArg::Spread(e) => f(e),
+                }
             }
         }
         Expr::JsNew {

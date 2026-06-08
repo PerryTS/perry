@@ -278,6 +278,17 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// Dynamic `new` with spread arguments — `new <callee>(...args)`.
+    /// Kept distinct from `NewDynamic` so the spread positions survive
+    /// lowering (a plain `Vec<Expr>` would collapse `...[1,2]` into a single
+    /// array argument). Codegen folds every argument into one JS array
+    /// (regular pushed, spread sources expanded) and dispatches through
+    /// `js_new_function_construct_apply`.
+    NewDynamicSpread {
+        callee: Box<Expr>,
+        args: Vec<CallArg>,
+    },
+
     /// Runtime `new.target` value for ordinary functions.
     NewTarget,
 
@@ -1724,6 +1735,7 @@ pub enum Expr {
     DateToString(Box<Expr>),     // date.toString() / String(date) -> full date string
     DateToDateString(Box<Expr>), // date.toDateString() -> string
     DateToTimeString(Box<Expr>), // date.toTimeString() -> string
+    DateToUTCString(Box<Expr>),  // date.toUTCString() / toGMTString() -> string
     DateToLocaleDateString(Box<Expr>), // date.toLocaleDateString() -> string
     DateToLocaleTimeString(Box<Expr>), // date.toLocaleTimeString() -> string
     DateToLocaleString(Box<Expr>), // date.toLocaleString() -> string

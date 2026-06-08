@@ -78,6 +78,7 @@ impl SH for Expr {
             Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
             Expr::New { class_name, args, type_args, } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
             Expr::NewDynamic { callee, args } => { tag(h, 43); callee.as_ref().hash(h); args.hash(h); }
+            Expr::NewDynamicSpread { callee, args } => { tag(h, 12507); callee.as_ref().hash(h); args.hash(h); }
             Expr::NewTarget => { tag(h, 12301); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }
@@ -474,6 +475,7 @@ impl SH for Expr {
             Expr::DateToString(e) => { tag(h, 1339); e.as_ref().hash(h); }
             Expr::DateToDateString(e) => { tag(h, 339); e.as_ref().hash(h); }
             Expr::DateToTimeString(e) => { tag(h, 340); e.as_ref().hash(h); }
+            Expr::DateToUTCString(e) => { tag(h, 12508); e.as_ref().hash(h); }
             Expr::DateToLocaleDateString(e) => { tag(h, 341); e.as_ref().hash(h); }
             Expr::DateToLocaleTimeString(e) => { tag(h, 342); e.as_ref().hash(h); }
             Expr::DateToLocaleString(e) => { tag(h, 343); e.as_ref().hash(h); }

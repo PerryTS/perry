@@ -55,6 +55,29 @@ extern "C" {
     fn mallopt(param: i32, value: i32) -> i32;
 }
 
+/// Disable Android heap tagging (MTE) at library load — independent of
+/// `JNI_OnLoad`.
+///
+/// Perry's NaN-boxing uses 48-bit pointers (`POINTER_MASK =
+/// 0x0000_FFFF_FFFF_FFFF`); scudo's top-byte tag breaks pointer extraction.
+/// `JNI_OnLoad` (below) also disables tagging, but a linked native library may
+/// define its own `JNI_OnLoad` that wins the single ELF symbol slot, leaving
+/// Perry's version unused. This `.init_array` constructor fires unconditionally
+/// when the `.so` is `dlopen`'d — before `JNI_OnLoad` and before any Perry
+/// allocation — so tagging is off no matter which `JNI_OnLoad` survives linking.
+/// `M_BIONIC_SET_HEAP_TAGGING_LEVEL = -204`, level `0` = no tagging.
+#[cfg(target_os = "android")]
+#[used]
+#[link_section = ".init_array"]
+static PERRY_DISABLE_MTE_CTOR: extern "C" fn() = {
+    extern "C" fn ctor() {
+        unsafe {
+            mallopt(-204, 0);
+        }
+    }
+    ctor
+};
+
 pub fn log_debug(msg: &str) {
     let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
     unsafe {
@@ -153,6 +176,16 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInit(
     mut env: jni::JNIEnv,
     _class: jni::objects::JClass,
 ) {
+    // Recover state that `JNI_OnLoad` would normally set up, in case a linked
+    // native library's own `JNI_OnLoad` shadowed Perry's (see
+    // `jni_bridge::ensure_vm` and `PERRY_DISABLE_MTE_CTOR`). The constructor
+    // above already disabled MTE at load; re-asserting it here is idempotent and
+    // cheap, and keeps the guarantee even on platforms without `.init_array`.
+    #[cfg(target_os = "android")]
+    unsafe {
+        mallopt(-204, 0);
+    }
+    jni_bridge::ensure_vm(&env);
     jni_bridge::init_cache(&mut env);
 }
 

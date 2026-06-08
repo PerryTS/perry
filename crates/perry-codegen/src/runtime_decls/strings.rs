@@ -22,6 +22,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_jsvalue_to_string", I64, &[DOUBLE]);
     // #3146: nullish-guarded `.toString()` member-call variant.
     module.declare_function("js_jsvalue_to_string_method", I64, &[DOUBLE]);
+    // ToString coercion (undefined→"undefined", null→"null", objects dispatch
+    // toString) — used by RegExp exec/test arg + constructor coercion.
+    module.declare_function("js_jsvalue_to_string_coerce", I64, &[DOUBLE]);
 
     // Fused string+value concat (issue #58): collapses js_jsvalue_to_string +
     // js_string_concat into a single allocation for number operands.
@@ -519,6 +522,22 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_trim", I64, &[I64]);
     module.declare_function("js_string_trim_start", I64, &[I64]);
     module.declare_function("js_string_trim_end", I64, &[I64]);
+    // Annex B §B.2.2 HTML wrappers. No-arg tag wrappers take only the receiver;
+    // anchor/link/fontcolor/fontsize take an already-coerced attribute-value
+    // string handle as the 2nd arg.
+    module.declare_function("js_string_big", I64, &[I64]);
+    module.declare_function("js_string_blink", I64, &[I64]);
+    module.declare_function("js_string_bold", I64, &[I64]);
+    module.declare_function("js_string_fixed", I64, &[I64]);
+    module.declare_function("js_string_italics", I64, &[I64]);
+    module.declare_function("js_string_small", I64, &[I64]);
+    module.declare_function("js_string_strike", I64, &[I64]);
+    module.declare_function("js_string_sub", I64, &[I64]);
+    module.declare_function("js_string_sup", I64, &[I64]);
+    module.declare_function("js_string_anchor", I64, &[I64, I64]);
+    module.declare_function("js_string_link", I64, &[I64, I64]);
+    module.declare_function("js_string_fontcolor", I64, &[I64, I64]);
+    module.declare_function("js_string_fontsize", I64, &[I64, I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
     // #3987: `s[key]` canonical-index read — returns the char (NaN-boxed string)
     // for a valid array index, else NaN-boxed `undefined`. Takes the raw key.
@@ -864,6 +883,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_inline_arena_state", PTR, &[]);
     module.declare_function("js_inline_arena_slow_alloc", PTR, &[PTR, I64, I64]);
     module.declare_function("js_object_delete_field", I32, &[I64, I64]);
+    // Box a `delete` success bit into a JS boolean, throwing TypeError in
+    // strict mode when the delete was refused (non-configurable property).
+    module.declare_function("js_delete_result", DOUBLE, &[I32, I32]);
     // js_eq takes JSValue (#[repr(transparent)] u64) for both
     // params + return — i64 in the ABI, not double.
     module.declare_function("js_eq", I64, &[I64, I64]);
@@ -992,6 +1014,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, I32, DOUBLE],
     );
     module.declare_function("js_regexp_new", I64, &[I64, I64]);
+    // Full ECMAScript RegExp constructor: NaN-boxed pattern + flags in, handles
+    // RegExp/undefined/object patterns and ToString-coerced flags.
+    module.declare_function("js_regexp_construct", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
     module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);
@@ -1117,6 +1142,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // invokes the constructor with IMPLICIT_THIS bound to the new
     // instance. Returns the NaN-boxed new instance pointer.
     module.declare_function("js_new_function_construct", DOUBLE, &[DOUBLE, PTR, I64]);
+    // `new <callee>(...spread)` — codegen folds every argument (regular +
+    // spread-expanded) into one JS array and hands it here; the runtime
+    // materialises a flat buffer and forwards to `js_new_function_construct`.
+    module.declare_function("js_new_function_construct_apply", DOUBLE, &[DOUBLE, DOUBLE]);
+    // `new <primitive-literal>` → `TypeError: … is not a constructor`. Emitted
+    // for primitive-literal callees (most importantly `f64` number literals,
+    // which the runtime construct path cannot tag-distinguish from pointers).
+    module.declare_function("js_throw_not_a_constructor", DOUBLE, &[]);
     module.declare_function("js_new_target_value", DOUBLE, &[]);
     // Read side of #838 followup (b): look up a previously-registered
     // prototype method on a function value by name. Pairs with
@@ -1148,6 +1181,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_throw_reference_error_unresolved_get", DOUBLE, &[]);
     module.declare_function("js_throw_reference_error_this_before_super", DOUBLE, &[]);
+    module.declare_function("js_throw_reference_error_super_delete", DOUBLE, &[]);
     module.declare_function(
         "js_throw_reference_error_unresolved_assignment",
         DOUBLE,
@@ -1254,6 +1288,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Date string formatters
     module.declare_function("js_date_to_date_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_time_string", I64, &[DOUBLE]);
+    module.declare_function("js_date_to_utc_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_locale_date_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_locale_time_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_json", I64, &[DOUBLE]);

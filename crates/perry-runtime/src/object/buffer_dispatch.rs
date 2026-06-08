@@ -344,6 +344,24 @@ pub unsafe fn dispatch_buffer_method(
     };
     let i32_bool = |b: i32| f64::from_bits(JSValue::bool(b != 0).bits());
     let i32_num = |n: i32| n as f64;
+    // ToIntegerOrInfinity for an ArrayBuffer/SharedArrayBuffer slice index:
+    // full ToNumber (runs `valueOf`/`toString`, throws on a Symbol) then
+    // truncate toward zero, saturating into i32 so `js_buffer_slice` can apply
+    // the spec's relative-index clamp to [0, len].
+    let ab_slice_index = |v: f64| -> i32 {
+        let n = crate::builtins::js_number_coerce(v);
+        if n.is_nan() {
+            return 0;
+        }
+        let t = n.trunc();
+        if t >= i32::MAX as f64 {
+            i32::MAX
+        } else if t <= i32::MIN as f64 {
+            i32::MIN
+        } else {
+            t as i32
+        }
+    };
 
     // DataView numeric accessors (#2878): getInt8/getUint16/setFloat64/… The
     // receiver is a BufferHeader marked as a DataView. Endianness defaults to
@@ -418,8 +436,27 @@ pub unsafe fn dispatch_buffer_method(
         }
         "slice" | "subarray" => {
             let len = (*buf_ptr).length as i32;
-            let start = arg_i32(0);
-            let end = if args.len() >= 2 { arg_i32(1) } else { len };
+            let (start, end) = if crate::buffer::is_array_buffer(addr)
+                || crate::buffer::is_shared_array_buffer(addr)
+            {
+                // ArrayBuffer / SharedArrayBuffer.prototype.slice: ToIntegerOrInfinity
+                // on `start` (always) and `end` (defaults to len when undefined),
+                // running an object arg's `valueOf` in left-to-right order. Plain
+                // `arg_i32` would `as i32`-cast a boxed object to garbage and skip
+                // the coercion entirely (test262 slice/number-conversion,
+                // end-default-if-undefined). `js_buffer_slice` then clamps.
+                let s = ab_slice_index(arg_or_zero(0));
+                let e = if args.len() < 2 || JSValue::from_bits(args[1].to_bits()).is_undefined() {
+                    len
+                } else {
+                    ab_slice_index(args[1])
+                };
+                (s, e)
+            } else {
+                let s = arg_i32(0);
+                let e = if args.len() >= 2 { arg_i32(1) } else { len };
+                (s, e)
+            };
             let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
             // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
             // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is

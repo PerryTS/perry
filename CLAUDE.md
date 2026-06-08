@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1146
+**Current Version:** 0.5.1147
 
 
 ## TypeScript Parity Status
@@ -130,7 +130,7 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Known Limitations
 
 - **No runtime type *validation***: declared TS types aren't enforced at runtime (a `string` param accepts a number, no throw). Annotations are mostly erased — the exception is `emitDecoratorMetadata`, which retains `design:type`/`design:paramtypes` from annotations on decorated members (see `docs/src/language/decorators.md`). Runtime type *discrimination* does exist: `typeof` via NaN-boxing tags, `instanceof` via class ID chain.
-- **No shared mutable state across threads**: No `SharedArrayBuffer` or `Atomics`.
+- **`SharedArrayBuffer` + `Atomics` are single-realm only** (#4794): construction, typed-array views, and the non-blocking `Atomics` ops (`add`/`and`/`or`/`sub`/`xor`/`load`/`store`/`exchange`/`compareExchange`/`isLockFree`) match the spec on one thread. `perry/thread` deep-copies values across OS threads, so a SAB does **not** alias across threads yet, and `Atomics.wait`/`notify`/`waitAsync` are non-blocking stubs (no cross-agent wakeups). The agent-coordinated test262 cases (`$262.agent`) remain out of scope.
 
 ## Common Pitfalls & Patterns
 

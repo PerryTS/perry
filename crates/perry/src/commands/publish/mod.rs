@@ -454,6 +454,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     // Android-specific config from perry.toml
     let android_min_sdk = config.android.as_ref().and_then(|a| a.min_sdk.clone());
     let android_target_sdk = config.android.as_ref().and_then(|a| a.target_sdk.clone());
+    let android_version_code = config.android.as_ref().and_then(|a| a.version_code);
     let android_permissions = config.android.as_ref().and_then(|a| a.permissions.clone());
     let android_distribute = config.android.as_ref().and_then(|a| a.distribute.clone());
 
@@ -1255,6 +1256,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             None
         },
         android_distribute: if is_android { android_distribute } else { None },
+        android_version_code: if is_android {
+            android_version_code
+        } else {
+            None
+        },
         linux_format: if is_linux {
             config.linux.as_ref().and_then(|l| l.format.clone())
         } else {

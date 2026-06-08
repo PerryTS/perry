@@ -490,6 +490,27 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
         if crate::buffer::is_registered_buffer(addr) {
             return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
         }
+        // A real Array → fast path (no protocol overhead).
+        if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+            return crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader;
+        }
+        // Generic iterable with a user `[Symbol.iterator]` (Map/Set, generator
+        // objects, hand-rolled iterables, …): spread uses the ITERATOR protocol
+        // (GetIterator → IteratorStep → IteratorValue), NOT array-like
+        // length/index access. Drive `.next()` to collect the yielded values so
+        // `f(...iterable)` / `new C(...iterable)` / `[...iterable]` spread see
+        // them, and so errors thrown by `[Symbol.iterator]` / `.next()` /
+        // accessing `value`/`done` propagate (test262 spread-err-*). Plain
+        // array-like objects (a `{length, 0, 1}` bag with no `@@iterator`) keep
+        // the legacy reinterpret fallback below.
+        if crate::collection_iter::is_iterable(value) {
+            let iter = crate::symbol::js_get_iterator(value);
+            let mut out = crate::array::js_array_alloc(0);
+            while let Some(v) = crate::collection_iter::iterator_next_value(iter) {
+                out = crate::array::js_array_push_f64(out, f64::from_bits(v.to_bits()));
+            }
+            return out;
+        }
         crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader
     }
 }

@@ -46,11 +46,71 @@ use super::{
     I18nLowerCtx,
 };
 
+/// A `new` callee that is a primitive literal — never a constructor, so
+/// `new <it>(…)` is a `TypeError`. Covers number / bool / null / undefined /
+/// string / bigint literals (the cases the runtime construct path can't always
+/// tag-reject, notably `f64` numbers).
+fn new_callee_is_primitive_literal(callee: &Expr) -> bool {
+    matches!(
+        callee,
+        Expr::Integer(_)
+            | Expr::Number(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Undefined
+            | Expr::String(_)
+            | Expr::WtfString(_)
+            | Expr::BigInt(_)
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::New {
             class_name, args, ..
         } => lower_new(ctx, class_name, args),
+
+        // `new <callee>(...spread)` — spread-bearing construction. Fold every
+        // argument (regular pushed, spread sources expanded via
+        // `js_array_like_to_array` + concat) into a single JS array in
+        // evaluation order, then dispatch through `js_new_function_construct_apply`
+        // which materialises a flat buffer and reuses the full callee-shape
+        // dispatch of the non-spread `js_new_function_construct`.
+        Expr::NewDynamicSpread { callee, args } => {
+            use perry_hir::CallArg;
+            let func_double = lower_expr(ctx, callee)?;
+            let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+            for a in args {
+                match a {
+                    CallArg::Expr(e) => {
+                        let v = lower_expr(ctx, e)?;
+                        acc_handle = ctx.block().call(
+                            I64,
+                            "js_array_push_f64",
+                            &[(I64, &acc_handle), (DOUBLE, &v)],
+                        );
+                    }
+                    CallArg::Spread(e) => {
+                        let part_box = lower_expr(ctx, e)?;
+                        let part_handle =
+                            ctx.block()
+                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
+                        acc_handle = ctx.block().call(
+                            I64,
+                            "js_array_concat",
+                            &[(I64, &acc_handle), (I64, &part_handle)],
+                        );
+                    }
+                }
+            }
+            let args_box = nanbox_pointer_inline(ctx.block(), &acc_handle);
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_new_function_construct_apply",
+                &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
+            );
+            Ok(result)
+        }
 
         // `new <expr>(args…)` where the callee isn't a bare identifier.
         // Several shapes get static rerouting; the rest fall back to a
@@ -96,6 +156,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //      class constructor. That's a separate followup tracked in
         //      the v0.5.8 changelog.
         Expr::NewDynamic { callee, args } => {
+            // `new <primitive-literal>(…)` is always a `TypeError` — a primitive
+            // is never a constructor (`new 1`, `new 1.5`, `new true`, `new null`,
+            // `new undefined`, `new "s"`). Number literals lower to a plain `f64`
+            // whose bit pattern overlaps the raw-pointer encoding, so the runtime
+            // construct path can't tag-distinguish them; handle every primitive
+            // literal here for a uniform, deterministic throw. Args are lowered
+            // first for their side effects (spec evaluation order).
+            if new_callee_is_primitive_literal(callee.as_ref()) {
+                let _ = lower_expr(ctx, callee)?;
+                for a in args {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                return Ok(ctx.block().call(DOUBLE, "js_throw_not_a_constructor", &[]));
+            }
+
             // Case 1 + 2: callee is statically a class.
             if let Some(name) = try_static_class_name(callee.as_ref(), ctx) {
                 return lower_new(ctx, name, args);
@@ -498,18 +573,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(result);
             }
 
-            // Case 4: best-effort fallback. Lower the callee + args for
-            // side effects, then return an empty object as the result.
-            let _ = lower_expr(ctx, callee)?;
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
-            let class_id = "0".to_string();
-            let count = "0".to_string();
-            let handle =
-                ctx.block()
-                    .call(I64, "js_object_alloc", &[(I32, &class_id), (I32, &count)]);
-            Ok(nanbox_pointer_inline(ctx.block(), &handle))
+            // Case 4: generic fallback — route any remaining callee shape
+            // through `js_new_function_construct`. This is what makes
+            // `new <primitive>` (`new 1`, `new true`, `new null`) and
+            // `new <boxed-wrapper>` (`new new Boolean(true)`) throw the spec
+            // `TypeError`: the runtime inspects the NaN-box tag / boxed payload
+            // and rejects non-constructors. Unknown closure values still fall
+            // back to the class_id=0 empty-object baseline inside the helper,
+            // preserving the previous best-effort behavior for shapes the
+            // compiler can't resolve statically.
+            let func_double = lower_expr(ctx, callee)?;
+            let lowered_args: Vec<String> = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
+            let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_new_function_construct",
+                &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+            );
+            Ok(result)
         }
 
         // `this` — load from the topmost `this` slot in the constructor

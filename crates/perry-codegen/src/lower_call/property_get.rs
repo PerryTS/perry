@@ -49,7 +49,16 @@ fn is_date_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 fn is_inherited_object_prototype_method(name: &str) -> bool {
     matches!(
         name,
-        "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" | "valueOf"
+        "hasOwnProperty"
+            | "propertyIsEnumerable"
+            | "isPrototypeOf"
+            | "valueOf"
+            // Annex B §B.2.2 legacy accessor helpers — inherited from
+            // Object.prototype by every instance (incl. class instances).
+            | "__defineGetter__"
+            | "__defineSetter__"
+            | "__lookupGetter__"
+            | "__lookupSetter__"
     )
 }
 
@@ -302,7 +311,10 @@ pub fn try_lower_property_get_method_call(
             "split" | "charCodeAt" | "charAt" | "trim" | "trimStart" | "trimEnd" | "substring"
             | "substr" | "toLowerCase" | "toUpperCase" | "toLocaleLowerCase"
             | "toLocaleUpperCase" | "replaceAll" | "padStart" | "padEnd" | "repeat"
-            | "normalize" | "codePointAt" | "localeCompare" => true,
+            | "normalize" | "codePointAt" | "localeCompare"
+            // Annex B §B.2.2 HTML wrappers — string-only, no array/map/set form.
+            | "anchor" | "big" | "blink" | "bold" | "fixed" | "fontcolor" | "fontsize"
+            | "italics" | "link" | "small" | "strike" | "sub" | "sup" => true,
             // Issue #638: `replace` is also string-exclusive, but routing
             // it here unconditionally caused regressions in async dispatch
             // pathways. Only fire when args[1] is statically detectable as
@@ -977,6 +989,13 @@ pub fn try_lower_property_get_method_call(
         &ctx.class_ids,
     );
     if let Some(cls_name) = static_dispatch_cls {
+        // `C.prop(args)` where `prop` is a static ACCESSOR reads the accessor and
+        // calls its result — handle before the by-name tower (which would miss).
+        if let Some(v) = super::console_promise::try_lower_class_static_accessor_call(
+            ctx, &cls_name, property, callee, args,
+        )? {
+            return Ok(Some(v));
+        }
         // (fn_name, is_static, declared_param_count, has_rest, is_synthetic_arguments)
         let mut resolved: Option<(String, bool, usize, bool, bool)> = None;
         let mut cur = Some(cls_name.clone());

@@ -133,6 +133,8 @@ pub(super) struct BuildManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) android_distribute: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) android_version_code: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) linux_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) linux_category: Option<String>,

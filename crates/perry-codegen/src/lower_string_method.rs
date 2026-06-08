@@ -25,7 +25,21 @@ fn regexp_search_method_id(property: &str) -> String {
 pub(crate) fn is_known_string_method_name(name: &str) -> bool {
     matches!(
         name,
-        "at" | "charAt"
+        "anchor"
+            | "big"
+            | "blink"
+            | "bold"
+            | "fixed"
+            | "fontcolor"
+            | "fontsize"
+            | "italics"
+            | "link"
+            | "small"
+            | "strike"
+            | "sub"
+            | "sup"
+            | "at"
+            | "charAt"
             | "charCodeAt"
             | "codePointAt"
             | "concat"
@@ -295,6 +309,57 @@ pub(crate) fn lower_string_method(
                 _ => unreachable!(),
             };
             let result = blk.call(I64, runtime_fn, &[(I64, &recv_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        // Annex B §B.2.2 HTML wrappers — no-arg tag wrappers. Extra args are
+        // evaluated for side effects (JS ignores them) then discarded.
+        "big" | "blink" | "bold" | "fixed" | "italics" | "small" | "strike" | "sub" | "sup" => {
+            for extra in args.iter() {
+                let _ = lower_expr(ctx, extra)?;
+            }
+            let blk = ctx.block();
+            let recv_handle = unbox_str_handle(blk, &recv_box);
+            let runtime_fn = match property {
+                "big" => "js_string_big",
+                "blink" => "js_string_blink",
+                "bold" => "js_string_bold",
+                "fixed" => "js_string_fixed",
+                "italics" => "js_string_italics",
+                "small" => "js_string_small",
+                "strike" => "js_string_strike",
+                "sub" => "js_string_sub",
+                "sup" => "js_string_sup",
+                _ => unreachable!(),
+            };
+            let result = blk.call(I64, runtime_fn, &[(I64, &recv_handle)]);
+            Ok(nanbox_string_inline(blk, &result))
+        }
+        // Annex B §B.2.2 HTML wrappers that take an attribute value. A missing
+        // arg coerces `undefined` -> "undefined" via `js_string_coerce`.
+        "anchor" | "link" | "fontcolor" | "fontsize" => {
+            let value_d = if args.is_empty() {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
+            for extra in args.iter().skip(1) {
+                let _ = lower_expr(ctx, extra)?;
+            }
+            let blk = ctx.block();
+            let recv_handle = unbox_str_handle(blk, &recv_box);
+            let value_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &value_d)]);
+            let runtime_fn = match property {
+                "anchor" => "js_string_anchor",
+                "link" => "js_string_link",
+                "fontcolor" => "js_string_fontcolor",
+                "fontsize" => "js_string_fontsize",
+                _ => unreachable!(),
+            };
+            let result = blk.call(
+                I64,
+                runtime_fn,
+                &[(I64, &recv_handle), (I64, &value_handle)],
+            );
             Ok(nanbox_string_inline(blk, &result))
         }
         "charAt" => {

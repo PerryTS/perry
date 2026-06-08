@@ -1463,7 +1463,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Conditional { .. } => conditional::lower(ctx, expr),
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => array_push::lower(ctx, expr),
         Expr::Closure { .. } => closure::lower(ctx, expr),
-        Expr::New { .. } | Expr::NewDynamic { .. } => new_dynamic::lower(ctx, expr),
+        Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => {
+            new_dynamic::lower(ctx, expr)
+        }
         Expr::This | Expr::NewTarget | Expr::SuperCall(..) => this_super_call::lower(ctx, expr),
         Expr::IsNaN(..)
         | Expr::MathPow(..)
@@ -1805,6 +1807,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DateToString(..)
         | Expr::DateToDateString(..)
         | Expr::DateToTimeString(..)
+        | Expr::DateToUTCString(..)
         | Expr::DateToLocaleDateString(..)
         | Expr::DateToLocaleTimeString(..)
         | Expr::DateToJSON(..)

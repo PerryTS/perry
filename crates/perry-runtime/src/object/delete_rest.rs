@@ -5,6 +5,25 @@
 
 use super::*;
 
+/// Box a `delete` operation's success bit into a JS boolean, throwing a
+/// `TypeError` in strict mode when the delete was refused (`deleted == 0`,
+/// i.e. the property exists and is non-configurable). Per spec, a strict-mode
+/// `delete` whose `[[Delete]]` returns `false` throws; sloppy mode yields
+/// `false`. `deleted != 0` always yields `true`.
+#[no_mangle]
+pub extern "C" fn js_delete_result(deleted: i32, strict: i32) -> f64 {
+    if deleted == 0 {
+        if strict != 0 {
+            let message = "Cannot delete property";
+            let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+            let err = crate::error::js_typeerror_new(msg);
+            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        }
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    f64::from_bits(crate::value::TAG_TRUE)
+}
+
 /// Delete a field from an object by its string key name
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
 #[no_mangle]
