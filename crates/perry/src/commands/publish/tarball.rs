@@ -34,6 +34,36 @@ pub(super) fn should_exclude_file(path: &Path) -> bool {
     false
 }
 
+/// Does a user `publish.exclude` pattern match `path` (within `project_dir`)?
+///
+/// Matching is anchored to the project root, NOT gitignore-style "match at any
+/// depth". A bare name like `"jump"` excludes the project-root entry `jump`
+/// (file or dir) only — it must NOT also prune a same-named directory buried in
+/// the tree (e.g. `android/app/src/main/java/com/bloomengine/jump/`, which holds
+/// the Android launcher Activity). That deep-match footgun silently dropped
+/// source from published Android AABs (#4810). A pattern containing `/` is a
+/// path relative to the project root and matches that subtree. A leading `/`
+/// is accepted as an explicit root anchor (`"/jump"` == `"jump"`).
+///
+/// The builtin always-excluded dirs (`node_modules`, `.git`, `target`, …) are
+/// handled separately and still match at any depth.
+pub(super) fn exclude_matches(pattern: &str, path: &Path, project_dir: &Path) -> bool {
+    let pattern = pattern.strip_prefix('/').unwrap_or(pattern);
+    if pattern.is_empty() {
+        return false;
+    }
+    let Ok(rel) = path.strip_prefix(project_dir) else {
+        return false;
+    };
+    if pattern.contains('/') {
+        // Path-relative: matches the named subtree from the project root.
+        rel.starts_with(pattern)
+    } else {
+        // Bare name: a single project-root entry (file or dir), root-anchored.
+        rel == Path::new(pattern)
+    }
+}
+
 /// Resolve `file:` dependencies from package.json and return (package_name, resolved_path) pairs.
 pub(super) fn resolve_file_deps(project_dir: &Path) -> Vec<(String, PathBuf)> {
     let pkg_path = project_dir.join("package.json");
@@ -125,17 +155,7 @@ pub(crate) fn create_project_tarball(
         if builtin_exclude_dirs.iter().any(|ex| name == *ex) {
             return false;
         }
-        if extra_excludes.iter().any(|ex| {
-            if ex.contains('/') {
-                // Path-based exclude: match against relative path from project root
-                e.path()
-                    .strip_prefix(project_dir)
-                    .map(|rel| rel.starts_with(ex))
-                    .unwrap_or(false)
-            } else {
-                name == *ex
-            }
-        }) {
+        if extra_excludes.iter().any(|ex| exclude_matches(ex, e.path(), project_dir)) {
             return false;
         }
         if name.ends_with(".app") {
@@ -262,6 +282,79 @@ mod force_include_tests {
                 .iter()
                 .any(|p| p.ends_with("GoogleSignIn.framework/GoogleSignIn")),
             "force-included framework binary should be packed, got {forced_entries:?}"
+        );
+    }
+
+    #[test]
+    fn exclude_matches_is_root_anchored() {
+        let root = Path::new("/proj");
+        // Bare name matches a project-root entry (file or dir)...
+        assert!(exclude_matches("jump", Path::new("/proj/jump"), root));
+        assert!(exclude_matches("dist", Path::new("/proj/dist"), root));
+        // ...but NOT a same-named directory deeper in the tree (the footgun).
+        assert!(!exclude_matches(
+            "jump",
+            Path::new("/proj/android/app/src/main/java/com/bloomengine/jump"),
+            root
+        ));
+        // A leading slash is an explicit root anchor, equivalent to the bare name.
+        assert!(exclude_matches("/jump", Path::new("/proj/jump"), root));
+        assert!(!exclude_matches(
+            "/jump",
+            Path::new("/proj/a/jump"),
+            root
+        ));
+        // Path patterns match the named subtree from the project root.
+        assert!(exclude_matches(
+            "android/app/build",
+            Path::new("/proj/android/app/build"),
+            root
+        ));
+        assert!(exclude_matches(
+            "android/app/build",
+            Path::new("/proj/android/app/build/outputs/x.txt"),
+            root
+        ));
+        assert!(!exclude_matches(
+            "android/app/build",
+            Path::new("/proj/android/app/src"),
+            root
+        ));
+        // Empty / outside-root never match.
+        assert!(!exclude_matches("/", Path::new("/proj/x"), root));
+        assert!(!exclude_matches("jump", Path::new("/other/jump"), root));
+    }
+
+    #[test]
+    fn bare_exclude_does_not_prune_deep_same_named_dir() {
+        // Regression: a project that excludes its root `jump` binary must NOT
+        // have a `…/com/bloomengine/jump/` source package pruned too — that
+        // silently dropped the Android launcher Activity from published AABs.
+        let proj = tempfile::tempdir().unwrap();
+        fs::write(proj.path().join("index.ts"), "export {}\n").unwrap();
+        // Root artifact the user wants gone (small, so not auto-excluded by size).
+        fs::write(proj.path().join("jump"), "binary-ish").unwrap();
+        // Deep source package that happens to share the name.
+        let pkg = proj
+            .path()
+            .join("android/app/src/main/java/com/bloomengine/jump");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("BloomActivity.kt"), "class BloomActivity\n").unwrap();
+
+        let bytes =
+            create_project_tarball(proj.path(), std::slice::from_ref(&"jump".to_string()), &[])
+                .unwrap();
+        let entries = tar_entries(&bytes);
+
+        assert!(
+            !entries.iter().any(|p| p == "jump"),
+            "root `jump` artifact should be excluded, got {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|p| p.ends_with(
+                "com/bloomengine/jump/BloomActivity.kt"
+            )),
+            "deep jump/ package must be kept, got {entries:?}"
         );
     }
 }
