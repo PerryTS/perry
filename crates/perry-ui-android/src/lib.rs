@@ -13,6 +13,7 @@ pub mod camera;
 pub mod clipboard;
 pub mod deeplinks;
 pub mod dialog;
+pub mod drag_drop;
 pub mod fetch;
 pub mod ffi;
 pub mod file_dialog;

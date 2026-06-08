@@ -1949,4 +1949,36 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::F64, ArgKind::F64],
         ret: ReturnKind::Widget,
     },
+    // ---- Drag & drop (issue #4773) ----
+    // Widget-level setters that attach drag/drop behavior to an existing
+    // widget handle. `widgetOnDrop` registers a drop destination; the
+    // callback receives a `{ text?, files?, urls? }` object built natively.
+    // The three `widgetSetDrag*` setters register a drag source; each
+    // provider closure returns the string payload for its pasteboard type
+    // (text / file-path / url). Real behavior is implemented per platform;
+    // every backend exports these symbols (no-op where the OS has no DnD).
+    MethodRow {
+        method: "widgetOnDrop",
+        runtime: "perry_ui_widget_on_drop",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetDragText",
+        runtime: "perry_ui_widget_set_drag_text",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetDragFile",
+        runtime: "perry_ui_widget_set_drag_file",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetDragUrl",
+        runtime: "perry_ui_widget_set_drag_url",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
 ];

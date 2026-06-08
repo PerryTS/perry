@@ -1492,6 +1492,50 @@ export function clipboardRead(): string;
 export function clipboardWrite(text: string): void;
 
 // ---------------------------------------------------------------------------
+// Drag & drop (issue #4773)
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload delivered to a {@link widgetOnDrop} handler. Each field is present
+ * only when the drag carried that representation:
+ *  - `text` — plain text (`public.utf8-plain-text`)
+ *  - `files` — absolute paths of dropped files (`public.file-url`)
+ *  - `urls` — web links (`public.url`)
+ */
+export interface DropData {
+  text?: string;
+  files?: string[];
+  urls?: string[];
+}
+
+/**
+ * Make `widget` a drop destination. `handler` fires when text, files, or URLs
+ * are dragged onto the widget, receiving a {@link DropData} describing the
+ * payload. The drop defaults to a "copy" operation.
+ */
+export function widgetOnDrop(widget: Widget, handler: (data: DropData) => void): void;
+
+/**
+ * Make `widget` a drag source that offers plain text. `provider` is called
+ * when a drag begins and returns the text to carry (`public.utf8-plain-text`).
+ * May be combined with {@link widgetSetDragFile} / {@link widgetSetDragUrl} to
+ * offer multiple representations of the same drag.
+ */
+export function widgetSetDragText(widget: Widget, provider: () => string): void;
+
+/**
+ * Make `widget` a drag source that offers a file. `provider` returns the
+ * absolute path of the file to carry (`public.file-url`).
+ */
+export function widgetSetDragFile(widget: Widget, provider: () => string): void;
+
+/**
+ * Make `widget` a drag source that offers a web link. `provider` returns the
+ * URL string to carry (`public.url`).
+ */
+export function widgetSetDragUrl(widget: Widget, provider: () => string): void;
+
+// ---------------------------------------------------------------------------
 // Dialogs
 // ---------------------------------------------------------------------------
 

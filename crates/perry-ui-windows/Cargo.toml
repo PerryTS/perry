@@ -35,6 +35,9 @@ geisterhand = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
+    # `#[implement]` — needed to author the IDropTarget / IDropSource /
+    # IDataObject COM objects for native drag-and-drop (#4773).
+    "implement",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
@@ -44,6 +47,8 @@ windows = { version = "0.58", features = [
     "Win32_System_DataExchange",
     "Win32_System_Ole",
     "Win32_System_Com",
+    # STGMEDIUM / IDataObject marshalling for native drag-and-drop (#4773).
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_Memory",
     "Win32_System_SystemServices",
     "Win32_UI_HiDpi",

@@ -6,6 +6,7 @@ pub mod camera;
 pub mod clipboard;
 pub mod crash_log;
 pub mod deeplinks_stub;
+pub mod drag_drop;
 pub mod file_dialog;
 #[cfg(feature = "geisterhand")]
 pub mod geisterhand_style;
