@@ -1500,6 +1500,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     // Lower callee as plain MemberExpr, unwrapping inner OptChain.
                     // SWC may wrap the callee member access in an OptChain too.
                     // We must NOT re-lower via lower_expr which would nest Conditionals.
+                    //
+                    // `callee_from_chain` records the `foo?.bar?.(args)` shape: the
+                    // callee is itself an optional chain, so `check_expr` is the
+                    // *receiver* (`foo`) rather than the function value. In that
+                    // case the receiver short-circuit alone is not enough — the
+                    // function value (`foo.bar`) must ALSO be null-checked before
+                    // the call, or an `undefined` property is invoked and throws
+                    // "X is not a function" (issue #4699: zod `safeParse`'s
+                    // `iss.inst?._zod.def?.error?.(iss)` error-map probe).
+                    let mut callee_from_chain = false;
                     let (check_expr, callee_expr) = {
                         let mut lower_member_flat =
                             |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
@@ -1532,12 +1542,15 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 (prop.clone(), prop)
                             }
                             ast::Expr::OptChain(inner) => match &*inner.base {
-                                // Chained `foo?.bar?.(args)`: keep checking the
-                                // receiver (foo) so the inner `?.` short-circuit
-                                // still works. A separate null-check on the
-                                // function value (foo.bar) is a known gap — see
-                                // the comment above the final Conditional below.
-                                ast::OptChainBase::Member(m) => lower_member_flat(m)?,
+                                // Chained `foo?.bar?.(args)`: check the receiver
+                                // (foo) so the inner `?.` short-circuit still works,
+                                // AND flag that the function value (foo.bar) needs
+                                // its own null-check before the call (added in the
+                                // final assembly below).
+                                ast::OptChainBase::Member(m) => {
+                                    callee_from_chain = true;
+                                    lower_member_flat(m)?
+                                }
                                 _ => {
                                     let ce = lower_expr(ctx, callee)?;
                                     (ce.clone(), ce)
@@ -1572,16 +1585,41 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             other => other,
                         };
                         let outer_call = Expr::Call {
-                            callee: Box::new(fixed_callee),
+                            callee: Box::new(fixed_callee.clone()),
                             args,
                             type_args: Vec::new(),
+                        };
+                        // For `foo?.bar?.(args)` the function value (`bar` on the
+                        // un-short-circuited receiver) must itself be null-checked
+                        // before calling — otherwise an `undefined` property is
+                        // invoked and throws "X is not a function" (#4699).
+                        let else_expr: Box<Expr> = if callee_from_chain {
+                            Box::new(Expr::Conditional {
+                                condition: Box::new(Expr::Compare {
+                                    op: CompareOp::LooseEq,
+                                    left: Box::new(fixed_callee),
+                                    right: Box::new(Expr::Null),
+                                }),
+                                then_expr: Box::new(Expr::Undefined),
+                                else_expr: Box::new(outer_call),
+                            })
+                        } else {
+                            Box::new(outer_call)
                         };
                         return Ok(Expr::Conditional {
                             condition: inner_cond,
                             then_expr: inner_then,
-                            else_expr: Box::new(outer_call),
+                            else_expr,
                         });
                     }
+
+                    // Keep the function value for the `foo?.bar?.(args)` guard
+                    // (see callee_from_chain) before it is moved into the call.
+                    let func_value_for_guard = if callee_from_chain {
+                        Some(callee_expr.clone())
+                    } else {
+                        None
+                    };
 
                     // Build the call expression
                     let call_expr = if has_spread {
@@ -1615,6 +1653,23 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         })
                     };
 
+                    // For `foo?.bar?.(args)` the receiver check below guards `foo`,
+                    // but the function value `foo.bar` must ALSO be null-checked
+                    // before the call — otherwise an `undefined` property is
+                    // invoked and throws "X is not a function" (#4699).
+                    let else_expr: Box<Expr> = match func_value_for_guard {
+                        Some(func_value) => Box::new(Expr::Conditional {
+                            condition: Box::new(Expr::Compare {
+                                op: CompareOp::LooseEq,
+                                left: Box::new(func_value),
+                                right: Box::new(Expr::Null),
+                            }),
+                            then_expr: Box::new(Expr::Undefined),
+                            else_expr: Box::new(call_expr),
+                        }),
+                        None => Box::new(call_expr),
+                    };
+
                     // Issue #388: optional chaining short-circuits on
                     // null OR undefined per spec. Use `LooseEq` so the
                     // comparison `check_expr == null` matches both —
@@ -1629,7 +1684,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             right: Box::new(Expr::Null),
                         }),
                         then_expr: Box::new(Expr::Undefined),
-                        else_expr: Box::new(call_expr),
+                        else_expr,
                     })
                 }
             }
