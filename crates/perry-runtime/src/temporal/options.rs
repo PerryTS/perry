@@ -32,11 +32,30 @@ fn as_obj(v: f64) -> Option<*const crate::object::ObjectHeader> {
     if !jv.is_pointer() {
         return None;
     }
+    // A Symbol is NaN-boxed with POINTER_TAG but is a primitive, never a valid
+    // options/fields object — reject it so callers don't deref it as one.
+    if unsafe { crate::symbol::js_is_symbol(v) } != 0 {
+        return None;
+    }
     let obj = jv.as_pointer::<crate::object::ObjectHeader>();
     if obj.is_null() {
         None
     } else {
         Some(obj)
+    }
+}
+
+/// Spec `GetOptionsObject(options)`: `undefined` → `None` (use defaults), an
+/// object → `Some`, and any other value (null, boolean, number, string, bigint,
+/// symbol) → `TypeError`. Used by the methods whose options argument is an
+/// object-only bag (no string shorthand): `until`/`since`/`toString`/`compare`.
+pub fn require_options_object(arg: f64) -> Option<*const crate::object::ObjectHeader> {
+    if is_undefined(arg) {
+        return None;
+    }
+    match as_obj(arg) {
+        Some(o) => Some(o),
+        None => type_error("options must be an object or undefined".to_string()),
     }
 }
 
@@ -203,9 +222,9 @@ pub fn total_options(arg: f64) -> (Unit, Option<RelativeTo>) {
 /// spec-default (auto precision, no smallest-unit override).
 pub fn to_string_rounding_options(arg: f64) -> ToStringRoundingOptions {
     let mut o = ToStringRoundingOptions::default();
-    let obj = match as_obj(arg) {
+    let obj = match require_options_object(arg) {
         Some(o) => o,
-        None => return o, // undefined / non-object → defaults
+        None => return o, // undefined → defaults; a primitive throws TypeError
     };
     if let Some(s) = str_field_coerce(obj, "smallestUnit") {
         o.smallest_unit = Some(parse_unit(&s));
@@ -242,7 +261,7 @@ pub fn to_string_rounding_options(arg: f64) -> ToStringRoundingOptions {
 /// quartet. An `undefined` / absent arg yields the default (auto units).
 pub fn difference_settings(arg: f64) -> DifferenceSettings {
     let mut s = DifferenceSettings::default();
-    if let Some(obj) = as_obj(arg) {
+    if let Some(obj) = require_options_object(arg) {
         if let Some(u) = str_field_coerce(obj, "largestUnit") {
             s.largest_unit = Some(parse_unit(&u));
         }

@@ -143,8 +143,10 @@ pub fn compare_static(args: &[f64]) -> f64 {
     let a = coerce_duration(raw_arg(args, 0));
     let b = coerce_duration(raw_arg(args, 1));
     // The `{ relativeTo }` option anchors calendar-unit (years/months/weeks)
-    // comparison; it is also validated (RangeError on a malformed string)
-    // before the early-equal return.
+    // comparison; the options bag itself must be an object or undefined
+    // (TypeError otherwise), and a malformed `relativeTo` string is a RangeError
+    // — both before the early-equal return.
+    super::options::require_options_object(raw_arg(args, 2));
     let rel = super::options::relative_to(raw_arg(args, 2));
     let ord = ok_or_throw(a.compare(&b, rel));
     match ord {
