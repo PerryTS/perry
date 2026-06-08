@@ -192,6 +192,8 @@ pub(super) fn try_url_date_weakref_instance(
                     | "toLocaleString"
                     | "toDateString"
                     | "toTimeString"
+                    | "toUTCString"
+                    | "toGMTString"
                     | "toLocaleDateString"
                     | "toLocaleTimeString"
                     | "toISOString"
@@ -300,6 +302,10 @@ pub(super) fn try_url_date_weakref_instance(
                     "toTimeString" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::DateToTimeString(Box::new(date_expr))));
+                    }
+                    "toUTCString" | "toGMTString" => {
+                        let date_expr = lower_expr(ctx, &member.obj)?;
+                        return Ok(Ok(Expr::DateToUTCString(Box::new(date_expr))));
                     }
                     "toLocaleDateString" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;

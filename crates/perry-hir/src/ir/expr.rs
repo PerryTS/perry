@@ -1735,6 +1735,7 @@ pub enum Expr {
     DateToString(Box<Expr>),     // date.toString() / String(date) -> full date string
     DateToDateString(Box<Expr>), // date.toDateString() -> string
     DateToTimeString(Box<Expr>), // date.toTimeString() -> string
+    DateToUTCString(Box<Expr>),  // date.toUTCString() / toGMTString() -> string
     DateToLocaleDateString(Box<Expr>), // date.toLocaleDateString() -> string
     DateToLocaleTimeString(Box<Expr>), // date.toLocaleTimeString() -> string
     DateToLocaleString(Box<Expr>), // date.toLocaleString() -> string

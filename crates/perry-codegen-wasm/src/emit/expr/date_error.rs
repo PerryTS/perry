@@ -148,6 +148,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, d);
                 self.emit_memcall(func, "date_to_time_string", 1);
             }
+            Expr::DateToUTCString(d) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, d);
+                self.emit_memcall(func, "date_to_utc_string", 1);
+            }
             Expr::DateToLocaleDateString(d) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, d);

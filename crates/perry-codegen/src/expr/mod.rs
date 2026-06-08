@@ -1807,6 +1807,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DateToString(..)
         | Expr::DateToDateString(..)
         | Expr::DateToTimeString(..)
+        | Expr::DateToUTCString(..)
         | Expr::DateToLocaleDateString(..)
         | Expr::DateToLocaleTimeString(..)
         | Expr::DateToJSON(..)

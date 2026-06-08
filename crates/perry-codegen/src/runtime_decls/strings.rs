@@ -1266,6 +1266,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Date string formatters
     module.declare_function("js_date_to_date_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_time_string", I64, &[DOUBLE]);
+    module.declare_function("js_date_to_utc_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_locale_date_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_locale_time_string", I64, &[DOUBLE]);
     module.declare_function("js_date_to_json", I64, &[DOUBLE]);

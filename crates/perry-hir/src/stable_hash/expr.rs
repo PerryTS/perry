@@ -475,6 +475,7 @@ impl SH for Expr {
             Expr::DateToString(e) => { tag(h, 1339); e.as_ref().hash(h); }
             Expr::DateToDateString(e) => { tag(h, 339); e.as_ref().hash(h); }
             Expr::DateToTimeString(e) => { tag(h, 340); e.as_ref().hash(h); }
+            Expr::DateToUTCString(e) => { tag(h, 12507); e.as_ref().hash(h); }
             Expr::DateToLocaleDateString(e) => { tag(h, 341); e.as_ref().hash(h); }
             Expr::DateToLocaleTimeString(e) => { tag(h, 342); e.as_ref().hash(h); }
             Expr::DateToLocaleString(e) => { tag(h, 343); e.as_ref().hash(h); }

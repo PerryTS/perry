@@ -1130,42 +1130,62 @@ pub extern "C" fn js_date_apply_setter(
             None,
         );
     }
-    // `req(0)` is the *leading*, required component: an omitted leading
-    // argument coerces to NaN (e.g. `setHours()` → Invalid Date). Trailing
-    // optional components use `opt(i)`: an omitted (or `undefined`) trailing
-    // argument is `None`, i.e. "keep the current field". A *present* arg
-    // coerces via ToNumber (NaN-propagating either way).
-    let opt = |i: usize| -> Option<f64> {
-        if i < argc && !jsvalue_is_undefined(args[i]) {
-            Some(jsvalue_to_number(args[i]))
-        } else {
-            None
-        }
+    // V8/Node observable order for the date/time setters (fields 0..=6): the
+    // LEADING argument is ToNumber-coerced first, THEN `thisTimeValue` is read
+    // — not before. A `valueOf` on the leading argument that re-enters and
+    // mutates this very Date is therefore visible to the rest of the
+    // algorithm. (test262 `date-value-read-before-tonumber-when-date-is-*`
+    // pin V8's read-AFTER order despite their spec-derived names, and so does
+    // `arg-coercion-order` for the short-circuit below.) The earlier `captured`
+    // read drives only setTime/setYear (fields 7/8), which already returned.
+    let _ = captured;
+    let leading = if argc >= 1 {
+        jsvalue_to_number(args[0])
+    } else {
+        f64::NAN
     };
-    let req = |i: usize| -> Option<f64> {
+    // Re-read the time value AFTER the leading arg's side effects.
+    let t = date_cell_timestamp(date);
+    let is_full_year = field == 0;
+    // For every setter except setFullYear/setUTCFullYear, a NaN time value at
+    // this point short-circuits to NaN: the remaining arguments are NOT
+    // coerced and the cell is NOT written (so a `valueOf`-installed value
+    // persists). setFullYear substitutes +0 for a NaN time value and coerces
+    // all of its arguments.
+    if t.is_nan() && !is_full_year {
+        return f64::NAN;
+    }
+    let base = if t.is_nan() { 0.0 } else { t };
+    // Trailing optional components: an ABSENT trailing argument is `None`
+    // ("keep the current field"); a PRESENT argument — even an explicit
+    // `undefined` — is ToNumber-coerced (so `setMinutes(0, 0, undefined)`
+    // yields NaN, not the retained millisecond; test262 set*/arg-*-to-number).
+    // The leading component is already coerced.
+    let lead = Some(leading);
+    let opt = |i: usize| -> Option<f64> {
         if i < argc {
             Some(jsvalue_to_number(args[i]))
         } else {
-            Some(f64::NAN)
+            None
         }
     };
     // Map (field, positional index) → the seven rebuild slots.
     // Slots: year, month0, day, hour, minute, second, ms. The first slot of
     // each setter is the required leading component.
     let (year, month0, day, hour, minute, second, ms) = match field {
-        0 => (req(0), opt(1), opt(2), None, None, None, None), // setFullYear(y, mo?, d?)
-        1 => (None, req(0), opt(1), None, None, None, None),   // setMonth(mo, d?)
-        2 => (None, None, req(0), None, None, None, None),     // setDate(d)
-        3 => (None, None, None, req(0), opt(1), opt(2), opt(3)), // setHours(h, mi?, s?, ms?)
-        4 => (None, None, None, None, req(0), opt(1), opt(2)), // setMinutes(mi, s?, ms?)
-        5 => (None, None, None, None, None, req(0), opt(1)),   // setSeconds(s, ms?)
-        6 => (None, None, None, None, None, None, req(0)),     // setMilliseconds(ms)
+        0 => (lead, opt(1), opt(2), None, None, None, None), // setFullYear(y, mo?, d?)
+        1 => (None, lead, opt(1), None, None, None, None),   // setMonth(mo, d?)
+        2 => (None, None, lead, None, None, None, None),     // setDate(d)
+        3 => (None, None, None, lead, opt(1), opt(2), opt(3)), // setHours(h, mi?, s?, ms?)
+        4 => (None, None, None, None, lead, opt(1), opt(2)), // setMinutes(mi, s?, ms?)
+        5 => (None, None, None, None, None, lead, opt(1)),   // setSeconds(s, ms?)
+        6 => (None, None, None, None, None, None, lead),     // setMilliseconds(ms)
         _ => return date_cell_store(date, f64::NAN),
     };
     if is_utc != 0 {
-        rebuild_with(date, captured, year, month0, day, hour, minute, second, ms)
+        rebuild_with(date, base, year, month0, day, hour, minute, second, ms)
     } else {
-        rebuild_local_with(date, captured, year, month0, day, hour, minute, second, ms)
+        rebuild_local_with(date, base, year, month0, day, hour, minute, second, ms)
     }
 }
 
@@ -1492,6 +1512,20 @@ const MONTH_NAMES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+/// Format a calendar year the way V8's date-to-string methods do: years in
+/// `0..=9999` are zero-padded to 4 digits ("0020"), negative years carry a
+/// leading `-` then the magnitude zero-padded to 4 digits ("-0001",
+/// "-123456"), and years `> 9999` print in full ("10000"). `{:04}` alone
+/// mis-pads negatives ("-001"), so the sign is handled explicitly. test262
+/// Date/prototype/{toString,toDateString,toUTCString}/negative-year.
+fn format_year(year: i32) -> String {
+    if year < 0 {
+        format!("-{:04}", -(year as i64))
+    } else {
+        format!("{:04}", year)
+    }
+}
+
 /// `date.toString()` / `String(date)` / `` `${date}` `` — the full local
 /// date+time string, e.g. "Mon Jan 15 2024 12:30:45 GMT+0100 (local)", or
 /// "Invalid Date". #2089: Date is a reference type now, so the generic
@@ -1515,17 +1549,43 @@ pub extern "C" fn js_date_to_string(timestamp: f64) -> *mut crate::StringHeader 
     let off_h = abs_off / 3600;
     let off_m = (abs_off % 3600) / 60;
     let s = format!(
-        "{} {} {:02} {:04} {:02}:{:02}:{:02} GMT{}{:02}{:02} (local)",
+        "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02} (local)",
         WEEKDAY_NAMES[dow],
         MONTH_NAMES[(month - 1) as usize],
         day,
-        year,
+        format_year(year),
         hour,
         minute,
         second,
         sign,
         off_h,
         off_m
+    );
+    alloc_runtime_string(&s)
+}
+
+/// `date.toUTCString()` — e.g. "Sun, 23 Mar 2014 00:00:00 GMT" (UTC), or
+/// "Invalid Date". Stored timestamps are already UTC, so components decode
+/// directly without a tz offset. `toGMTString` is a legacy alias.
+#[no_mangle]
+pub extern "C" fn js_date_to_utc_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
+    if timestamp.is_nan() {
+        return invalid_date_string();
+    }
+    let ts_ms = timestamp as i64;
+    let secs = ts_ms.div_euclid(1000);
+    let (year, month, day, hour, minute, second) = timestamp_to_components(secs);
+    let dow = weekday_from_timestamp(secs) as usize;
+    let s = format!(
+        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
+        WEEKDAY_NAMES[dow],
+        day,
+        MONTH_NAMES[(month - 1) as usize],
+        format_year(year),
+        hour,
+        minute,
+        second
     );
     alloc_runtime_string(&s)
 }
@@ -1542,11 +1602,11 @@ pub extern "C" fn js_date_to_date_string(timestamp: f64) -> *mut crate::StringHe
     let (year, month, day, _, _, _, tz_offset) = timestamp_to_local_components(secs);
     let dow = weekday_from_timestamp(secs + tz_offset) as usize;
     let s = format!(
-        "{} {} {:02} {:04}",
+        "{} {} {:02} {}",
         WEEKDAY_NAMES[dow],
         MONTH_NAMES[(month - 1) as usize],
         day,
-        year
+        format_year(year)
     );
     alloc_runtime_string(&s)
 }

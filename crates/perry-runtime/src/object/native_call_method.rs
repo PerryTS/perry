@@ -1313,6 +1313,40 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // Primitive-wrapper prototypes (`Number.prototype`, `Boolean.prototype`,
+    // `BigInt.prototype`) carry a brand default value (+0 / false / 0n) for
+    // valueOf/toString, matching V8. They are ordinary objects with no
+    // [[*Data]] slot, so `boxed_primitive_payload` below misses them; without
+    // this a fused `Number.prototype.valueOf()` returned the prototype object
+    // itself (test262 Number/prototype/valueOf/S15.7.4.4_*).
+    if jsval.is_pointer() && matches!(method_name, "valueOf" | "toString" | "toLocaleString") {
+        use crate::object::builtin_prototype_value;
+        let ob = object.to_bits();
+        if ob == builtin_prototype_value("Number").to_bits() {
+            match method_name {
+                "valueOf" => return 0.0,
+                _ => {
+                    let radix = if args_len >= 1 && !args_ptr.is_null() {
+                        *args_ptr
+                    } else {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    };
+                    let s = crate::value::js_jsvalue_to_string_radix(0.0, radix);
+                    return f64::from_bits(JSValue::string_ptr(s).bits());
+                }
+            }
+        }
+        if ob == builtin_prototype_value("Boolean").to_bits() {
+            match method_name {
+                "valueOf" => return f64::from_bits(crate::value::TAG_FALSE),
+                _ => {
+                    let s = crate::string::js_string_from_bytes(b"false".as_ptr(), 5);
+                    return f64::from_bits(JSValue::string_ptr(s).bits());
+                }
+            }
+        }
+    }
+
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
         match method_name {
             "valueOf" => return payload,

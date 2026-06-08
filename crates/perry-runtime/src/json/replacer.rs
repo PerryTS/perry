@@ -771,10 +771,21 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     let actual_fields = std::cmp::min(num_fields, keys_len);
 
-    // Build a map of key_name -> field_value for the object
+    // Build a map of key_name -> field_value for the object. An own accessor
+    // (`get key()`) holds no value in its raw slot, so resolve it through the
+    // getter — matching the function-replacer walk (test262
+    // replacer-array-duplicates, whose whitelisted key is a getter).
+    let filter_non_enum = crate::object::descriptors_in_use();
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
-        let field_val = *fields_ptr.add(f as usize);
+        let mut field_val = *fields_ptr.add(f as usize);
+        if filter_non_enum && f < keys_len {
+            if let Some(gv) =
+                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
+            {
+                field_val = gv;
+            }
+        }
         let key_name = if f < keys_len {
             let key_f64 = *keys_elements.add(f as usize);
             let key_bits = key_f64.to_bits();
@@ -814,12 +825,26 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
                 buf.push('"');
                 buf.push_str(allowed_key);
                 buf.push_str("\": ");
-                stringify_value_pretty(*field_val, TYPE_UNKNOWN, buf, indent, inner_indent_count);
+                stringify_value_with_array_replacer(
+                    *field_val,
+                    allowed_keys,
+                    buf,
+                    indent,
+                    inner_indent_count,
+                    true,
+                );
             } else {
                 buf.push('"');
                 buf.push_str(allowed_key);
                 buf.push_str("\":");
-                stringify_value(*field_val, TYPE_UNKNOWN, buf);
+                stringify_value_with_array_replacer(
+                    *field_val,
+                    allowed_keys,
+                    buf,
+                    indent,
+                    depth,
+                    false,
+                );
             }
         }
     }
@@ -833,37 +858,192 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
+/// Serialize one value while an array replacer (PropertyList) is active. Per
+/// spec the key whitelist applies to EVERY nested object in the tree, not just
+/// the top-level one — so a plain object recurses through
+/// `stringify_object_with_array_replacer` and an array through
+/// `stringify_array_with_array_replacer`. Scalars, boxed primitive wrappers,
+/// buffers, Map/Set, etc. defer to the ordinary (whitelist-agnostic) serializer.
+pub(crate) unsafe fn stringify_value_with_array_replacer(
+    val: f64,
+    allowed_keys: &[String],
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+    use_pretty: bool,
+) {
+    let bits = val.to_bits();
+    if let Some(ptr) = extract_pointer(bits) {
+        if !crate::buffer::is_registered_buffer(ptr as usize)
+            && crate::builtins::boxed_primitive_json_value(val).is_none()
+        {
+            match gc_obj_type(ptr) {
+                crate::gc::GC_TYPE_ARRAY => {
+                    stringify_array_with_array_replacer(
+                        ptr,
+                        allowed_keys,
+                        buf,
+                        indent,
+                        depth,
+                        use_pretty,
+                    );
+                    return;
+                }
+                crate::gc::GC_TYPE_OBJECT if is_object_pointer(ptr) => {
+                    stringify_object_with_array_replacer(
+                        ptr,
+                        allowed_keys,
+                        buf,
+                        indent,
+                        depth,
+                        use_pretty,
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+    if use_pretty {
+        stringify_value_pretty(val, TYPE_UNKNOWN, buf, indent, depth);
+    } else {
+        stringify_value(val, TYPE_UNKNOWN, buf);
+    }
+}
+
+/// Array walk under an active array replacer. Every element is serialized (the
+/// PropertyList only filters object keys, never array indices); undefined /
+/// function elements become `null`. Nested objects/arrays recurse carrying the
+/// same key whitelist.
+pub(crate) unsafe fn stringify_array_with_array_replacer(
+    ptr: *const u8,
+    allowed_keys: &[String],
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+    use_pretty: bool,
+) {
+    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
+        let msg = "Converting circular structure to JSON";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+        crate::exception::js_throw(f64::from_bits(
+            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+        ));
+    }
+    STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+
+    let arr = ptr as *const crate::ArrayHeader;
+    let len = (*arr).length;
+    let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    if len == 0 {
+        buf.push_str("[]");
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        return;
+    }
+    let inner_depth = depth + 1;
+    buf.push('[');
+    for i in 0..len {
+        if i > 0 {
+            buf.push(',');
+        }
+        if use_pretty {
+            buf.push('\n');
+            for _ in 0..inner_depth {
+                buf.push_str(indent);
+            }
+        }
+        let elem = *elements.add(i as usize);
+        let elem_bits = elem.to_bits();
+        if elem_bits == TAG_UNDEFINED || is_closure_value(elem_bits) {
+            buf.push_str("null");
+        } else {
+            stringify_value_with_array_replacer(
+                elem,
+                allowed_keys,
+                buf,
+                indent,
+                inner_depth,
+                use_pretty,
+            );
+        }
+    }
+    if use_pretty {
+        buf.push('\n');
+        for _ in 0..depth {
+            buf.push_str(indent);
+        }
+    }
+    buf.push(']');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+}
+
 // ─── Extract array of strings from a JSValue array ──────────────────────────
 
 pub(crate) unsafe fn extract_string_array(ptr: *const u8) -> Vec<String> {
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-    let mut result = Vec::new();
+    let mut result: Vec<String> = Vec::new();
     for i in 0..len {
         let elem = *elements.add(i as usize);
-        let elem_bits = elem.to_bits();
-        let elem_tag = elem_bits & 0xFFFF_0000_0000_0000;
-        if elem_tag == STRING_TAG {
-            let str_ptr = (elem_bits & POINTER_MASK) as *const StringHeader;
-            if let Some(s) = str_from_header(str_ptr) {
-                result.push(s.to_string());
-            }
-        } else if elem_tag == crate::value::SHORT_STRING_TAG {
-            let jsval = JSValue::from_bits(elem_bits);
-            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let n = jsval.short_string_to_buf(&mut scratch);
-            if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-                result.push(s.to_string());
-            }
-        } else if is_raw_pointer(elem_bits) {
-            let str_ptr = elem_bits as *const StringHeader;
-            if let Some(s) = str_from_header(str_ptr) {
-                result.push(s.to_string());
+        // Per ECMA-262 SerializeJSONObject: a PropertyList item is kept when it
+        // is a String, a Number, or a String/Number wrapper object (Numbers and
+        // wrappers coerce to their canonical string form). Duplicate names are
+        // dropped — first occurrence wins.
+        if let Some(key) = json_property_list_key(elem) {
+            if !result.contains(&key) {
+                result.push(key);
             }
         }
     }
     result
+}
+
+/// Resolve one PropertyList element to its key name (or `None` to skip it).
+/// String/Number values and `Number`/`String` wrapper objects qualify; all
+/// other types (booleans, null, plain objects, symbols, …) are skipped.
+unsafe fn json_property_list_key(elem: f64) -> Option<String> {
+    let bits = elem.to_bits();
+    let tag = bits & 0xFFFF_0000_0000_0000;
+    if tag == STRING_TAG {
+        let str_ptr = (bits & POINTER_MASK) as *const StringHeader;
+        return str_from_header(str_ptr).map(|s| s.to_string());
+    }
+    if tag == crate::value::SHORT_STRING_TAG {
+        let jsval = JSValue::from_bits(bits);
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = jsval.short_string_to_buf(&mut scratch);
+        return std::str::from_utf8(&scratch[..n])
+            .ok()
+            .map(|s| s.to_string());
+    }
+    // Heap-string literal pointer (denormal-range bits, never a real number).
+    if is_raw_pointer(bits) {
+        let str_ptr = bits as *const StringHeader;
+        return str_from_header(str_ptr).map(|s| s.to_string());
+    }
+    let jsval = JSValue::from_bits(bits);
+    if jsval.is_int32() {
+        return Some(jsval.as_int32().to_string());
+    }
+    if jsval.is_number() {
+        let p = crate::string::js_number_to_string(elem);
+        return str_from_header(p).map(|s| s.to_string());
+    }
+    // String / Number wrapper objects → ToString(v). This runs the object's
+    // own `toString`/`valueOf` (ToPrimitive), not a raw read of [[*Data]] — so
+    // `new Number(10)` with an overridden `toString` contributes that string,
+    // not "10" (test262 replacer-array-{number,string}-object).
+    if let Some((cid, _)) = crate::builtins::boxed_primitive_payload(elem) {
+        const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+        const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
+        if cid == CLASS_ID_BOXED_NUMBER || cid == CLASS_ID_BOXED_STRING {
+            let s = crate::value::js_jsvalue_to_string(elem);
+            return str_from_header(s).map(|s| s.to_string());
+        }
+    }
+    None
 }
 
 /// Detect whether a NaN-boxed value is an array (not an object).
@@ -932,7 +1112,28 @@ pub unsafe extern "C" fn js_json_stringify_full(
     let value = redirect_lazy_to_materialized(value);
     let value_bits = value.to_bits();
 
-    // Determine spacer/indent
+    // Determine spacer/indent. A `Number`/`String` wrapper object spacer
+    // (`JSON.stringify(v, null, new Number(2))`) is coerced per ECMA-262
+    // 25.5.2.1: a Number wrapper via ToNumber, a String wrapper via ToString —
+    // both of which run the object's own `valueOf`/`toString` (so an overridden
+    // `valueOf` is observed, and a throwing one propagates). Without this the
+    // NaN-boxed pointer would be read as a raw indent count (test262
+    // space-{number,string}-object).
+    let spacer_f64 = match crate::builtins::boxed_primitive_payload(spacer_f64) {
+        Some((cid, _)) => {
+            const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+            const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
+            if cid == CLASS_ID_BOXED_NUMBER {
+                crate::builtins::js_number_coerce(spacer_f64)
+            } else if cid == CLASS_ID_BOXED_STRING {
+                let s = crate::value::js_jsvalue_to_string(spacer_f64);
+                f64::from_bits(STRING_TAG | (s as u64 & POINTER_MASK))
+            } else {
+                spacer_f64
+            }
+        }
+        None => spacer_f64,
+    };
     let indent_str: String;
     let spacer_bits = spacer_f64.to_bits();
     let spacer_tag = spacer_bits & 0xFFFF_0000_0000_0000;
@@ -1014,27 +1215,19 @@ pub unsafe extern "C" fn js_json_stringify_full(
     let mut buf = take_stringify_buf();
 
     if let Some(ref allowed_keys) = array_replacer {
-        // Array replacer: only applies to objects at the top level
-        if let Some(ptr) = extract_pointer(value_bits) {
-            if is_object_pointer(ptr) {
-                stringify_object_with_array_replacer(
-                    ptr,
-                    allowed_keys,
-                    &mut buf,
-                    &indent_str,
-                    0,
-                    use_pretty,
-                );
-            } else if use_pretty {
-                stringify_value_pretty(value, TYPE_UNKNOWN, &mut buf, &indent_str, 0);
-            } else {
-                stringify_value(value, TYPE_UNKNOWN, &mut buf);
-            }
-        } else if use_pretty {
-            stringify_value_pretty(value, TYPE_UNKNOWN, &mut buf, &indent_str, 0);
-        } else {
-            stringify_value(value, TYPE_UNKNOWN, &mut buf);
-        }
+        // Array replacer (PropertyList): the key whitelist applies recursively
+        // to EVERY nested object, whether the root is an object or an array
+        // (`JSON.stringify([1, {a:2}], [])` → "[1,{}]"). The shared dispatcher
+        // routes objects/arrays into the whitelist-aware walks and everything
+        // else into the plain serializer.
+        stringify_value_with_array_replacer(
+            value,
+            allowed_keys,
+            &mut buf,
+            &indent_str,
+            0,
+            use_pretty,
+        );
     } else if let Some(closure_ptr) = closure_replacer {
         // Function replacer. Per spec SerializeJSONProperty: toJSON FIRST, then
         // the replacer, then serialize — threading `indent_str` so the 3-arg
