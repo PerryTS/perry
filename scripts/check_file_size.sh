@@ -248,6 +248,12 @@ crates/perry-runtime/src/node_stream_constructors.rs
 # LOC) on main after recent dispatch-arm additions. Splitting per receiver-type
 # family is tracked under #1435.
 crates/perry-codegen/src/expr/property_get.rs
+# Codegen call-site method-dispatch tower (string/array/class/Map/Set/Promise +
+# static/instance method resolution). Sat at 1998 LOC on main; crossed the
+# 2000-line gate after the class static-accessor call route (test262
+# arguments-object cls-*-static-* getter calls). Splitting the per-receiver-type
+# dispatch helpers into sibling modules is tracked under #1435.
+crates/perry-codegen/src/lower_call/property_get.rs
 # TypedArray root — constructor/view-metadata/element load-store/iterator tower.
 # Crossed the 2000-line gate (2062 LOC) on current main after the #4702
 # %TypedArray%.prototype iterator brand-check + array-like/iterable constructor

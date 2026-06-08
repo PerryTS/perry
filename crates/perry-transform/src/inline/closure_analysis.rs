@@ -69,6 +69,85 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
     stmts.iter().any(check_stmt)
 }
 
+/// Returns true if the body references the dynamic `this` or `new.target`
+/// bindings — directly (`Expr::This` / `Expr::NewTarget`) or through a nested
+/// arrow that lexically captures them (`captures_this` / `captures_new_target`).
+///
+/// These bindings belong to the function's OWN invocation: spec
+/// `OrdinaryCallBindThis` binds `this` from the call's thisArgument (which for a
+/// plain `f()` call is `undefined` in strict code, the global object in sloppy
+/// code), and `new.target` from the construct. Substituting the body into the
+/// caller (what the inliner does) silently rebinds them to the CALLER's frame —
+/// a strict callee whose `this` is `undefined` would instead read the caller's
+/// `this` (e.g. the global object), and `typeof this` flips from `"undefined"`
+/// to `"object"`. Refs test262 language/function-code `10.4.3-1-*` strict-mode
+/// `this`. Reject inlining of any such function.
+pub fn body_references_dynamic_this(stmts: &[Stmt]) -> bool {
+    fn check_expr(expr: &Expr) -> bool {
+        if matches!(expr, Expr::This | Expr::NewTarget) {
+            return true;
+        }
+        // An arrow that lexically uses the enclosing `this`/`new.target` records
+        // it via these flags. We do NOT descend into the closure body for a bare
+        // `Expr::This` (that one is the closure's OWN binding when it isn't an
+        // arrow); `walk_expr_children` only yields a closure's param defaults,
+        // which DO execute in the enclosing frame, so those are still checked.
+        if let Expr::Closure {
+            captures_this,
+            captures_new_target,
+            ..
+        } = expr
+        {
+            if *captures_this || *captures_new_target {
+                return true;
+            }
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            if !found && check_expr(child) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    fn check_stmt(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
+            Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
+            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                check_expr(condition)
+                    || then_branch.iter().any(check_stmt)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|b| b.iter().any(check_stmt))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                check_expr(condition) || body.iter().any(check_stmt)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref().is_some_and(|i| check_stmt(i))
+                    || condition.as_ref().is_some_and(check_expr)
+                    || update.as_ref().is_some_and(check_expr)
+                    || body.iter().any(check_stmt)
+            }
+            _ => false,
+        }
+    }
+
+    stmts.iter().any(check_stmt)
+}
+
 /// Check if statements contain a closure that captures any of the given local IDs
 pub fn body_contains_closure_capturing(
     stmts: &[Stmt],

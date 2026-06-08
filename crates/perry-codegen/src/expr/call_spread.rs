@@ -217,10 +217,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (the previous `FuncRef` arm catches the FuncRef case; ExternFuncRef
             // here means a top-level imported function reference, not a method).
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
-                let skip = matches!(
+                let mut skip = matches!(
                     object.as_ref(),
                     Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
                 );
+                // `recv.prop(...args)` where `prop` is an instance ACCESSOR
+                // (`get prop()`) is NOT a method call: it must READ the accessor
+                // (running the getter, which yields a function) and CALL that
+                // function with the spread args. The method-apply path below
+                // dispatches `prop` by name via `js_native_call_method`, which
+                // looks up a same-named METHOD and throws "prop is not a
+                // function" for an accessor. Skip it so the closure-callee path
+                // lowers the callee `PropertyGet{recv, prop}` (invoking the
+                // getter) and applies the spread to its result. Refs test262
+                // language/arguments-object cls-*-spread-operator getter calls.
+                if !skip {
+                    if let Some(cls) = receiver_class_name(ctx, object) {
+                        let mut cur = Some(cls);
+                        while let Some(c) = cur {
+                            let Some(ci) = ctx.classes.get(&c) else {
+                                break;
+                            };
+                            if ci.getters.iter().any(|(n, _)| n == property) {
+                                skip = true;
+                                break;
+                            }
+                            cur = ci.extends_name.clone();
+                        }
+                    }
+                }
                 if !skip {
                     let recv_box = lower_expr(ctx, object)?;
                     // Build a single JS array containing every arg in order.

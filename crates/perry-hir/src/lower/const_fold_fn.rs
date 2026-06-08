@@ -386,13 +386,26 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
     };
     let name = parse_eval_ident_name(trim_js_eval_ws(name_raw))?;
     let value = parse_eval_literal(value_raw)?;
+    // A `var x = <v>` DECLARATION runs the binding initialization as a side
+    // effect, but its completion value is empty (→ `undefined`) per spec
+    // (VariableStatement yields an empty completion). A bare `x = <v>`
+    // AssignmentExpression has completion value `<v>`. Wrap the var-declaration
+    // form so it still stores but yields `undefined`. Refs test262
+    // language/eval-code cptn-nrml-empty-var (`eval("var x = 1") === undefined`).
+    let finish = |assign: Expr| -> Expr {
+        if is_var_assignment {
+            Expr::Sequence(vec![assign, Expr::Undefined])
+        } else {
+            assign
+        }
+    };
     if let Some(id) = ctx.lookup_local(name) {
         if is_var_assignment && !ctx.var_hoisted_ids.contains(&id) {
             return Some(Expr::SyntaxErrorNew(Box::new(Expr::String(format!(
                 "eval var declaration conflicts with lexical binding `{name}`"
             )))));
         }
-        Some(Expr::LocalSet(id, Box::new(value)))
+        Some(finish(Expr::LocalSet(id, Box::new(value))))
     } else if ctx.current_strict {
         Some(super::throw_reference_error_expr(&format!(
             "eval assignment to undeclared identifier `{name}`"
@@ -400,7 +413,7 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
     } else {
         let id = ctx.define_local(name.to_string(), perry_types::Type::Any);
         ctx.var_hoisted_ids.insert(id);
-        Some(Expr::LocalSet(id, Box::new(value)))
+        Some(finish(Expr::LocalSet(id, Box::new(value))))
     }
 }
 

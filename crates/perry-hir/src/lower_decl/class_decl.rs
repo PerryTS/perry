@@ -290,12 +290,21 @@ pub fn lower_class_decl(
     let mut static_method_names = Vec::new();
     for member in &class_decl.class.body {
         match member {
-            ast::ClassMember::Method(method) if method.is_static => {
+            // Static accessors (`static get foo()`) are not callable static
+            // methods: `C.foo(...)` must read the accessor and call its result.
+            // Excluding getter/setter kinds keeps `has_static_method` from
+            // hijacking the call into a non-existent StaticMethodCall. Refs
+            // test262 language/arguments-object cls-*-static-* getter calls.
+            ast::ClassMember::Method(method)
+                if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+            {
                 if let ast::PropName::Ident(ident) = &method.key {
                     static_method_names.push(ident.sym.to_string());
                 }
             }
-            ast::ClassMember::PrivateMethod(method) if method.is_static => {
+            ast::ClassMember::PrivateMethod(method)
+                if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+            {
                 // Register as "#name" so WithPrivateStatic.#helper()
                 // call-site lookup via has_static_method() succeeds.
                 static_method_names.push(format!("#{}", method.key.name));
@@ -1185,12 +1194,17 @@ pub fn lower_class_from_ast(
     let mut static_method_names = Vec::new();
     for member in &class.body {
         match member {
-            ast::ClassMember::Method(method) if method.is_static => {
+            // See note above: static getters/setters are not callable methods.
+            ast::ClassMember::Method(method)
+                if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+            {
                 if let ast::PropName::Ident(ident) = &method.key {
                     static_method_names.push(ident.sym.to_string());
                 }
             }
-            ast::ClassMember::PrivateMethod(method) if method.is_static => {
+            ast::ClassMember::PrivateMethod(method)
+                if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+            {
                 static_method_names.push(format!("#{}", method.key.name));
             }
             ast::ClassMember::ClassProp(prop) if prop.is_static => {

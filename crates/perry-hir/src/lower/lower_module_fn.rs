@@ -550,12 +550,24 @@ pub fn lower_module_full(
             let mut static_method_names = Vec::new();
             for member in &cd.class.body {
                 match member {
-                    ast::ClassMember::Method(method) if method.is_static => {
+                    // Only true static *methods* register as callable statics.
+                    // Static accessors (`static get foo()`) are NOT methods —
+                    // `C.foo(...)` must read the accessor (invoking the getter)
+                    // and call its result, not dispatch a static method named
+                    // `foo`. Registering them here makes `has_static_method`
+                    // hijack the call into a StaticMethodCall whose target
+                    // doesn't exist, silently dropping the call. Refs test262
+                    // language/arguments-object cls-*-static-* getter calls.
+                    ast::ClassMember::Method(method)
+                        if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+                    {
                         if let ast::PropName::Ident(ident) = &method.key {
                             static_method_names.push(ident.sym.to_string());
                         }
                     }
-                    ast::ClassMember::PrivateMethod(method) if method.is_static => {
+                    ast::ClassMember::PrivateMethod(method)
+                        if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+                    {
                         static_method_names.push(format!("#{}", method.key.name));
                     }
                     ast::ClassMember::ClassProp(prop) if prop.is_static => {

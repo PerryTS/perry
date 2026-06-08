@@ -61,11 +61,20 @@ fn is_node_stream_iterator_helper_instance_method(
 pub(super) fn try_static_method_and_instance(
     ctx: &mut LoweringContext,
     // #854: kept for the uniform `try_*` dispatch-helper signature; this arm
-    // works off `expr`, not the raw `CallExpr`.
-    _call: &ast::CallExpr,
+    // works off `expr`, not the raw `CallExpr` — except for the spread check.
+    call: &ast::CallExpr,
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
+    // `StaticMethodCall` carries plain positional `args: Vec<Expr>` with no way
+    // to express argument spreads, so routing a spread call (`C.method(...xs)`)
+    // here would silently drop the spread markers — the spread sources land as
+    // single positional args and `arguments.length` undercounts. When the call
+    // spreads, skip the static-method production below and let the generic
+    // `CallSpread` path (which expands spreads into the runtime args array)
+    // handle it. Refs test262 language/arguments-object
+    // cls-*-static-*-spread-operator.
+    let static_call_has_spread = call.args.iter().any(|a| a.spread.is_some());
     // Check for static method calls (e.g., Counter.increment())
     if let ast::Expr::Member(member) = expr {
         if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
@@ -141,7 +150,9 @@ pub(super) fn try_static_method_and_instance(
                                 args,
                             }));
                         }
-                        if ctx.has_static_method(&obj_name, &method_name) || is_imported_upper {
+                        if (ctx.has_static_method(&obj_name, &method_name) || is_imported_upper)
+                            && !static_call_has_spread
+                        {
                             return Ok(Ok(Expr::StaticMethodCall {
                                 class_name: obj_name,
                                 method_name,
@@ -152,7 +163,8 @@ pub(super) fn try_static_method_and_instance(
                     // Private static method: WithPrivateStatic.#helper()
                     ast::MemberProp::PrivateName(priv_ident) => {
                         let method_name = format!("#{}", priv_ident.name);
-                        if ctx.has_static_method(&obj_name, &method_name) {
+                        if ctx.has_static_method(&obj_name, &method_name) && !static_call_has_spread
+                        {
                             return Ok(Ok(Expr::StaticMethodCall {
                                 class_name: obj_name,
                                 method_name,

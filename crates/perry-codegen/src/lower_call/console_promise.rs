@@ -818,6 +818,37 @@ fn is_message_port_closure_method(object: &Expr, property: &str) -> bool {
     )
 }
 
+/// `C.prop(args)` where `prop` names a static ACCESSOR (`static get prop()`)
+/// anywhere on `cls_name`'s chain is NOT a static-method dispatch: it must READ
+/// the accessor (running the getter, which yields a function) and CALL that
+/// function with `args`. We emit that value-call via the closure-callee
+/// fallthrough — which lowers the callee `PropertyGet{<class>, prop}` (invoking
+/// the getter with `this` bound to the class) and dispatches the result through
+/// `js_closure_call` — instead of letting a downstream by-name dispatcher
+/// (`js_native_call_method` / `js_class_static_method_call`) silently drop the
+/// call (those miss because the name lives in CLASS_STATIC_ACCESSORS, not
+/// CLASS_STATIC_METHODS). Returns `None` when `prop` is not a static accessor on
+/// the chain. Refs test262 language/arguments-object cls-*-static-* getter calls.
+pub fn try_lower_class_static_accessor_call(
+    ctx: &mut FnCtx<'_>,
+    cls_name: &str,
+    property: &str,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    let mut cur = Some(cls_name.to_string());
+    while let Some(c) = cur {
+        let Some(ci) = ctx.classes.get(&c) else {
+            break;
+        };
+        if ci.static_accessor_names.iter().any(|n| n == property) {
+            return try_lower_closure_call_fallthrough(ctx, callee, args);
+        }
+        cur = ci.extends_name.clone();
+    }
+    Ok(None)
+}
+
 pub fn try_lower_closure_call_fallthrough(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,

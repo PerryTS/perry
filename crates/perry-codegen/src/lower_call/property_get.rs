@@ -977,6 +977,13 @@ pub fn try_lower_property_get_method_call(
         &ctx.class_ids,
     );
     if let Some(cls_name) = static_dispatch_cls {
+        // `C.prop(args)` where `prop` is a static ACCESSOR reads the accessor and
+        // calls its result — handle before the by-name tower (which would miss).
+        if let Some(v) = super::console_promise::try_lower_class_static_accessor_call(
+            ctx, &cls_name, property, callee, args,
+        )? {
+            return Ok(Some(v));
+        }
         // (fn_name, is_static, declared_param_count, has_rest, is_synthetic_arguments)
         let mut resolved: Option<(String, bool, usize, bool, bool)> = None;
         let mut cur = Some(cls_name.clone());
