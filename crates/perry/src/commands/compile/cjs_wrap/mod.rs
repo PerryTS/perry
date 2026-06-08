@@ -55,7 +55,7 @@ pub(self) use hoist_classes::{
 
 // Public API consumed by `compile.rs` / `collect_modules.rs`.
 pub(super) use detect::is_commonjs;
-pub(super) use wrap::wrap_commonjs;
+pub(super) use wrap::wrap_commonjs_for_target;
 
 #[cfg(test)]
 mod tests {
@@ -67,7 +67,7 @@ mod tests {
     use super::extract_requires::{
         extract_require_aliases_with_ranges, extract_require_specifiers,
     };
-    use super::wrap::wrap_commonjs;
+    use super::wrap::{wrap_commonjs, wrap_commonjs_for_target};
     use std::fs;
     use std::path::PathBuf;
 
@@ -276,6 +276,70 @@ module.exports = inner;
         assert!(
             wrapped.contains("if (specifier === './dep') return dep;"),
             "expected require dispatch through aliased import, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_prunes_dead_process_platform_require_for_windows_target() {
+        let src = r#"
+var terminalCtor;
+if (process.platform === 'win32') {
+    terminalCtor = require('./windowsTerminal').WindowsTerminal;
+}
+else {
+    terminalCtor = require('./unixTerminal').UnixTerminal;
+}
+exports.spawn = function spawn() { return terminalCtor; };
+"#;
+        let wrapped = wrap_commonjs_for_target(
+            src,
+            &PathBuf::from("/tmp/node_modules/node-pty/lib/index.js"),
+            Some("windows"),
+        );
+        assert!(
+            wrapped.contains("import _req_0 from './windowsTerminal';")
+                || wrapped.contains("import terminalCtor from './windowsTerminal';"),
+            "expected live Windows require to stay hoisted, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("from './unixTerminal'"),
+            "dead Unix require must not become an eager ESM import on Windows, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("if (specifier === './unixTerminal')"),
+            "dead Unix require must not be dispatchable on Windows, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_prunes_dead_process_platform_require_for_linux_target() {
+        let src = r#"
+var terminalCtor;
+if (process.platform === 'win32') {
+    terminalCtor = require('./windowsTerminal').WindowsTerminal;
+}
+else {
+    terminalCtor = require('./unixTerminal').UnixTerminal;
+}
+exports.spawn = function spawn() { return terminalCtor; };
+"#;
+        let wrapped = wrap_commonjs_for_target(
+            src,
+            &PathBuf::from("/tmp/node_modules/node-pty/lib/index.js"),
+            Some("linux"),
+        );
+        assert!(
+            wrapped.contains("from './unixTerminal'"),
+            "expected live Unix require to stay hoisted, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("from './windowsTerminal'"),
+            "dead Windows require must not become an eager ESM import on Linux, got:\n{}",
             wrapped
         );
     }

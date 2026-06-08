@@ -8,7 +8,16 @@ use std::path::Path;
 /// Wrap CJS source as ESM. `source_path` is the absolute path of the file
 /// being wrapped — used to resolve `require('./relative')` targets when
 /// peeking at re-export wrappers' transitive named exports.
+#[cfg(test)]
 pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Path) -> String {
+    wrap_commonjs_for_target(source, source_path, None)
+}
+
+pub(in crate::commands::compile) fn wrap_commonjs_for_target(
+    source: &str,
+    source_path: &Path,
+    target: Option<&str>,
+) -> String {
     let mut source_cow = Cow::Borrowed(source);
 
     if is_depd_index_path(source_path) {
@@ -46,7 +55,11 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     }
     let source: &str = source_cow.as_ref();
 
-    let require_specs = extract_require_specifiers(source);
+    let mut require_specs = extract_require_specifiers(source);
+    let dead_platform_requires = inactive_platform_guarded_requires(source, target);
+    if !dead_platform_requires.is_empty() {
+        require_specs.retain(|spec| !dead_platform_requires.contains(spec));
+    }
 
     // Issue #652: hoist top-level `class X { ... }` declarations OUT of the
     // IIFE so the consumer's `import { X } from "pkg"` resolves to the real
@@ -475,6 +488,88 @@ const _cjs = (function() {{
         );
     }
     wrapped
+}
+
+fn target_node_platform(target: Option<&str>) -> Option<&'static str> {
+    match target {
+        Some("windows") | Some("windows-winui") => Some("win32"),
+        Some("linux") | Some("linux-x86_64") | Some("linux-arm64") | Some("linux-aarch64") => {
+            Some("linux")
+        }
+        Some("macos")
+        | Some("ios")
+        | Some("ios-simulator")
+        | Some("ios-widget")
+        | Some("ios-widget-simulator")
+        | Some("visionos")
+        | Some("visionos-simulator")
+        | Some("watchos")
+        | Some("watchos-simulator")
+        | Some("watchos-widget")
+        | Some("watchos-widget-simulator")
+        | Some("tvos")
+        | Some("tvos-simulator") => Some("darwin"),
+        Some(_) => None,
+        None => {
+            #[cfg(target_os = "windows")]
+            {
+                Some("win32")
+            }
+            #[cfg(target_os = "linux")]
+            {
+                Some("linux")
+            }
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            {
+                Some("darwin")
+            }
+            #[cfg(not(any(
+                target_os = "windows",
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "ios"
+            )))]
+            {
+                None
+            }
+        }
+    }
+}
+
+fn inactive_platform_guarded_requires(
+    source: &str,
+    target: Option<&str>,
+) -> std::collections::HashSet<String> {
+    let Some(platform) = target_node_platform(target) else {
+        return std::collections::HashSet::new();
+    };
+    let re = regex::Regex::new(
+        r#"(?s)if\s*\(\s*process\.platform\s*(===|!==)\s*['"]([^'"]+)['"]\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<else>.*?)\}"#,
+    )
+    .unwrap();
+    let mut inactive = std::collections::HashSet::new();
+    for cap in re.captures_iter(source) {
+        let Some(op) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(expected) = cap.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        let condition_true = match op {
+            "===" => platform == expected,
+            "!==" => platform != expected,
+            _ => continue,
+        };
+        let dead_body = if condition_true {
+            cap.name("else")
+        } else {
+            cap.name("then")
+        };
+        if let Some(body) = dead_body {
+            inactive.extend(extract_require_specifiers(body.as_str()));
+        }
+    }
+    inactive
 }
 
 fn is_depd_index_path(source_path: &Path) -> bool {
