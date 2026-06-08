@@ -1664,6 +1664,47 @@ object PerryBridge {
     }
 
     // ============================================================
+    // Issue #4772 — DatePicker (android.widget.DatePicker).
+    // ============================================================
+    //
+    // The compact, spinner-style complement to the CalendarView-backed
+    // Calendar widget. `DatePicker.init` installs an OnDateChangedListener
+    // that fires with (year, monthZeroBased, day); we format `yyyy-MM-dd`
+    // (POSIX/ISO) here so the cross-platform string matches the macOS /
+    // iOS / gtk4 / Windows twins exactly.
+
+    @JvmStatic
+    fun datePickerCreate(year: Long, month: Long, callbackKey: Long): android.widget.DatePicker {
+        val dp = android.widget.DatePicker(activity)
+        val cal = java.util.Calendar.getInstance()
+        val initYear = if (year > 0L) year.toInt() else cal.get(java.util.Calendar.YEAR)
+        val initMonth = if (month in 1L..12L) (month - 1).toInt() else cal.get(java.util.Calendar.MONTH)
+        dp.init(initYear, initMonth, 1) { _, y, m, d ->
+            if (callbackKey != 0L) {
+                val iso = String.format("%04d-%02d-%02d", y, m + 1, d)
+                nativeInvokeCallbackWithString(callbackKey, iso)
+            }
+        }
+        return dp
+    }
+
+    @JvmStatic
+    fun datePickerSetDate(dp: android.widget.DatePicker, year: Long, month: Long, day: Long) {
+        if (year <= 0L || month !in 1L..12L || day !in 1L..31L) return
+        uiHandler.post {
+            dp.updateDate(year.toInt(), (month - 1).toInt(), day.toInt())
+        }
+    }
+
+    @JvmStatic
+    fun datePickerGetSelectedDate(dp: android.widget.DatePicker): String {
+        val y = dp.year
+        val m = dp.month + 1
+        val d = dp.dayOfMonth
+        return String.format("%04d-%02d-%02d", y, m, d)
+    }
+
+    // ============================================================
     // Issue #475 — Combobox (android.widget.AutoCompleteTextView).
     // ============================================================
     //

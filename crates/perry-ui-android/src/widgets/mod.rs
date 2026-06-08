@@ -5,6 +5,7 @@ pub mod calendar;
 pub mod canvas;
 pub mod chart;
 pub mod combobox;
+pub mod date_picker;
 pub mod divider;
 pub mod form;
 pub mod hstack;

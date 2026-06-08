@@ -9,6 +9,7 @@ pub mod canvas;
 pub mod chart;
 pub mod combobox;
 pub mod command_palette;
+pub mod date_picker;
 pub mod divider;
 pub mod foreach_registry;
 pub mod form;
@@ -80,6 +81,7 @@ pub enum WidgetKind {
     LazyVStack,
     Image,
     Calendar,
+    DatePicker,
     Combobox,
     TreeView,
     RichText,
@@ -814,6 +816,11 @@ pub fn handle_notify(lparam: LPARAM) {
     // MCN_SELCHANGE = -749 (calendar)
     if hdr.code == -749 && matches!(kind, Some(WidgetKind::Calendar)) {
         calendar::handle_selection_change(handle);
+        return;
+    }
+    // DTN_DATETIMECHANGE = -759 (date picker)
+    if hdr.code == date_picker::DTN_DATETIMECHANGE && matches!(kind, Some(WidgetKind::DatePicker)) {
+        date_picker::handle_selection_change(handle);
         return;
     }
     // TVN_SELCHANGEDW = -411 (tree view — actual tree, not the table-shaped

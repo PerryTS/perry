@@ -1037,6 +1037,30 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::Str,
     },
+    // ---- DatePicker (issue #4772) ----
+    MethodRow {
+        method: "DatePicker",
+        runtime: "perry_ui_date_picker_create",
+        args: &[ArgKind::I64Raw, ArgKind::I64Raw, ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "datePickerSetDate",
+        runtime: "perry_ui_date_picker_set_date",
+        args: &[
+            ArgKind::Widget,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+        ],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "datePickerGetSelectedDate",
+        runtime: "perry_ui_date_picker_get_selected_date",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
     // ---- Chart (issue #474) ----
     MethodRow {
         method: "Chart",
