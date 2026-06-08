@@ -5,6 +5,7 @@ pub mod camera;
 pub mod clipboard;
 pub mod deeplinks_stub;
 pub mod dialog;
+pub mod drag_drop;
 pub mod file_dialog;
 pub mod issue_552_stub;
 pub mod keyboard;

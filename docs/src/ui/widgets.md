@@ -287,6 +287,22 @@ import { Calendar, calendarGetSelectedDate } from "perry/ui";
 const cal = Calendar(2026, 5, (iso) => console.log("date:", iso));
 ```
 
+### DatePicker (issue #4772)
+
+Compact field-style date picker — the space-saving complement to the
+month-grid `Calendar`. Each platform uses its native compact date control:
+macOS `NSDatePicker` (text-field-and-stepper), iOS / visionOS
+`UIDatePicker` (`.compact`), Windows `SysDateTimePick32`, Android
+`android.widget.DatePicker`. GTK4 has no native compact date field, so it
+reuses `GtkCalendar`; tvOS / watchOS stub. `onChange` receives the selected
+date as an ISO `yyyy-MM-dd` string.
+
+```typescript,no-test
+import { DatePicker, datePickerGetSelectedDate } from "perry/ui";
+
+const picker = DatePicker(2026, 5, (iso) => console.log("date:", iso));
+```
+
 ### Chart (issue #474)
 
 Line / bar / pie via CoreGraphics on macOS. `kind` is `0=line`, `1=bar`,

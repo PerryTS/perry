@@ -30,6 +30,32 @@ a case unless:
 Pass `--all-features` to ignore the feature allow-list and run every
 discovered case (useful for measuring the raw denominator).
 
+### Self-validating features (oracle can't run them) — #4792
+
+Some features Perry implements aren't in the Node oracle at all — `Temporal`
+is the motivating case (Node v22/v25 ship no `Temporal` global). A plain
+differential would score every Perry success as a `runtime-fail` (Node throws
+`Temporal is not defined`, Perry runs clean), so those ~4,600 tests were
+excluded outright and the work went unmeasured.
+
+`self-validate-features.txt` lists the feature tags to score this way. A case
+carrying one of them:
+
+- is discovered even though the tag is (by definition) absent from
+  `features-applicable.txt` — it bypasses that gate and counts toward the
+  denominator;
+- is judged **Perry-only**, dropping the Node oracle. Test262 cases are
+  self-checking (`assert.*` throws on failure), so a positive case **passes**
+  iff its Perry binary runs to completion without throwing (exit 0); a negative
+  case passes iff it threw (exit != 0). These land in the normal
+  `pass`/`runtime-fail`/`compile-fail` buckets, so `built-ins/Temporal` shows
+  up as its own per-dir cluster.
+
+The report's `self_validated` block records `{features, judged, pass,
+pass_pct}`, and the console prints a `self-validated N/M = X%` line, so the
+Perry-only measure stays legible alongside the differential parity number.
+Remove a tag from the file once the oracle Node build ships the feature.
+
 ## How it works
 
 Test262 cases are silent on success and `throw` on failure, so the
@@ -80,6 +106,8 @@ the negative-rejection signal stay legible.
 ## Files
 
 - `features-applicable.txt` — curated allow-list of feature tags.
+- `self-validate-features.txt` — feature tags scored Perry-only because the
+  Node oracle can't run them (e.g. `Temporal`); see #4792.
 - `pinned-sha.txt` — the Test262 SHA the corpus is pulled from.
 - `preamble.js` — host shims (`print`, `$DONOTEVALUATE`) prepended to
   every non-`raw` assembled case under both runtimes.

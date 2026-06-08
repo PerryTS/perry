@@ -27,6 +27,24 @@ the Node radar drops `node-skip`. Instead we bucket by Perry-vs-Node
 that's a `pass`. The only `skip` here is a case we couldn't even assemble
 (missing include, unsupported flag, or a `$262`-host dependency).
 
+Self-validating mode (#4792)
+----------------------------
+The differential above needs an oracle that can *run* the feature. For things
+Perry implements but the Node oracle does not — `Temporal` is the motivating
+case (Node v22/v25 ship no `Temporal` global) — a differential would score
+every Perry success as a `runtime-fail` (Node throws `Temporal is not defined`,
+Perry runs clean), making real work look like regressions and excluding it from
+the denominator entirely.
+
+Test262 cases are *self-checking*: they `assert.*`-throw on failure and exit 0
+on success. So for any feature on `self-validate-features.txt` we drop the
+oracle and judge Perry on its own verdict: a positive case **passes** iff its
+Perry binary runs to completion without throwing (exit 0); a negative case
+passes iff it threw (exit != 0). These cases land in the normal
+`pass`/`runtime-fail`/`compile-fail` buckets — so `built-ins/Temporal` shows up
+as its own per-dir cluster — and a `self_validated` tally in the report records
+how many of the judged cases were scored this way.
+
 Buckets
 -------
 - pass         — Perry agrees with Node:
@@ -73,6 +91,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 TEST262_DIR = REPO_ROOT / "test-compat" / "test262"
 PREAMBLE = TEST262_DIR / "preamble.js"
+# Feature tags Perry implements but the Node oracle cannot run (e.g. Temporal).
+# Cases tagged with one of these are judged in self-validating mode (#4792):
+# Perry-only, scored on whether the case's own `assert.*` self-checks throw.
+SELF_VALIDATE_FEATURES_FILE = TEST262_DIR / "self-validate-features.txt"
 
 # Default subtrees to walk (relative to <root>/test). Language + builtins are
 # the cleanest TS-subset denominator; intl402/staging are out of scope.
@@ -85,7 +107,9 @@ _PATH_SKIP = re.compile(
     r"intl402|staging|"
     r"eval|"  # dynamic eval — Perry is AOT
     r"Atomics|SharedArrayBuffer|"  # no shared heap
-    r"Temporal|"  # not implemented
+    # NB: Temporal is intentionally NOT skipped — Perry implements it but the
+    # Node oracle does not, so it is judged in self-validating mode (#4792).
+    # (Temporal under intl402/ stays out: intl402 is skipped wholesale above.)
     r"RegExp/(?:lookbehind|property-escapes)"  # Rust regex crate gaps
     r")(?:/|$)"
 )
@@ -141,6 +165,7 @@ class Meta:
     features: list[str] = field(default_factory=list)
     includes: list[str] = field(default_factory=list)
     negative: bool = False
+    self_validate: bool = False  # judge Perry-only (oracle lacks the feature)
 
 
 def parse_frontmatter(src: str) -> Meta | None:
@@ -222,8 +247,12 @@ def assemble(src: str, meta: Meta, harness: Path, preamble_text: str) -> str:
 
 
 def discover(root: Path, dirs: list[str], applicable: set[str],
-             all_features: bool):
-    """Yield (relpath, src, meta) for every applicable, runnable case."""
+             all_features: bool, self_validate: set[str]):
+    """Yield (relpath, src, meta) for every applicable, runnable case.
+
+    `self_validate` is the set of feature tags the Node oracle can't run; a case
+    carrying one is kept regardless of the `--all-features`/applicable gate and
+    flagged `meta.self_validate` so the judge scores it Perry-only (#4792)."""
     test_root = root / "test"
     for d in dirs:
         base = test_root / d
@@ -246,7 +275,11 @@ def discover(root: Path, dirs: list[str], applicable: set[str],
                 continue
             if _HOST_DEP.search(src):
                 continue
-            if not all_features and meta.features:
+            meta.self_validate = bool(set(meta.features) & self_validate)
+            # Self-validating cases bypass the applicable gate: the whole point
+            # is to measure a feature (e.g. Temporal) the oracle can't run and
+            # that is therefore absent from features-applicable.txt.
+            if not meta.self_validate and not all_features and meta.features:
                 if any(f not in applicable for f in meta.features):
                     continue
             yield rel, src, meta
@@ -360,6 +393,8 @@ def main() -> int:
         return 2
 
     applicable = set(read_list(TEST262_DIR / "features-applicable.txt"))
+    self_validate = (set(read_list(SELF_VALIDATE_FEATURES_FILE))
+                     if SELF_VALIDATE_FEATURES_FILE.exists() else set())
     preamble_text = PREAMBLE.read_text()
     pinned = (TEST262_DIR / "pinned-sha.txt").read_text().strip()
 
@@ -370,6 +405,8 @@ def main() -> int:
                ("pass", "diff", "runtime-fail", "compile-fail", "skip")}
     per_dir: dict[str, dict[str, int]] = {}
     neg_pass = 0  # negative cases where both runtimes correctly rejected
+    self_judged = 0  # cases scored Perry-only (oracle lacks the feature)
+    self_pass = 0    # of those, how many Perry passed
     judged_n = 0
     all_failures: list[dict] = []  # every non-pass case, uncapped
 
@@ -378,7 +415,8 @@ def main() -> int:
     # Materialize the case list so we can shard / cap deterministically. The
     # shard is strided over the sorted list so each shard spans the whole
     # alphabet (avoids one shard getting all of the slow `built-ins/...`).
-    cases = list(discover(root, args.dir, applicable, args.all_features))
+    cases = list(discover(root, args.dir, applicable, args.all_features,
+                          self_validate))
     if shard_n:
         cases = cases[shard_i::shard_n]
     if args.max:
@@ -386,17 +424,38 @@ def main() -> int:
 
     def judge_one(case):
         """Compile+run one case under its own temp dir (so workers don't clash)
-        and return (rel, cat, bucket_key, reason, is_negative)."""
+        and return (rel, cat, bucket_key, reason, is_negative, is_self_validate)."""
         rel, src, meta = case
         cat = top_dir(rel)
         try:
             program = assemble(src, meta, harness, preamble_text)
         except OSError as e:
-            return (rel, cat, "skip", f"assemble: {e}", False)
+            return (rel, cat, "skip", f"assemble: {e}", False, meta.self_validate)
         workdir = Path(tempfile.mkdtemp(dir=stage))
         staged = workdir / "case.js"
         try:
             staged.write_text(program)
+            if meta.self_validate:
+                # Oracle (Node) can't run this feature — judge Perry alone on
+                # the case's own `assert.*` self-checks (#4792).
+                out_bin = workdir / "case.out"
+                c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
+                             PERRY_NO_AUTO_OPTIMIZE="1")
+                c_exit, c_out = run(
+                    [str(args.perry_bin), "compile", str(staged), "-o",
+                     str(out_bin)], c_env, args.timeout, cwd=str(workdir))
+                if c_exit != 0:
+                    return (rel, cat, "compile-fail", error_line(c_out),
+                            False, True)
+                p_exit, p_out = run([str(out_bin)], base_env, args.timeout)
+                ran_clean = p_exit == 0
+                # Positive: pass iff it ran clean. Negative: pass iff it threw
+                # the (unverified) expected error, i.e. exited non-zero.
+                if ran_clean != meta.negative:
+                    return (rel, cat, "pass", "", False, True)
+                reason = (first_line(p_out) if not ran_clean
+                          else "ran clean; expected a thrown error (negative)")
+                return (rel, cat, "runtime-fail", reason, False, True)
             # 1) Node is the oracle (negative cases legitimately exit != 0).
             n_exit, n_out = run(["node", str(staged)], base_env, args.timeout)
             node_clean = n_exit == 0
@@ -409,21 +468,24 @@ def main() -> int:
                  str(out_bin)], c_env, args.timeout, cwd=str(workdir))
             if c_exit != 0:
                 if node_clean:
-                    return (rel, cat, "compile-fail", error_line(c_out), False)
-                return (rel, cat, "pass", "", True)  # both reject (negative)
+                    return (rel, cat, "compile-fail", error_line(c_out),
+                            False, False)
+                return (rel, cat, "pass", "", True, False)  # both reject (neg)
             # 3) Run the Perry binary.
             p_exit, p_out = run([str(out_bin)], base_env, args.timeout)
             perry_clean = p_exit == 0
             if node_clean and perry_clean:
                 if normalize(p_out) == normalize(n_out):
-                    return (rel, cat, "pass", "", False)
-                return (rel, cat, "diff", first_line(p_out), False)
+                    return (rel, cat, "pass", "", False, False)
+                return (rel, cat, "diff", first_line(p_out), False, False)
             if node_clean and not perry_clean:
-                return (rel, cat, "runtime-fail", first_line(p_out), False)
+                return (rel, cat, "runtime-fail", first_line(p_out),
+                        False, False)
             if not node_clean and not perry_clean:
-                return (rel, cat, "pass", "", True)  # both reject (negative)
+                return (rel, cat, "pass", "", True, False)  # both reject (neg)
             return (rel, cat, "runtime-fail",
-                    "Perry ran clean; Node rejected (missed negative)", False)
+                    "Perry ran clean; Node rejected (missed negative)",
+                    False, False)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
@@ -431,12 +493,16 @@ def main() -> int:
         with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
             futures = [ex.submit(judge_one, c) for c in cases]
             for fut in as_completed(futures):
-                rel, cat, key, reason, is_neg = fut.result()
+                rel, cat, key, reason, is_neg, is_self = fut.result()
                 counts = per_dir.setdefault(cat, {k: 0 for k in buckets})
                 buckets[key].add(rel, reason, args.sample_cap)
                 counts[key] += 1
                 if is_neg:
                     neg_pass += 1
+                if is_self and key != "skip":
+                    self_judged += 1
+                    if key == "pass":
+                        self_pass += 1
                 if key in ("diff", "runtime-fail", "compile-fail"):
                     all_failures.append({"test": rel, "bucket": key,
                                          "reason": reason})
@@ -471,6 +537,13 @@ def main() -> int:
         "totals": totals,
         "judged": judged,
         "negative_agreements": neg_pass,
+        "self_validated": {
+            "features": sorted(self_validate),
+            "judged": self_judged,
+            "pass": self_pass,
+            "pass_pct": (round(100 * self_pass / self_judged, 1)
+                         if self_judged else 0.0),
+        },
         "parity_pct": parity_pct,
         "per_dir": per_dir,
         "samples": {
@@ -496,6 +569,11 @@ def main() -> int:
         print(f"  {k:<14} {totals[k]}")
     print(f"  {'judged':<14} {judged}   (excludes skip)")
     print(f"  {'of which neg':<14} {neg_pass}   (both runtimes correctly rejected)")
+    if self_judged:
+        sv_pct = round(100 * self_pass / self_judged, 1)
+        feats = ", ".join(sorted(self_validate))
+        print(f"  {'self-validated':<14} {self_pass}/{self_judged} = {sv_pct}%"
+              f"   (Perry-only; oracle lacks: {feats})")
     print(f"  parity:        {parity_pct}%")
     print(f"  report:        {args.report}")
     return 0

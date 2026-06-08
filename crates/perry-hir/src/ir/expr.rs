@@ -278,6 +278,17 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// Dynamic `new` with spread arguments — `new <callee>(...args)`.
+    /// Kept distinct from `NewDynamic` so the spread positions survive
+    /// lowering (a plain `Vec<Expr>` would collapse `...[1,2]` into a single
+    /// array argument). Codegen folds every argument into one JS array
+    /// (regular pushed, spread sources expanded) and dispatches through
+    /// `js_new_function_construct_apply`.
+    NewDynamicSpread {
+        callee: Box<Expr>,
+        args: Vec<CallArg>,
+    },
+
     /// Runtime `new.target` value for ordinary functions.
     NewTarget,
 

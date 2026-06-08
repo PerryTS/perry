@@ -2,6 +2,7 @@
 
 mod calendar;
 mod chart;
+mod date_picker;
 mod foreach;
 mod image;
 mod inputs;
@@ -14,6 +15,7 @@ mod tree;
 
 pub(crate) use calendar::*;
 pub(crate) use chart::*;
+pub(crate) use date_picker::*;
 pub(crate) use foreach::*;
 pub(crate) use image::*;
 pub(crate) use inputs::*;

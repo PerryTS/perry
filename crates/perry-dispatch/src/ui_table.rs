@@ -1037,6 +1037,30 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::Str,
     },
+    // ---- DatePicker (issue #4772) ----
+    MethodRow {
+        method: "DatePicker",
+        runtime: "perry_ui_date_picker_create",
+        args: &[ArgKind::I64Raw, ArgKind::I64Raw, ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "datePickerSetDate",
+        runtime: "perry_ui_date_picker_set_date",
+        args: &[
+            ArgKind::Widget,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+            ArgKind::I64Raw,
+        ],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "datePickerGetSelectedDate",
+        runtime: "perry_ui_date_picker_get_selected_date",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::Str,
+    },
     // ---- Chart (issue #474) ----
     MethodRow {
         method: "Chart",
@@ -1948,5 +1972,37 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         runtime: "perry_ui_canvas_create",
         args: &[ArgKind::F64, ArgKind::F64],
         ret: ReturnKind::Widget,
+    },
+    // ---- Drag & drop (issue #4773) ----
+    // Widget-level setters that attach drag/drop behavior to an existing
+    // widget handle. `widgetOnDrop` registers a drop destination; the
+    // callback receives a `{ text?, files?, urls? }` object built natively.
+    // The three `widgetSetDrag*` setters register a drag source; each
+    // provider closure returns the string payload for its pasteboard type
+    // (text / file-path / url). Real behavior is implemented per platform;
+    // every backend exports these symbols (no-op where the OS has no DnD).
+    MethodRow {
+        method: "widgetOnDrop",
+        runtime: "perry_ui_widget_on_drop",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetDragText",
+        runtime: "perry_ui_widget_set_drag_text",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetDragFile",
+        runtime: "perry_ui_widget_set_drag_file",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "widgetSetDragUrl",
+        runtime: "perry_ui_widget_set_drag_url",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
     },
 ];

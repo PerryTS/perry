@@ -8,6 +8,7 @@ pub mod app;
 pub mod audio;
 pub mod audio_playback;
 pub mod background;
+pub mod drag_drop;
 pub mod media_playback;
 pub mod state;
 pub mod tree;
@@ -1040,6 +1041,19 @@ pub extern "C" fn perry_ui_calendar_create(_y: i64, _m: i64, _cb: f64) -> i64 {
 pub extern "C" fn perry_ui_calendar_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_calendar_get_selected_date(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+// Issue #4772 — DatePicker widget stubs (watchOS screen real estate
+// makes an inline date field impractical).
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_create(_y: i64, _m: i64, _cb: f64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_get_selected_date(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 

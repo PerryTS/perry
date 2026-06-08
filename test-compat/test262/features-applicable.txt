@@ -66,4 +66,5 @@ Proxy
 # top-level-await              — partial; semantics depend on loader
 # regexp-lookbehind            — Rust regex crate lacks lookbehind
 # resizable-arraybuffer        — not implemented
-# Temporal                     — not implemented
+# Temporal                     — implemented, but scored via self-validate-features.txt
+#                                (the Node oracle lacks Temporal; see #4792)

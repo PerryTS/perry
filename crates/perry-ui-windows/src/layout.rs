@@ -471,6 +471,14 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
                 280
             }
         }
+        WidgetKind::DatePicker => {
+            // Compact date field — a single row, narrow like a textfield.
+            if vertical {
+                28
+            } else {
+                160
+            }
+        }
         WidgetKind::Combobox => {
             if vertical {
                 28

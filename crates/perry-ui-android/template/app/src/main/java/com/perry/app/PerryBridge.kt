@@ -22,6 +22,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
 import android.util.TypedValue
+import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
@@ -251,6 +252,87 @@ object PerryBridge {
                 }
             }
         })
+    }
+
+    // --- Drag & drop (issue #4773) ---
+
+    // Install a drop destination on `view`. On ACTION_DROP the DragEvent's
+    // ClipData is parsed into text / file-or-content URIs / web URLs and handed
+    // to native, which builds the `{ text?, files?, urls? }` payload and invokes
+    // the JS callback registered under `callbackKey`.
+    @JvmStatic
+    fun setOnDropCallback(view: View, callbackKey: Long) {
+        view.setOnDragListener { _, event ->
+            when (event.action) {
+                DragEvent.ACTION_DROP -> {
+                    var text: String? = null
+                    val files = ArrayList<String>()
+                    val urls = ArrayList<String>()
+                    val clip = event.clipData
+                    if (clip != null) {
+                        for (i in 0 until clip.itemCount) {
+                            val item = clip.getItemAt(i)
+                            val t = item.text
+                            if (t != null && text == null) text = t.toString()
+                            val uri = item.uri
+                            if (uri != null) {
+                                val s = uri.toString()
+                                when (uri.scheme) {
+                                    "http", "https" -> urls.add(s)
+                                    else -> files.add(s) // content:// / file://
+                                }
+                            }
+                        }
+                    }
+                    nativeInvokeDropCallback(
+                        callbackKey,
+                        text,
+                        if (files.isEmpty()) null else files.toTypedArray(),
+                        if (urls.isEmpty()) null else urls.toTypedArray(),
+                    )
+                    true
+                }
+                // Accept the drag for the remaining lifecycle events.
+                else -> true
+            }
+        }
+    }
+
+    // Install a drag source on `view`. A long-press starts the drag; for each
+    // non-zero provider key, native returns the payload string for that
+    // representation (text / file path / url), which is assembled into a
+    // ClipData and handed to `startDragAndDrop`.
+    @JvmStatic
+    fun setDragSource(view: View, textKey: Long, fileKey: Long, urlKey: Long) {
+        view.setOnLongClickListener { v ->
+            val clip = buildDragClip(textKey, fileKey, urlKey)
+                ?: return@setOnLongClickListener false
+            v.startDragAndDrop(clip, View.DragShadowBuilder(v), null, 0)
+            true
+        }
+    }
+
+    private fun buildDragClip(textKey: Long, fileKey: Long, urlKey: Long): ClipData? {
+        var clip: ClipData? = null
+        if (textKey != 0L) {
+            val s = nativeInvokeDragProvider(textKey)
+            if (s.isNotEmpty()) clip = appendOrNew(clip, ClipData.newPlainText("text", s))
+        }
+        if (fileKey != 0L) {
+            val s = nativeInvokeDragProvider(fileKey)
+            if (s.isNotEmpty()) clip = appendOrNew(clip, ClipData.newRawUri("file", Uri.parse(s)))
+        }
+        if (urlKey != 0L) {
+            val s = nativeInvokeDragProvider(urlKey)
+            if (s.isNotEmpty()) clip = appendOrNew(clip, ClipData.newRawUri("url", Uri.parse(s)))
+        }
+        return clip
+    }
+
+    private fun appendOrNew(existing: ClipData?, fresh: ClipData): ClipData {
+        if (existing == null) return fresh
+        for (i in 0 until fresh.itemCount) existing.addItem(fresh.getItemAt(i))
+        return existing
     }
 
     // --- Button styling ---
@@ -1664,6 +1746,47 @@ object PerryBridge {
     }
 
     // ============================================================
+    // Issue #4772 — DatePicker (android.widget.DatePicker).
+    // ============================================================
+    //
+    // The compact, spinner-style complement to the CalendarView-backed
+    // Calendar widget. `DatePicker.init` installs an OnDateChangedListener
+    // that fires with (year, monthZeroBased, day); we format `yyyy-MM-dd`
+    // (POSIX/ISO) here so the cross-platform string matches the macOS /
+    // iOS / gtk4 / Windows twins exactly.
+
+    @JvmStatic
+    fun datePickerCreate(year: Long, month: Long, callbackKey: Long): android.widget.DatePicker {
+        val dp = android.widget.DatePicker(activity)
+        val cal = java.util.Calendar.getInstance()
+        val initYear = if (year > 0L) year.toInt() else cal.get(java.util.Calendar.YEAR)
+        val initMonth = if (month in 1L..12L) (month - 1).toInt() else cal.get(java.util.Calendar.MONTH)
+        dp.init(initYear, initMonth, 1) { _, y, m, d ->
+            if (callbackKey != 0L) {
+                val iso = String.format("%04d-%02d-%02d", y, m + 1, d)
+                nativeInvokeCallbackWithString(callbackKey, iso)
+            }
+        }
+        return dp
+    }
+
+    @JvmStatic
+    fun datePickerSetDate(dp: android.widget.DatePicker, year: Long, month: Long, day: Long) {
+        if (year <= 0L || month !in 1L..12L || day !in 1L..31L) return
+        uiHandler.post {
+            dp.updateDate(year.toInt(), (month - 1).toInt(), day.toInt())
+        }
+    }
+
+    @JvmStatic
+    fun datePickerGetSelectedDate(dp: android.widget.DatePicker): String {
+        val y = dp.year
+        val m = dp.month + 1
+        val d = dp.dayOfMonth
+        return String.format("%04d-%02d-%02d", y, m, d)
+    }
+
+    // ============================================================
     // Issue #475 — Combobox (android.widget.AutoCompleteTextView).
     // ============================================================
     //
@@ -2144,6 +2267,20 @@ object PerryBridge {
 
     @JvmStatic
     external fun nativeInvokeCallbackWithStringArray(key: Long, paths: Array<String>)
+
+    // Issue #4773 — drag & drop. The drop callback delivers the parsed payload
+    // (any of text/files/urls may be null); the drag provider returns the
+    // payload string for one representation when a drag begins.
+    @JvmStatic
+    external fun nativeInvokeDropCallback(
+        key: Long,
+        text: String?,
+        files: Array<String>?,
+        urls: Array<String>?,
+    )
+
+    @JvmStatic
+    external fun nativeInvokeDragProvider(key: Long): String
 
     // Issue #480 — TreeView row-tap callback.
     @JvmStatic

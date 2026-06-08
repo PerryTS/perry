@@ -2,6 +2,47 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1147 — Wire the fancy-regex fallback through every RegExp operation (#4797)
+
+`fancy-regex` (lookbehind, lookahead, backreferences, named groups) was already
+a dependency with a partial fallback in `crates/perry-runtime/src/regex.rs`, but
+the fallback was only consulted by `test`, `exec`, `match`, and the
+callback form of `replace`. For any pattern the `regex` crate can't compile,
+`get_or_compile_regex` stores a never-match `[^\s\S]` placeholder in the
+`RegExpHeader` and stashes the real engine in `FANCY_CACHE`; operations that
+read `regex_ptr` directly therefore silently returned no-match results. This
+finishes the integration so a lookbehind/backreference pattern behaves the same
+as in V8/Node across the whole `String.prototype`/`RegExp.prototype` surface.
+
+Changes (all in `regex.rs` / `regex/match_all.rs`):
+
+- **`String.prototype.search`** — fancy fallback via `fre.find` (was always -1).
+- **`String.prototype.split`** — `fancy_regex` has no `split`, so walk
+  non-overlapping matches and slice between them, mirroring the `regex` crate's
+  split semantics (delimiter dropped, captured groups not spliced — unchanged
+  from the standard path). Zero-width lookbehind splits (`"a1b2c3".split(/(?<=\d)/)`
+  → `["a1","b2","c3",""]`) now work.
+- **`String.prototype.replace`/`replaceAll` (string replacement)** — new
+  `replace_regex_str_fancy` drives the match loop with `fancy_regex` and a
+  `fancy_regex`-typed twin of `expand_js_replacement`, so `$1`/`$<name>`/`$&`/
+  `` $` ``/`$'`/`$$` substitution works under lookbehind/backreferences. The
+  `$<name>` (`js_string_replace_regex_named`) path routes through it too.
+- **Named-capture `groups`** now come through the fallback for `match`
+  (non-global), `exec`, and `matchAll` via a shared `build_fancy_groups`
+  helper (fancy-regex exposes `capture_names()` just like the `regex` crate);
+  previously the fancy branches hard-coded `groups = undefined`.
+- **`String.prototype.matchAll`** — fancy branch in
+  `materialize_match_all_results` (was an empty iterator for fancy patterns).
+
+Zero regressions on the fast `regex`-crate path: simple patterns never enter
+the fallback (it's gated on the `regex` crate failing to compile), and all
+prior regex unit tests pass alongside six new fancy-path tests.
+
+Not in scope (tracked separately under #4797's umbrella): the `v` flag's
+set-notation matching (`[[...]]`, `\q{}`) — fancy-regex shares the `regex`
+crate's class syntax and can't express nested set operations — and the `d`-flag
+indices array, which is not built on the standard path either.
+
 ## v0.5.1146 — Default Windows output extension by type (#4771)
 
 On Windows, `perry compile .\src\main.ts -o main` produced an extension-less

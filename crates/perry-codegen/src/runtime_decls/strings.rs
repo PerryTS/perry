@@ -864,6 +864,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_inline_arena_state", PTR, &[]);
     module.declare_function("js_inline_arena_slow_alloc", PTR, &[PTR, I64, I64]);
     module.declare_function("js_object_delete_field", I32, &[I64, I64]);
+    // Box a `delete` success bit into a JS boolean, throwing TypeError in
+    // strict mode when the delete was refused (non-configurable property).
+    module.declare_function("js_delete_result", DOUBLE, &[I32, I32]);
     // js_eq takes JSValue (#[repr(transparent)] u64) for both
     // params + return — i64 in the ABI, not double.
     module.declare_function("js_eq", I64, &[I64, I64]);
@@ -1117,6 +1120,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // invokes the constructor with IMPLICIT_THIS bound to the new
     // instance. Returns the NaN-boxed new instance pointer.
     module.declare_function("js_new_function_construct", DOUBLE, &[DOUBLE, PTR, I64]);
+    // `new <callee>(...spread)` — codegen folds every argument (regular +
+    // spread-expanded) into one JS array and hands it here; the runtime
+    // materialises a flat buffer and forwards to `js_new_function_construct`.
+    module.declare_function("js_new_function_construct_apply", DOUBLE, &[DOUBLE, DOUBLE]);
+    // `new <primitive-literal>` → `TypeError: … is not a constructor`. Emitted
+    // for primitive-literal callees (most importantly `f64` number literals,
+    // which the runtime construct path cannot tag-distinguish from pointers).
+    module.declare_function("js_throw_not_a_constructor", DOUBLE, &[]);
     module.declare_function("js_new_target_value", DOUBLE, &[]);
     // Read side of #838 followup (b): look up a previously-registered
     // prototype method on a function value by name. Pairs with
@@ -1148,6 +1159,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_throw_reference_error_unresolved_get", DOUBLE, &[]);
     module.declare_function("js_throw_reference_error_this_before_super", DOUBLE, &[]);
+    module.declare_function("js_throw_reference_error_super_delete", DOUBLE, &[]);
     module.declare_function(
         "js_throw_reference_error_unresolved_assignment",
         DOUBLE,

@@ -4,6 +4,7 @@ pub mod audio_playback;
 pub mod deeplinks_stub;
 #[cfg(target_os = "windows")]
 pub mod dpi_compat;
+pub mod drag_drop;
 #[cfg(target_os = "windows")]
 pub mod dwm;
 pub mod issue_552_stub;

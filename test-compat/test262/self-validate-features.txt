@@ -1,0 +1,16 @@
+# Test262 feature tags that Perry implements but the Node oracle (v22/v25)
+# CANNOT run, so the usual node-differential would score every Perry success
+# as a mismatch. Cases carrying one of these tags are judged in
+# **self-validating** mode by scripts/test262_subset.py (#4792): the oracle is
+# dropped and Perry is scored on the case's own `assert.*` self-checks —
+# a positive case passes iff its binary runs to completion without throwing,
+# a negative case passes iff it threw.
+#
+# These cases bypass features-applicable.txt (the feature is, by definition,
+# absent from it) and count toward the denominator, reported as their own
+# per-dir cluster (e.g. built-ins/Temporal).
+#
+# Lines starting with # are comments; blank lines ignored. One feature tag per
+# line. Remove a tag once the oracle Node build ships the feature.
+
+Temporal
