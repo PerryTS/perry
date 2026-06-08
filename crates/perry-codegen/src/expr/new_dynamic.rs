@@ -463,6 +463,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Array / Object thunks and dispatches into the matching
             // real factory; non-matching closures still get the
             // class_id=0 empty-object baseline.
+            // `Expr::Logical` covers `new (A ?? B)()` / `new (A || B)()` /
+            // `new (A && B)()` — picking a constructor with a short-circuit
+            // operator. zod v4's `safeParse` builds its error via
+            // `new (_Err ?? errors.$ZodError)(issues)` (#4699): without this
+            // the callee fell through to the Case-4 empty-object placeholder,
+            // so the `ZodError` constructor never ran and `r.error.issues`
+            // was `undefined`. The whole logical expression lowers to a single
+            // closure value, which `js_new_function_construct` handles exactly
+            // like a `LocalGet` callee (and still falls back to the class_id=0
+            // empty object if the value turns out non-callable).
             let routes_through_function_construct = matches!(
                 callee.as_ref(),
                 Expr::FuncRef(_)
@@ -471,6 +481,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     | Expr::PropertyGet { .. }
                     | Expr::IndexGet { .. }
                     | Expr::Closure { .. }
+                    | Expr::Logical { .. }
             );
             if routes_through_function_construct {
                 let func_double = lower_expr(ctx, callee)?;
