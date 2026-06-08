@@ -569,6 +569,7 @@ fn stmt_resets_completion(stmt: &ast::Stmt) -> bool {
             | ast::Stmt::ForOf(_)
             | ast::Stmt::Switch(_)
             | ast::Stmt::Try(_)
+            | ast::Stmt::With(_)
     )
 }
 
@@ -611,6 +612,7 @@ fn track_completion_inner(stmt: &mut ast::Stmt, reset_template: &ast::Stmt) {
         ast::Stmt::ForIn(s) => track_completion_single(&mut s.body, reset_template),
         ast::Stmt::ForOf(s) => track_completion_single(&mut s.body, reset_template),
         ast::Stmt::Labeled(s) => track_completion_single(&mut s.body, reset_template),
+        ast::Stmt::With(s) => track_completion_single(&mut s.body, reset_template),
         ast::Stmt::Switch(s) => {
             for case in s.cases.iter_mut() {
                 track_completion(&mut case.cons, reset_template);
