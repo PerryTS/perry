@@ -892,20 +892,28 @@ pub(super) fn try_native_module_methods(
                                 // Static descriptor literal — desugar to a Sequence
                                 // of `defineProperty(target, key, desc)` calls and
                                 // yield `target` as the result value.
-                                let target = target;
-                                let mut exprs: Vec<Expr> = Vec::with_capacity(props.len() + 1);
-                                for (key_name, desc_expr) in props {
-                                    exprs.push(Expr::ObjectDefineProperty(
-                                        Box::new(target.clone()),
-                                        Box::new(Expr::String(key_name.clone())),
-                                        Box::new(desc_expr.clone()),
-                                    ));
+                                //
+                                // An EMPTY literal must NOT fold to a bare `target`:
+                                // `Object.defineProperties(O, {})` still performs the
+                                // spec's step-1 `If Type(O) is not Object, throw a
+                                // TypeError`, so `Object.defineProperties(undefined,
+                                // {})` must throw. With no keys there is no per-key
+                                // `defineProperty` to enforce that, so route the
+                                // empty case through the runtime helper (which
+                                // validates the target).
+                                if !props.is_empty() {
+                                    let target = target;
+                                    let mut exprs: Vec<Expr> = Vec::with_capacity(props.len() + 1);
+                                    for (key_name, desc_expr) in props {
+                                        exprs.push(Expr::ObjectDefineProperty(
+                                            Box::new(target.clone()),
+                                            Box::new(Expr::String(key_name.clone())),
+                                            Box::new(desc_expr.clone()),
+                                        ));
+                                    }
+                                    exprs.push(target);
+                                    return Ok(Ok(Expr::Sequence(exprs)));
                                 }
-                                exprs.push(target);
-                                if exprs.len() == 1 {
-                                    return Ok(Ok(exprs.into_iter().next().unwrap()));
-                                }
-                                return Ok(Ok(Expr::Sequence(exprs)));
                             }
                             return Ok(Ok(Expr::ObjectDefineProperties(
                                 Box::new(target),

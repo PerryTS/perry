@@ -30,13 +30,14 @@ pub(crate) unsafe fn array_property_is_enumerable(
     if !super::has_own_helpers::array_own_key_present(arr, key_str) {
         return Some(f64::from_bits(TAG_FALSE));
     }
-    let enumerable = if super::canonical_array_index(key_name).is_some() {
-        true
-    } else {
-        super::get_property_attrs(obj as usize, key_name)
-            .map(|attrs| attrs.enumerable())
-            .unwrap_or(true)
-    };
+    // Both index and named properties default to enumerable when no explicit
+    // descriptor was recorded; an index redefined via
+    // `Object.defineProperty(arr, i, { enumerable: false })` carries a
+    // side-table entry that must be honored (it previously hard-coded `true`
+    // for canonical indices, so a non-enumerable index still reported `true`).
+    let enumerable = super::get_property_attrs(obj as usize, key_name)
+        .map(|attrs| attrs.enumerable())
+        .unwrap_or(true);
     Some(f64::from_bits(if enumerable {
         TAG_TRUE
     } else {
@@ -355,6 +356,17 @@ pub(crate) unsafe fn define_array_property(
 
         if has_value {
             crate::array::js_array_set_f64_extend(arr, index, value);
+        } else if !exists {
+            // A NEW index defined with an attributes-only / generic descriptor
+            // (`Object.defineProperty(arr, i, { enumerable: true })`, no `value`)
+            // still becomes an own data property whose value defaults to
+            // `undefined`. Materialize the slot so the index counts as an own
+            // property for reflection (`hasOwnProperty`, `verifyProperty`).
+            crate::array::js_array_set_f64_extend(
+                arr,
+                index,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
         }
 
         // Compute final attributes. New property: omitted ⇒ false. Redefine:

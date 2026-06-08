@@ -1609,6 +1609,15 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 let elements = (arr as *const u8)
                     .add(std::mem::size_of::<crate::array::ArrayHeader>())
                     as *const u64;
+                // Index properties may carry a non-default descriptor
+                // (`Object.defineProperty(arr, i, { enumerable: false })`).
+                // Object.keys / for-in must skip non-enumerable indices — but
+                // the per-index side-table lookup is only needed when this array
+                // actually has descriptor entries, so the common all-default
+                // array stays on the fast path.
+                let owner = stripped as usize;
+                let has_idx_descriptors = PROPERTY_DESCRIPTORS
+                    .with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == owner));
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
                     if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
@@ -1618,6 +1627,13 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                     // 0..=99999 (≤5 bytes), and a length-100k array hits the
                     // sanity-cap above so we never need a heap StringHeader.
                     let s = i.to_string();
+                    if has_idx_descriptors {
+                        if let Some(attrs) = get_property_attrs(owner, &s) {
+                            if !attrs.enumerable() {
+                                continue;
+                            }
+                        }
+                    }
                     let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
                     crate::array::js_array_push_f64(result, key_box);
                 }
@@ -2317,28 +2333,85 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let key_str = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
 
     unsafe {
-        let keys = (*obj_ptr).keys_array;
-        if keys.is_null() {
-            return nanbox_false;
+        if ordinary_has_property(obj_ptr, key_str) {
+            nanbox_true
+        } else {
+            nanbox_false
         }
+    }
+}
 
-        let key_count = crate::array::js_array_length(keys) as usize;
-        for i in 0..key_count {
-            let stored_key_val = crate::array::js_array_get(keys, i as u32);
-            // #1781: accept inline SSO short keys (the closure-style
-            // `key in obj` path previously dropped them too).
-            if crate::string::js_string_key_matches(stored_key_val, key_str) {
-                // Check if the field was deleted (set to undefined by delete operator)
-                let field_val = js_object_get_field(obj_ptr, i as u32);
-                if field_val.is_undefined() {
-                    return nanbox_false;
-                }
-                return nanbox_true;
+/// `OrdinaryHasProperty(O, P)` (ECMA-262 10.1.7.1) for ordinary heap objects:
+/// true when `P` is an own property of `O` OR of any object in `O`'s
+/// `[[Prototype]]` chain.
+///
+/// Pre-fix the `in`-operator tail only scanned the receiver's own `keys_array`
+/// and, fatally, treated a present key whose stored value is `undefined` as
+/// absent. That conflated three distinct cases: a deleted property (`delete`
+/// actually removes the key from `keys_array`, so it never reaches here), an
+/// explicit `obj.x = undefined` (own, present), and an own *accessor* whose
+/// backing slot reads `undefined`. It also never walked the prototype chain, so
+/// inherited data/accessor properties — and `ToPropertyDescriptor`'s
+/// `HasProperty(desc, "value"/"get"/...)` reads on a descriptor whose fields are
+/// inherited or accessor-backed — wrongly reported absent.
+///
+/// This implements the spec walk: at each level check own-key presence (a key in
+/// `keys_array`, regardless of stored value) and the own-accessor side table,
+/// then advance to the recorded `[[Prototype]]`. When the chain ends without an
+/// explicit prototype, an inherited `Object.prototype` method still counts.
+unsafe fn ordinary_has_property(
+    obj_ptr: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    let key_name = super::has_own_helpers::str_from_string_header(key);
+    let mut cur = obj_ptr;
+    let mut last_valid = obj_ptr;
+    let mut guard = 0u32;
+    loop {
+        guard += 1;
+        if guard > 1024 || cur.is_null() || !super::is_valid_obj_ptr(cur as *const u8) {
+            break;
+        }
+        last_valid = cur;
+        // Own data / overflow key present (value-agnostic: `delete` removes the
+        // key, so a present key — even one holding `undefined` — is an own
+        // property).
+        if super::own_key_present(cur as *mut ObjectHeader, key) {
+            return true;
+        }
+        // Own accessor property (also mirrored into `keys_array`, but check the
+        // side table directly so a get-only accessor is never missed).
+        if let Some(name) = key_name {
+            if get_accessor_descriptor(cur as usize, name).is_some() {
+                return true;
             }
         }
-
-        nanbox_false
+        // Advance to the recorded `[[Prototype]]`.
+        let cur_addr = cur as usize;
+        match super::prototype_chain::object_static_prototype(cur_addr) {
+            Some(b) if b == TAG_NULL => return false,
+            Some(b) => {
+                let top16 = b >> 48;
+                let p = if top16 == 0x7FFD {
+                    (b & crate::value::POINTER_MASK) as usize
+                } else if top16 == 0 && b > 0x10000 {
+                    b as usize
+                } else {
+                    break;
+                };
+                if p == 0 || p == cur_addr {
+                    break;
+                }
+                cur = p as *const ObjectHeader;
+            }
+            // No explicit prototype recorded — the default `Object.prototype`
+            // applies (handled below), so stop the explicit walk here.
+            None => break,
+        }
     }
+    // Inherited `Object.prototype` methods (`toString`, `hasOwnProperty`, …).
+    ordinary_object_prototype_method_value(last_valid, key).is_some()
 }
 
 /// Get a field by its string key name

@@ -2437,8 +2437,27 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
     for k in keys {
         // Read the descriptor through `[[Get]]` so accessors on the properties
         // bag are honored, then ToPropertyDescriptor + DefinePropertyOrThrow.
+        //
+        // Use the value-level getter (keyed off the `descriptors` *value*, not a
+        // raw `ObjectHeader` deref): the properties bag is `ToObject(Properties)`
+        // and may be ANY object — a Date, array, boxed primitive, class
+        // instance, etc. `Object.create({}, new Date(0))` previously bit-cast the
+        // Date's `DateCell` pointer to an `ObjectHeader` and segfaulted. The
+        // dynamic getter dispatches on the receiver's real type.
+        let key_str = str_from_value(k);
         let descriptor = unsafe {
-            js_object_get_field_by_name_f64(desc_obj as *const ObjectHeader, str_from_value(k))
+            if key_str.is_null() {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                let name_ptr =
+                    (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key_str).byte_len as usize;
+                crate::value::js_dynamic_object_get_property(
+                    descriptors,
+                    name_ptr as *const i8,
+                    name_len,
+                )
+            }
         };
         js_object_define_property(target, k, descriptor);
     }
