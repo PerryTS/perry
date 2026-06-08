@@ -503,4 +503,128 @@ mod tests {
             .scalar_replaceable_object_locals
             .contains(&3));
     }
+
+    // Regression: a mutable `let __d = undefined` seed (the shape the
+    // iterator-protocol array-destructuring lowering emits for each binding
+    // element) must NOT leak integer-ness into its immutable `const` copy
+    // chain. `cbBase = __d` then `cb = cbBase` previously ended up in
+    // `integer_locals` + `strictly_i32_bounded_locals`, giving `cb` an i32
+    // shadow slot that fptosi'd a NaN-boxed object/string to i32::MIN
+    // (`(number).setName is not a function` in drizzle's column builders).
+    #[test]
+    fn destructure_undefined_seed_does_not_leak_into_const_copy_chain() {
+        // let __d = undefined        (id 1, mutable seed)
+        // if (cond) { __d = undefined } else { __d = src.value }  (non-int writes)
+        // const cbBase = __d         (id 2)
+        // const cb = cbBase          (id 3)
+        let stmts = vec![
+            mutable_number_let(1, Expr::Undefined),
+            Stmt::If {
+                condition: Expr::LocalGet(98),
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Undefined)))],
+                else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
+                    1,
+                    Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(99)),
+                        property: "value".to_string(),
+                    }),
+                ))]),
+            },
+            const_let(2, Expr::LocalGet(1)),
+            const_let(3, Expr::LocalGet(2)),
+        ];
+
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(
+            !ints.contains(&1),
+            "mutable undefined seed must be disqualified"
+        );
+        assert!(
+            !ints.contains(&2),
+            "const copy of a disqualified seed must not be integer"
+        );
+        assert!(
+            !ints.contains(&3),
+            "second-hop const copy must not be integer (the regressing slot)"
+        );
+    }
+
+    // Guard against over-pruning: a `const` whose source is a *legitimately*
+    // integer mutable accumulator (every write `| 0`) must stay in the set so
+    // image_convolution-style i32 chains keep their shadow slots.
+    #[test]
+    fn const_copy_of_live_integer_accumulator_stays_integer() {
+        let bitor0 = |left: Expr| Expr::Binary {
+            op: BinaryOp::BitOr,
+            left: Box::new(left),
+            right: Box::new(Expr::Integer(0)),
+        };
+        // let acc = 0|0 ; acc = (acc) | 0 ; const snap = acc;
+        let stmts = vec![
+            mutable_number_let(1, bitor0(Expr::Integer(0))),
+            Stmt::Expr(Expr::LocalSet(1, Box::new(bitor0(Expr::LocalGet(1))))),
+            const_let(2, Expr::LocalGet(1)),
+        ];
+
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(ints.contains(&1), "live |0 accumulator must stay integer");
+        assert!(
+            ints.contains(&2),
+            "const copy of a live integer accumulator must stay integer"
+        );
+    }
+
+    // Regression (parameter-destructuring path): the bindings the *param*
+    // destructure lowering emits are `mutable: true` with no reassignment, so
+    // they escape an immutable-only re-validation. They must still be pruned
+    // via their init-only definition when their `undefined`-seed source is
+    // disqualified.
+    #[test]
+    fn destructure_mutable_param_bindings_do_not_leak_into_copy() {
+        // let __d = undefined           (id 1, mutable seed, has non-int writes)
+        // __d = src.value
+        // let cbBase = __d              (id 2, mutable binding, NO LocalSet)
+        // const cb = cbBase             (id 3)
+        let stmts = vec![
+            mutable_number_let(1, Expr::Undefined),
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(99)),
+                    property: "value".to_string(),
+                }),
+            )),
+            mutable_number_let(2, Expr::LocalGet(1)),
+            const_let(3, Expr::LocalGet(2)),
+        ];
+
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(
+            !ints.contains(&1),
+            "mutable undefined seed must be disqualified"
+        );
+        assert!(
+            !ints.contains(&2),
+            "mutable param binding copied from a disqualified seed must not be integer"
+        );
+        assert!(
+            !ints.contains(&3),
+            "const copy of the mutable param binding must not be integer"
+        );
+    }
 }

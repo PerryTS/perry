@@ -62,12 +62,45 @@ pub fn collect_integer_locals(
     // disqualifying one candidate may cascade to other candidates whose
     // rhs referenced the first via LocalGet. Iterate until the set
     // stabilizes.
+    // Locals that are ever the target of a `LocalSet` are governed by the
+    // write-based disqualifier above; locals that are NOT (their `Let` init is
+    // their sole definition — every `const`, plus never-reassigned `let`s such
+    // as the mutable bindings the *parameter* destructuring path emits) must be
+    // re-validated through that init when their source leaves the set.
+    let mut localset_written: HashSet<u32> = HashSet::new();
+    collect_localset_ids_in_stmts(stmts, &mut localset_written);
     loop {
         let mut disqualified: HashSet<u32> = HashSet::new();
         collect_non_int_localset_ids_in_stmts(
             stmts,
             &mut disqualified,
             &candidates,
+            flat_const_ids,
+            &flat_row_alias_ids,
+            clamp_fn_ids,
+        );
+        // Re-validate init-only candidates against the *current*
+        // (shrinking) set. The forward pass above adds a `y = x` (an init-only
+        // Let whose init is `LocalGet(x)` / an int-producing expr) the moment
+        // `x` is a candidate — but the LocalSet-based disqualifier never
+        // revisits it, because the binding's defining init is not a `LocalSet`.
+        // So when `x` later leaves the set (e.g. a mutable `undefined` seed
+        // disqualified by a non-int write), `y` was left stranded as a stale
+        // integer local, and any further `z = y` copy then qualified for an i32
+        // shadow slot — fptosi'ing a NaN-boxed value to i32::MIN. This is the
+        // destructuring-scaffolding regression: the iterator-protocol
+        // array-binding lowering emits `let __destruct = undefined`
+        // (mutable+Undefined seed), whose binding copies (`cb = cbBase`, where
+        // the *parameter* path even makes those bindings `mutable` with no
+        // reassignment) were mis-typed as integers. Pruning any init-only
+        // candidate whose init is no longer int-producing closes that hop.
+        // Locals with real `LocalSet` writes (clampIdx's `xx`) stay governed by
+        // those writes above.
+        collect_non_int_init_only_let_ids(
+            stmts,
+            &mut disqualified,
+            &candidates,
+            &localset_written,
             flat_const_ids,
             &flat_row_alias_ids,
             clamp_fn_ids,
@@ -79,6 +112,172 @@ pub fn collect_integer_locals(
         }
     }
     candidates
+}
+
+/// Walk all `Stmt::Let { id, init: Some(e), .. }` whose `id` is a current
+/// candidate, has NO `LocalSet` write (`!localset_written.contains(id)` — its
+/// init is its sole definition), and whose init `e` is NOT
+/// `is_int32_producing_expr` against the current candidate set, recording `id`
+/// in `out`. Used inside `collect_integer_locals`'s disqualify fixed point to
+/// prune init-only members (every `const`, plus never-reassigned `let`s like
+/// the parameter-destructuring bindings) that the forward propagation added
+/// from a source local which has since been disqualified — those carry no
+/// `LocalSet` write for `collect_non_int_localset_ids_in_stmts` to catch, so
+/// they must be re-validated through their defining init here.
+#[allow(clippy::too_many_arguments)]
+pub fn collect_non_int_init_only_let_ids(
+    stmts: &[perry_hir::Stmt],
+    out: &mut HashSet<u32>,
+    candidates: &HashSet<u32>,
+    localset_written: &HashSet<u32>,
+    flat_const_ids: &HashSet<u32>,
+    flat_row_alias_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+) {
+    use perry_hir::Stmt;
+    for s in stmts {
+        match s {
+            Stmt::Let {
+                id,
+                init: Some(init),
+                ..
+            } => {
+                if candidates.contains(id)
+                    && !localset_written.contains(id)
+                    && !is_int32_producing_expr(
+                        init,
+                        candidates,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    )
+                {
+                    out.insert(*id);
+                }
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_non_int_init_only_let_ids(
+                    then_branch,
+                    out,
+                    candidates,
+                    localset_written,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+                if let Some(eb) = else_branch {
+                    collect_non_int_init_only_let_ids(
+                        eb,
+                        out,
+                        candidates,
+                        localset_written,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
+                }
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init_stmt) = init {
+                    collect_non_int_init_only_let_ids(
+                        std::slice::from_ref(init_stmt),
+                        out,
+                        candidates,
+                        localset_written,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
+                }
+                collect_non_int_init_only_let_ids(
+                    body,
+                    out,
+                    candidates,
+                    localset_written,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_non_int_init_only_let_ids(
+                    body,
+                    out,
+                    candidates,
+                    localset_written,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_non_int_init_only_let_ids(
+                    body,
+                    out,
+                    candidates,
+                    localset_written,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+                if let Some(c) = catch {
+                    collect_non_int_init_only_let_ids(
+                        &c.body,
+                        out,
+                        candidates,
+                        localset_written,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
+                }
+                if let Some(f) = finally {
+                    collect_non_int_init_only_let_ids(
+                        f,
+                        out,
+                        candidates,
+                        localset_written,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    collect_non_int_init_only_let_ids(
+                        &c.body,
+                        out,
+                        candidates,
+                        localset_written,
+                        flat_const_ids,
+                        flat_row_alias_ids,
+                        clamp_fn_ids,
+                    );
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_non_int_init_only_let_ids(
+                    std::slice::from_ref(body.as_ref()),
+                    out,
+                    candidates,
+                    localset_written,
+                    flat_const_ids,
+                    flat_row_alias_ids,
+                    clamp_fn_ids,
+                );
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Walk all `Stmt::Let { id, init: Some(e), .. }` and add `id` to
