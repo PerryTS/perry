@@ -50,10 +50,16 @@ pub extern "C" fn js_string_materialize_to_heap(value: f64) -> *mut StringHeader
 pub extern "C" fn js_string_new_sso(data: *const u8, len: u32) -> f64 {
     unsafe {
         let ulen = len as usize;
-        if ulen <= crate::value::SHORT_STRING_MAX_LEN {
+        // SSO stores its length tag as the JS `.length`, which is only valid
+        // when byte length == UTF-16 length — i.e. pure ASCII. Non-ASCII (incl.
+        // WTF-8 lone surrogates) must take the heap path so `compute_utf16_len`
+        // records the correct code-unit count (#4793).
+        if ulen <= crate::value::SHORT_STRING_MAX_LEN && (ulen == 0 || !data.is_null()) {
             let bytes = std::slice::from_raw_parts(data, ulen);
-            if let Some(v) = crate::value::JSValue::try_short_string(bytes) {
-                return f64::from_bits(v.bits());
+            if bytes.iter().all(|&b| b < 0x80) {
+                if let Some(v) = crate::value::JSValue::try_short_string(bytes) {
+                    return f64::from_bits(v.bits());
+                }
             }
         }
         let ptr = js_string_from_bytes(data, len);
