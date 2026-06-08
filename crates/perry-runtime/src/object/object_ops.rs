@@ -200,12 +200,21 @@ pub(crate) unsafe fn desc_read_field(descriptor_value: f64, name: &[u8]) -> crat
             return crate::value::JSValue::from_bits(crate::value::TAG_UNDEFINED);
         }
     }
-    let desc_ptr = extract_obj_ptr(descriptor_value);
-    if desc_ptr.is_null() {
+    // The descriptor may be ANY object — a Date, array, RegExp, boxed
+    // primitive, typed array, class instance — not just a plain `ObjectHeader`.
+    // A raw `js_object_get_field_by_name(ptr as ObjectHeader)` bit-casts e.g. a
+    // Date's cell to an `ObjectHeader` and segfaults (test262
+    // Object/create/15.2.3.5-4-* and defineProperties exotic-descriptor cases).
+    // Read through the value-level `[[Get]]`, which dispatches on the receiver's
+    // real type and — matching `desc_has_field`'s `HasProperty` and the spec
+    // `ToPropertyDescriptor` — walks the prototype chain and fires accessors.
+    if !value_is_object_like(descriptor_value) {
         return crate::value::JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_get_field_by_name(desc_ptr as *const ObjectHeader, key)
+    let key_f64 = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
+    let v = crate::object::js_object_get_property_key(descriptor_value, key_f64);
+    crate::value::JSValue::from_bits(v.to_bits())
 }
 
 /// Validate a property descriptor object per ES `ToPropertyDescriptor`
