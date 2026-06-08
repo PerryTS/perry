@@ -441,12 +441,7 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                     );
                 }
                 if let Some(f) = finally.as_mut() {
-                    insert_iterator_close_on_abrupt(
-                        f,
-                        iter_id,
-                        break_capture_depth,
-                        inner_labels,
-                    );
+                    insert_iterator_close_on_abrupt(f, iter_id, break_capture_depth, inner_labels);
                 }
                 rewritten.push(Stmt::Try {
                     body,
@@ -1731,12 +1726,7 @@ pub(crate) fn lower_stmt_for_of(
                 name,
                 ty: Type::Any,
                 mutable: false,
-                init: Some(lazy_or_index_elem(
-                    use_lazy_iter,
-                    arr_id,
-                    idx_id,
-                    result_id,
-                )),
+                init: Some(lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)),
             }]
         }
         _ => return Err(anyhow!("Unsupported for-of left-hand side")),
@@ -1775,7 +1765,10 @@ pub(crate) fn lower_stmt_for_of(
                     property: "done".to_string(),
                 }),
             }),
-            update: Some(Expr::LocalSet(result_id, Box::new(iterator_next_call(arr_id)))),
+            update: Some(Expr::LocalSet(
+                result_id,
+                Box::new(iterator_next_call(arr_id)),
+            )),
             body: loop_body,
         });
         ctx.pop_block_scope(for_scope_mark);

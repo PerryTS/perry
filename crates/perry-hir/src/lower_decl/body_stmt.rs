@@ -1761,12 +1761,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         name,
                         ty: Type::Any,
                         mutable: false,
-                        init: Some(lazy_or_index_elem(
-                            use_lazy_iter,
-                            arr_id,
-                            idx_id,
-                            result_id,
-                        )),
+                        init: Some(lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)),
                     }]
                 }
                 _ => return Err(anyhow!("Unsupported for-of left-hand side")),

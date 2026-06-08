@@ -2040,6 +2040,17 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             }
         }
     }
+    // A primitive number / boolean / null / undefined is not iterable. Per
+    // GetIterator this is a TypeError; bail before the `[Symbol.iterator]`
+    // lookup, which would otherwise dereference a raw (non-NaN-boxed) double as
+    // an object pointer and crash (`for (x of 37) {}`). Strings ARE iterable, so
+    // they fall through to the symbol lookup below.
+    {
+        let jsv = crate::value::JSValue::from_bits(val_f64.to_bits());
+        if !jsv.is_pointer() && !jsv.is_any_string() {
+            throw_value_not_iterable();
+        }
+    }
     let iter_wk = well_known_symbol("iterator");
     if !iter_wk.is_null() {
         let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
@@ -2073,17 +2084,6 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 }
                 return iter;
             }
-        }
-    }
-    // No usable `[Symbol.iterator]` was found. A primitive number / boolean /
-    // null / undefined is not iterable — per GetIterator this is a TypeError,
-    // and returning the value unchanged would crash a downstream `.next()`
-    // call (`for (x of 37) {}`). Strings and objects/arrays are handled above
-    // or carry a real iterator, so only the non-iterable primitives throw here.
-    {
-        let jsv = crate::value::JSValue::from_bits(val_f64.to_bits());
-        if !jsv.is_pointer() && !jsv.is_any_string() {
-            throw_value_not_iterable();
         }
     }
     val_f64

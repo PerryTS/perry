@@ -694,8 +694,7 @@ fn try_const_fold_eval(
     //                            __perry_cv = undefined;   (reset/assign template)
     //                            return __perry_cv;]
     let template_src = "(function () {\nvar __perry_cv = undefined;\n__perry_cv = undefined;\nreturn __perry_cv;\n});\n";
-    let template_module = match perry_parser::parse_typescript(template_src, "<eval wrapper>.cjs")
-    {
+    let template_module = match perry_parser::parse_typescript(template_src, "<eval wrapper>.cjs") {
         Ok(m) => m,
         Err(_) => return Ok(None),
     };
