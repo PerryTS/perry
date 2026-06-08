@@ -84,6 +84,18 @@ extern "C" fn date_to_iso_string(_closure: *const crate::closure::ClosureHeader)
     crate::value::js_nanbox_string(s as i64)
 }
 
+/// `Date.prototype.toUTCString` (and its legacy `toGMTString` alias)
+/// reflective thunk: brand-check `this` (TypeError on a non-Date receiver),
+/// then format as "Sun, 23 Mar 2014 00:00:00 GMT" (or "Invalid Date").
+extern "C" fn date_to_utc_string(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    if !crate::date::is_date_value(this) {
+        super::object_ops::throw_object_type_error(b"this is not a Date object.");
+    }
+    let s = crate::date::js_date_to_utc_string(this);
+    crate::value::js_nanbox_string(s as i64)
+}
+
 /// `Date.prototype.toJSON` reflective thunk. Unlike the getters this is a
 /// *generic* method — it is not brand-checked to Date. Per ECMA-262
 /// (`thisTimeValue` is NOT used): `ToObject(this)`, then `ToPrimitive(this,
@@ -287,6 +299,18 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
         0,
     );
     super::global_this::install_proto_method(proto_obj, "toJSON", date_to_json as *const u8, 1);
+    super::global_this::install_proto_method(
+        proto_obj,
+        "toUTCString",
+        date_to_utc_string as *const u8,
+        0,
+    );
+    super::global_this::install_proto_method(
+        proto_obj,
+        "toGMTString",
+        date_to_utc_string as *const u8,
+        0,
+    );
 }
 
 // --- Setters ---------------------------------------------------------------

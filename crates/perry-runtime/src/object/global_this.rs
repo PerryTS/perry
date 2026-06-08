@@ -3134,6 +3134,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
     // `Error` is listed before its subclasses in GLOBAL_THIS_BUILTIN_CONSTRUCTORS,
     // so these are populated before the subclass iterations consume them.
     let mut error_ctor_bits: Option<u64> = None;
+    let mut error_proto_bits: Option<u64> = None;
     for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
@@ -3339,6 +3340,23 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
             install_error_prototype_data_properties(name, proto_obj);
+            // ECMA-262 20.5.6.3: the [[Prototype]] of each NativeError prototype
+            // object is %Error.prototype% (not %Object.prototype%). `Error` is
+            // listed before its subclasses, so its prototype object is stashed
+            // here and linked into each subclass prototype's chain. Without this
+            // `Object.getPrototypeOf(TypeError.prototype) !== Error.prototype`
+            // (test262 NativeErrors/*/prototype/proto.js).
+            if name == "Error" {
+                error_proto_bits =
+                    Some(crate::value::js_nanbox_pointer(proto_obj as i64).to_bits());
+            } else if is_native_error_subclass_constructor(name) {
+                if let Some(proto_bits) = error_proto_bits {
+                    super::prototype_chain::object_set_static_prototype(
+                        proto_obj as usize,
+                        proto_bits,
+                    );
+                }
+            }
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
                 crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
             }

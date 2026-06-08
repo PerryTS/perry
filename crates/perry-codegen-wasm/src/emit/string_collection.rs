@@ -834,6 +834,7 @@ impl WasmModuleEmitter {
             | Expr::DateValueOf(e)
             | Expr::DateToDateString(e)
             | Expr::DateToTimeString(e)
+            | Expr::DateToUTCString(e)
             | Expr::DateToLocaleDateString(e)
             | Expr::DateToLocaleTimeString(e)
             | Expr::DateToLocaleString(e)

@@ -197,6 +197,15 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
 
 #[inline]
 pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
+    // A BigInt's NaN-boxed bits ARE an IEEE NaN, so it would otherwise fall into
+    // the `is_nan()` → "null" arm below. BigInt is unserializable (modulo a
+    // `toJSON`), so funnel it through the throwing serializer. Centralizes the
+    // BigInt rule for every object-field / array-element numeric fallback that
+    // reaches here (test262 JSON/stringify/value-bigint `{x: 0n}`).
+    if (value.to_bits() & 0xFFFF_0000_0000_0000) == BIGINT_TAG {
+        serialize_bigint(value, buf);
+        return;
+    }
     // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
     // `stringify_value`/`stringify_value_depth` before this numeric funnel —
     // so no Date detection is needed here anymore.
@@ -348,6 +357,71 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
         buf_vec.extend_from_slice(&bytes[start..]);
     }
     buf_vec.push(b'"');
+}
+
+/// ECMA-262 SerializeJSONProperty step 2 for a BigInt: `GetV(value, "toJSON")`
+/// resolves through `BigInt.prototype`. If a callable `toJSON` is installed
+/// (e.g. a userland `BigInt.prototype.toJSON`), invoke it with `this` bound to
+/// the BigInt and return the (serializable) result; otherwise `None` so the
+/// caller throws. Unlike objects, a primitive BigInt never reaches
+/// `object_get_to_json` (that helper only walks `GC_TYPE_OBJECT` layouts), so
+/// the toJSON application lives here.
+pub(crate) unsafe fn bigint_apply_to_json(value: f64) -> Option<f64> {
+    let proto = crate::object::builtin_prototype_value("BigInt");
+    let proto_bits = proto.to_bits();
+    if (proto_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let proto_ptr = (proto_bits & POINTER_MASK) as *const crate::ObjectHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let key = js_string_from_bytes(b"toJSON".as_ptr(), 6);
+    let key_handle = scope.root_string_ptr(key);
+    let method = crate::object::js_object_get_field_by_name(
+        proto_ptr,
+        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
+    );
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return None;
+    }
+    let recv = value_handle.get_nanbox_f64();
+    let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
+    let key_f64_arg = f64::from_bits(STRING_TAG | (empty_str as u64 & POINTER_MASK));
+    let prev_this = crate::object::js_implicit_this_set(recv);
+    let result = crate::closure::js_native_call_value(f64::from_bits(method_bits), &key_f64_arg, 1);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(result)
+}
+
+/// Serialize a BigInt: apply `BigInt.prototype.toJSON` if present, else throw a
+/// TypeError. If `toJSON` returns another BigInt the value remains
+/// unserializable and we throw.
+pub(crate) unsafe fn serialize_bigint(value: f64, buf: &mut String) {
+    if let Some(converted) = bigint_apply_to_json(value) {
+        if (converted.to_bits() & 0xFFFF_0000_0000_0000) == BIGINT_TAG {
+            throw_bigint_serialize();
+        }
+        stringify_value(converted, TYPE_UNKNOWN, buf);
+        return;
+    }
+    throw_bigint_serialize();
+}
+
+/// ECMA-262 SerializeJSONProperty step for a BigInt value: throw a TypeError.
+/// A `toJSON`/replacer that converts the BigInt runs earlier in the walk, so
+/// any BigInt reaching a serializer is unconvertible.
+pub(crate) fn throw_bigint_serialize() -> ! {
+    let msg = "Do not know how to serialize a BigInt";
+    let msg_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+    crate::exception::js_throw(f64::from_bits(
+        POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+    ))
 }
 
 /// Check if a NaN-boxed value is a closure (function).
@@ -510,15 +584,10 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         return;
     }
 
-    // BigInt: serialize as quoted string (matching JSON.stringify with BigInt replacer behavior)
+    // BigInt: apply `BigInt.prototype.toJSON` if present, else throw a TypeError
+    // (test262 JSON/stringify/value-bigint*).
     if tag == BIGINT_TAG {
-        let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
-            buf.push_str("null");
-        }
+        serialize_bigint(value, buf);
         return;
     }
 
@@ -740,13 +809,7 @@ pub(crate) unsafe fn stringify_value_depth(
     }
 
     if tag == BIGINT_TAG {
-        let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
-            buf.push_str("null");
-        }
+        serialize_bigint(value, buf);
         return;
     }
 
@@ -1613,13 +1676,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         } else if elem_bits == TAG_FALSE {
             buf.push_str("false");
         } else if elem_tag == BIGINT_TAG {
-            let bigint_ptr = (elem_bits & POINTER_MASK) as *const crate::BigIntHeader;
-            let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-            if let Some(s) = str_from_header(str_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
+            serialize_bigint(elem, buf);
         } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
             let elem_ptr = if elem_tag == POINTER_TAG {
                 (elem_bits & POINTER_MASK) as *const u8

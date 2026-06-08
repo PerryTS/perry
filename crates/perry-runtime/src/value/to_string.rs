@@ -952,25 +952,45 @@ pub extern "C" fn js_jsvalue_to_string_radix(
         }
         let s = double_to_radix_string(n as f64, radix as u32);
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    } else if jsval.is_number() {
+        number_to_radix_string(value, radix)
     } else {
-        // Regular f64 number
-        let n = value;
-        if n.is_nan() {
-            return crate::string::js_string_from_bytes(b"NaN".as_ptr(), 3);
-        }
-        if n.is_infinite() {
-            if n > 0.0 {
-                return crate::string::js_string_from_bytes(b"Infinity".as_ptr(), 8);
-            } else {
-                return crate::string::js_string_from_bytes(b"-Infinity".as_ptr(), 9);
+        // Pointer / object receiver. `Number.prototype.toString` brand
+        // semantics (ECMA-262 21.1.3): a boxed `Number` exposes its
+        // [[NumberData]]; `Number.prototype` itself has [[NumberData]] +0;
+        // any other object has no number value and falls back to ordinary
+        // ToString (Object.prototype.toString, [object Object], etc.).
+        const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+        if let Some((cid, payload)) = crate::builtins::boxed_primitive_payload(value) {
+            if cid == CLASS_ID_BOXED_NUMBER {
+                return number_to_radix_string(payload, radix);
             }
         }
-        if radix == 10 {
-            return crate::string::js_number_to_string(value);
+        if value.to_bits() == crate::object::builtin_prototype_value("Number").to_bits() {
+            return number_to_radix_string(0.0, radix);
         }
-        let s = double_to_radix_string(n, radix as u32);
-        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+        js_jsvalue_to_string(value)
     }
+}
+
+/// Format a real f64 `n` in the given `radix` (2..=36), matching
+/// `Number.prototype.toString`'s NaN/Infinity/decimal handling.
+fn number_to_radix_string(n: f64, radix: i32) -> *mut crate::string::StringHeader {
+    if n.is_nan() {
+        return crate::string::js_string_from_bytes(b"NaN".as_ptr(), 3);
+    }
+    if n.is_infinite() {
+        if n > 0.0 {
+            return crate::string::js_string_from_bytes(b"Infinity".as_ptr(), 8);
+        } else {
+            return crate::string::js_string_from_bytes(b"-Infinity".as_ptr(), 9);
+        }
+    }
+    if radix == 10 {
+        return crate::string::js_number_to_string(n);
+    }
+    let s = double_to_radix_string(n, radix as u32);
+    crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
 /// Ensure a value is a native string pointer.

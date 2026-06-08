@@ -277,6 +277,7 @@ where
         | Expr::DateToString(v)
         | Expr::DateToDateString(v)
         | Expr::DateToTimeString(v)
+        | Expr::DateToUTCString(v)
         | Expr::DateToLocaleDateString(v)
         | Expr::DateToLocaleTimeString(v)
         | Expr::DateToLocaleString(v)

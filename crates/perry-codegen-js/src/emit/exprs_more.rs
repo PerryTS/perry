@@ -652,6 +652,10 @@ impl JsEmitter {
                 self.emit_expr(d);
                 self.output.push_str(".toTimeString()");
             }
+            Expr::DateToUTCString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toUTCString()");
+            }
             Expr::DateToLocaleDateString(d) => {
                 self.emit_expr(d);
                 self.output.push_str(".toLocaleDateString()");
