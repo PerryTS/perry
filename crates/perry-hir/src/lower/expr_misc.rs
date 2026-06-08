@@ -284,14 +284,14 @@ pub(super) fn lower_meta_prop(
 /// Used by both the bare-`import.meta` Object synthesis above and the
 /// member-access fast path in `expr_member::lower_member`.
 pub(crate) fn import_meta_paths(ctx: &LoweringContext) -> (String, String, String) {
-    let path = &ctx.source_file_path;
+    let path = ctx.source_file_path.replace('\\', "/");
     let url = format!("file://{}", path);
     let dirname = match path.rfind('/') {
         Some(i) if i > 0 => path[..i].to_string(),
         Some(_) => "/".to_string(),
         None => String::new(),
     };
-    let filename = path.to_string();
+    let filename = path;
     (url, dirname, filename)
 }
 

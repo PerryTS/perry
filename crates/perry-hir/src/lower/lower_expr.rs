@@ -460,7 +460,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // which silently corrupts any path computation built on
                 // path.join(__dirname, ...). Mirrors the import.meta arm
                 // (expr_misc::import_meta_paths) so both surfaces agree.
-                let path = &ctx.source_file_path;
+                let path = ctx.source_file_path.replace('\\', "/");
                 let value = if name == "__filename" {
                     path.clone()
                 } else {

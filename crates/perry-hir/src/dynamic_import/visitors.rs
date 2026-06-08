@@ -692,5 +692,10 @@ fn visit_expr_for_worker_new_ref<F: FnMut(&Expr)>(expr: &Expr, f: &mut F) {
     if matches!(expr, Expr::WorkerNew { .. }) {
         f(expr);
     }
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            visit_stmt_for_worker_new_ref(s, f);
+        }
+    }
     walk_expr_children(expr, &mut |child| visit_expr_for_worker_new_ref(child, f));
 }

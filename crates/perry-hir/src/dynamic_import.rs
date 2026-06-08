@@ -1177,6 +1177,72 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
 ) -> Resolution {
     match arg {
         Expr::String(s) => Resolution::Set(vec![s.clone()]),
+        Expr::Call { callee, args, .. } => match static_string_replace_target(callee, args) {
+            Some(string) => resolve_string_replace_parts(
+                string,
+                &args[0],
+                &args[1],
+                consts,
+                param_literals,
+                local_literals,
+                visiting,
+            ),
+            None if is_static_path_join_call(callee) => {
+                resolve_static_path_args(args, consts, param_literals, local_literals, visiting)
+            }
+            None => Resolution::Unresolved(
+                "path argument is not statically resolvable (supported: string literals, \
+                 ternaries of resolvable arms, template literals with const-local \
+                 interpolations, and references to module-level const string locals)"
+                    .to_string(),
+            ),
+        },
+        Expr::PathJoin(left, right) | Expr::PathResolveJoin(left, right) => {
+            let left = resolve_import_path_with_context(
+                left,
+                consts,
+                param_literals,
+                local_literals,
+                visiting,
+            );
+            let right = resolve_import_path_with_context(
+                right,
+                consts,
+                param_literals,
+                local_literals,
+                visiting,
+            );
+            match (left, right) {
+                (Resolution::Set(lefts), Resolution::Set(rights)) => {
+                    let mut out = Vec::new();
+                    for left in &lefts {
+                        for right in &rights {
+                            let joined = static_path_join(left, right);
+                            if !out.contains(&joined) {
+                                out.push(joined);
+                            }
+                        }
+                    }
+                    Resolution::Set(out)
+                }
+                (Resolution::Unresolved(reason), _) | (_, Resolution::Unresolved(reason)) => {
+                    Resolution::Unresolved(reason)
+                }
+            }
+        }
+        Expr::StringReplace {
+            string,
+            pattern,
+            replacement,
+        } => resolve_string_replace_parts(
+            string,
+            pattern,
+            replacement,
+            consts,
+            param_literals,
+            local_literals,
+            visiting,
+        ),
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -1292,6 +1358,116 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
     }
 }
 
+fn static_string_replace_target<'a>(callee: &'a Expr, args: &[Expr]) -> Option<&'a Expr> {
+    if args.len() < 2 {
+        return None;
+    }
+    match callee {
+        Expr::PropertyGet { object, property } if property == "replace" => Some(object),
+        _ => None,
+    }
+}
+
+fn resolve_string_replace_parts<V: Borrow<Expr>>(
+    string: &Expr,
+    pattern: &Expr,
+    replacement: &Expr,
+    consts: &std::collections::HashMap<u32, V>,
+    param_literals: &std::collections::HashMap<u32, Vec<String>>,
+    local_literals: &std::collections::HashMap<u32, Vec<String>>,
+    visiting: &mut std::collections::HashSet<u32>,
+) -> Resolution {
+    let string =
+        resolve_import_path_with_context(string, consts, param_literals, local_literals, visiting);
+    let pattern =
+        resolve_import_path_with_context(pattern, consts, param_literals, local_literals, visiting);
+    let replacement = resolve_import_path_with_context(
+        replacement,
+        consts,
+        param_literals,
+        local_literals,
+        visiting,
+    );
+    match (string, pattern, replacement) {
+        (Resolution::Set(strings), Resolution::Set(patterns), Resolution::Set(replacements)) => {
+            let mut out = Vec::new();
+            for string in &strings {
+                for pattern in &patterns {
+                    for replacement in &replacements {
+                        let replaced = string.replacen(pattern, replacement, 1);
+                        if !out.contains(&replaced) {
+                            out.push(replaced);
+                        }
+                    }
+                }
+            }
+            Resolution::Set(out)
+        }
+        (Resolution::Unresolved(reason), _, _)
+        | (_, Resolution::Unresolved(reason), _)
+        | (_, _, Resolution::Unresolved(reason)) => Resolution::Unresolved(reason),
+    }
+}
+
+fn is_static_path_join_call(callee: &Expr) -> bool {
+    let Expr::PropertyGet { object, property } = callee else {
+        return false;
+    };
+    property == "join" && is_static_path_module_expr(object)
+}
+
+fn is_static_path_module_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::NativeModuleRef(module) => module == "path" || module == "node:path",
+        Expr::PropertyGet { object, property } if property == "default" => {
+            is_static_path_module_expr(object)
+        }
+        _ => false,
+    }
+}
+
+fn resolve_static_path_args<V: Borrow<Expr>>(
+    args: &[Expr],
+    consts: &std::collections::HashMap<u32, V>,
+    param_literals: &std::collections::HashMap<u32, Vec<String>>,
+    local_literals: &std::collections::HashMap<u32, Vec<String>>,
+    visiting: &mut std::collections::HashSet<u32>,
+) -> Resolution {
+    if args.is_empty() {
+        return Resolution::Set(vec![".".to_string()]);
+    }
+    let mut sets = Vec::with_capacity(args.len());
+    for arg in args {
+        match resolve_import_path_with_context(
+            arg,
+            consts,
+            param_literals,
+            local_literals,
+            visiting,
+        ) {
+            Resolution::Set(paths) => sets.push(paths),
+            Resolution::Unresolved(reason) => return Resolution::Unresolved(reason),
+        }
+    }
+    let mut acc = vec![String::new()];
+    for set in sets {
+        let mut next = Vec::new();
+        for left in &acc {
+            for right in &set {
+                let joined = static_path_join(left, right);
+                if !next.contains(&joined) {
+                    next.push(joined);
+                }
+            }
+        }
+        acc = next;
+        if acc.len() > DYNAMIC_IMPORT_PATH_CAP {
+            return Resolution::Set(acc);
+        }
+    }
+    Resolution::Set(acc)
+}
+
 /// Flatten a left-leaning `Add` chain — produced by
 /// `expr_misc::lower_tpl` for a template literal — into the ordered
 /// list of leaf parts. e.g. `(("./locale_" + lang) + ".ts")` flattens
@@ -1308,6 +1484,76 @@ fn flatten_concat<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
     } else {
         out.push(expr);
     }
+}
+
+fn static_path_join(left: &str, right: &str) -> String {
+    let left = left.replace('\\', "/");
+    let right = right.replace('\\', "/");
+    if is_static_path_absolute(&right) {
+        return normalize_static_path(&right);
+    }
+    if left.is_empty() {
+        return normalize_static_path(&right);
+    }
+    if right.is_empty() {
+        return normalize_static_path(&left);
+    }
+    normalize_static_path(&format!(
+        "{}/{}",
+        left.trim_end_matches('/'),
+        right.trim_start_matches('/')
+    ))
+}
+
+fn is_static_path_absolute(path: &str) -> bool {
+    path.starts_with('/')
+        || path.starts_with("//")
+        || path.as_bytes().get(1).is_some_and(|b| *b == b':')
+}
+
+fn normalize_static_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let (prefix, rest) = split_static_path_prefix(&path);
+    let mut parts = Vec::new();
+    for part in rest.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if !parts.is_empty() && parts.last() != Some(&"..") => {
+                parts.pop();
+            }
+            ".." if prefix.is_empty() => parts.push(part),
+            ".." => {}
+            _ => parts.push(part),
+        }
+    }
+    let body = parts.join("/");
+    if prefix.is_empty() {
+        if body.is_empty() {
+            ".".to_string()
+        } else {
+            body
+        }
+    } else if body.is_empty() {
+        prefix.to_string()
+    } else if prefix.ends_with('/') {
+        format!("{prefix}{body}")
+    } else {
+        format!("{prefix}/{body}")
+    }
+}
+
+fn split_static_path_prefix(path: &str) -> (&str, &str) {
+    if path.starts_with("//") {
+        let trimmed = path.trim_start_matches('/');
+        return ("//", trimmed);
+    }
+    if path.starts_with('/') {
+        return ("/", &path[1..]);
+    }
+    if path.as_bytes().get(1).is_some_and(|b| *b == b':') {
+        return (&path[..2], &path[2..]);
+    }
+    ("", path)
 }
 
 /// Scan `module.init` for an `await` expression outside any function/

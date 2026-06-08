@@ -436,6 +436,140 @@ fn resolve_reassigned_local_literal_candidates() {
 }
 
 #[test]
+fn resolve_path_join_over_replaced_dirname() {
+    // node-pty's Windows conout worker uses:
+    //   new Worker(path.join(__dirname.replace('node_modules.asar',
+    //     'node_modules.asar.unpacked'), 'worker/conoutSocketWorker.js'))
+    // `__dirname` is already lowered to a string by the parser; the path
+    // resolver still needs to fold the replace + join chain to a single
+    // deterministic worker module.
+    let expr = Expr::PathJoin(
+        Box::new(Expr::StringReplace {
+            string: Box::new(Expr::String(
+                "D:/tmp/probe/node_modules/node-pty/lib".to_string(),
+            )),
+            pattern: Box::new(Expr::String("node_modules.asar".to_string())),
+            replacement: Box::new(Expr::String("node_modules.asar.unpacked".to_string())),
+        }),
+        Box::new(Expr::String("worker/conoutSocketWorker.js".to_string())),
+    );
+
+    let mut visiting = HashSet::new();
+    match resolve_import_path_with_context(
+        &expr,
+        &HashMap::<u32, Expr>::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &mut visiting,
+    ) {
+        Resolution::Set(v) => assert_eq!(
+            v,
+            vec!["D:/tmp/probe/node_modules/node-pty/lib/worker/conoutSocketWorker.js"]
+        ),
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
+fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
+    let mut module = Module::new("node-pty-windows-conout");
+    module.init.push(Stmt::Let {
+        id: 81,
+        name: "scriptPath".into(),
+        ty: Type::String,
+        mutable: true,
+        init: Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::String(
+                    "D:\\tmp\\probe\\node_modules\\node-pty\\lib".to_string(),
+                )),
+                property: "replace".to_string(),
+            }),
+            args: vec![
+                Expr::String("node_modules.asar".to_string()),
+                Expr::String("node_modules.asar.unpacked".to_string()),
+            ],
+            type_args: vec![],
+        }),
+    });
+
+    let filename = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::NativeModuleRef("path".to_string())),
+                property: "default".to_string(),
+            }),
+            property: "join".to_string(),
+        }),
+        args: vec![
+            Expr::LocalGet(81),
+            Expr::String("worker/conoutSocketWorker.js".to_string()),
+        ],
+        type_args: vec![],
+    };
+
+    let consts = collect_module_const_locals(&module);
+    let params = collect_dynamic_import_param_literals(&module);
+    let locals = collect_dynamic_import_local_candidate_literals(&module, &consts, &params);
+    let mut visiting = HashSet::new();
+    match resolve_import_path_with_context(&filename, &consts, &params, &locals, &mut visiting) {
+        Resolution::Set(v) => assert_eq!(
+            v,
+            vec!["D:/tmp/probe/node_modules/node-pty/lib/worker/conoutSocketWorker.js"]
+        ),
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
+fn resolve_path_join_normalizes_relative_segments() {
+    let expr = Expr::PathJoin(
+        Box::new(Expr::String("/project/src/lib".to_string())),
+        Box::new(Expr::String("../worker.js".to_string())),
+    );
+
+    let mut visiting = HashSet::new();
+    match resolve_import_path_with_context(
+        &expr,
+        &HashMap::<u32, Expr>::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &mut visiting,
+    ) {
+        Resolution::Set(v) => assert_eq!(v, vec!["/project/src/worker.js"]),
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
+fn worker_new_visitor_descends_into_closure_bodies() {
+    let mut module = Module::new("worker-closure");
+    module.init.push(Stmt::Expr(Expr::Closure {
+        func_id: 1,
+        params: vec![],
+        return_type: Type::Void,
+        body: vec![Stmt::Expr(Expr::WorkerNew {
+            paths: vec![],
+            filename: Box::new(Expr::String("./worker.js".to_string())),
+            options: None,
+        })],
+        captures: vec![],
+        mutable_captures: vec![],
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: false,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+    }));
+
+    let mut count = 0;
+    for_each_worker_new(&module, &mut |_| count += 1);
+    assert_eq!(count, 1);
+}
+
+#[test]
 fn reassigned_local_candidates_drop_mixed_dynamic_defs() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
