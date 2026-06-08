@@ -3160,6 +3160,190 @@ fn install_temporal_constructor(
     closure
 }
 
+/// Read a built-in closure's installed `name` dynamic prop as a Rust `String`
+/// (used by the shared Temporal prototype thunks to recover which getter /
+/// method they back). Empty string if absent.
+fn temporal_closure_name(closure: *const crate::closure::ClosureHeader) -> String {
+    let v = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
+    if !JSValue::from_bits(v.to_bits()).is_string() {
+        return String::new();
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(v) as *const crate::string::StringHeader;
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+/// Throw `TypeError: <type>.prototype.<member> called on incompatible receiver`
+/// for a Temporal prototype getter / method invoked on a non-branded `this`
+/// (the spec brand check). Used by the reflective `.call`/`.apply` paths;
+/// normal `zdt.foo()` dispatches via the brand arm and never reaches here.
+fn temporal_brand_type_error(type_name: &str, member: &str) -> ! {
+    crate::object::throw_object_type_error(
+        format!("{type_name}.prototype.{member} called on incompatible receiver").as_bytes(),
+    )
+}
+
+/// Shared body for a `Temporal.ZonedDateTime.prototype` accessor getter invoked
+/// reflectively. Resolves `this` from `IMPLICIT_THIS`, brand-checks it is a
+/// `ZonedDateTime`, and returns the getter's value.
+extern "C" fn temporal_zdt_proto_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    // The accessor's name is `"get <prop>"`; recover the bare property.
+    let name = temporal_closure_name(closure);
+    let prop = name.strip_prefix("get ").unwrap_or(&name);
+    if crate::temporal::temporal_kind(this) != Some(crate::temporal::TemporalKind::ZonedDateTime) {
+        temporal_brand_type_error("Temporal.ZonedDateTime", prop);
+    }
+    crate::temporal::dispatch::get_property(this, prop)
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// Shared body for a `Temporal.ZonedDateTime.prototype` method invoked
+/// reflectively (`.prototype.equals.call(zdt, …)`). Brand-checks `this` then
+/// dispatches to the per-type method router.
+extern "C" fn temporal_zdt_proto_method_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let name = temporal_closure_name(closure);
+    if crate::temporal::temporal_kind(this) != Some(crate::temporal::TemporalKind::ZonedDateTime) {
+        temporal_brand_type_error("Temporal.ZonedDateTime", &name);
+    }
+    crate::temporal::dispatch::call_method(this, &name, &global_this_rest_array_values(rest))
+}
+
+/// Install one accessor getter onto a Temporal prototype with the spec
+/// descriptor (`enumerable:false, configurable:true`, `set:undefined`) and the
+/// proper getter `name` (`"get <prop>"`) / `length` (0). Mirrors the RegExp
+/// prototype getter install.
+fn install_temporal_getter(proto: *mut ObjectHeader, prop: &str, func_ptr: *const u8) {
+    unsafe {
+        crate::closure::js_register_closure_arity(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        if closure.is_null() {
+            return;
+        }
+        super::native_module::set_bound_native_closure_name(closure, &format!("get {prop}"));
+        super::native_module::set_builtin_closure_length(closure as usize, 0);
+        let key = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+        super::object_ops::ensure_key_in_keys_array(proto, key);
+        let getter_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
+        super::object_ops::install_builtin_getter(proto, prop, getter_bits);
+        super::set_accessor_descriptor(
+            proto as usize,
+            prop.to_string(),
+            super::AccessorDescriptor {
+                get: getter_bits,
+                set: 0,
+            },
+        );
+        super::set_property_attrs(
+            proto as usize,
+            prop.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+        super::set_builtin_property_attrs(
+            closure as usize,
+            "name".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
+        super::set_builtin_property_attrs(
+            closure as usize,
+            "length".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
+    }
+}
+
+/// Build the `Temporal.ZonedDateTime.prototype` object: every getter as an
+/// accessor property + every method as a non-constructable built-in function,
+/// each with the spec `name`/`length`/descriptor, plus `[Symbol.toStringTag]`.
+/// These satisfy the reflective test262 cases (branding / prop-desc / length /
+/// name / not-a-constructor / builtin); ordinary `zdt.foo()` calls still
+/// dispatch via the Temporal brand arm and never touch this object.
+fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return proto;
+    }
+    const GETTERS: &[&str] = &[
+        "year",
+        "month",
+        "monthCode",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "millisecond",
+        "microsecond",
+        "nanosecond",
+        "era",
+        "eraYear",
+        "epochMilliseconds",
+        "epochNanoseconds",
+        "dayOfWeek",
+        "dayOfYear",
+        "weekOfYear",
+        "yearOfWeek",
+        "daysInWeek",
+        "daysInMonth",
+        "daysInYear",
+        "monthsInYear",
+        "inLeapYear",
+        "hoursInDay",
+        "offset",
+        "offsetNanoseconds",
+        "timeZoneId",
+        "calendarId",
+    ];
+    for g in GETTERS {
+        install_temporal_getter(proto, g, temporal_zdt_proto_getter_thunk as *const u8);
+    }
+    // (name, spec_length)
+    const METHODS: &[(&str, u32)] = &[
+        ("add", 1),
+        ("subtract", 1),
+        ("until", 1),
+        ("since", 1),
+        ("round", 1),
+        ("equals", 1),
+        ("with", 1),
+        ("withCalendar", 1),
+        ("withPlainTime", 0),
+        ("withTimeZone", 1),
+        ("toInstant", 0),
+        ("toPlainDate", 0),
+        ("toPlainTime", 0),
+        ("toPlainDateTime", 0),
+        ("toString", 0),
+        ("toJSON", 0),
+        ("toLocaleString", 0),
+        ("valueOf", 0),
+        ("startOfDay", 0),
+        ("getTimeZoneTransition", 0),
+    ];
+    for (name, len) in METHODS {
+        install_proto_method_rest_with_length(
+            proto,
+            name,
+            temporal_zdt_proto_method_thunk as *const u8,
+            *len,
+            0,
+        );
+    }
+    set_intrinsic_to_string_tag(proto, "Temporal.ZonedDateTime");
+    proto
+}
+
 /// Map a value to the [`TemporalKind`] it constructs *iff* it is one of the
 /// eight `Temporal.<X>` constructor closures (matched by func-ptr, so a
 /// same-named user closure never matches). Used by `instanceof` to make
@@ -3421,6 +3605,26 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             temporal_zoned_date_time_from_thunk as *const u8,
             temporal_zoned_date_time_compare_thunk as *const u8,
         );
+        // Real `Temporal.ZonedDateTime.prototype` with getter/method descriptors
+        // so reflective test262 cases resolve (branding / prop-desc / length /
+        // name / not-a-constructor). `ctor.prototype` is non-writable/non-enum/
+        // non-config; `proto.constructor` is writable/non-enum/config (spec).
+        let proto = build_zoned_date_time_prototype();
+        if !proto.is_null() {
+            let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+            crate::closure::closure_set_dynamic_prop(zoned as usize, "prototype", proto_value);
+            super::set_builtin_property_attrs(
+                zoned as usize,
+                "prototype".to_string(),
+                super::PropertyAttrs::new(false, false, false),
+            );
+            set_intrinsic_data_prop(
+                proto,
+                "constructor",
+                crate::value::js_nanbox_pointer(zoned as i64),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
     }
 
     // Temporal.Now namespace (#4689)
