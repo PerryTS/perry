@@ -165,6 +165,8 @@ jobs:
         #   image doesn't have libgtk-4-dev installed by default.
         # - perry-ui-android: needs Android NDK.
         # - perry-ui-windows: needs win32 headers.
+        # - perry-ui-windows-winui: re-exports perry-ui-windows, so it inherits
+        #   the same win32 / webview2-com dependency that won't build on Linux.
         env:
           # Rust's Ubuntu target can drive `cc` with `-fuse-ld=lld`; on the
           # shared runner this has repeatedly terminated large test links with
@@ -215,6 +217,7 @@ jobs:
               "perry-ui-gtk4",
               "perry-ui-android",
               "perry-ui-windows",
+              "perry-ui-windows-winui",
               "perry-doc-fixture-my-bindings",
           }
           metadata = json.load(sys.stdin)
