@@ -25,7 +25,9 @@ pub use match_all::{
     REGEXP_STRING_ITERATOR_CLASS_ID,
 };
 use replace_expand::{expand_js_replacement, replace_regex_fn_fancy};
-pub use replace_expand::{js_string_replace_all_regex_fn, js_string_replace_regex_fn};
+pub use replace_expand::{
+    js_string_replace_all_regex_fn, js_string_replace_regex_fn, js_string_replace_regex_named,
+};
 use replace_fn::call_replace_callback;
 pub use replace_fn::{
     js_string_replace_all_string, js_string_replace_all_string_fn, js_string_replace_string,
@@ -612,12 +614,15 @@ pub extern "C" fn js_string_match(
                             str_data,
                             match_char_offset as f64,
                         );
-                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                        // fancy-regex path doesn't extract named groups; mirror
-                        // the thread-local (`undefined`) on the result object.
+                        // Extract named-capture groups through the fancy path
+                        // (fancy-regex exposes `capture_names()` just like the
+                        // `regex` crate), so `s.match(/(?<=x)(?<y>\d+)/).groups`
+                        // works for lookbehind+named patterns.
+                        let groups_obj = build_fancy_groups(&fre, &caps, &scope);
+                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
                         set_exec_array_groups(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                            ptr::null_mut(),
+                            groups_obj,
                         );
                         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
                     }
@@ -764,6 +769,186 @@ pub extern "C" fn js_string_match(
 /// Replace matches in a string
 /// Expand a JS replacement string against one match, supporting the full set
 
+/// Fancy-regex twin of [`expand_js_replacement`]. The two `Captures` types
+/// (`regex::Captures` / `fancy_regex::Captures`) expose the same surface used
+/// here — `get(0)`, `len()`, `get(n)`, `name(s)`, `Match::{as_str,start,end}` —
+/// so the body is a deliberate duplicate of the standard expander with the
+/// capture type swapped, mirroring the `replace_regex_fn_fancy` ↔
+/// `js_string_replace_regex_fn` pairing already in this file. Used so a pattern
+/// the `regex` crate can't compile (lookbehind/backreferences) still gets full
+/// `$1`/`$<name>`/`$&`/`` $` ``/`$'`/`$$` substitution.
+fn expand_js_replacement_fancy(
+    repl: &str,
+    caps: &fancy_regex::Captures,
+    subject: &str,
+    has_named_groups: bool,
+) -> String {
+    let m0 = match caps.get(0) {
+        Some(m) => m,
+        None => return String::new(),
+    };
+    let (mstart, mend) = (m0.start(), m0.end());
+    let ngroups = caps.len();
+    let b = repl.as_bytes();
+    let mut out = String::with_capacity(repl.len() + 16);
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'$' {
+            let start = i;
+            while i < b.len() && b[i] != b'$' {
+                i += 1;
+            }
+            out.push_str(&repl[start..i]);
+            continue;
+        }
+        if i + 1 >= b.len() {
+            out.push('$');
+            i += 1;
+            continue;
+        }
+        match b[i + 1] {
+            b'$' => {
+                out.push('$');
+                i += 2;
+            }
+            b'&' => {
+                out.push_str(&subject[mstart..mend]);
+                i += 2;
+            }
+            b'`' => {
+                out.push_str(&subject[..mstart]);
+                i += 2;
+            }
+            b'\'' => {
+                out.push_str(&subject[mend..]);
+                i += 2;
+            }
+            b'0'..=b'9' => {
+                let d1 = (b[i + 1] - b'0') as usize;
+                let (group, consumed) = if i + 2 < b.len() && b[i + 2].is_ascii_digit() {
+                    let two = d1 * 10 + (b[i + 2] - b'0') as usize;
+                    if two >= 1 && two < ngroups {
+                        (Some(two), 2)
+                    } else if d1 >= 1 && d1 < ngroups {
+                        (Some(d1), 1)
+                    } else {
+                        (None, 0)
+                    }
+                } else if d1 >= 1 && d1 < ngroups {
+                    (Some(d1), 1)
+                } else {
+                    (None, 0)
+                };
+                match group {
+                    Some(g) => {
+                        if let Some(m) = caps.get(g) {
+                            out.push_str(m.as_str());
+                        }
+                        i += 1 + consumed;
+                    }
+                    None => {
+                        out.push('$');
+                        i += 1;
+                    }
+                }
+            }
+            b'<' => {
+                if has_named_groups {
+                    if let Some(rel) = repl[i + 2..].find('>') {
+                        let name = &repl[i + 2..i + 2 + rel];
+                        if let Some(m) = caps.name(name) {
+                            out.push_str(m.as_str());
+                        }
+                        i += 2 + rel + 1;
+                    } else {
+                        out.push('$');
+                        i += 1;
+                    }
+                } else {
+                    out.push('$');
+                    i += 1;
+                }
+            }
+            _ => {
+                out.push('$');
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Build a named-capture `groups` object from a fancy-regex match, or return
+/// null when the pattern declares no named capture groups. Mirrors the
+/// named-group construction in the standard-engine `js_regexp_exec` path
+/// (fresh per-result object + by-name setters so each match grows its own
+/// shape). The returned object must be stored into a GC-visible slot by the
+/// caller immediately; it is rooted via `scope` until then.
+pub(crate) unsafe fn build_fancy_groups(
+    fre: &fancy_regex::Regex,
+    caps: &fancy_regex::Captures,
+    scope: &crate::gc::RuntimeHandleScope,
+) -> *mut ObjectHeader {
+    let group_names: Vec<(&str, Option<fancy_regex::Match>)> = fre
+        .capture_names()
+        .enumerate()
+        .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
+        .collect();
+    if group_names.is_empty() {
+        return ptr::null_mut();
+    }
+    let groups_obj = crate::object::js_object_alloc(0, 0);
+    let groups_handle = scope.root_raw_mut_ptr(groups_obj);
+    for (name, m) in &group_names {
+        let val = if let Some(m) = m {
+            js_nanbox_string(js_string_from_str(m.as_str()) as i64)
+        } else {
+            f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
+        };
+        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+        crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
+    }
+    groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
+}
+
+/// Fancy-regex fallback for the string-replacement (non-callback) forms of
+/// `String.prototype.replace`/`replaceAll`. Drives a manual non-overlapping
+/// match loop with `fancy_regex` and expands the replacement string via
+/// [`expand_js_replacement_fancy`]. Used when the pattern needs
+/// lookbehind/backreferences the `regex` crate can't compile.
+unsafe fn replace_regex_str_fancy(
+    str_data: &str,
+    fre: &fancy_regex::Regex,
+    global: bool,
+    repl_str: &str,
+) -> *mut StringHeader {
+    let has_named_groups = fre.capture_names().any(|n| n.is_some());
+    let mut captures_list: Vec<fancy_regex::Captures> = Vec::new();
+    let mut iter = fre.captures_iter(str_data);
+    while let Some(Ok(caps)) = iter.next() {
+        captures_list.push(caps);
+        if !global {
+            break;
+        }
+    }
+    let mut result = String::new();
+    let mut last_end = 0usize;
+    for caps in &captures_list {
+        let full_match = caps.get(0).unwrap();
+        result.push_str(&str_data[last_end..full_match.start()]);
+        result.push_str(&expand_js_replacement_fancy(
+            repl_str,
+            caps,
+            str_data,
+            has_named_groups,
+        ));
+        last_end = full_match.end();
+    }
+    result.push_str(&str_data[last_end..]);
+    js_string_from_str(&result)
+}
+
 /// string.replace(regex, replacement) -> string
 #[no_mangle]
 pub extern "C" fn js_string_replace_regex(
@@ -788,6 +973,13 @@ pub extern "C" fn js_string_replace_regex(
     }
 
     unsafe {
+        // Pattern the `regex` crate couldn't compile (lookbehind/backreferences)
+        // → drive the replacement through fancy-regex. Otherwise the never-match
+        // placeholder in `regex_ptr` would leave the input unchanged.
+        if let Some(fre) = lookup_fancy_regex(re) {
+            return replace_regex_str_fancy(str_data, &fre, (*re).global, repl_str);
+        }
+
         let regex = &*(*re).regex_ptr;
         let global = (*re).global;
         let has_named_groups = regex.capture_names().any(|n| n.is_some());
@@ -879,8 +1071,24 @@ pub extern "C" fn js_string_split_regex_n(
     }
 
     unsafe {
-        let regex = &*(*re).regex_ptr;
-        let mut parts: Vec<&str> = regex.split(&str_data).collect();
+        // Fancy-regex fallback (lookbehind/backreferences): `fancy_regex` has no
+        // `split`, so walk non-overlapping matches and slice between them. This
+        // mirrors the `regex` crate's `split` (delimiter text dropped, captured
+        // groups NOT spliced into the result — same as the standard path here).
+        let mut parts: Vec<&str> = if let Some(fre) = lookup_fancy_regex(re) {
+            let mut v: Vec<&str> = Vec::new();
+            let mut last = 0usize;
+            let mut iter = fre.find_iter(&str_data);
+            while let Some(Ok(m)) = iter.next() {
+                v.push(&str_data[last..m.start()]);
+                last = m.end();
+            }
+            v.push(&str_data[last..]);
+            v
+        } else {
+            let regex = &*(*re).regex_ptr;
+            regex.split(&str_data).collect()
+        };
         if limit > 0 && (parts.len() as i64) > (limit as i64) {
             parts.truncate(limit as usize);
         }
@@ -911,6 +1119,15 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
     let str_data = string_as_str(s);
 
     unsafe {
+        // Fancy-regex fallback (lookbehind/backreferences): the never-match
+        // placeholder in `regex_ptr` would always report -1 otherwise.
+        if let Some(fre) = lookup_fancy_regex(re) {
+            return match fre.find(str_data) {
+                Ok(Some(m)) => str_data[..m.start()].chars().count() as i32,
+                _ => -1,
+            };
+        }
+
         let regex = &*(*re).regex_ptr;
         match regex.find(str_data) {
             Some(m) => {
@@ -1019,12 +1236,14 @@ pub extern "C" fn js_regexp_exec(
                         match_char_offset as f64,
                     );
                     LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
-                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                    // fancy-regex path doesn't extract named groups; mirror the
-                    // thread-local (`undefined`) on the result object.
+                    // Extract named-capture groups through the fancy path so
+                    // `/(?<=x)(?<y>\d+)/.exec(s).groups` works for patterns the
+                    // `regex` crate can't compile.
+                    let groups_obj = build_fancy_groups(fre, &caps, &scope);
+                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
                     set_exec_array_groups(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        ptr::null_mut(),
+                        groups_obj,
                     );
                     return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
                 }
@@ -1523,6 +1742,74 @@ mod tests {
             expand_js_replacement("[$<missing>]", &caps2, subj2, true),
             "[]"
         );
+    }
+
+    // ---- #4797: fancy-regex fallback wired through every operation ----
+
+    #[test]
+    fn fancy_backreference_match() {
+        // `(\w)\1` needs backreferences → fancy-regex fallback.
+        let re = js_regexp_new(make_string(r"(\w)\1"), make_string(""));
+        let result = js_string_match(make_string("hello"), re);
+        assert!(!result.is_null());
+        unsafe {
+            let v = crate::array::js_array_get_f64(result, 0);
+            let sp = crate::value::js_get_string_pointer_unified(v) as *const StringHeader;
+            assert_eq!(string_as_str(sp), "ll");
+        }
+    }
+
+    #[test]
+    fn fancy_lookbehind_search() {
+        let re = js_regexp_new(make_string(r"(?<==)\w+"), make_string(""));
+        assert_eq!(js_string_search_regex(make_string("foo=bar"), re), 4);
+        // No match → -1.
+        let re2 = js_regexp_new(make_string(r"(?<==)\w+"), make_string(""));
+        assert_eq!(js_string_search_regex(make_string("nomatch"), re2), -1);
+    }
+
+    #[test]
+    fn fancy_lookbehind_split() {
+        // Zero-width lookbehind split: "a1b2c3" → ["a1","b2","c3",""].
+        let re = js_regexp_new(make_string(r"(?<=\d)"), make_string(""));
+        let arr = js_string_split_regex(make_string("a1b2c3"), re);
+        unsafe {
+            assert_eq!((*arr).length, 4);
+            let first = crate::array::js_array_get_f64(arr, 0);
+            let sp = crate::value::js_get_string_pointer_unified(first) as *const StringHeader;
+            assert_eq!(string_as_str(sp), "a1");
+        }
+    }
+
+    #[test]
+    fn fancy_lookbehind_replace_string() {
+        // `$&` substitution under a lookbehind pattern the regex crate rejects.
+        let re = js_regexp_new(make_string(r"(?<=\$)\d+"), make_string("g"));
+        let out = js_string_replace_regex(make_string("$5 and $10"), re, make_string("[$&]"));
+        assert_eq!(string_as_str(out), "$[5] and $[10]");
+    }
+
+    #[test]
+    fn fancy_named_group_replace() {
+        // `$<n>` named-group substitution through the fancy fallback.
+        let re = js_regexp_new(make_string(r"(?<=\$)(?<n>\d+)"), make_string("g"));
+        let out =
+            js_string_replace_regex_named(make_string("$5 and $10"), re, make_string("[$<n>]"));
+        assert_eq!(string_as_str(out), "$[5] and $[10]");
+    }
+
+    #[test]
+    fn fancy_lookbehind_exec_index() {
+        // exec() through the fancy path reports the char index of the match.
+        let re = js_regexp_new(make_string(r"(?<=\$)\d+"), make_string(""));
+        let result = js_regexp_exec(re, make_string("price: $42"));
+        assert!(!result.is_null());
+        assert_eq!(js_regexp_exec_get_index(), 8.0);
+        unsafe {
+            let v = crate::array::js_array_get_f64(result, 0);
+            let sp = crate::value::js_get_string_pointer_unified(v) as *const StringHeader;
+            assert_eq!(string_as_str(sp), "42");
+        }
     }
 
     #[test]
