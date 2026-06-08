@@ -53,6 +53,7 @@ fn coerce_date_with_overflow(
     match temporal_value_ref(v) {
         Some(TemporalValue::PlainDate(d)) => return d.clone(),
         Some(TemporalValue::PlainDateTime(dt)) => return dt.to_plain_date(),
+        Some(TemporalValue::ZonedDateTime(z)) => return z.to_plain_date(),
         Some(_) => crate::object::throw_object_type_error(
             b"Cannot convert this Temporal value to a Temporal.PlainDate",
         ),
