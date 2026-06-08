@@ -71,7 +71,7 @@ use library_search::{
     find_geisterhand_stdlib, find_geisterhand_ui, find_harmonyos_sdk, find_lld_link,
     find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
     find_runtime_library, find_stdlib_library, find_ui_library, find_wasm_host_library,
-    windows_pe_subsystem_flag, windows_subsystem_needs_ui,
+    windows_default_output_extension, windows_pe_subsystem_flag, windows_subsystem_needs_ui,
 };
 use link::{build_and_run_link, write_link_cache_manifest};
 pub use lock_scan::collect_native_archives_for_lock;
@@ -4697,7 +4697,33 @@ pub fn run_with_parse_cache(
     // fields, not `&CompileArgs`.
     let input_path_owned: PathBuf = args.input.clone();
     let app_bundle_id_owned: Option<String> = args.app_bundle_id.clone();
-    let exe_path = args.output.unwrap_or_else(|| {
+    let exe_path = match args.output {
+        // #4771: a user-supplied `-o NAME` without an extension won't launch
+        // from PowerShell/cmd on a Windows target (and `.dll`/`.lib` are the
+        // expected library shapes). Default the extension to the
+        // target-appropriate one unless the user already gave one (e.g.
+        // `-o app.appx` is respected verbatim). Non-Windows targets keep the
+        // bare name — Unix executables are conventionally extension-less.
+        Some(p) => {
+            let is_windows_output = matches!(target.as_deref(), Some("windows"))
+                || (target.is_none() && cfg!(target_os = "windows"));
+            if is_windows_output && p.extension().is_none() {
+                p.with_extension(windows_default_output_extension(is_dylib, is_staticlib))
+            } else {
+                p
+            }
+        }
+        None => default_output_path(is_dylib, is_staticlib, target.as_deref(), stem),
+    };
+
+    // The default output path when no `-o` is given. Extracted to a free fn so
+    // the `-o`-provided extension-defaulting above stays readable.
+    fn default_output_path(
+        is_dylib: bool,
+        is_staticlib: bool,
+        target: Option<&str>,
+        stem: &str,
+    ) -> PathBuf {
         if is_dylib {
             #[cfg(target_os = "macos")]
             {
@@ -4711,30 +4737,27 @@ pub fn run_with_parse_cache(
             // #1088 — Windows hosts expect `.lib`; everywhere else uses
             // the Unix `lib<stem>.a` convention so the archive is reachable
             // from `-l<stem>` at the host's link step.
-            if matches!(target.as_deref(), Some("windows"))
+            if matches!(target, Some("windows"))
                 || (target.is_none() && cfg!(target_os = "windows"))
             {
                 PathBuf::from(format!("{}.lib", stem))
             } else {
                 PathBuf::from(format!("lib{}.a", stem))
             }
-        } else if matches!(
-            target.as_deref(),
-            Some("harmonyos") | Some("harmonyos-simulator")
-        ) {
+        } else if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
             // HarmonyOS apps ship as .so loaded by the ArkTS runtime via
             // napi_module_register — there is no standalone executable
             // shipping shape. `lib` prefix matches the dlopen name used by
             // the generated ArkTS shim (`import entry from 'libapp.so'`).
             PathBuf::from(format!("lib{}.so", stem))
-        } else if matches!(target.as_deref(), Some("windows"))
+        } else if matches!(target, Some("windows"))
             || (target.is_none() && cfg!(target_os = "windows"))
         {
             PathBuf::from(format!("{}.exe", stem))
         } else {
             PathBuf::from(stem)
         }
-    });
+    }
 
     if !failed_modules.is_empty() {
         // The loud failure summary + abort already ran earlier (right

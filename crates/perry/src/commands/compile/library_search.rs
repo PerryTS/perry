@@ -366,6 +366,22 @@ pub(super) fn windows_subsystem_needs_ui(subsystem: &str, needs_ui: bool) -> boo
     }
 }
 
+/// The conventional output-file extension for a Windows target, by output
+/// type (#4771): executables are `.exe`, shared libraries `.dll`, static
+/// libraries `.lib`. Used to default the extension on a Windows `-o NAME`
+/// that the user gave without one, so the produced file is runnable from
+/// PowerShell/cmd (which won't launch an extension-less file) and linkable
+/// under the platform's library conventions.
+pub(super) fn windows_default_output_extension(is_dylib: bool, is_staticlib: bool) -> &'static str {
+    if is_dylib {
+        "dll"
+    } else if is_staticlib {
+        "lib"
+    } else {
+        "exe"
+    }
+}
+
 pub(super) fn windows_pe_subsystem_flag(needs_ui: bool, min_windows_version: &str) -> String {
     let base = if needs_ui {
         "/SUBSYSTEM:WINDOWS"

@@ -3,6 +3,7 @@
 //! `#[cfg(test)] mod windows_link_tests;` in compile.rs.
 
 use super::link::WINDOWS_APP_MANIFEST;
+use super::windows_default_output_extension;
 use super::windows_pe_subsystem_flag;
 use super::windows_subsystem_needs_ui;
 
@@ -88,6 +89,17 @@ fn subsystem_console_forces_console() {
 fn subsystem_override_composes_with_min_version_suffix() {
     let flag = windows_pe_subsystem_flag(windows_subsystem_needs_ui("windows", false), "7");
     assert_eq!(flag, "/SUBSYSTEM:WINDOWS,5.1");
+}
+
+// Issue #4771: the Windows output extension defaults by output type — .exe for
+// executables, .dll for shared libraries, .lib for static libraries — so a
+// user-supplied `-o NAME` without an extension still produces a runnable /
+// linkable file on Windows.
+#[test]
+fn windows_output_extension_defaults_by_type() {
+    assert_eq!(windows_default_output_extension(false, false), "exe");
+    assert_eq!(windows_default_output_extension(true, false), "dll");
+    assert_eq!(windows_default_output_extension(false, true), "lib");
 }
 
 // Issue #4681 / discussion #3486: the embedded app manifest must declare the
