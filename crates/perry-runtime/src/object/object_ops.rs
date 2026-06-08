@@ -124,11 +124,88 @@ unsafe fn registered_buffer_index_own_property_present(
 /// present (e.g. `Object.defineProperty(o, k, child)` where `child`'s prototype
 /// carries `value`). `descriptor_value` is the NaN-boxed descriptor object.
 pub(crate) unsafe fn desc_has_field(descriptor_value: f64, name: &[u8]) -> bool {
+    // A function object used as a descriptor (`Object.defineProperty(o, k,
+    // funObj)`, test262 15.2.3.6-3-139-1 …) is a closure, not an
+    // `ObjectHeader`. `js_object_has_property` can't walk a closure's own
+    // dynamic props nor its `[[Prototype]]` (`Function.prototype`), so
+    // `ToPropertyDescriptor` would miss an inherited `value`/`get`/… field.
+    // Route closures through the closure-aware presence check.
+    if let Some(ptr) = closure_ptr_from_value(descriptor_value) {
+        if let Ok(key_str) = std::str::from_utf8(name) {
+            if super::has_own_helpers::closure_own_key_present(ptr, key_str) {
+                return true;
+            }
+            // Inherited from `Function.prototype` (and its own chain).
+            let fp = crate::object::builtin_prototype_value("Function");
+            if value_is_object_like(fp) {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let key_f64 = crate::value::JSValue::string_ptr(key).bits();
+                const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+                return crate::object::js_object_has_property(fp, f64::from_bits(key_f64))
+                    .to_bits()
+                    == TAG_TRUE;
+            }
+            return false;
+        }
+    }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let key_f64 = crate::value::JSValue::string_ptr(key).bits();
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     crate::object::js_object_has_property(descriptor_value, f64::from_bits(key_f64)).to_bits()
         == TAG_TRUE
+}
+
+/// If `value` is a closure (function object), return its heap pointer. Mirrors
+/// the closure-pointer recovery used elsewhere in `js_object_define_property`:
+/// closures arrive either NaN-boxed with `POINTER_TAG` (function-local) or as a
+/// raw in-range I64 (module-level), and `is_closure_ptr` confirms the magic.
+pub(crate) unsafe fn closure_ptr_from_value(value: f64) -> Option<usize> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    let raw = if jv.is_pointer() {
+        jv.as_pointer::<u8>() as usize
+    } else {
+        let bits = value.to_bits();
+        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+            bits as usize
+        } else {
+            0
+        }
+    };
+    if raw >= 0x10000 && crate::closure::is_closure_ptr(raw) {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+/// `Get(descriptor, name)` as a value-level read. For an ordinary object the raw
+/// `js_object_get_field_by_name` read is sufficient, but a closure descriptor
+/// (`Object.defineProperty(o, k, funObj)`) requires reading its own dynamic
+/// props and then walking its `[[Prototype]]` (`Function.prototype`) — Perry's
+/// `[[Get]]` for the descriptor's `value`/`get`/`set`/attribute fields. Returns
+/// `undefined` when the field is absent.
+pub(crate) unsafe fn desc_read_field(descriptor_value: f64, name: &[u8]) -> crate::value::JSValue {
+    if let Some(ptr) = closure_ptr_from_value(descriptor_value) {
+        if let Ok(key_str) = std::str::from_utf8(name) {
+            if super::has_own_helpers::closure_own_key_present(ptr, key_str) {
+                let v = crate::closure::closure_get_dynamic_prop(ptr, key_str);
+                return crate::value::JSValue::from_bits(v.to_bits());
+            }
+            let fp = crate::object::builtin_prototype_value("Function");
+            let fp_ptr = extract_obj_ptr(fp);
+            if !fp_ptr.is_null() {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                return js_object_get_field_by_name(fp_ptr as *const ObjectHeader, key);
+            }
+            return crate::value::JSValue::from_bits(crate::value::TAG_UNDEFINED);
+        }
+    }
+    let desc_ptr = extract_obj_ptr(descriptor_value);
+    if desc_ptr.is_null() {
+        return crate::value::JSValue::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_get_field_by_name(desc_ptr as *const ObjectHeader, key)
 }
 
 /// Validate a property descriptor object per ES `ToPropertyDescriptor`
@@ -1494,12 +1571,10 @@ pub extern "C" fn js_object_define_property(
         // PRESENCE (HasProperty — own OR inherited) on the descriptor object,
         // not by `is_undefined`: `{ get: undefined }` is an explicit (present)
         // accessor field, and an *inherited* `value`/`get` counts as present.
-        let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
-        let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
         let desc_has_get = desc_has_field(descriptor_value, b"get");
         let desc_has_set = desc_has_field(descriptor_value, b"set");
-        let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
-        let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
+        let get_field = desc_read_field(descriptor_value, b"get");
+        let set_field = desc_read_field(descriptor_value, b"set");
         let has_accessor = desc_has_get || desc_has_set;
 
         // The existing accessor (if the property is currently an accessor) —
@@ -1564,7 +1639,6 @@ pub extern "C" fn js_object_define_property(
             // descriptor (only `enumerable`/`configurable`). Detect by own-field
             // presence so `{ value: undefined }` (present) stores `undefined`,
             // while a generic descriptor on an existing accessor leaves it intact.
-            let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
             let desc_has_value = desc_has_field(descriptor_value, b"value");
             let desc_has_writable = desc_has_field(descriptor_value, b"writable");
             let is_data = desc_has_value || desc_has_writable;
@@ -1581,8 +1655,7 @@ pub extern "C" fn js_object_define_property(
                     });
                     clear_property_attrs(obj as usize, k);
                 }
-                let value_field =
-                    js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
+                let value_field = desc_read_field(descriptor_value, b"value");
                 // Ensure the key exists; store the (possibly `undefined`) value
                 // via `[[DefineOwnProperty]]`, bypassing the `[[Set]]` writability
                 // / frozen guard (invariants already enforced above). When
@@ -1617,8 +1690,7 @@ pub extern "C" fn js_object_define_property(
         // Read attribute flags from descriptor. JS defaults when omitted in
         // `Object.defineProperty` are `false` (NOT `true` like for direct assignment).
         let read_bool = |name: &[u8]| -> Option<bool> {
-            let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k);
+            let v = desc_read_field(descriptor_value, name);
             if v.is_undefined() {
                 None
             } else {

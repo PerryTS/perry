@@ -29,8 +29,110 @@ unsafe fn mark_all_symbol_keys(
     }
 }
 
+/// Build a partial property descriptor object for `SetIntegrityLevel`:
+/// `{ configurable: false }` (sealed, or a frozen accessor) or
+/// `{ configurable: false, writable: false }` (a frozen data property).
+unsafe fn build_integrity_descriptor(set_writable_false: bool) -> f64 {
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    let obj = js_object_alloc(0, 2);
+    let false_v = f64::from_bits(TAG_FALSE);
+    let ck = crate::string::js_string_from_bytes(b"configurable".as_ptr(), 12);
+    js_object_set_field_by_name(obj, ck, false_v);
+    if set_writable_false {
+        let wk = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+        js_object_set_field_by_name(obj, wk, false_v);
+    }
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+/// `SetIntegrityLevel(O, level)` (ECMA-262 7.3.16) for a Proxy receiver. A
+/// Proxy is a small registered id, not a heap object — `extract_obj_ptr` yields
+/// the fake pointer and `gc_header_for` would deref unmapped memory (the
+/// `Object.seal`/`Object.freeze` proxy crash cluster). Route through the proxy
+/// `[[PreventExtensions]]`, `[[OwnPropertyKeys]]`, `[[GetOwnProperty]]` and
+/// `[[DefineOwnProperty]]` traps. Returns the proxy; throws a `TypeError` when a
+/// trap reports failure (`PreventExtensions` false ⇒ `SetIntegrityLevel` false
+/// ⇒ `Object.seal`/`Object.freeze` throw).
+unsafe fn set_integrity_level_proxy(obj_value: f64, frozen: bool) -> f64 {
+    let ok = crate::proxy::js_reflect_prevent_extensions(obj_value);
+    if crate::value::js_is_truthy(ok) == 0 {
+        throw_object_type_error(
+            b"Cannot set integrity level: 'preventExtensions' trap returned falsish",
+        );
+    }
+    let keys = crate::proxy::js_proxy_own_keys(obj_value);
+    let keys_ptr = extract_obj_ptr(keys) as *const crate::array::ArrayHeader;
+    if keys_ptr.is_null() {
+        return obj_value;
+    }
+    let len = crate::array::js_array_length(keys_ptr);
+    for i in 0..len {
+        let k = crate::array::js_array_get_f64(keys_ptr, i);
+        let desc = if frozen {
+            let cur = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, k);
+            if crate::value::JSValue::from_bits(cur.to_bits()).is_undefined() {
+                continue;
+            }
+            let is_accessor = desc_has_field(cur, b"get") || desc_has_field(cur, b"set");
+            build_integrity_descriptor(!is_accessor)
+        } else {
+            build_integrity_descriptor(false)
+        };
+        // DefinePropertyOrThrow: js_object_define_property routes the proxy
+        // through the `[[DefineOwnProperty]]` trap and throws if it reports
+        // failure, propagating the abrupt completion just like the spec.
+        js_object_define_property(obj_value, k, desc);
+    }
+    obj_value
+}
+
+/// Truthiness of a boolean descriptor field (`configurable`/`writable`).
+unsafe fn desc_field_true(desc: f64, name: &[u8]) -> bool {
+    let v = desc_read_field(desc, name);
+    crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0
+}
+
+/// `TestIntegrityLevel(O, level)` (ECMA-262 7.3.15) for a Proxy receiver. Drives
+/// the `[[IsExtensible]]`, `[[OwnPropertyKeys]]` and `[[GetOwnProperty]]` traps
+/// in spec order (test262 `isSealed`/`isFrozen` `proxy-no-ownkeys-returned-keys-order`
+/// asserts each key returned by `ownKeys` is queried via `getOwnPropertyDescriptor`).
+unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
+    let ext = crate::proxy::js_reflect_is_extensible(obj_value);
+    if crate::value::js_is_truthy(ext) != 0 {
+        return false;
+    }
+    let keys = crate::proxy::js_proxy_own_keys(obj_value);
+    let keys_ptr = extract_obj_ptr(keys) as *const crate::array::ArrayHeader;
+    if keys_ptr.is_null() {
+        return true;
+    }
+    let len = crate::array::js_array_length(keys_ptr);
+    for i in 0..len {
+        let k = crate::array::js_array_get_f64(keys_ptr, i);
+        let cur = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, k);
+        if crate::value::JSValue::from_bits(cur.to_bits()).is_undefined() {
+            continue;
+        }
+        if desc_field_true(cur, b"configurable") {
+            return false;
+        }
+        if frozen {
+            let is_data = desc_has_field(cur, b"value") || desc_has_field(cur, b"writable");
+            if is_data && desc_field_true(cur, b"writable") {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
+    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        return unsafe {
+            set_integrity_level_proxy(obj_value, /*frozen=*/ true)
+        };
+    }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if !obj.is_null() && (obj as usize) > 0x10000 {
@@ -54,6 +156,11 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
 /// existing key. Writable is preserved (sealed ≠ frozen). Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
+    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        return unsafe {
+            set_integrity_level_proxy(obj_value, /*frozen=*/ false)
+        };
+    }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if !obj.is_null() && (obj as usize) > 0x10000 {
@@ -197,10 +304,9 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-        // Proxy: a frozen proxy is one whose target is non-extensible with all
-        // own props non-configurable/non-writable. Fall back to extensibility.
-        let ext = crate::proxy::js_reflect_is_extensible(obj_value);
-        return if crate::value::js_is_truthy(ext) == 0 {
+        return if unsafe {
+            test_integrity_level_proxy(obj_value, /*frozen=*/ true)
+        } {
             f64::from_bits(TAG_TRUE)
         } else {
             f64::from_bits(TAG_FALSE)
@@ -230,8 +336,9 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-        let ext = crate::proxy::js_reflect_is_extensible(obj_value);
-        return if crate::value::js_is_truthy(ext) == 0 {
+        return if unsafe {
+            test_integrity_level_proxy(obj_value, /*frozen=*/ false)
+        } {
             f64::from_bits(TAG_TRUE)
         } else {
             f64::from_bits(TAG_FALSE)
