@@ -1241,10 +1241,7 @@ pub extern "C" fn js_regexp_exec(
                     // `regex` crate can't compile.
                     let groups_obj = build_fancy_groups(fre, &caps, &scope);
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
-                    set_exec_array_groups(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        groups_obj,
-                    );
+                    set_exec_array_groups(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), groups_obj);
                     return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
                 }
                 return Some(ptr::null_mut()); // fancy-regex tried but no match
