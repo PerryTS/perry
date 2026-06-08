@@ -664,9 +664,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     literal,
                     "iset.literal",
                 );
+                let static_classref =
+                    super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let (obj_handle, key_raw) = {
                     let blk = ctx.block();
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    let obj_handle = super::index_get::classref_preserving_handle(
+                        blk,
+                        &obj_bits,
+                        static_classref,
+                    );
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
                     let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -700,9 +706,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "index",
                     "iset.string",
                 );
+                let static_classref =
+                    super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let (obj_handle, key_handle) = {
                     let blk = ctx.block();
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    let obj_handle = super::index_get::classref_preserving_handle(
+                        blk,
+                        &obj_bits,
+                        static_classref,
+                    );
                     // SSO-safe key unbox — see IndexGet branch above for rationale.
                     let key_handle = unbox_str_handle(blk, &key_box);
                     (obj_handle, key_handle)
@@ -734,9 +746,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let val_double = lower_expr(ctx, value)?;
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
             super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset");
+            let static_classref =
+                super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
             let obj_handle = {
                 let blk = ctx.block();
-                unbox_to_i64(blk, &obj_box)
+                super::index_get::classref_preserving_handle(blk, &obj_bits, static_classref)
             };
             let feedback_site_id = emit_typed_feedback_register_site(
                 ctx,

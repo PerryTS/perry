@@ -61,6 +61,7 @@ members = [
     "crates/perry-audio-miniaudio",
     "crates/perry-ui-gtk4",
     "crates/perry-ui-windows",
+    "crates/perry-ui-windows-winui",
     "crates/perry-ui-watchos",
     "crates/perry-ui-tvos",
     "crates/perry-ui-geisterhand",
@@ -166,6 +167,12 @@ codegen-units = 16
 strip = false
 codegen-units = 16
 
+# WinUI scaffold (#4680): re-exports perry-ui-windows; the staticlib bundles
+# its #[no_mangle] extern "C" symbols, so it must not be stripped either.
+[profile.release.package.perry-ui-windows-winui]
+strip = false
+codegen-units = 16
+
 [profile.release.package.perry-ui-geisterhand]
 strip = false
 codegen-units = 16
@@ -194,7 +201,7 @@ codegen-units = 16
 opt-level = "s"       # Optimize for size in stdlib
 
 [workspace.package]
-version = "0.5.1145"
+version = "0.5.1146"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"

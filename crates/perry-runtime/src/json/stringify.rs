@@ -962,7 +962,15 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // The shape-template fast path emits every key in the shape; it can't
     // honor per-key `enumerable: false`, so fall through to the slow path
     // (which filters) whenever any descriptor exists on this thread.
-    if num_fields >= 5 && !has_overflow_fields && !crate::object::descriptors_in_use() {
+    // Class instances (class_id != 0) route through the slow path: it honours a
+    // prototype/own `toJSON` and filters private (`#x`) elements, neither of
+    // which the shape-template fast path handles. Plain data objects (class_id
+    // == 0 — the common JSON shape) keep the fast path.
+    if num_fields >= 5
+        && !has_overflow_fields
+        && !crate::object::descriptors_in_use()
+        && (*obj).class_id == 0
+    {
         if let Some(tmpl_ptr) = shape_template_for(ptr) {
             if try_emit_shape_element(make_pointer_bits(ptr), &*tmpl_ptr, buf, depth) {
                 if depth > MAX_FAST_DEPTH {
@@ -1081,6 +1089,16 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     for j in 0..actual_fields {
         let f = pos(j);
+        // Private elements (`#x`) live in a class instance's keys_array but are
+        // not serializable own properties. (`has_prototype_chain` == class_id != 0.)
+        if has_prototype_chain
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
+            continue;
+        }
         // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
         if filter_non_enum && json_key_non_enumerable(obj, *keys_elements.add(f as usize)) {

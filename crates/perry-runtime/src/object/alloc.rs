@@ -650,6 +650,11 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         if !key_val.is_any_string() {
             continue;
         }
+        // Private elements (`#x`) live in a class instance's keys_array but are
+        // never copied by object spread / Object.assign.
+        if crate::object::instance_private_key_hidden(src, key_val) {
+            continue;
+        }
         let key_f64 = f64::from_bits(key_val.bits());
         let key_ptr =
             crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
@@ -889,6 +894,11 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(src_keys, i as u32);
             if !key_val.is_any_string() {
+                continue;
+            }
+            // Private elements (`#x`) live in a class instance's keys_array but
+            // are never copied by Object.assign / object spread.
+            if crate::object::instance_private_key_hidden(src, key_val) {
                 continue;
             }
             let key_f64 = f64::from_bits(key_val.bits());

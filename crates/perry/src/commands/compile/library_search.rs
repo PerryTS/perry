@@ -114,8 +114,8 @@ fn lib_name_variants(lib_name: &str, target: Option<&str>) -> Vec<String> {
     if std::path::Path::new(lib_name).extension().is_some() {
         return out;
     }
-    let is_windows =
-        matches!(target, Some("windows")) || (target.is_none() && cfg!(target_os = "windows"));
+    let is_windows = matches!(target, Some("windows") | Some("windows-winui"))
+        || (target.is_none() && cfg!(target_os = "windows"));
     let is_macos = matches!(
         target,
         Some("ios")
@@ -748,7 +748,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
         // also check the default target/release/ directory since native builds
         // put libraries there without the triple subdirectory.
         #[cfg(target_os = "windows")]
-        if matches!(target, Some("windows")) {
+        if matches!(target, Some("windows") | Some("windows-winui")) {
             candidates.push(PathBuf::from(format!("target/release/{}", name)));
             candidates.push(PathBuf::from(format!("target/debug/{}", name)));
             candidates.extend(winget_lib_candidates(name));
@@ -864,7 +864,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
 /// Find the runtime library for linking
 pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
     let lib_name = match target {
-        Some("windows") => "perry_runtime.lib",
+        Some("windows") | Some("windows-winui") => "perry_runtime.lib",
         #[cfg(target_os = "windows")]
         None => "perry_runtime.lib",
         _ => "libperry_runtime.a",
@@ -901,7 +901,7 @@ pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
 /// Find the stdlib library for linking (optional - only needed for native modules)
 pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = match target {
-        Some("windows") => "perry_stdlib.lib",
+        Some("windows") | Some("windows-winui") => "perry_stdlib.lib",
         #[cfg(target_os = "windows")]
         None => "perry_stdlib.lib",
         _ => "libperry_stdlib.a",
@@ -913,7 +913,7 @@ pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
 /// when `--enable-wasm-runtime` is set, see issue #76).
 pub(super) fn find_wasm_host_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = match target {
-        Some("windows") => "perry_wasm_host.lib",
+        Some("windows") | Some("windows-winui") => "perry_wasm_host.lib",
         #[cfg(target_os = "windows")]
         None => "perry_wasm_host.lib",
         _ => "libperry_wasm_host.a",
@@ -940,6 +940,10 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
         Some("tvos-simulator") | Some("tvos") => "libperry_ui_tvos.a",
         Some("linux") => "libperry_ui_gtk4.a",
         Some("macos") => "libperry_ui_macos.a",
+        // Opt-in WinUI 3 backend (#4680) — its own staticlib. It bundles the
+        // perry-ui-windows Win32 symbols today (scaffold), so the FFI surface
+        // is identical to the `windows` lib.
+        Some("windows-winui") => "perry_ui_windows_winui.lib",
         Some("windows") => "perry_ui_windows.lib",
         #[cfg(target_os = "windows")]
         None => "perry_ui_windows.lib",
@@ -1202,7 +1206,9 @@ pub(super) fn find_geisterhand_lib(name: &str, target: Option<&str>) -> Option<P
 }
 
 pub(super) fn find_geisterhand_library(target: Option<&str>) -> Option<PathBuf> {
-    let name = if matches!(target, Some("windows")) || cfg!(target_os = "windows") {
+    let name = if matches!(target, Some("windows") | Some("windows-winui"))
+        || cfg!(target_os = "windows")
+    {
         "perry_ui_geisterhand.lib"
     } else {
         "libperry_ui_geisterhand.a"
@@ -1211,7 +1217,9 @@ pub(super) fn find_geisterhand_library(target: Option<&str>) -> Option<PathBuf> 
 }
 
 pub(super) fn find_geisterhand_runtime(target: Option<&str>) -> Option<PathBuf> {
-    let name = if matches!(target, Some("windows")) || cfg!(target_os = "windows") {
+    let name = if matches!(target, Some("windows") | Some("windows-winui"))
+        || cfg!(target_os = "windows")
+    {
         "perry_runtime.lib"
     } else {
         "libperry_runtime.a"
@@ -1229,7 +1237,9 @@ pub(super) fn find_geisterhand_stdlib(target: Option<&str>) -> Option<PathBuf> {
     // so we never select the auto-optimized stdlib, whose feature set is
     // computed from the app's TS imports and omits async-runtime when the async
     // surface comes from a native binding — the #1383 link failure.
-    let name = if matches!(target, Some("windows")) || cfg!(target_os = "windows") {
+    let name = if matches!(target, Some("windows") | Some("windows-winui"))
+        || cfg!(target_os = "windows")
+    {
         "perry_stdlib.lib"
     } else {
         "libperry_stdlib.a"
@@ -1246,6 +1256,8 @@ pub(super) fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
         "libperry_ui_android.a"
     } else if matches!(target, Some("linux")) || cfg!(target_os = "linux") {
         "libperry_ui_gtk4.a"
+    } else if matches!(target, Some("windows-winui")) {
+        "perry_ui_windows_winui.lib"
     } else if matches!(target, Some("windows")) || cfg!(target_os = "windows") {
         "perry_ui_windows.lib"
     } else {
@@ -1265,6 +1277,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         Some("ios-simulator") | Some("ios") => "perry-ui-ios",
         Some("android") => "perry-ui-android",
         Some("linux") => "perry-ui-gtk4",
+        Some("windows-winui") => "perry-ui-windows-winui",
         Some("windows") => "perry-ui-windows",
         _ if cfg!(target_os = "linux") => "perry-ui-gtk4",
         _ if cfg!(target_os = "windows") => "perry-ui-windows",

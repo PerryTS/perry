@@ -1186,7 +1186,15 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         (*obj_ptr).class_id
     };
     if class_id == 0 {
-        return value;
+        // A plain object literal (`{ then(resolve, reject) {…} }` / `{ get then()
+        // {…} }`) has no class vtable, so the method-chain probe below can't see
+        // its `then`. Per ECMA-262 PromiseResolveThenableJob the thenable check
+        // is `Get(value, "then")` + IsCallable — independent of how `then` is
+        // stored. Route object literals through the property-based fallback so
+        // `await { then(r){ r(v) } }` and delegated async-iterator results (whose
+        // `next()` returns object-literal promises — test262 yield-star-async-*)
+        // assimilate instead of resolving with the thenable object itself.
+        return assimilate_via_then_property(value);
     }
 
     // Probe the vtable chain for `then` (a class *method*). If that fails, fall
@@ -1264,11 +1272,15 @@ fn assimilate_via_then_property(value: f64) -> f64 {
     let reject_closure = crate::closure::js_closure_alloc(promise_reject_fn as *const u8, 1);
     crate::closure::js_closure_set_capture_ptr(reject_closure, 0, promise_i64);
 
-    // The user's `then(onFulfilled, onRejected)` receives each resolving function
-    // as a raw closure-pointer f64 — the same convention `js_promise_new_with_
-    // executor` uses for `executor(resolve, reject)` (user JS calls these fine).
-    let resolve_f64 = f64::from_bits(resolve_closure as u64);
-    let reject_f64 = f64::from_bits(reject_closure as u64);
+    // Pass the resolving functions as proper NaN-boxed function values (not the
+    // raw closure-pointer-bits convention used internally by
+    // `js_promise_new_with_executor`): a thenable's `then(onFulfilled,
+    // onRejected)` is a USER-visible call, and spec/Node hand it real functions —
+    // so `typeof onFulfilled === "function"` must hold (test262
+    // yield-star-async-* / yield-star-next-then-* check this). A NaN-boxed
+    // closure is still invoked through the normal call path.
+    let resolve_f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
+    let reject_f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
     let args = [resolve_f64, reject_f64];
 
     // Bind `this` to the thenable so a non-arrow `then` body reads the right

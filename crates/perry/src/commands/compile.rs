@@ -4344,8 +4344,9 @@ pub fn run_with_parse_cache(
             .or_else(|| find_runtime_library(target.as_deref()).ok());
         let stdlib_lib_path = stdlib_lib_resolved.clone();
         // Check if stdlib will be linked - if so, it provides perry_runtime symbols (no stubs needed)
-        let target_is_windows = matches!(target.as_deref(), Some("windows"))
-            || (cfg!(target_os = "windows") && target.is_none());
+        let target_is_windows =
+            matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                || (cfg!(target_os = "windows") && target.is_none());
         let will_link_stdlib = (ctx.needs_stdlib || target_is_windows) && stdlib_lib_path.is_some();
         // Issue #76 — when the wasm host is
         // being linked, scan its archive so the `perry_wasm_host_*` symbols
@@ -4392,7 +4393,7 @@ pub fn run_with_parse_cache(
         );
         let is_linux = matches!(target.as_deref(), Some("linux"))
             || (!cfg!(target_os = "macos") && !cfg!(target_os = "windows") && target.is_none());
-        let is_windows = matches!(target.as_deref(), Some("windows"))
+        let is_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
             || (cfg!(target_os = "windows") && target.is_none());
         // Symbol prefix depends on object format:
         // Mach-O targets (macOS, iOS, watchOS, tvOS): nm shows `_` prefix
@@ -4705,8 +4706,9 @@ pub fn run_with_parse_cache(
         // `-o app.appx` is respected verbatim). Non-Windows targets keep the
         // bare name — Unix executables are conventionally extension-less.
         Some(p) => {
-            let is_windows_output = matches!(target.as_deref(), Some("windows"))
-                || (target.is_none() && cfg!(target_os = "windows"));
+            let is_windows_output =
+                matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                    || (target.is_none() && cfg!(target_os = "windows"));
             if is_windows_output && p.extension().is_none() {
                 p.with_extension(windows_default_output_extension(is_dylib, is_staticlib))
             } else {
@@ -4737,7 +4739,7 @@ pub fn run_with_parse_cache(
             // #1088 — Windows hosts expect `.lib`; everywhere else uses
             // the Unix `lib<stem>.a` convention so the archive is reachable
             // from `-l<stem>` at the host's link step.
-            if matches!(target, Some("windows"))
+            if matches!(target, Some("windows") | Some("windows-winui"))
                 || (target.is_none() && cfg!(target_os = "windows"))
             {
                 PathBuf::from(format!("{}.lib", stem))
@@ -4750,7 +4752,7 @@ pub fn run_with_parse_cache(
             // shipping shape. `lib` prefix matches the dlopen name used by
             // the generated ArkTS shim (`import entry from 'libapp.so'`).
             PathBuf::from(format!("lib{}.so", stem))
-        } else if matches!(target, Some("windows"))
+        } else if matches!(target, Some("windows") | Some("windows-winui"))
             || (target.is_none() && cfg!(target_os = "windows"))
         {
             PathBuf::from(format!("{}.exe", stem))
@@ -4943,7 +4945,7 @@ pub fn run_with_parse_cache(
     );
     let is_linux = matches!(target.as_deref(), Some("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
-    let _is_windows = matches!(target.as_deref(), Some("windows"))
+    let _is_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
         || (target.is_none() && cfg!(target_os = "windows"));
     // is_watchos / is_tvos are defined below (near the per-platform link step).
     // The is_cross_* bindings used to live here, but they're now derived
@@ -4956,8 +4958,9 @@ pub fn run_with_parse_cache(
     // emits `perry_module_init` instead of `main` (see is_dylib branch in
     // codegen/entry.rs, which now also covers `staticlib`).
     if is_staticlib {
-        let is_windows_target = matches!(target.as_deref(), Some("windows"))
-            || (target.is_none() && cfg!(target_os = "windows"));
+        let is_windows_target =
+            matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                || (target.is_none() && cfg!(target_os = "windows"));
         // Best-effort: drop a stale archive first so `ar` doesn't append to a
         // previous build's contents.
         let _ = fs::remove_file(&exe_path);

@@ -44,6 +44,157 @@ fn delegate_await(call: Expr) -> Expr {
     }
 }
 
+/// Invoke the captured delegated `[[NextMethod]]` (`del_next_id`) with `this` =
+/// the delegated iterator (`del_iter_id`). Spec `yield *` reads `next` exactly
+/// once at iterator-record creation (GetIterator) and re-uses the captured
+/// method for every pull, so the desugar must NOT re-read `del_iter.next` on
+/// each loop iteration (that re-ran the iterator's `get next` accessor and an
+/// extra property read, diverging from Node's operation order — test262
+/// yield-star-{async,sync}-next, yield-star-next-*).
+///
+/// Generated shape:
+///   typeof __del_next === "function"
+///     ? __del_next.call(__del_iter, arg)   // observable case: captured method
+///     : __del_iter.next(arg)               // fallback: method dispatch
+///
+/// The captured-method path calls through `.call` (reads Function.prototype,
+/// not the iterator's getters, and binds `this` for builtin/inherited `next`
+/// thunks — e.g. the array-iterator prototype's `next`). The fallback covers
+/// builtin iterators that expose no *readable* `next` property (string and
+/// typed-array iterators dispatch `.next()` through the class-id method tower);
+/// for those, re-reading is harmless because there is no observable getter.
+fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> Expr {
+    // Spec passes `received.[[Value]]` to every inner `next()` — including the
+    // first pull, where `received` is `NormalCompletion(undefined)`. So the
+    // delegated `next` is ALWAYS called with exactly one argument (the first
+    // pull with an explicit `undefined`, not argless — test262
+    // yield-star-{sync,async}-next assert `next args.length === 1`).
+    let call_args = vec![Expr::LocalGet(del_iter_id), arg.clone()];
+    let method_args = vec![arg];
+    Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
+            right: Box::new(Expr::String("function".to_string())),
+        }),
+        then_expr: Box::new(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_next_id)),
+                property: "call".to_string(),
+            }),
+            args: call_args,
+            type_args: vec![],
+        }),
+        else_expr: Box::new(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_iter_id)),
+                property: "next".to_string(),
+            }),
+            args: method_args,
+            type_args: vec![],
+        }),
+    }
+}
+
+/// Emit the common `yield *` delegation prelude + driving loop into `current`
+/// and linearize it. Shared by all three desugar positions (statement-level
+/// `yield* e`, `return yield* e`, `let x = yield* e`). Returns the local id
+/// holding the delegated iterator's most-recent result object (`{value, done}`),
+/// whose `.value` the caller uses for the completion value.
+#[allow(clippy::too_many_arguments)]
+fn emit_yield_star_loop(
+    inner: &Expr,
+    states: &mut Vec<State>,
+    current: &mut Vec<Stmt>,
+    state_num: &mut u32,
+    state_id: LocalId,
+    next_local_id: &mut u32,
+    sent_id: LocalId,
+    catches: &mut Vec<CatchRoute>,
+    finallys: &mut Vec<FinallyRoute>,
+) -> LocalId {
+    let del_iter_id = alloc_local(next_local_id);
+    let del_next_id = alloc_local(next_local_id);
+    let del_result_id = alloc_local(next_local_id);
+
+    // #1831: resolve the iterator (a generator *call* already is its iterator;
+    // an arbitrary iterable resolves via `[Symbol.iterator]` /
+    // `[Symbol.asyncIterator]`).
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_iter_id,
+        Box::new(delegate_get_iterator(inner.clone())),
+    )));
+    // Capture `[[NextMethod]]` once (see `delegate_next_call`).
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_next_id,
+        Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(del_iter_id)),
+            property: "next".to_string(),
+        }),
+    )));
+    // Initial pull: `received` starts as `NormalCompletion(undefined)`, so the
+    // first inner `next()` gets an explicit `undefined` argument.
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_result_id,
+        Box::new(delegate_await(delegate_next_call(
+            del_next_id,
+            del_iter_id,
+            Expr::Undefined,
+        ))),
+    )));
+
+    // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
+    // `sent_id`) into the delegated iterator's `next(v)`.
+    let while_body = vec![
+        // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
+        // Unlike a plain `yield x` (which is `AsyncGeneratorYield(? Await(x))` and
+        // is handled by the #4777 await pass), the DELEGATED value is NOT awaited:
+        // current `AsyncGeneratorYield` does not await its operand, so a delegated
+        // promise value flows through un-unwrapped (test262
+        // yield-star-promise-not-unwrapped). Only the `next()` RESULT is awaited
+        // (via `delegate_await` on the pull below).
+        Stmt::Expr(Expr::Yield {
+            value: Some(Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_result_id)),
+                property: "value".to_string(),
+            })),
+            delegate: false,
+        }),
+        Stmt::Expr(Expr::LocalSet(
+            del_result_id,
+            Box::new(delegate_await(delegate_next_call(
+                del_next_id,
+                del_iter_id,
+                Expr::LocalGet(sent_id),
+            ))),
+        )),
+    ];
+    let while_stmt = Stmt::While {
+        condition: Expr::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_result_id)),
+                property: "done".to_string(),
+            }),
+        },
+        body: while_body,
+    };
+
+    linearize_body(
+        &[while_stmt],
+        states,
+        current,
+        state_num,
+        state_id,
+        next_local_id,
+        sent_id,
+        catches,
+        finallys,
+    );
+
+    del_result_id
+}
+
 pub struct State {
     pub num: u32,
     pub body: Vec<Stmt>,
@@ -135,85 +286,17 @@ pub fn linearize_body(
                 value: Some(inner),
                 delegate: true,
             }) => {
-                // Desugar yield* into:
-                //   let __del_iter = inner_expr;  (inner is a generator call)
-                //   let __del_result = __del_iter.next();
+                // Desugar `yield* inner` into a drive loop:
+                //   let __del_iter = GetIterator(inner);
+                //   let __del_next = __del_iter.next;          // captured ONCE
+                //   let __del_result = __del_next.call(__del_iter);
                 //   while (!__del_result.done) {
                 //     yield __del_result.value;
-                //     __del_result = __del_iter.next();
+                //     __del_result = __del_next.call(__del_iter, __sent);
                 //   }
-                // We don't actually need real vars — we can inline this as states.
-                // But the simplest approach: expand into statements and re-linearize.
-                let del_iter_id = alloc_local(next_local_id);
-                let del_result_id = alloc_local(next_local_id);
-
-                // Initial pull: `__del_iter.next()` with no argument (the value
-                // passed to the *first* `next()` of a generator is discarded per
-                // spec).
-                let next_call = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![],
-                    type_args: vec![],
-                };
-                // #1832: in-loop pull must forward the value the *outer* generator
-                // was resumed with (`outer.next(v)` → stored in `sent_id`) into the
-                // delegated iterator's `next(v)`, so `yield*`-delegated two-way
-                // communication matches spec. Argless here silently dropped it.
-                let next_call_resumed = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![Expr::LocalGet(sent_id)],
-                    type_args: vec![],
-                };
-
-                // Add hoisted var declarations to current (they'll be emitted in the state body)
-                // #1831: resolve the iterator. For a generator *call* the result
-                // already is its iterator; for an arbitrary iterable (effect,
-                // custom `[Symbol.iterator]`) `js_get_iterator` invokes the
-                // well-known-symbol method to obtain one.
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_iter_id,
-                    Box::new(delegate_get_iterator(*inner.clone())),
-                )));
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_result_id,
-                    Box::new(delegate_await(next_call)),
-                )));
-
-                // Build the while loop with yield
-                let while_body = vec![
-                    Stmt::Expr(Expr::Yield {
-                        value: Some(Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "value".to_string(),
-                        })),
-                        delegate: false,
-                    }),
-                    Stmt::Expr(Expr::LocalSet(
-                        del_result_id,
-                        Box::new(delegate_await(next_call_resumed)),
-                    )),
-                ];
-
-                let while_stmt = Stmt::While {
-                    condition: Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "done".to_string(),
-                        }),
-                    },
-                    body: while_body,
-                };
-
-                // Now linearize the expanded while (it contains a yield, so the while handler picks it up)
-                linearize_body(
-                    &[while_stmt],
+                // (see `emit_yield_star_loop` for the shared implementation).
+                emit_yield_star_loop(
+                    inner,
                     states,
                     current,
                     state_num,
@@ -263,69 +346,8 @@ pub fn linearize_body(
                 value: Some(inner),
                 delegate: true,
             })) => {
-                let del_iter_id = alloc_local(next_local_id);
-                let del_result_id = alloc_local(next_local_id);
-
-                // Initial pull: argless (the first `next()` value is discarded
-                // per spec).
-                let next_call = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![],
-                    type_args: vec![],
-                };
-                // #1832: in-loop pull forwards the outer resume value (`sent_id`).
-                let next_call_resumed = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![Expr::LocalGet(sent_id)],
-                    type_args: vec![],
-                };
-
-                // #1831: resolve the iterator (effect / custom `[Symbol.iterator]`
-                // operands need `js_get_iterator` to invoke the well-known-symbol
-                // method; a generator call already is its iterator). Async
-                // generators delegate through the async-iterator protocol.
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_iter_id,
-                    Box::new(delegate_get_iterator(*inner.clone())),
-                )));
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_result_id,
-                    Box::new(delegate_await(next_call)),
-                )));
-
-                let while_body = vec![
-                    Stmt::Expr(Expr::Yield {
-                        value: Some(Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "value".to_string(),
-                        })),
-                        delegate: false,
-                    }),
-                    Stmt::Expr(Expr::LocalSet(
-                        del_result_id,
-                        Box::new(delegate_await(next_call_resumed)),
-                    )),
-                ];
-
-                let while_stmt = Stmt::While {
-                    condition: Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "done".to_string(),
-                        }),
-                    },
-                    body: while_body,
-                };
-
-                linearize_body(
-                    &[while_stmt],
+                let del_result_id = emit_yield_star_loop(
+                    inner,
                     states,
                     current,
                     state_num,
@@ -1022,69 +1044,8 @@ pub fn linearize_body(
                 ty,
                 name,
             } => {
-                let del_iter_id = alloc_local(next_local_id);
-                let del_result_id = alloc_local(next_local_id);
-
-                // Initial pull: argless (first `next()` value is discarded per spec).
-                let next_call = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![],
-                    type_args: vec![],
-                };
-                // #1832: in-loop pull forwards the outer resume value (`sent_id`).
-                let next_call_resumed = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![Expr::LocalGet(sent_id)],
-                    type_args: vec![],
-                };
-
-                // #1831: resolve the iterator. For a generator *call* the result
-                // already is its iterator; for an arbitrary iterable (effect,
-                // custom `[Symbol.iterator]`) `js_get_iterator` invokes the
-                // well-known-symbol method to obtain one. Async generators
-                // delegate through the async-iterator protocol.
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_iter_id,
-                    Box::new(delegate_get_iterator(*inner.clone())),
-                )));
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_result_id,
-                    Box::new(delegate_await(next_call)),
-                )));
-
-                let while_body = vec![
-                    Stmt::Expr(Expr::Yield {
-                        value: Some(Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "value".to_string(),
-                        })),
-                        delegate: false,
-                    }),
-                    Stmt::Expr(Expr::LocalSet(
-                        del_result_id,
-                        Box::new(delegate_await(next_call_resumed)),
-                    )),
-                ];
-
-                let while_stmt = Stmt::While {
-                    condition: Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "done".to_string(),
-                        }),
-                    },
-                    body: while_body,
-                };
-
-                linearize_body(
-                    &[while_stmt],
+                let del_result_id = emit_yield_star_loop(
+                    inner,
                     states,
                     current,
                     state_num,

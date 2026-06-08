@@ -406,7 +406,7 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "linux-aarch64" => Some("aarch64-unknown-linux-gnu".to_string()),
         "macos" => Some("arm64-apple-macosx15.0.0".to_string()),
         "macos-x86_64" => Some("x86_64-apple-macosx15.0.0".to_string()),
-        "windows" => Some("x86_64-pc-windows-msvc".to_string()),
+        "windows" | "windows-winui" => Some("x86_64-pc-windows-msvc".to_string()),
         _ => None,
     }
 }

@@ -146,7 +146,7 @@ fn derive_target_key(target: Option<&str>) -> String {
         None => format!("{}-{}", std::env::consts::OS, arch),
         Some("macos") => format!("macos-{}", arch),
         Some("linux") => format!("linux-{}", arch),
-        Some("windows") => format!("windows-{}", arch),
+        Some("windows") | Some("windows-winui") => format!("windows-{}", arch),
         Some("ios") => "ios".to_string(),
         Some("ios-simulator") => "ios-simulator".to_string(),
         Some("tvos") => "tvos".to_string(),

@@ -576,15 +576,29 @@ pub(super) fn compile_static_method(
     let mut static_boxed_vars = module_boxed_vars.clone();
     super::arguments::add_arguments_mapped_boxes(&f.params, &mut static_boxed_vars);
 
-    let locals: HashMap<u32, String> = {
+    // A static method invoked as `C.m()` binds `this` to the class
+    // constructor `C`. Represent that as the class-ref NaN-box (the same
+    // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
+    // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
+    // resolve against the class object via the normal dynamic-dispatch
+    // path. (Previously `this` fell through to `js_implicit_this_get` and
+    // read back `undefined`.)
+    let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
+    let class_ref_lit = {
+        let bits = crate::nanbox::INT32_TAG | (class_ref_cid as u64 & 0xFFFF_FFFF);
+        crate::nanbox::double_literal(f64::from_bits(bits))
+    };
+    let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
+        let this_slot = blk.alloca(DOUBLE);
+        blk.store(DOUBLE, &class_ref_lit, &this_slot);
         let mut map = HashMap::new();
         for p in &f.params {
             let arg_name = format!("%arg{}", p.id);
             let slot = super::arguments::store_param_slot(blk, p, &static_boxed_vars, &arg_name);
             map.insert(p.id, slot);
         }
-        map
+        (this_slot, map)
     };
 
     let local_types: HashMap<u32, perry_types::Type> =
@@ -627,14 +641,14 @@ pub(super) fn compile_static_method(
         label_targets: HashMap::new(),
         pending_label: None,
         classes,
-        this_stack: Vec::new(),
+        this_stack: vec![this_slot],
         inline_ctor_return: Vec::new(),
         new_target_stack: Vec::new(),
-        // Static methods have no `this` but they CAN reference
-        // sibling static methods/fields via the class name (which
-        // they handle via StaticFieldGet/StaticMethodCall, not via
-        // `this`). The class_stack is empty here.
-        class_stack: Vec::new(),
+        // A static method's `this` is the class constructor (bound above to
+        // the class-ref slot). `class_stack` carries the class name so
+        // `super.x` in a static method resolves against the parent's static
+        // side, mirroring instance-method setup.
+        class_stack: vec![class.name.clone()],
         methods,
         module_globals,
         import_function_prefixes,

@@ -1900,6 +1900,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 .lookup_class_captures(&synthetic_name)
                 .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
                 .unwrap_or_default();
+            // Static block synthetic-method names (`__perry_static_init_N`), in
+            // source order — emitted as inline `StaticMethodCall`s on the
+            // shared-template path so blocks run at class-evaluation time (the
+            // same treatment the class-declaration path gives them).
+            let static_block_names: Vec<String> = class
+                .static_methods
+                .iter()
+                .filter(|m| m.name.starts_with("__perry_static_init_"))
+                .map(|m| m.name.clone())
+                .collect();
             ctx.pending_classes.push(class);
             // #1772: a class EXPRESSION that carries per-evaluation static
             // fields and is NOT a mixin (`class extends <expr>`) lowers to a
@@ -1907,7 +1917,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             // `make(a) !== make(b)` and each holds its own statics as own
             // properties. Mixins and class expressions without statics/captures
             // keep the historical (shared-template) path.
-            if parent_expr.is_none()
+            // A class expression evaluated at module top level runs exactly
+            // once, so it needs no per-evaluation freshness — route it through
+            // the shared-template `ClassRef` path (identical to a class
+            // declaration), where static field/element initializers run via
+            // `init_static_fields_late` and a static method's `this` resolves
+            // to the class-ref. The `ClassExprFresh` path is reserved for class
+            // expressions inside a function body (factories like effect's
+            // `make()`), which produce a distinct class object per call.
+            let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
+            if !at_module_top
+                && parent_expr.is_none()
                 && (!named_statics.is_empty()
                     || !static_symbol_registrations.is_empty()
                     || !captured_args.is_empty())
@@ -1946,6 +1966,30 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     class_name: synthetic_name.clone(),
                     key_expr: Box::new(k),
                     value_expr: Box::new(v),
+                });
+            }
+            // Inline the named static field/element initializers at the point
+            // the class expression evaluates (source order), mirroring the
+            // class-declaration path. Without this the shared-template path
+            // relied solely on the late `init_static_fields_late` pass, which
+            // runs AFTER the surrounding top-level statements — so a read like
+            // `C.x` immediately after `var C = class { static x = 1 }` saw the
+            // uninitialized (0.0) slot. (Private statics carry a `#`-prefixed
+            // name and flow through the same StaticFieldSet path.)
+            for (name, v) in named_statics {
+                seq.push(Expr::StaticFieldSet {
+                    class_name: synthetic_name.clone(),
+                    field_name: name,
+                    value: Box::new(v),
+                });
+            }
+            // Static blocks run right after the static-field initializers, in
+            // source order, with the class as `this`.
+            for block_name in static_block_names {
+                seq.push(Expr::StaticMethodCall {
+                    class_name: synthetic_name.clone(),
+                    method_name: block_name,
+                    args: Vec::new(),
                 });
             }
             if seq.is_empty() {

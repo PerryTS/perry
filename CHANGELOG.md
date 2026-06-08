@@ -2,6 +2,29 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1146 — Default Windows output extension by type (#4771)
+
+On Windows, `perry compile .\src\main.ts -o main` produced an extension-less
+file named `main`, which PowerShell / cmd won't launch (`.\main` fails). The
+`.exe` default previously only applied when `-o` was omitted entirely.
+
+- When the user passes `-o NAME` **without** an extension on a Windows target,
+  the extension now defaults to the target-appropriate one: executable →
+  `.exe`, shared library (`--output-type dylib`) → `.dll`, static library
+  (`--output-type staticlib`) → `.lib`. An explicit extension is respected
+  verbatim (`-o app.appx` stays `app.appx`). Non-Windows targets keep the bare
+  name — Unix executables are conventionally extension-less, so nothing changes
+  there.
+- New `windows_default_output_extension(is_dylib, is_staticlib)` helper in
+  `library_search.rs`, applied at the `exe_path` computation in `compile.rs`
+  when `args.output` is `Some` and has no extension. The no-`-o` default path
+  was refactored into a `default_output_path()` free fn (behavior unchanged).
+- New unit test `windows_output_extension_defaults_by_type`.
+
+Merge note: rebased over the `windows-winui` target work (#4681 series); the
+new Windows-detection branches treat `windows-winui` like `windows`, matching
+the rest of `compile.rs`.
+
 ## v0.5.1145 — Win32 Fluent polish: Mica-by-default + WM_DPICHANGED relayout (#4681)
 
 Continues the #4681 Win32/GDI modernization (after #4682 default DWM chrome and

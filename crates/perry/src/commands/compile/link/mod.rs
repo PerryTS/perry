@@ -273,8 +273,8 @@ pub(super) fn build_and_run_link(
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
     let is_linux = matches!(target, Some(t) if t.starts_with("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
-    let is_windows =
-        matches!(target, Some("windows")) || (target.is_none() && cfg!(target_os = "windows"));
+    let is_windows = matches!(target, Some("windows") | Some("windows-winui"))
+        || (target.is_none() && cfg!(target_os = "windows"));
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
     let is_cross_ios = is_ios && !cfg!(target_os = "macos");
     let is_cross_visionos = is_visionos && !cfg!(target_os = "macos");
@@ -1248,6 +1248,11 @@ pub(super) fn build_and_run_link(
                 (
                     "libperry_ui_gtk4.a",
                     "cargo build --release -p perry-ui-gtk4 --target x86_64-unknown-linux-gnu",
+                )
+            } else if matches!(target, Some("windows-winui")) {
+                (
+                    "perry_ui_windows_winui.lib",
+                    "cargo build --release -p perry-ui-windows-winui --target x86_64-pc-windows-msvc",
                 )
             } else if is_windows {
                 (
