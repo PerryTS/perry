@@ -75,12 +75,38 @@ pub fn select_linker_command(
             .and_then(|s| s.to_str())
             .map(|s| format!("{}_ts", s))
             .unwrap_or_else(|| "main_ts".to_string());
-        if let Some(entry_obj) = obj_paths.iter().find(|f| {
-            f.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem)))
+        // The entry object is the one that defines the `_main` text symbol.
+        // Object files are content-hash-named in the per-module cache
+        // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
+        // silently missed them — the objcopy rename then no-op'd and the link
+        // failed with undefined `__perry_user_main`. Query each object's symbol
+        // table instead; fall back to the stem match only if `nm` is unavailable.
+        let defines_main = |obj: &std::path::Path| -> bool {
+            Command::new("nm")
+                .arg(obj)
+                .output()
+                .ok()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|l| l.ends_with(" T _main") || l.ends_with(" t _main"))
+                })
                 .unwrap_or(false)
-        }) {
+        };
+        let entry_obj = obj_paths
+            .iter()
+            .find(|f| defines_main(f.as_ref()))
+            .or_else(|| {
+                obj_paths.iter().find(|f| {
+                    f.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| {
+                            s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem))
+                        })
+                        .unwrap_or(false)
+                })
+            });
+        if let Some(entry_obj) = entry_obj {
             let objcopy = std::env::var("HOME").ok()
                 .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
                 .filter(|p| p.exists())
@@ -205,12 +231,38 @@ pub fn select_linker_command(
             .and_then(|s| s.to_str())
             .map(|s| format!("{}_ts", s))
             .unwrap_or_else(|| "main_ts".to_string());
-        if let Some(entry_obj) = obj_paths.iter().find(|f| {
-            f.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem)))
+        // The entry object is the one that defines the `_main` text symbol.
+        // Object files are content-hash-named in the per-module cache
+        // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
+        // silently missed them — the objcopy rename then no-op'd and the link
+        // failed with undefined `__perry_user_main`. Query each object's symbol
+        // table instead; fall back to the stem match only if `nm` is unavailable.
+        let defines_main = |obj: &std::path::Path| -> bool {
+            Command::new("nm")
+                .arg(obj)
+                .output()
+                .ok()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|l| l.ends_with(" T _main") || l.ends_with(" t _main"))
+                })
                 .unwrap_or(false)
-        }) {
+        };
+        let entry_obj = obj_paths
+            .iter()
+            .find(|f| defines_main(f.as_ref()))
+            .or_else(|| {
+                obj_paths.iter().find(|f| {
+                    f.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| {
+                            s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem))
+                        })
+                        .unwrap_or(false)
+                })
+            });
+        if let Some(entry_obj) = entry_obj {
             let objcopy = std::env::var("HOME").ok()
                 .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
                 .filter(|p| p.exists())

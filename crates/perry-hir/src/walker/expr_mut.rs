@@ -883,6 +883,14 @@ where
                 f(a);
             }
         }
+        Expr::NewDynamicSpread { callee, args } => {
+            f(callee);
+            for a in args {
+                match a {
+                    CallArg::Expr(e) | CallArg::Spread(e) => f(e),
+                }
+            }
+        }
         Expr::JsNew {
             module_handle,
             args,

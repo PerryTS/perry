@@ -2010,6 +2010,36 @@ pub unsafe extern "C" fn js_new_function_construct(
     nan_boxed
 }
 
+/// `new <callee>(...spread)` — spread-bearing construction. Codegen builds a
+/// single JS array containing every argument in evaluation order (regular args
+/// pushed, spread sources expanded via `js_array_like_to_array` + concat), then
+/// hands the array here. We materialise it into a flat `f64` buffer and forward
+/// to `js_new_function_construct`, so the full callee-shape dispatch (primitive
+/// → TypeError, proxy `construct` trap, boxed-wrapper TypeError, class refs,
+/// closures, native module constructors) is shared with the non-spread path.
+///
+/// `args_array` is a NaN-boxed Array JSValue (POINTER_TAG). A null/0 handle is
+/// treated as an empty argument list.
+#[no_mangle]
+pub unsafe extern "C" fn js_new_function_construct_apply(func_value: f64, args_array: f64) -> f64 {
+    let arr_ptr = (args_array.to_bits() & crate::value::POINTER_MASK) as *const crate::ArrayHeader;
+    if arr_ptr.is_null() {
+        return js_new_function_construct(func_value, std::ptr::null::<f64>(), 0);
+    }
+    let len = crate::array::js_array_length(arr_ptr) as usize;
+    let mut buf: Vec<f64> = Vec::with_capacity(len);
+    for i in 0..len {
+        let v = crate::array::js_array_get(arr_ptr, i as u32);
+        buf.push(f64::from_bits(v.bits()));
+    }
+    let (ptr, n) = if buf.is_empty() {
+        (std::ptr::null::<f64>(), 0usize)
+    } else {
+        (buf.as_ptr(), buf.len())
+    };
+    js_new_function_construct(func_value, ptr, n)
+}
+
 fn constructor_class_ref_id(value: f64) -> Option<u32> {
     if super::class_prototype_ref_id(value).is_some() {
         return None;

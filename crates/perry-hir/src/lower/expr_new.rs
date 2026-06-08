@@ -111,6 +111,40 @@ fn lower_optional_args(
     .map(|args| args.unwrap_or_default())
 }
 
+/// Lower a `new` argument list preserving spread positions as
+/// `CallArg::Spread`, for the `NewDynamicSpread` path.
+fn lower_new_spread_args(
+    ctx: &mut LoweringContext,
+    args: &[ast::ExprOrSpread],
+) -> Result<Vec<crate::ir::CallArg>> {
+    use crate::ir::CallArg;
+    args.iter()
+        .map(|a| {
+            let e = lower_expr(ctx, &a.expr)?;
+            Ok(if a.spread.is_some() {
+                CallArg::Spread(e)
+            } else {
+                CallArg::Expr(e)
+            })
+        })
+        .collect()
+}
+
+/// Whether a `new` callee is a generic constructable shape that the
+/// `NewDynamicSpread` path can handle: a function/class expression, an IIFE
+/// (`new (function(){…})()`), or an arrow (constructing one is a `TypeError` —
+/// the runtime reports it). Bare-identifier callees (user classes, native
+/// module constructors, built-ins) are intentionally excluded — they keep their
+/// dedicated per-constructor lowering, whose argument marshalling (rest
+/// parameters, default values, …) the generic construct helper does not
+/// replicate. `callee` must already be peeled (see `peel_new_callee`).
+fn callee_is_generic_construct_shape(_ctx: &LoweringContext, callee: &ast::Expr) -> bool {
+    matches!(
+        callee,
+        ast::Expr::Fn(_) | ast::Expr::Class(_) | ast::Expr::Arrow(_) | ast::Expr::Call(_)
+    )
+}
+
 fn lower_url_encoding_constructor(
     ctx: &mut LoweringContext,
     class_name: &str,
@@ -275,6 +309,29 @@ fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
+
+    // `new <callee>(...args)` — spread arguments. Every per-constructor branch
+    // below collapses spreads into a plain array argument (they map over
+    // `a.expr` and drop `a.spread`), so `new f(...[1,2])` would pass a single
+    // array instead of two arguments. When any argument is a spread AND the
+    // callee is a generic constructable shape (function/class expression, IIFE,
+    // arrow, or a user-class identifier), route through `NewDynamicSpread` so
+    // the spread positions survive lowering. Built-in/native special
+    // constructors (URL, TypedArray, net.Socket, …) keep their existing
+    // behavior — calling those with a spread argument is vanishingly rare and
+    // already unsupported.
+    if let Some(args_ast) = new_expr.args.as_deref() {
+        if args_ast.iter().any(|a| a.spread.is_some())
+            && callee_is_generic_construct_shape(ctx, callee_expr)
+        {
+            let callee = lower_expr(ctx, callee_expr)?;
+            let args = lower_new_spread_args(ctx, args_ast)?;
+            return Ok(Expr::NewDynamicSpread {
+                callee: Box::new(callee),
+                args,
+            });
+        }
+    }
 
     if let ast::Expr::Ident(callee_ident) = callee_expr {
         let is_module_constructor = ctx

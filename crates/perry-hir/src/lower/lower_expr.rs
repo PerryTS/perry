@@ -1325,6 +1325,24 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     Ok(Expr::TypeOf(operand))
                 }
                 ast::UnaryOp::Delete => {
+                    // `delete super.prop` / `delete super[expr]` is always a
+                    // ReferenceError (the operand is a SuperProperty reference,
+                    // which `delete` rejects). Peel parens to catch
+                    // `delete (super.x)`. Args of a computed super key are
+                    // evaluated first for side effects.
+                    let mut del_arg = unary.arg.as_ref();
+                    while let ast::Expr::Paren(p) = del_arg {
+                        del_arg = p.expr.as_ref();
+                    }
+                    if let ast::Expr::SuperProp(super_prop) = del_arg {
+                        let throw =
+                            throw_reference_error_expr("js_throw_reference_error_super_delete");
+                        if let ast::SuperProp::Computed(computed) = &super_prop.prop {
+                            let key = lower_expr(ctx, computed.expr.as_ref())?;
+                            return Ok(Expr::Sequence(vec![key, throw]));
+                        }
+                        return Ok(throw);
+                    }
                     // Proxy delete: rewrite `delete proxy.key` as ProxyDelete.
                     if let Expr::ProxyGet { proxy, key } = &*operand {
                         return Ok(Expr::ProxyDelete {

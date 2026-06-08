@@ -725,6 +725,17 @@ pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
     throw_reference_error_message(b"assignment to undeclared variable")
 }
 
+/// `delete super.prop` / `delete super[expr]` is always a ReferenceError — a
+/// super reference can never be the target of `delete` (spec: the
+/// UnaryExpression `delete` evaluates the SuperProperty reference, and
+/// `Reference.[[Base]]` carries `thisValue` with `IsSuperReference` true, so
+/// the `delete` algorithm throws before attempting the delete). The args are
+/// evaluated for their side effects first by codegen.
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_super_delete() -> f64 {
+    throw_reference_error_message(b"Unsupported reference to 'super'")
+}
+
 /// A derived constructor whose body never calls `super()` leaves `this`
 /// uninitialized; the implicit `return this` (or any `this` access) throws a
 /// ReferenceError per ECMAScript. Refs class/subclass/builtin-objects/*/
@@ -956,6 +967,23 @@ pub extern "C" fn js_throw_type_error_not_a_function(
     } else {
         format!("({}).{} is not a function", kind, prop)
     };
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_typeerror_new(msg_str);
+    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(err_value))
+}
+
+/// `new <primitive>(…)` where the callee is a primitive value (number, string,
+/// boolean, null, undefined, bigint) → `TypeError: <x> is not a constructor`.
+///
+/// Codegen calls this for `new`-callee shapes whose value is a NaN-boxed
+/// primitive the runtime construct path can't always tag-distinguish — most
+/// importantly plain `f64` numbers, whose bit pattern overlaps the raw pointer
+/// encoding (`new 1`, `new 1.5`). The thrown TypeError is catchable via Perry's
+/// exception machinery, matching `try { new 1 } catch (e) { … }`.
+#[no_mangle]
+pub extern "C" fn js_throw_not_a_constructor() -> f64 {
+    let msg = b"is not a constructor";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = js_typeerror_new(msg_str);
     let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();

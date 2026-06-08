@@ -57,6 +57,12 @@ crates/perry-runtime/src/gc/tests.rs
 crates/perry-codegen-arkts/src/tests.rs
 crates/perry-api-manifest/src/entries.rs
 crates/perry/src/commands/compile.rs
+# `PERRY_UI_TABLE` — flat `MethodRow` data table for receiver-less perry/ui
+# calls (one row per constructor/setter). Generated-feel manifest like
+# entries.rs: length reflects widget-API breadth, not complexity, and a single
+# const array can't be split across files without scattering rows that belong
+# next to each other for review. Crossed 2000 LOC on current main.
+crates/perry-dispatch/src/ui_table.rs
 # Native-module dispatch table; one big match by (module, method, class).
 # Splitting per-namespace is tracked under the API-manifest refactor in #793.
 crates/perry-codegen/src/lower_call/native/mod.rs
@@ -117,13 +123,6 @@ crates/perry-runtime/src/object/native_module.rs
 # globalThis constructor/namespace registry; current main crossed the threshold
 # after WebCrypto + DOM/Event global exposure landed. Split tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
-# console.log / util.inspect value formatter (two big per-tag dispatch
-# towers: format_jsvalue + format_jsvalue_for_json). main had already
-# grown it to 1999 LOC; the #2089 Date-as-reference-type inspect arms
-# (a DateCell pointer must render as its ISO string, not be deref'd as an
-# ObjectHeader) tipped it over. Splitting the two towers into sibling
-# modules is tracked under #1435.
-crates/perry-runtime/src/builtins/formatting.rs
 # Node core native-lowering table; current main crossed the threshold after
 # namespace alias exposure work. Split tracked under #1435.
 crates/perry-codegen/src/lower_call/native_table/node_core.rs
@@ -167,11 +166,6 @@ crates/perry-hir/src/lower/module_decl.rs
 # on current main, independent of this PR. Splitting the per-shape helpers into a
 # sibling module is tracked under #1435.
 crates/perry-hir/src/lower/expr_call/intrinsics.rs
-# Module collection / resolution driver. Crossed the 2000-line gate after the
-# ESM package `.js` detection helpers (package.json `type`/`exports`/`module`
-# probing) landed. Extracting the package-metadata probe into a sibling module
-# is tracked under #1435.
-crates/perry/src/commands/compile/collect_modules.rs
 # node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
 # wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
 # argument-validation batch landed on main without a split (#3493 setuid/setgid/
@@ -254,10 +248,6 @@ crates/perry-runtime/src/node_stream_constructors.rs
 # LOC) on main after recent dispatch-arm additions. Splitting per receiver-type
 # family is tracked under #1435.
 crates/perry-codegen/src/expr/property_get.rs
-# Regex engine wrapper (compile/exec/replace + named-group + lookahead handling).
-# Crossed the 2000-line gate (2026 LOC) after the replace-lookahead additions.
-# Splitting the matcher from the replace machinery is tracked under #1435.
-crates/perry-runtime/src/regex.rs
 # TypedArray root — constructor/view-metadata/element load-store/iterator tower.
 # Crossed the 2000-line gate (2062 LOC) on current main after the #4702
 # %TypedArray%.prototype iterator brand-check + array-like/iterable constructor
