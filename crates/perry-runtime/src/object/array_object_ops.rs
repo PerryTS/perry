@@ -142,22 +142,61 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
         }
     }
 
-    // Apply. Shrinking deletes the now-out-of-range indices (handled by
-    // `js_array_set_length`, which holes the truncated slots); growing pads with
-    // holes. `js_array_set_length` doesn't consult the writable side table, and
-    // we've already validated the write above.
+    // Apply. Growing pads with holes. Shrinking must delete the now-out-of-range
+    // indices from the TOP down (ECMA-262 10.4.2.4 ArraySetLength steps 15-17):
+    // if a deletion target is a NON-configurable index, `length` can only shrink
+    // to just above it and the operation is rejected. `js_array_set_length`
+    // doesn't consult the per-index descriptor side table, so do the spec walk
+    // here. The new writability (if `writable:false` was requested) is persisted
+    // even on the reject path, matching the spec's step-16/17 ordering.
+    let mut rejected = false;
     if let Some(n) = new_len {
-        crate::array::js_array_set_length(arr, n as f64);
+        if n < old_len {
+            // Find the highest non-configurable index in [n, old_len): length
+            // can shrink no further than one past it.
+            let mut target = n;
+            let mut i = old_len;
+            while i > n {
+                i -= 1;
+                let key = i.to_string();
+                let configurable = super::get_property_attrs(obj as usize, &key)
+                    .map(|a| a.configurable())
+                    .unwrap_or(true);
+                if !configurable {
+                    target = i + 1;
+                    rejected = true;
+                    break;
+                }
+            }
+            // Drop the per-index descriptor entries for the indices actually
+            // removed so stale attrs can't resurrect a deleted index.
+            let mut j = old_len;
+            while j > target {
+                j -= 1;
+                super::clear_property_attrs(obj as usize, &j.to_string());
+            }
+            crate::array::js_array_set_length(arr, target as f64);
+        } else {
+            crate::array::js_array_set_length(arr, n as f64);
+        }
     }
-    if has_writable {
-        // Persist the new writability (enumerable/configurable stay false).
+    if has_writable && !new_writable {
+        // A `writable:false` length define is applied even when a shrink was
+        // rejected (the property becomes non-writable; only the truncation
+        // partially failed).
+        super::set_property_attrs(
+            obj as usize,
+            "length".to_string(),
+            PropertyAttrs::new(false, false, false),
+        );
+    } else if has_writable {
         super::set_property_attrs(
             obj as usize,
             "length".to_string(),
             PropertyAttrs::new(new_writable, false, false),
         );
     }
-    true
+    !rejected
 }
 
 /// `Reflect.defineProperty` hook for the array `length` property. Returns
@@ -230,6 +269,19 @@ pub(crate) unsafe fn define_array_property(
 
     if let Some(index) = super::canonical_array_index(key_name) {
         let exists = super::has_own_helpers::array_own_key_present(arr, key_str);
+
+        // Array exotic `[[DefineOwnProperty]]` (ECMA-262 10.4.2.1) step 3.b: a
+        // NEW index at or beyond `length` requires extending `length`, which is
+        // forbidden when the `length` property is non-writable — reject (the
+        // caller turns this into a `TypeError`).
+        if !exists && index >= (*arr).length {
+            let len_writable = super::get_property_attrs(obj as usize, "length")
+                .map(|a| a.writable())
+                .unwrap_or(true);
+            if !len_writable {
+                return Some(false);
+            }
+        }
 
         // Accessor descriptor on an array index: store get/set in the side table
         // (the dense element store can't hold a getter/setter). Routing this
