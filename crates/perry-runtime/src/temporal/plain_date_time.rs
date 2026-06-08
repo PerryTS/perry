@@ -109,11 +109,16 @@ pub fn get(dt: &PlainDateTime, name: &str) -> Option<f64> {
         "day" => dt.day() as f64,
         "dayOfWeek" => dt.day_of_week() as f64,
         "dayOfYear" => dt.day_of_year() as f64,
+        "daysInWeek" => dt.days_in_week() as f64,
         "daysInMonth" => dt.days_in_month() as f64,
         "daysInYear" => dt.days_in_year() as f64,
         "monthsInYear" => dt.months_in_year() as f64,
         "weekOfYear" => match dt.week_of_year() {
             Some(w) => w as f64,
+            None => return Some(undefined()),
+        },
+        "yearOfWeek" => match dt.year_of_week() {
+            Some(y) => y as f64,
             None => return Some(undefined()),
         },
         "inLeapYear" => boolean(dt.in_leap_year()),

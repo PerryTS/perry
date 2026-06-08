@@ -3404,6 +3404,87 @@ pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::Tempo
         .map(|(_, k)| *k)
 }
 
+/// `Temporal.PlainDate.prototype` accessor getters and method shapes (#4691).
+const PLAIN_DATE_GETTERS: &[&str] = &[
+    "calendarId",
+    "era",
+    "eraYear",
+    "year",
+    "month",
+    "monthCode",
+    "day",
+    "dayOfWeek",
+    "dayOfYear",
+    "weekOfYear",
+    "yearOfWeek",
+    "daysInWeek",
+    "daysInMonth",
+    "daysInYear",
+    "monthsInYear",
+    "inLeapYear",
+];
+const PLAIN_DATE_METHODS: &[(&str, u32)] = &[
+    ("toPlainYearMonth", 0),
+    ("toPlainMonthDay", 0),
+    ("add", 1),
+    ("subtract", 1),
+    ("with", 1),
+    ("withCalendar", 1),
+    ("until", 1),
+    ("since", 1),
+    ("equals", 1),
+    ("toPlainDateTime", 0),
+    ("toZonedDateTime", 1),
+    ("toString", 0),
+    ("toLocaleString", 0),
+    ("toJSON", 0),
+    ("valueOf", 0),
+];
+
+/// `Temporal.PlainDateTime.prototype` accessor getters and method shapes (#4693).
+const PLAIN_DATE_TIME_GETTERS: &[&str] = &[
+    "calendarId",
+    "era",
+    "eraYear",
+    "year",
+    "month",
+    "monthCode",
+    "day",
+    "dayOfWeek",
+    "dayOfYear",
+    "weekOfYear",
+    "yearOfWeek",
+    "daysInWeek",
+    "daysInMonth",
+    "daysInYear",
+    "monthsInYear",
+    "inLeapYear",
+    "hour",
+    "minute",
+    "second",
+    "millisecond",
+    "microsecond",
+    "nanosecond",
+];
+const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
+    ("with", 1),
+    ("withPlainTime", 0),
+    ("withCalendar", 1),
+    ("add", 1),
+    ("subtract", 1),
+    ("until", 1),
+    ("since", 1),
+    ("round", 1),
+    ("equals", 1),
+    ("toString", 0),
+    ("toLocaleString", 0),
+    ("toJSON", 0),
+    ("valueOf", 0),
+    ("toZonedDateTime", 1),
+    ("toPlainDate", 0),
+    ("toPlainTime", 0),
+];
+
 fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
@@ -3527,6 +3608,12 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             temporal_plain_date_from_thunk as *const u8,
             temporal_plain_date_compare_thunk as *const u8,
         );
+        install_temporal_prototype(
+            plain_date,
+            crate::temporal::TemporalKind::PlainDate as u8,
+            PLAIN_DATE_GETTERS,
+            PLAIN_DATE_METHODS,
+        );
     }
 
     // Temporal.PlainTime (#4692)
@@ -3556,6 +3643,12 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             plain_date_time,
             temporal_plain_date_time_from_thunk as *const u8,
             temporal_plain_date_time_compare_thunk as *const u8,
+        );
+        install_temporal_prototype(
+            plain_date_time,
+            crate::temporal::TemporalKind::PlainDateTime as u8,
+            PLAIN_DATE_TIME_GETTERS,
+            PLAIN_DATE_TIME_METHODS,
         );
     }
 

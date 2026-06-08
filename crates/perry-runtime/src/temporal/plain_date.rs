@@ -103,6 +103,10 @@ pub fn get(d: &PlainDate, name: &str) -> Option<f64> {
             Some(w) => w as f64,
             None => return Some(undefined()),
         },
+        "yearOfWeek" => match d.year_of_week() {
+            Some(y) => y as f64,
+            None => return Some(undefined()),
+        },
         "inLeapYear" => boolean(d.in_leap_year()),
         "monthCode" => string(d.month_code().as_str()),
         "calendarId" => string(d.calendar().identifier()),

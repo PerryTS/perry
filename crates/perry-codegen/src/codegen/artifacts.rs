@@ -620,7 +620,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             // Determine the local target. Prefer a real HIR function;
             // fall back to a no-op (variable/class/type rename).
             if let Some(f) = func_by_local_name.get(local.as_str()) {
-                let arity = f.params.len().min(5);
+                let arity = f.params.len().min(32);
                 let mut wrap_params: Vec<(LlvmType, String)> =
                     vec![(I64, "%this_closure".to_string())];
                 for i in 0..arity {
@@ -851,7 +851,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         .find(|(n, _)| n == exported)
                         .and_then(|(_, fid)| hir.functions.iter().find(|f| f.id == *fid));
                     if let Some(f) = aliased_func {
-                        let arity = f.params.len().min(5);
+                        let arity = f.params.len().min(32);
                         let mut wrap_params: Vec<(LlvmType, String)> =
                             vec![(I64, "%this_closure".to_string())];
                         for i in 0..arity {
@@ -910,7 +910,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             if !emitted_wrappers.insert(wrap_name.clone()) {
                 continue;
             }
-            let arity = method.params.len().min(5);
+            let arity = method.params.len().min(32);
             let mut wrap_params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
             for i in 0..arity {
                 wrap_params.push((DOUBLE, format!("%a{}", i)));
