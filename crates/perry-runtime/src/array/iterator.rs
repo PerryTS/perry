@@ -334,6 +334,45 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
     result
 }
 
+/// Invoke a pre-fetched method value with `this` = `iter`. Mirrors
+/// [`async_from_sync_call_raw`] but skips the per-call property read — used for
+/// the `next` method, whose `[[NextMethod]]` the spec captures ONCE at
+/// CreateAsyncFromSyncIterator time and reuses for every step (ECMA-262
+/// §27.1.4.2). Re-reading `next` per call re-ran the sync iterator's `get next`
+/// accessor on every pull, diverging from Node's operation order
+/// (test262 yield-star-sync-next).
+fn async_from_sync_call_cached_raw(
+    iter: f64,
+    method_value: f64,
+    args: &[f64],
+) -> Result<Option<f64>, f64> {
+    if !is_callable_value(method_value) {
+        return Err(async_from_sync_type_error(
+            b"Async-from-sync iterator method is not callable",
+        ));
+    }
+    let prev_this = crate::object::js_implicit_this_set(iter);
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
+    let result = if jumped == 0 {
+        let args_ptr = if args.is_empty() {
+            std::ptr::null()
+        } else {
+            args.as_ptr()
+        };
+        let value =
+            unsafe { crate::closure::js_native_call_value(method_value, args_ptr, args.len()) };
+        Ok(Some(value))
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(exc)
+    };
+    crate::object::js_implicit_this_set(prev_this);
+    crate::exception::js_try_end();
+    result
+}
+
 fn async_from_sync_close(iter: f64) {
     let _ = async_from_sync_call_raw(iter, b"return", &[]);
 }
@@ -351,9 +390,21 @@ extern "C" fn async_from_sync_next(
     rest: f64,
 ) -> f64 {
     let iter = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let cached_next = crate::closure::js_closure_get_capture_f64(closure, 1);
     let (argc, first) = async_from_sync_rest_args(rest);
     let single = [first];
     let args: &[f64] = if argc == 0 { &[] } else { &single };
+    // Use the captured `[[NextMethod]]` when it is a readable callable (the
+    // observable-getter case). Builtin iterators (array/map/set/string) expose
+    // no readable own `next` and dispatch through the class-id method tower, so
+    // fall back to the by-name call for them.
+    if is_callable_value(cached_next) {
+        return match async_from_sync_call_cached_raw(iter, cached_next, args) {
+            Ok(Some(step)) => async_from_sync_continue(iter, step, true),
+            Ok(None) => async_from_sync_call(iter, b"next", args, true),
+            Err(reason) => boxed_promise_value(crate::promise::js_promise_rejected(reason)),
+        };
+    }
     async_from_sync_call(iter, b"next", args, true)
 }
 
@@ -428,11 +479,31 @@ fn install_async_from_sync_method(
     value
 }
 
+/// Install the wrapper's `next` method with TWO captures: the sync iterator
+/// (slot 0) and its pre-fetched `[[NextMethod]]` (slot 1, see
+/// [`async_from_sync_call_cached_raw`]).
+fn install_async_from_sync_next(
+    obj: *mut crate::object::ObjectHeader,
+    iter: f64,
+    cached_next: f64,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(async_from_sync_next as *const u8, 2);
+    crate::closure::js_closure_set_capture_f64(closure, 0, iter);
+    crate::closure::js_closure_set_capture_f64(closure, 1, cached_next);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    let key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+    value
+}
+
 pub(crate) fn async_from_sync_wrap_iterator(iter: f64) -> f64 {
     register_async_from_sync_thunks_once();
     let obj = crate::object::js_object_alloc(0, 0);
     let wrapper = crate::value::js_nanbox_pointer(obj as i64);
-    install_async_from_sync_method(obj, b"next", async_from_sync_next, iter);
+    // Spec (CreateAsyncFromSyncIterator): the sync iterator record's
+    // `[[NextMethod]]` is read once, here, and reused for every `next()` step.
+    let cached_next = named_field(iter, b"next");
+    install_async_from_sync_next(obj, iter, cached_next);
     install_async_from_sync_method(obj, b"return", async_from_sync_return, iter);
     install_async_from_sync_method(obj, b"throw", async_from_sync_throw, iter);
     let async_iter =
