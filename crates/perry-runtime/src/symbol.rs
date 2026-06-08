@@ -2052,7 +2052,16 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             let fn_ptr = crate::value::js_nanbox_get_pointer(call_target)
                 as *const crate::closure::ClosureHeader;
             if !fn_ptr.is_null() {
+                // Spec `GetIterator(obj)` → `Call(method, obj)`: the
+                // `[Symbol.iterator]()` factory runs with `this === obj`. The
+                // `clone_closure_rebind_this` above covers a closure that
+                // *captures* `this` (effect's prototype method); a plain
+                // `function(){ …this… }` factory reads `this` dynamically off
+                // IMPLICIT_THIS, so set it here too (test262 yield-star-sync-*
+                // asserts the `[Symbol.iterator]` call's thisValue === obj).
+                let prev_this = crate::object::js_implicit_this_set(val_f64);
                 let iter = crate::closure::js_closure_call0(fn_ptr);
+                crate::object::js_implicit_this_set(prev_this);
                 // Several Perry host-backed collections expose iterator
                 // helpers as eager arrays for direct `.entries()` parity. When
                 // the same function is reached through `Symbol.iterator`, wrap
