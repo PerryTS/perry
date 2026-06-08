@@ -17,14 +17,7 @@ fn wrap(dt: PlainDateTime) -> f64 {
 }
 
 fn calendar_arg(v: f64) -> Calendar {
-    if dispatch::is_undefined(v) {
-        return Calendar::default();
-    }
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
-        return ok_or_throw(dispatch::read_string(v).parse::<Calendar>());
-    }
-    Calendar::default()
+    super::options::calendar_slot(v)
 }
 
 /// `new Temporal.PlainDateTime(year, month, day, hour?, …, nanosecond?, calendar?)`.
@@ -47,49 +40,34 @@ pub fn construct(args: &[f64]) -> f64 {
 }
 
 fn coerce_dt(v: f64) -> PlainDateTime {
-    if let Some(TemporalValue::PlainDateTime(dt)) = temporal_value_ref(v) {
-        return dt.clone();
+    coerce_dt_with_overflow(v, None)
+}
+
+/// `ToTemporalDateTime(item, overflow)`. A `PlainDateTime` is cloned; a
+/// `PlainDate` is widened to midnight; an ISO string is parsed; a property-bag
+/// object is built via partial fields under `overflow`; anything else
+/// (number/boolean/null/symbol, or a non-date Temporal value) is a `TypeError`.
+fn coerce_dt_with_overflow(
+    v: f64,
+    overflow: Option<temporal_rs::options::Overflow>,
+) -> PlainDateTime {
+    match temporal_value_ref(v) {
+        Some(TemporalValue::PlainDateTime(dt)) => return dt.clone(),
+        Some(TemporalValue::PlainDate(d)) => return ok_or_throw(d.to_plain_date_time(None)),
+        Some(_) => crate::object::throw_object_type_error(
+            b"Cannot convert this Temporal value to a Temporal.PlainDateTime",
+        ),
+        None => {}
     }
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if JSValue::from_bits(v.to_bits()).is_string() {
         return ok_or_throw(dispatch::read_string(v).parse::<PlainDateTime>());
     }
-    if jv.is_pointer() {
-        let obj = jv.as_pointer::<crate::object::ObjectHeader>();
-        if !obj.is_null() {
-            let f = |name: &str| -> f64 {
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                let raw = crate::object::js_object_get_field_by_name_f64(obj, key);
-                let n = JSValue::from_bits(raw.to_bits()).to_number();
-                if n.is_finite() {
-                    n
-                } else {
-                    0.0
-                }
-            };
-            let cal_key = crate::string::js_string_from_bytes(b"calendar".as_ptr(), 8);
-            let cal_raw = crate::object::js_object_get_field_by_name_f64(obj, cal_key);
-            return ok_or_throw(PlainDateTime::new(
-                f("year") as i32,
-                f("month") as u8,
-                f("day") as u8,
-                f("hour") as u8,
-                f("minute") as u8,
-                f("second") as u8,
-                f("millisecond") as u16,
-                f("microsecond") as u16,
-                f("nanosecond") as u16,
-                calendar_arg(cal_raw),
-            ));
-        }
-    }
-    crate::fs::validate::throw_range_error_with_code(
-        "Cannot convert value to a Temporal.PlainDateTime",
-    )
+    super::options::plain_date_time_from_bag(v, overflow)
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
-    wrap(coerce_dt(raw_arg(args, 0)))
+    let overflow = super::options::overflow(raw_arg(args, 1));
+    wrap(coerce_dt_with_overflow(raw_arg(args, 0), overflow))
 }
 
 pub fn compare_static(args: &[f64]) -> f64 {
@@ -144,12 +122,20 @@ pub fn get(dt: &PlainDateTime, name: &str) -> Option<f64> {
 
 pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
     match name {
-        "add" => wrap(ok_or_throw(
-            dt.add(&super::duration::coerce_duration(raw_arg(args, 0)), None),
-        )),
-        "subtract" => wrap(ok_or_throw(
-            dt.subtract(&super::duration::coerce_duration(raw_arg(args, 0)), None),
-        )),
+        "add" => {
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(dt.add(
+                &super::duration::coerce_duration(raw_arg(args, 0)),
+                overflow,
+            )))
+        }
+        "subtract" => {
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(dt.subtract(
+                &super::duration::coerce_duration(raw_arg(args, 0)),
+                overflow,
+            )))
+        }
         "until" => super::duration::wrap(ok_or_throw(dt.until(
             &coerce_dt(raw_arg(args, 0)),
             super::options::difference_settings(raw_arg(args, 1)),

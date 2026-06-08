@@ -60,6 +60,81 @@ pub fn require_options_object(arg: f64) -> Option<*const crate::object::ObjectHe
     }
 }
 
+/// Build a [`temporal_rs::PlainDate`] from a property-bag object
+/// (`ToTemporalDate` step for an Object that isn't already a Temporal value):
+/// read its calendar fields + `calendar` slot into a `PartialDate` and let
+/// `temporal_rs` validate/construct under the given `overflow`. A non-object
+/// (number/boolean/null/symbol) is a `TypeError`, matching the spec's
+/// "Numbers cannot be used in place of an ISO string" wrong-type cases.
+pub fn plain_date_from_bag(v: f64, overflow: Option<Overflow>) -> temporal_rs::PlainDate {
+    let obj = match as_obj(v) {
+        Some(o) => o,
+        None => type_error("Cannot convert value to a Temporal.PlainDate".to_string()),
+    };
+    let partial = temporal_rs::partial::PartialDate {
+        calendar_fields: calendar_fields(obj),
+        calendar: calendar_slot(field(obj, "calendar")),
+    };
+    ok_or_throw(temporal_rs::PlainDate::from_partial(partial, overflow))
+}
+
+/// Build a [`temporal_rs::PlainDateTime`] from a property-bag object
+/// (`ToTemporalDateTime` for a non-Temporal Object). Mirrors
+/// [`plain_date_from_bag`] with date + time fields.
+pub fn plain_date_time_from_bag(v: f64, overflow: Option<Overflow>) -> temporal_rs::PlainDateTime {
+    let obj = match as_obj(v) {
+        Some(o) => o,
+        None => type_error("Cannot convert value to a Temporal.PlainDateTime".to_string()),
+    };
+    let partial = temporal_rs::partial::PartialDateTime {
+        fields: datetime_fields(obj),
+        calendar: calendar_slot(field(obj, "calendar")),
+    };
+    ok_or_throw(temporal_rs::PlainDateTime::from_partial(partial, overflow))
+}
+
+/// `ToTemporalCalendarSlotValue`: resolve a calendar argument to a
+/// [`temporal_rs::Calendar`]. `undefined` → ISO-8601; a calendar-id string →
+/// that calendar; a `Temporal.*` value → its own `[[Calendar]]`. Anything else
+/// (null / number / boolean / symbol / plain object) is a `TypeError` — the
+/// `calendar-wrong-type` cases.
+pub fn calendar_slot(v: f64) -> temporal_rs::Calendar {
+    use temporal_rs::Calendar;
+    if is_undefined(v) {
+        return Calendar::default();
+    }
+    let jv = JSValue::from_bits(v.to_bits());
+    if jv.is_string() {
+        return ok_or_throw(read_string(v).parse::<Calendar>());
+    }
+    if let Some(tv) = super::temporal_value_ref(v) {
+        return match tv {
+            super::TemporalValue::PlainDate(d) => d.calendar().clone(),
+            super::TemporalValue::PlainDateTime(dt) => dt.calendar().clone(),
+            super::TemporalValue::PlainYearMonth(ym) => ym.calendar().clone(),
+            super::TemporalValue::PlainMonthDay(md) => md.calendar().clone(),
+            super::TemporalValue::ZonedDateTime(z) => z.calendar().clone(),
+            _ => type_error("Temporal value has no calendar".to_string()),
+        };
+    }
+    type_error("calendar must be a calendar identifier string or a Temporal object".to_string())
+}
+
+/// `GetOptionsObject`: an options argument must be `undefined` or an Object.
+/// Any other value — number, string, boolean, bigint, **symbol** — is a
+/// `TypeError`. Methods that take an options bag call this up front so a
+/// wrong-typed options arg throws before any work (every
+/// `*/options-wrong-type.js`). A Temporal value counts as an object here
+/// (its calendar fields just won't match any option name).
+pub fn validate_options_arg(arg: f64) {
+    if is_undefined(arg) {
+        return;
+    }
+    if as_obj(arg).is_none() {
+        type_error("options argument must be an object or undefined".to_string());
+    }
+}
+
 /// Raw (NaN-boxed) value of `obj.<name>`.
 fn field(obj: *const crate::object::ObjectHeader, name: &str) -> f64 {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -347,7 +422,9 @@ fn relative_to_field(obj: *const crate::object::ObjectHeader) -> Option<Relative
 // ---- overflow / disambiguation (second-arg option objects) ----------------
 
 /// Read an optional `overflow` (`"constrain"` | `"reject"`) from an options arg.
+/// A non-object, non-undefined options arg is a `TypeError` (`GetOptionsObject`).
 pub fn overflow(arg: f64) -> Option<Overflow> {
+    validate_options_arg(arg);
     let obj = as_obj(arg)?;
     str_field_coerce(obj, "overflow").map(|s| parse_overflow(&s))
 }
