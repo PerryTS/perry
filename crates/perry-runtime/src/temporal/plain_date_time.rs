@@ -161,7 +161,11 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
         }
         "toPlainDate" => alloc_temporal_cell(TemporalValue::PlainDate(dt.to_plain_date())),
         "toPlainTime" => alloc_temporal_cell(TemporalValue::PlainTime(dt.to_plain_time())),
-        "toString" | "toJSON" | "toLocaleString" => string(&dt.to_string()),
+        "toString" => string(&ok_or_throw(dt.to_ixdtf_string(
+            super::options::to_string_rounding_options(raw_arg(args, 0)),
+            super::options::display_calendar(raw_arg(args, 0)),
+        ))),
+        "toJSON" | "toLocaleString" => string(&dt.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

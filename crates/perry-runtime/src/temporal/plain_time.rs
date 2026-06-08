@@ -107,7 +107,10 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
             DifferenceSettings::default(),
         ))),
         "equals" => dispatch::boolean(*t == coerce_time(raw_arg(args, 0))),
-        "toString" | "toJSON" | "toLocaleString" => string(
+        "toString" => string(&ok_or_throw(t.to_ixdtf_string(
+            super::options::to_string_rounding_options(raw_arg(args, 0)),
+        ))),
+        "toJSON" | "toLocaleString" => string(
             &t.to_ixdtf_string(ToStringRoundingOptions::default())
                 .unwrap_or_default(),
         ),

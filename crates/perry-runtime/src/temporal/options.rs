@@ -14,8 +14,9 @@ use temporal_rs::fields::{
     CalendarFields, DateTimeFields, YearMonthCalendarFields, ZonedDateTimeFields,
 };
 use temporal_rs::options::{
-    DifferenceSettings, Disambiguation, OffsetDisambiguation, Overflow, RelativeTo,
-    RoundingIncrement, RoundingMode, RoundingOptions, ToStringRoundingOptions, Unit,
+    DifferenceSettings, Disambiguation, DisplayCalendar, DisplayOffset, DisplayTimeZone,
+    OffsetDisambiguation, Overflow, RelativeTo, RoundingIncrement, RoundingMode, RoundingOptions,
+    ToStringRoundingOptions, Unit,
 };
 use temporal_rs::parsers::Precision;
 use temporal_rs::partial::PartialTime;
@@ -276,6 +277,35 @@ pub fn difference_settings(arg: f64) -> DifferenceSettings {
         }
     }
     s
+}
+
+/// Parse the `calendarName` display option (`"auto"|"always"|"never"|"critical"`)
+/// from a `toString` options bag. Absent → `Auto`; an invalid string → RangeError.
+pub fn display_calendar(arg: f64) -> DisplayCalendar {
+    match require_options_object(arg).and_then(|obj| str_field_coerce(obj, "calendarName")) {
+        Some(s) => {
+            DisplayCalendar::from_str(&s).unwrap_or_else(|_| range("Invalid calendarName option"))
+        }
+        None => DisplayCalendar::Auto,
+    }
+}
+
+/// Parse the `offset` display option (`"auto"|"never"`) from a `toString` bag.
+pub fn display_offset(arg: f64) -> DisplayOffset {
+    match require_options_object(arg).and_then(|obj| str_field_coerce(obj, "offset")) {
+        Some(s) => DisplayOffset::from_str(&s).unwrap_or_else(|_| range("Invalid offset option")),
+        None => DisplayOffset::Auto,
+    }
+}
+
+/// Parse the `timeZoneName` display option (`"auto"|"never"|"critical"`).
+pub fn display_time_zone(arg: f64) -> DisplayTimeZone {
+    match require_options_object(arg).and_then(|obj| str_field_coerce(obj, "timeZoneName")) {
+        Some(s) => {
+            DisplayTimeZone::from_str(&s).unwrap_or_else(|_| range("Invalid timeZoneName option"))
+        }
+        None => DisplayTimeZone::Auto,
+    }
 }
 
 /// Read an optional `relativeTo` from a `round`/`total` options object.
