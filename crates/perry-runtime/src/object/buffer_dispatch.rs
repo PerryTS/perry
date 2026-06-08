@@ -446,9 +446,7 @@ pub unsafe fn dispatch_buffer_method(
                 // the coercion entirely (test262 slice/number-conversion,
                 // end-default-if-undefined). `js_buffer_slice` then clamps.
                 let s = ab_slice_index(arg_or_zero(0));
-                let e = if args.len() < 2
-                    || JSValue::from_bits(args[1].to_bits()).is_undefined()
-                {
+                let e = if args.len() < 2 || JSValue::from_bits(args[1].to_bits()).is_undefined() {
                     len
                 } else {
                     ab_slice_index(args[1])
