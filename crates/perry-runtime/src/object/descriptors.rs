@@ -982,6 +982,23 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             let empty = crate::array::js_array_alloc(0);
             return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
         }
+        // A heap value that isn't a plain ordinary object (Date `DateCell`,
+        // RegExp, Map/Set, Promise, …) has no `ObjectHeader.keys_array` — reading
+        // one off its header dereferences garbage and segfaults. `Object.create({},
+        // new Date(0))` / `Object.defineProperties(obj, new RegExp())` reach here
+        // with such a value. Perry doesn't model expando properties on these
+        // exotic objects, so report no own keys rather than crashing.
+        if !is_valid_obj_ptr(obj as *const u8) {
+            let empty = crate::array::js_array_alloc(0);
+            return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
+        }
+        {
+            let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+                let empty = crate::array::js_array_alloc(0);
+                return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
+            }
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             let empty = crate::array::js_array_alloc(0);
