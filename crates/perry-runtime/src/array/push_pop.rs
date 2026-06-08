@@ -3,6 +3,15 @@ use super::*;
 use crate::arena::arena_alloc_gc;
 use std::ptr;
 
+/// `pop`/`shift`/`push`/`unshift` on a frozen array perform a `Set`/`Delete`
+/// with `Throw = true` internally (ECMA-262 §23.1.3.*), so a non-writable
+/// `length` / non-extensible receiver makes them throw a **TypeError** — they
+/// must not silently no-op. Used by the frozen guards below.
+#[cold]
+fn throw_frozen_array_mutation() -> ! {
+    crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mut ArrayHeader {
     if arr.is_null() || (arr as usize) < 0x1000 {
@@ -105,7 +114,10 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
     unsafe {
@@ -232,7 +244,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
         return TAG_UNDEFINED_F64;
     }
     if array_is_frozen(arr) {
-        return TAG_UNDEFINED_F64;
+        throw_frozen_array_mutation();
     }
     unsafe {
         let length = (*arr).length;
@@ -352,7 +364,7 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
         return TAG_UNDEFINED_F64;
     }
     if array_is_frozen(arr) {
-        return TAG_UNDEFINED_F64;
+        throw_frozen_array_mutation();
     }
     unsafe {
         let length = (*arr).length;
@@ -380,7 +392,10 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
