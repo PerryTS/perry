@@ -31,6 +31,7 @@ mod class_registry;
 mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
+mod disposable_proto_thunks;
 mod date_proto_thunks;
 mod delete_rest;
 mod descriptors;

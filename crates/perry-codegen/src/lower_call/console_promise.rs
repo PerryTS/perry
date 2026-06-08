@@ -717,6 +717,12 @@ pub fn try_lower_native_method_str_dispatch(
                 | "isPrototypeOf"
                 | "toLocaleString"
                 | "valueOf"
+                // #4795: the `using`-declaration disposability validator is not
+                // a class method — it must reach the runtime `js_native_call_method`
+                // handler (which checks symbol keys + the class vtable) rather
+                // than the static class-dispatch tower, which would treat the
+                // missing method as a non-callable property read and throw.
+                | "__perry_using_check__"
         );
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))

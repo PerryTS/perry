@@ -700,6 +700,21 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // must run before any var-init in the body, then var-inits and other
     // executable statements run in source order.
     let mut body = if let Some(ref block) = fn_expr.function.body {
+        // #4795: a `using` / `await using` declaration in a function-expression
+        // body must be desugared (scope-exit disposal + declaration-time
+        // disposability check). The hand-rolled per-statement loop below routes
+        // through `lower_body_stmt`, which lowers `using` as a plain `const`
+        // with no disposal — so route the whole body through the using-aware
+        // lowering (the same path arrow/fn-decl bodies use) when any top-level
+        // `using` is present. Forward references stay resolvable via the
+        // FnDecl/var pre-registration done above.
+        let has_using = block
+            .stmts
+            .iter()
+            .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Using(_))));
+        if has_using {
+            crate::lower_decl::lower_stmts_using_aware(ctx, &block.stmts)?
+        } else {
         let mut func_decls = Vec::new();
         let mut exec_stmts = Vec::new();
         for stmt in &block.stmts {
@@ -726,6 +741,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             }
         }
         combined
+        }
     } else {
         Vec::new()
     };

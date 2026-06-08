@@ -5378,6 +5378,11 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         return;
     }
+    // #4795: TC39 explicit-resource-management stacks.
+    if super::disposable_proto_thunks::install_disposable_proto_methods(builtin_name, proto_obj) {
+        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        return;
+    }
     // #4100: primitive wrapper prototypes need real thunks for their own
     // methods so reflective calls brand-check `this` instead of hitting the
     // generic Object no-op/valueOf fallbacks.
@@ -6067,7 +6072,7 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
 fn install_error_prototype_data_properties(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     let name = match builtin_name {
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
-        | "AggregateError" | "EvalError" | "URIError" => builtin_name,
+        | "AggregateError" | "EvalError" | "URIError" | "SuppressedError" => builtin_name,
         _ => return,
     };
     if proto_obj.is_null() {

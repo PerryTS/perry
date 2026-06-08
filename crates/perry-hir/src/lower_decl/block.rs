@@ -452,9 +452,10 @@ pub fn lower_block_stmt_scoped(
 /// Bindings whose initializer evaluates to `null` or `undefined` are skipped
 /// per spec (no dispose call, no error). Multi-binding using declarations
 /// (`using a = e1, b = e2`) are unrolled left-to-right with each binding
-/// getting its own try/finally so the rightmost disposes first. SuppressedError
-/// chaining when a body throw is followed by a dispose throw is not yet
-/// implemented — the dispose throw shadows the original.
+/// getting its own try/catch/finally so the rightmost disposes first. When a
+/// body throw (or an earlier dispose throw) is followed by another dispose
+/// throw, the later error is wrapped in a `SuppressedError` whose `.suppressed`
+/// is the accumulated completion (spec `DisposeResources`).
 pub fn lower_stmts_using_aware(
     ctx: &mut LoweringContext,
     stmts: &[ast::Stmt],
@@ -475,24 +476,87 @@ pub fn lower_stmts_using_aware(
                 // for `Type::Named` locals; without inference it stays `Any`
                 // and the call goes nowhere on missing-method).
                 let stmts = lower_var_decl_with_destructuring(ctx, decl, false, false)?;
+                let mut decl_ids: Vec<LocalId> = Vec::new();
                 for s in &stmts {
                     if let Stmt::Let { id, .. } = s {
                         binding_ids.push(*id);
+                        decl_ids.push(*id);
                     }
                 }
                 result.extend(stmts);
+                // Validate disposability at the declaration point (spec
+                // `CreateDisposableResource`): a non-nullish initializer with no
+                // callable `[Symbol.dispose]` / `[Symbol.asyncDispose]` throws a
+                // `TypeError` here, before the block body runs. `null` /
+                // `undefined` are accepted. The runtime `__perry_using_check__`
+                // dispatch validates and returns; primitives throw via the
+                // ordinary "not a function" method-call path.
+                for &id in &decl_ids {
+                    let check_call = Expr::Call {
+                        callee: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(id)),
+                            property: "__perry_using_check__".to_string(),
+                        }),
+                        args: vec![Expr::Bool(is_async)],
+                        type_args: Vec::new(),
+                    };
+                    result.push(Stmt::If {
+                        condition: Expr::Logical {
+                            op: LogicalOp::And,
+                            left: Box::new(Expr::Compare {
+                                op: CompareOp::Ne,
+                                left: Box::new(Expr::LocalGet(id)),
+                                right: Box::new(Expr::Null),
+                            }),
+                            right: Box::new(Expr::Compare {
+                                op: CompareOp::Ne,
+                                left: Box::new(Expr::LocalGet(id)),
+                                right: Box::new(Expr::Undefined),
+                            }),
+                        },
+                        then_branch: vec![Stmt::Expr(check_call)],
+                        else_branch: None,
+                    });
+                }
             }
             // Recursively lower remaining stmts as the try body.
             let body_stmts = lower_stmts_using_aware(ctx, &stmts[i + 1..])?;
-            // Wrap each binding in its own try/finally — innermost (rightmost
-            // binding) finally runs first, giving reverse-declaration disposal.
+            // Wrap each binding in its own try/catch/finally — innermost
+            // (rightmost binding) disposes first, giving reverse-declaration
+            // order. Each level captures a thrown body completion into a pair
+            // of locals (`__pending` / `__has`) so the finally can aggregate a
+            // dispose-throw into a `SuppressedError` (spec `DisposeResources`):
+            //
+            //   let __pending; let __has = false;
+            //   try { <inner> }
+            //   catch (__c) { __pending = __c; __has = true; }
+            //   finally {
+            //     try { if (x != null) [await] x.<dispose>(); }
+            //     catch (__d) {
+            //        if (__has) __pending = new SuppressedError(__d, __pending);
+            //        else { __pending = __d; __has = true; }
+            //     }
+            //     if (__has) throw __pending;
+            //   }
+            //
+            // `try`/`finally` (not bare `catch`) is required so the disposal
+            // runs on every abrupt completion of `<inner>` — `return` /
+            // `break` / `continue` as well as `throw`. Nesting composes the
+            // chaining: a body error becomes the innermost `suppressed`, and
+            // each outer dispose-throw wraps the accumulated value, so the
+            // last (outermost, first-declared) dispose throw is `.error`.
             let mut wrapped = body_stmts;
-            for &id in binding_ids.iter().rev() {
+            for (level, &id) in binding_ids.iter().rev().enumerate() {
                 let method_name = if is_async {
                     "__perry_async_dispose__"
                 } else {
                     "__perry_dispose__"
                 };
+                let pending = ctx.fresh_local();
+                let has = ctx.fresh_local();
+                let body_err = ctx.fresh_local();
+                let dispose_err = ctx.fresh_local();
+
                 // if (id !== null && id !== undefined) [await] id.<method>()
                 let null_check = Expr::Logical {
                     op: LogicalOp::And,
@@ -518,16 +582,83 @@ pub fn lower_stmts_using_aware(
                 if is_async {
                     call_expr = Expr::Await(Box::new(call_expr));
                 }
-                let finally_stmts = vec![Stmt::If {
-                    condition: null_check,
-                    then_branch: vec![Stmt::Expr(call_expr)],
-                    else_branch: None,
-                }];
-                wrapped = vec![Stmt::Try {
-                    body: wrapped,
-                    catch: None,
-                    finally: Some(finally_stmts),
-                }];
+
+                // catch (__d) { if (__has) __pending = new SuppressedError(__d,
+                // __pending); else { __pending = __d; __has = true; } }
+                let dispose_catch = CatchClause {
+                    param: Some((dispose_err, format!("__perry_dispose_err_{level}"))),
+                    body: vec![Stmt::If {
+                        condition: Expr::LocalGet(has),
+                        then_branch: vec![Stmt::Expr(Expr::LocalSet(
+                            pending,
+                            Box::new(Expr::New {
+                                class_name: "SuppressedError".to_string(),
+                                args: vec![
+                                    Expr::LocalGet(dispose_err),
+                                    Expr::LocalGet(pending),
+                                    Expr::String(
+                                        "An error was suppressed during disposal".to_string(),
+                                    ),
+                                ],
+                                type_args: Vec::new(),
+                            }),
+                        ))],
+                        else_branch: Some(vec![
+                            Stmt::Expr(Expr::LocalSet(
+                                pending,
+                                Box::new(Expr::LocalGet(dispose_err)),
+                            )),
+                            Stmt::Expr(Expr::LocalSet(has, Box::new(Expr::Bool(true)))),
+                        ]),
+                    }],
+                };
+
+                let finally_stmts = vec![
+                    Stmt::Try {
+                        body: vec![Stmt::If {
+                            condition: null_check,
+                            then_branch: vec![Stmt::Expr(call_expr)],
+                            else_branch: None,
+                        }],
+                        catch: Some(dispose_catch),
+                        finally: None,
+                    },
+                    Stmt::If {
+                        condition: Expr::LocalGet(has),
+                        then_branch: vec![Stmt::Throw(Expr::LocalGet(pending))],
+                        else_branch: None,
+                    },
+                ];
+
+                let body_catch = CatchClause {
+                    param: Some((body_err, format!("__perry_body_err_{level}"))),
+                    body: vec![
+                        Stmt::Expr(Expr::LocalSet(pending, Box::new(Expr::LocalGet(body_err)))),
+                        Stmt::Expr(Expr::LocalSet(has, Box::new(Expr::Bool(true)))),
+                    ],
+                };
+
+                wrapped = vec![
+                    Stmt::Let {
+                        id: pending,
+                        name: format!("__perry_pending_{level}"),
+                        ty: Type::Any,
+                        mutable: true,
+                        init: Some(Expr::Undefined),
+                    },
+                    Stmt::Let {
+                        id: has,
+                        name: format!("__perry_has_err_{level}"),
+                        ty: Type::Any,
+                        mutable: true,
+                        init: Some(Expr::Bool(false)),
+                    },
+                    Stmt::Try {
+                        body: wrapped,
+                        catch: Some(body_catch),
+                        finally: Some(finally_stmts),
+                    },
+                ];
             }
             result.extend(wrapped);
             return Ok(result);
