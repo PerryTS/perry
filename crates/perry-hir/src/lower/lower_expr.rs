@@ -639,7 +639,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         let native_module = if let ast::Expr::Ident(obj_ident) = member.obj.as_ref()
                         {
                             let obj_name = obj_ident.sym.as_ref();
-                            ctx.lookup_builtin_module_alias(obj_name).is_some()
+                            // `Temporal.<X>` constructors dispatch via brand arms,
+                            // not a class chain, so route them through the runtime
+                            // dynamic path (`js_instanceof_dynamic` →
+                            // `temporal_ctor_kind`) by lowering the constructor to
+                            // its closure value here.
+                            obj_name == "Temporal"
+                                || ctx.lookup_builtin_module_alias(obj_name).is_some()
                                 || matches!(ctx.lookup_native_module(obj_name), Some((_, None)))
                         } else {
                             false

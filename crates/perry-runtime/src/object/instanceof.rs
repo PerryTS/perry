@@ -99,6 +99,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             depth += 1;
         }
     }
+    // `temporalValue instanceof Temporal.<X>` — Temporal values dispatch via
+    // brand arms (not a real prototype chain), so resolve the constructor to
+    // its kind and compare against the value's brand. A non-Temporal value, or
+    // a Temporal value of a different kind, yields `false`.
+    if let Some(kind) = super::global_this::temporal_ctor_kind(type_ref) {
+        return if crate::temporal::temporal_kind(value) == Some(kind) {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
     let bits = type_ref.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFE {

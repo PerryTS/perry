@@ -9,7 +9,7 @@ use super::dispatch::{
 };
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
-use temporal_rs::options::{DifferenceSettings, Disambiguation, OffsetDisambiguation};
+use temporal_rs::options::{Disambiguation, OffsetDisambiguation};
 use temporal_rs::{Calendar, TimeZone, ZonedDateTime};
 
 const TYPE_NAME: &str = "Temporal.ZonedDateTime";
@@ -57,15 +57,31 @@ pub fn construct(args: &[f64]) -> f64 {
 }
 
 fn coerce_zdt(v: f64) -> ZonedDateTime {
+    coerce_zdt_with_options(v, undefined())
+}
+
+/// `ToTemporalZonedDateTime(item, options)` — a `Temporal.ZonedDateTime` (cloned),
+/// an IXDTF string, or a property bag with a `timeZone` (built via
+/// `from_partial`). `opts` supplies `overflow`/`disambiguation`/`offset` (only
+/// consulted for the string + property-bag forms).
+fn coerce_zdt_with_options(v: f64, opts: f64) -> ZonedDateTime {
     if let Some(TemporalValue::ZonedDateTime(z)) = temporal_value_ref(v) {
         return z.clone();
+    }
+    if let Some(partial) = super::options::zoned_partial(v) {
+        return ok_or_throw(ZonedDateTime::from_partial(
+            partial,
+            super::options::overflow(opts),
+            super::options::disambiguation(opts),
+            super::options::offset_option(opts),
+        ));
     }
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
         return ok_or_throw(ZonedDateTime::from_utf8(
             dispatch::read_string(v).as_bytes(),
-            Disambiguation::default(),
-            OffsetDisambiguation::Reject,
+            super::options::disambiguation(opts).unwrap_or(Disambiguation::Compatible),
+            super::options::offset_option(opts).unwrap_or(OffsetDisambiguation::Reject),
         ));
     }
     crate::fs::validate::throw_range_error_with_code(
@@ -74,7 +90,7 @@ fn coerce_zdt(v: f64) -> ZonedDateTime {
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
-    wrap(coerce_zdt(raw_arg(args, 0)))
+    wrap(coerce_zdt_with_options(raw_arg(args, 0), raw_arg(args, 1)))
 }
 
 pub fn compare_static(args: &[f64]) -> f64 {
@@ -101,6 +117,29 @@ pub fn get(z: &ZonedDateTime, name: &str) -> Option<f64> {
         "microsecond" => z.microsecond() as f64,
         "nanosecond" => z.nanosecond() as f64,
         "dayOfWeek" => z.day_of_week() as f64,
+        "dayOfYear" => z.day_of_year() as f64,
+        "daysInWeek" => z.days_in_week() as f64,
+        "daysInMonth" => z.days_in_month() as f64,
+        "daysInYear" => z.days_in_year() as f64,
+        "monthsInYear" => z.months_in_year() as f64,
+        "inLeapYear" => boolean(z.in_leap_year()),
+        "monthCode" => string(z.month_code().as_str()),
+        "weekOfYear" => match z.week_of_year() {
+            Some(w) => w as f64,
+            None => return Some(undefined()),
+        },
+        "yearOfWeek" => match z.year_of_week() {
+            Some(y) => y as f64,
+            None => return Some(undefined()),
+        },
+        "era" => match z.era() {
+            Some(e) => string(e.as_str()),
+            None => return Some(undefined()),
+        },
+        "eraYear" => match z.era_year() {
+            Some(y) => y as f64,
+            None => return Some(undefined()),
+        },
         "epochMilliseconds" => z.epoch_milliseconds() as f64,
         "epochNanoseconds" => bigint_from_i128(z.to_instant().as_i128()),
         "offsetNanoseconds" => z.offset_nanoseconds() as f64,
@@ -117,18 +156,22 @@ pub fn get(z: &ZonedDateTime, name: &str) -> Option<f64> {
 
 pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
     match name {
-        "add" => wrap(ok_or_throw(
-            z.add(&super::duration::coerce_duration(raw_arg(args, 0)), None),
-        )),
-        "subtract" => wrap(ok_or_throw(
-            z.subtract(&super::duration::coerce_duration(raw_arg(args, 0)), None),
-        )),
-        "until" => super::duration::wrap(ok_or_throw(
-            z.until(&coerce_zdt(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
-        "since" => super::duration::wrap(ok_or_throw(
-            z.since(&coerce_zdt(raw_arg(args, 0)), DifferenceSettings::default()),
-        )),
+        "add" => wrap(ok_or_throw(z.add(
+            &super::duration::coerce_duration(raw_arg(args, 0)),
+            super::options::overflow(raw_arg(args, 1)),
+        ))),
+        "subtract" => wrap(ok_or_throw(z.subtract(
+            &super::duration::coerce_duration(raw_arg(args, 0)),
+            super::options::overflow(raw_arg(args, 1)),
+        ))),
+        "until" => super::duration::wrap(ok_or_throw(z.until(
+            &coerce_zdt(raw_arg(args, 0)),
+            super::options::difference_settings(raw_arg(args, 1)),
+        ))),
+        "since" => super::duration::wrap(ok_or_throw(z.since(
+            &coerce_zdt(raw_arg(args, 0)),
+            super::options::difference_settings(raw_arg(args, 1)),
+        ))),
         "equals" => boolean(ok_or_throw(z.equals(&coerce_zdt(raw_arg(args, 0))))),
         "toInstant" => alloc_temporal_cell(TemporalValue::Instant(z.to_instant())),
         "toPlainDate" => alloc_temporal_cell(TemporalValue::PlainDate(z.to_plain_date())),

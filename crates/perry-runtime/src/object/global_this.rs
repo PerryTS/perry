@@ -3160,6 +3160,66 @@ fn install_temporal_constructor(
     closure
 }
 
+/// Map a value to the [`TemporalKind`] it constructs *iff* it is one of the
+/// eight `Temporal.<X>` constructor closures (matched by func-ptr, so a
+/// same-named user closure never matches). Used by `instanceof` to make
+/// `zdt instanceof Temporal.ZonedDateTime` resolve to `true` even though
+/// Temporal values dispatch via brand arms, not a real prototype chain.
+pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::TemporalKind> {
+    use crate::temporal::TemporalKind;
+    let jv = JSValue::from_bits(type_ref.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let closure = jv.as_pointer::<crate::closure::ClosureHeader>();
+    if closure.is_null() {
+        return None;
+    }
+    let (tag, fp) = unsafe { ((*closure).type_tag, (*closure).func_ptr) };
+    if tag != crate::closure::CLOSURE_MAGIC {
+        return None;
+    }
+    let fp = fp as usize;
+    let table: [(*const u8, TemporalKind); 8] = [
+        (
+            temporal_duration_ctor_thunk as *const u8,
+            TemporalKind::Duration,
+        ),
+        (
+            temporal_instant_ctor_thunk as *const u8,
+            TemporalKind::Instant,
+        ),
+        (
+            temporal_plain_date_ctor_thunk as *const u8,
+            TemporalKind::PlainDate,
+        ),
+        (
+            temporal_plain_time_ctor_thunk as *const u8,
+            TemporalKind::PlainTime,
+        ),
+        (
+            temporal_plain_date_time_ctor_thunk as *const u8,
+            TemporalKind::PlainDateTime,
+        ),
+        (
+            temporal_plain_year_month_ctor_thunk as *const u8,
+            TemporalKind::PlainYearMonth,
+        ),
+        (
+            temporal_plain_month_day_ctor_thunk as *const u8,
+            TemporalKind::PlainMonthDay,
+        ),
+        (
+            temporal_zoned_date_time_ctor_thunk as *const u8,
+            TemporalKind::ZonedDateTime,
+        ),
+    ];
+    table
+        .iter()
+        .find(|(ptr, _)| *ptr as usize == fp)
+        .map(|(_, k)| *k)
+}
+
 fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
