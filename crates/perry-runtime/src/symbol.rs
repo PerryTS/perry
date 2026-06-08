@@ -1981,6 +1981,13 @@ fn throw_iterator_result_not_object() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
 }
 
+fn throw_value_not_iterable() -> ! {
+    let msg = b"is not iterable";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
 /// #1831: resolve the iterator for a `yield*` operand.
 ///
 /// `yield* X` must drive `X[Symbol.iterator]()` — for a generator **call** the
@@ -2066,6 +2073,17 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 }
                 return iter;
             }
+        }
+    }
+    // No usable `[Symbol.iterator]` was found. A primitive number / boolean /
+    // null / undefined is not iterable — per GetIterator this is a TypeError,
+    // and returning the value unchanged would crash a downstream `.next()`
+    // call (`for (x of 37) {}`). Strings and objects/arrays are handled above
+    // or carry a real iterator, so only the non-iterable primitives throw here.
+    {
+        let jsv = crate::value::JSValue::from_bits(val_f64.to_bits());
+        if !jsv.is_pointer() && !jsv.is_any_string() {
+            throw_value_not_iterable();
         }
     }
     val_f64
