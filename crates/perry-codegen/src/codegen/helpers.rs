@@ -410,9 +410,7 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         // provided.al2023, scratch/distroless containers, Cloud Run, etc.
         // (no glibc loader dependency). See link/platform_cmd.rs for the
         // `-static` musl link path and #4826.
-        "linux-musl" | "linux-x86_64-musl" => {
-            Some("x86_64-unknown-linux-musl".to_string())
-        }
+        "linux-musl" | "linux-x86_64-musl" => Some("x86_64-unknown-linux-musl".to_string()),
         "linux-aarch64-musl" => Some("aarch64-unknown-linux-musl".to_string()),
         "macos" => Some("arm64-apple-macosx15.0.0".to_string()),
         "macos-x86_64" => Some("x86_64-apple-macosx15.0.0".to_string()),

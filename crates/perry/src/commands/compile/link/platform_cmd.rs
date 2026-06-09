@@ -628,12 +628,9 @@ pub fn select_linker_command(
                 "x86_64-unknown-linux-musl",
             )
         };
-        let musl_gcc =
-            std::env::var(cc_env).unwrap_or_else(|_| default_musl_gcc.to_string());
+        let musl_gcc = std::env::var(cc_env).unwrap_or_else(|_| default_musl_gcc.to_string());
         let musl_gcc_on_path = std::env::var_os("PATH")
-            .map(|paths| {
-                std::env::split_paths(&paths).any(|d| d.join(&musl_gcc).is_file())
-            })
+            .map(|paths| std::env::split_paths(&paths).any(|d| d.join(&musl_gcc).is_file()))
             .unwrap_or(false);
         let mut c = if musl_gcc_on_path {
             Command::new(musl_gcc)

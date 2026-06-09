@@ -187,9 +187,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             .or_else(|| config.linux.as_ref().and_then(|l| l.libc.clone()));
         match raw.as_deref().map(|s| s.trim().to_ascii_lowercase()) {
             None => None,
-            Some(ref s) if s == "glibc" || s == "gnu" || s.is_empty() => {
-                Some("glibc".to_string())
-            }
+            Some(ref s) if s == "glibc" || s == "gnu" || s.is_empty() => Some("glibc".to_string()),
             Some(ref s) if s == "musl" => Some("musl".to_string()),
             Some(other) => bail!(
                 "Invalid [linux] libc / --libc value '{other}'. \

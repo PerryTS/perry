@@ -299,9 +299,7 @@ pub(crate) fn apply_libc_to_target(
         "glibc" | "gnu" | "" => Ok(target),
         "musl" => match target.as_deref() {
             // Default (native host) or explicit x86_64 Linux → x86_64 musl.
-            None | Some("linux") | Some("linux-x86_64") => {
-                Ok(Some("linux-musl".to_string()))
-            }
+            None | Some("linux") | Some("linux-x86_64") => Ok(Some("linux-musl".to_string())),
             Some("linux-aarch64") | Some("linux-arm64") => {
                 Ok(Some("linux-aarch64-musl".to_string()))
             }
@@ -315,9 +313,9 @@ pub(crate) fn apply_libc_to_target(
                  (e.g. --target linux)."
             ),
         },
-        other => anyhow::bail!(
-            "unknown --libc value '{other}'. Supported: glibc (default) or musl."
-        ),
+        other => {
+            anyhow::bail!("unknown --libc value '{other}'. Supported: glibc (default) or musl.")
+        }
     }
 }
 
