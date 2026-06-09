@@ -186,6 +186,31 @@ fn test_array_sparse_max_valid_index_boundary() {
     );
 }
 
+/// Sequential growth (gap 0) must stay on the dense backing store past
+/// MAX_DENSE_ARRAY_GROW_LENGTH — routing it to string-keyed sparse properties
+/// is quadratic and hung the 10M-element 03_array_write benchmark for 6 hours
+/// per CI run (v0.5.1129–v0.5.1150). Only far jumps past the current length
+/// (the boundary test above) belong in sparse storage.
+#[test]
+fn test_array_sequential_growth_past_dense_threshold_stays_dense() {
+    let mut arr = js_array_alloc(0);
+    const N: u32 = 1_200_000; // past MAX_DENSE_ARRAY_GROW_LENGTH (1M)
+    for i in 0..N {
+        arr = js_array_set_f64_extend(arr, i, i as f64);
+    }
+    assert_eq!(js_array_length(arr), N);
+    unsafe {
+        assert!(
+            (*arr).capacity >= N,
+            "sequential fill fell off the dense path: capacity {} < length {}",
+            (*arr).capacity,
+            N
+        );
+    }
+    assert_eq!(js_array_get_f64(arr, N - 1), (N - 1) as f64);
+    assert_eq!(js_array_get_f64(arr, 1_000_001), 1_000_001.0);
+}
+
 #[test]
 fn test_array_exotic_descriptors_and_global_prototype_identity() {
     let arr = js_array_alloc(0);

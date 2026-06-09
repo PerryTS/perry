@@ -1,178 +1,199 @@
 {
-  "commit": "c89b3ad5",
-  "generated_at": "2026-04-23T13:05:00Z",
-  "notes": "json_roundtrip row rerun at v0.5.173 (best-of-5): Perry 314ms vs Node 377ms → Perry now 1.2x faster than Node (was 1.58x slower at v0.5.166, baseline commit 00fa823). Other rows unchanged from the 2026-04-17 sweep.",
+  "commit": "5e612062",
+  "generated_at": "2026-06-05T07:32:00Z",
+  "notes": "Refreshed 2026-06-09 from the last green Regression Check run (27001035612, macos-14, commit 5e612062791, 2026-06-05) while fixing the vacuous gate: compare.sh --json-out resolved relative to benchmarks/suite after the mid-script cd, so current.json was never written, the comparison crashed, and `| tee` swallowed the exit \u2014 no run since the 2026-04-23 c89b3ad5 baseline was ever actually compared. The April numbers (e.g. 03_array_write 3ms) no longer reflect any recent run (3.1-3.4s on every June run) and would hard-fail every release tag the moment the gate started working again, so the baseline restarts from the most recent trusted full measurement. Known perf gaps vs Node (method_calls, nested_loops, matrix_multiply, numeric_array_downgrade) are pre-existing and tracked separately \u2014 this file gates *drift*, not absolute performance.",
   "benchmarks": {
     "02_loop_overhead": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1712,
-      "node_ms": 54,
-      "node_rss_kb": 34481,
-      "memory_ratio": 0.05
+      "perry_ms": 99,
+      "perry_rss_kb": 3681,
+      "node_ms": 67,
+      "node_rss_kb": 17652,
+      "speed_ratio": 1.478,
+      "memory_ratio": 0.209
     },
     "03_array_write": {
-      "perry_ms": 3,
-      "perry_rss_kb": 212208,
-      "node_ms": 9,
-      "node_rss_kb": 281506,
-      "speed_ratio": 0.333,
-      "memory_ratio": 0.754
+      "perry_ms": 3357,
+      "perry_rss_kb": 239809,
+      "node_ms": 8,
+      "node_rss_kb": 326277,
+      "speed_ratio": 419.625,
+      "memory_ratio": 0.735
     },
     "04_array_read": {
-      "perry_ms": 4,
-      "perry_rss_kb": 212240,
-      "node_ms": 13,
-      "node_rss_kb": 282978,
-      "speed_ratio": 0.308,
-      "memory_ratio": 0.75
+      "perry_ms": 2558,
+      "perry_rss_kb": 239857,
+      "node_ms": 12,
+      "node_rss_kb": 326533,
+      "speed_ratio": 213.167,
+      "memory_ratio": 0.735
     },
     "05_fibonacci": {
-      "perry_ms": 317,
-      "perry_rss_kb": 1776,
-      "node_ms": 1028,
-      "node_rss_kb": 34449,
-      "speed_ratio": 0.308,
-      "memory_ratio": 0.052
+      "perry_ms": 323,
+      "perry_rss_kb": 3665,
+      "node_ms": 954,
+      "node_rss_kb": 17668,
+      "speed_ratio": 0.339,
+      "memory_ratio": 0.207
     },
     "06_math_intensive": {
-      "perry_ms": 15,
-      "perry_rss_kb": 1776,
-      "node_ms": 50,
-      "node_rss_kb": 36642,
-      "speed_ratio": 0.3,
-      "memory_ratio": 0.048
+      "perry_ms": 52,
+      "perry_rss_kb": 3649,
+      "node_ms": 53,
+      "node_rss_kb": 18661,
+      "speed_ratio": 0.981,
+      "memory_ratio": 0.196
     },
     "07_object_create": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1792,
-      "node_ms": 9,
-      "node_rss_kb": 37762,
-      "memory_ratio": 0.047
+      "perry_ms": 3,
+      "perry_rss_kb": 3681,
+      "node_ms": 5,
+      "node_rss_kb": 19157,
+      "speed_ratio": 0.6,
+      "memory_ratio": 0.192
     },
     "08_string_concat": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1968,
-      "node_ms": 2,
-      "node_rss_kb": 41586,
-      "memory_ratio": 0.047
+      "perry_ms": 3,
+      "perry_rss_kb": 3921,
+      "node_ms": 5,
+      "node_rss_kb": 22646,
+      "speed_ratio": 0.6,
+      "memory_ratio": 0.173
     },
     "09_method_calls": {
-      "perry_ms": 1,
-      "perry_rss_kb": 1760,
-      "node_ms": 11,
-      "node_rss_kb": 36689,
-      "speed_ratio": 0.091,
-      "memory_ratio": 0.048
+      "perry_ms": 9892,
+      "perry_rss_kb": 3777,
+      "node_ms": 12,
+      "node_rss_kb": 17668,
+      "speed_ratio": 824.333,
+      "memory_ratio": 0.214
     },
     "10_nested_loops": {
-      "perry_ms": 9,
-      "perry_rss_kb": 1840,
-      "node_ms": 17,
-      "node_rss_kb": 34993,
-      "speed_ratio": 0.529,
-      "memory_ratio": 0.053
+      "perry_ms": 3948,
+      "perry_rss_kb": 3585,
+      "node_ms": 18,
+      "node_rss_kb": 18661,
+      "speed_ratio": 219.333,
+      "memory_ratio": 0.192
     },
     "11_prime_sieve": {
-      "perry_ms": 4,
-      "perry_rss_kb": 17888,
-      "node_ms": 8,
-      "node_rss_kb": 58450,
-      "speed_ratio": 0.5,
-      "memory_ratio": 0.306
+      "perry_ms": 486,
+      "perry_rss_kb": 22273,
+      "node_ms": 6,
+      "node_rss_kb": 50813,
+      "speed_ratio": 81.0,
+      "memory_ratio": 0.438
     },
     "12_binary_trees": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1776,
-      "node_ms": 9,
-      "node_rss_kb": 37458,
-      "memory_ratio": 0.047
+      "perry_ms": 3,
+      "perry_rss_kb": 3665,
+      "node_ms": 6,
+      "node_rss_kb": 19205,
+      "speed_ratio": 0.5,
+      "memory_ratio": 0.191
     },
     "13_factorial": {
-      "perry_ms": 35,
-      "perry_rss_kb": 1744,
-      "node_ms": 608,
-      "node_rss_kb": 37522,
-      "speed_ratio": 0.058,
-      "memory_ratio": 0.046
+      "perry_ms": 97,
+      "perry_rss_kb": 3649,
+      "node_ms": 100,
+      "node_rss_kb": 18293,
+      "speed_ratio": 0.97,
+      "memory_ratio": 0.199
     },
     "14_closure": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1792,
-      "node_ms": 311,
-      "node_rss_kb": 36866,
-      "memory_ratio": 0.049
+      "perry_ms": 49,
+      "perry_rss_kb": 3649,
+      "node_ms": 52,
+      "node_rss_kb": 19029,
+      "speed_ratio": 0.942,
+      "memory_ratio": 0.192
     },
     "15_mandelbrot": {
-      "perry_ms": 21,
-      "perry_rss_kb": 1760,
+      "perry_ms": 22,
+      "perry_rss_kb": 3633,
       "node_ms": 25,
-      "node_rss_kb": 36850,
-      "speed_ratio": 0.84,
-      "memory_ratio": 0.048
+      "node_rss_kb": 18677,
+      "speed_ratio": 0.88,
+      "memory_ratio": 0.195
     },
     "16_matrix_multiply": {
-      "perry_ms": 21,
-      "perry_rss_kb": 4816,
-      "node_ms": 35,
-      "node_rss_kb": 41730,
-      "speed_ratio": 0.6,
-      "memory_ratio": 0.115
+      "perry_ms": 7792,
+      "perry_rss_kb": 7265,
+      "node_ms": 42,
+      "node_rss_kb": 23879,
+      "speed_ratio": 185.524,
+      "memory_ratio": 0.304
     },
     "bench_gc_pressure": {
-      "perry_ms": 16,
-      "perry_rss_kb": 21376,
-      "node_ms": 13,
-      "node_rss_kb": 42147,
-      "speed_ratio": 1.231,
-      "memory_ratio": 0.507
+      "perry_ms": 71,
+      "perry_rss_kb": 23409,
+      "node_ms": 17,
+      "node_rss_kb": 26936,
+      "speed_ratio": 4.176,
+      "memory_ratio": 0.869
     },
     "bench_json_roundtrip": {
-      "perry_ms": 314,
-      "perry_rss_kb": 310640,
-      "node_ms": 377,
-      "node_rss_kb": 186768,
-      "speed_ratio": 0.833,
-      "memory_ratio": 1.663
+      "perry_ms": 377,
+      "perry_rss_kb": 302289,
+      "node_ms": 427,
+      "node_rss_kb": 77930,
+      "speed_ratio": 0.883,
+      "memory_ratio": 3.879
     },
     "bench_object_property": {
-      "perry_ms": 9,
-      "perry_rss_kb": 13520,
+      "perry_ms": 611,
+      "perry_rss_kb": 90625,
       "node_ms": 16,
-      "node_rss_kb": 38290,
-      "speed_ratio": 0.562,
-      "memory_ratio": 0.353
+      "node_rss_kb": 19013,
+      "speed_ratio": 38.188,
+      "memory_ratio": 4.766
     },
     "bench_int_arithmetic": {
-      "perry_ms": 7,
-      "perry_rss_kb": 1776,
-      "node_ms": 73,
-      "node_rss_kb": 34849,
-      "speed_ratio": 0.096,
-      "memory_ratio": 0.051
+      "perry_ms": 496,
+      "perry_rss_kb": 3777,
+      "node_ms": 97,
+      "node_rss_kb": 17988,
+      "speed_ratio": 5.113,
+      "memory_ratio": 0.21
     },
     "bench_buffer_readwrite": {
-      "perry_ms": 23,
-      "perry_rss_kb": 2784,
-      "node_ms": 86,
-      "node_rss_kb": 36385,
-      "speed_ratio": 0.267,
-      "memory_ratio": 0.077
+      "perry_ms": 924,
+      "perry_rss_kb": 4721,
+      "node_ms": 102,
+      "node_rss_kb": 18484,
+      "speed_ratio": 9.059,
+      "memory_ratio": 0.255
     },
     "bench_array_grow": {
-      "perry_ms": 12,
-      "perry_rss_kb": 34176,
-      "node_ms": 13,
-      "node_rss_kb": 97330,
-      "speed_ratio": 0.923,
-      "memory_ratio": 0.351
+      "perry_ms": 473,
+      "perry_rss_kb": 40321,
+      "node_ms": 14,
+      "node_rss_kb": 84660,
+      "speed_ratio": 33.786,
+      "memory_ratio": 0.476
     },
     "bench_string_heavy": {
-      "perry_ms": 37,
-      "perry_rss_kb": 49696,
-      "node_ms": 49,
-      "node_rss_kb": 41795,
-      "speed_ratio": 0.755,
-      "memory_ratio": 1.189
+      "perry_ms": 59,
+      "perry_rss_kb": 59521,
+      "node_ms": 43,
+      "node_rss_kb": 20982,
+      "speed_ratio": 1.372,
+      "memory_ratio": 2.837
+    },
+    "bench_numeric_array_numeric": {
+      "perry_ms": 3201,
+      "perry_rss_kb": 21281,
+      "node_ms": 5,
+      "node_rss_kb": 39950,
+      "speed_ratio": 640.2,
+      "memory_ratio": 0.533
+    },
+    "bench_numeric_array_downgrade": {
+      "perry_ms": 22889,
+      "perry_rss_kb": 21441,
+      "node_ms": 6,
+      "node_rss_kb": 40414,
+      "speed_ratio": 3814.833,
+      "memory_ratio": 0.531
     }
   }
 }

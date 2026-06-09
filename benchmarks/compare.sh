@@ -52,6 +52,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Resolve --json-out to an absolute path up front: the script `cd`s into
+# $SUITE_DIR during compilation, so a relative path like
+# `.bench-results/current.json` would be created (or fail to be created)
+# relative to benchmarks/suite/ instead of the caller's cwd. This silently
+# broke the CI regression gate for weeks: the JSON write threw
+# FileNotFoundError, `| tee` swallowed the non-zero exit, and the workflow's
+# "grep REGRESSION" found nothing — every release-mode performance gate
+# passed vacuously.
+if [[ -n "$JSON_OUT" ]]; then
+  mkdir -p "$(dirname "$JSON_OUT")"
+  JSON_OUT="$(cd "$(dirname "$JSON_OUT")" && pwd)/$(basename "$JSON_OUT")"
+fi
+
 if [[ ! -f "$COMPILETS" ]]; then
   echo -e "${RED}Perry not found at $COMPILETS${NC}"
   echo "Run: cargo build --release"

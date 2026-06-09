@@ -29,6 +29,10 @@ jobs:
   # ---------------------------------------------------------------------------
   performance:
     runs-on: macos-14
+    # A hung benchmark binary should fail fast, not burn the 6h default
+    # (03_array_write hung for 6h on every run v0.5.1129–v0.5.1150).
+    # A healthy cached run takes ~15-20 min; allow for a cold cargo build.
+    timeout-minutes: 100
     outputs:
       status: ${{ steps.compare.outputs.status }}
     steps:
@@ -61,6 +65,11 @@ jobs:
       - name: Run benchmarks (median of 3 runs)
         id: compare
         run: |
+          # The default runner shell is `bash -e` WITHOUT pipefail, so the
+          # `compare.sh | tee` pipeline below would otherwise report tee's
+          # exit status and swallow a hard-fail regression exit.
+          set -o pipefail
+
           # Release tags: hard-fail. Everything else: warn-only.
           if [[ "$IS_RELEASE" == "true" ]]; then
             WARN_FLAG=""
