@@ -87,20 +87,42 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
     // these fields, so `attach_settle_listener` removes them from the set at
     // attach time.) This makes the detector robust to internal machinery
     // (async generators, async-from-sync iterators) adopting a rejection.
-    let any_unhandled = UNHANDLED_REJECTIONS.with(|m| {
-        m.borrow().iter().any(|&p| {
-            let pr = p as *const Promise;
-            unsafe {
-                (*pr).state == PromiseState::Rejected
-                    && (*pr).on_rejected.is_null()
-                    && (*pr).next.is_null()
-            }
-        })
+    let unhandled_reasons: Vec<f64> = UNHANDLED_REJECTIONS.with(|m| {
+        m.borrow()
+            .iter()
+            .filter_map(|&p| {
+                let pr = p as *const Promise;
+                unsafe {
+                    if (*pr).state == PromiseState::Rejected
+                        && (*pr).on_rejected.is_null()
+                        && (*pr).next.is_null()
+                    {
+                        Some((*pr).reason)
+                    } else {
+                        None
+                    }
+                }
+            })
+            .collect()
     });
-    if !any_unhandled {
+    if unhandled_reasons.is_empty() {
         return;
     }
-    eprintln!("Uncaught (in promise)");
+    // Surface the rejection reason instead of the bare, opaque
+    // "Uncaught (in promise)" line (#4841): an unhandled rejection that
+    // carried a `TypeError: ...` previously printed nothing useful, forcing
+    // users to wrap every call in `.catch` just to learn what failed.
+    // `js_jsvalue_to_string` renders Error values as `<Name>: <message>` and
+    // everything else via ordinary ToString, matching the synchronous
+    // uncaught-throw header.
+    let reason = unhandled_reasons[0];
+    let reason_str_ptr = crate::value::js_jsvalue_to_string(reason);
+    let reason_str = unsafe { crate::exception::string_header_to_string(reason_str_ptr) };
+    if reason_str.is_empty() {
+        eprintln!("Uncaught (in promise)");
+    } else {
+        eprintln!("Uncaught (in promise) {reason_str}");
+    }
     // Match Node's unhandled-rejection exit code (1). The event loop has
     // already drained, so there is no pending work to lose.
     std::process::exit(1);

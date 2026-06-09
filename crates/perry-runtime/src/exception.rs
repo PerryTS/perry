@@ -201,7 +201,7 @@ pub extern "C" fn js_leave_finally() {
 }
 
 /// Read a StringHeader into an owned Rust String (empty on null/garbage).
-unsafe fn string_header_to_string(ptr: *const crate::string::StringHeader) -> String {
+pub(crate) unsafe fn string_header_to_string(ptr: *const crate::string::StringHeader) -> String {
     if ptr.is_null() || (ptr as usize) < 0x10000 {
         return String::new();
     }
