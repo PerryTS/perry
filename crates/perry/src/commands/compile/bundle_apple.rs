@@ -20,6 +20,116 @@ use super::resources::{
 use super::targets::{compile_metallib_for_bundle, lookup_bundle_id_from_toml};
 use super::CompilationContext;
 
+// Fallback DT* (SDK / Xcode toolchain marker) values, used only when neither
+// an env override nor the cross sysroot supplies a value (#4849). These mirror
+// the public GM toolchain shipped in the worker's Apple sysroot. The *version*
+// is normally read from `<sysroot>/SDKSettings.json` so it tracks whatever SDK
+// actually links the binary; the build strings (not carried by the slim cross
+// sysroot) come from `PERRY_DT_*` env vars set by the build worker.
+const DEFAULT_DT_PLATFORM_VERSION: &str = "26.4";
+const DEFAULT_DT_SDK_BUILD: &str = "23E237";
+const DEFAULT_DT_XCODE: &str = "2640";
+const DEFAULT_DT_XCODE_BUILD: &str = "17E192";
+
+/// Read `[project].version` and `[project].build_number` from the nearest
+/// `perry.toml` (walking up to 5 parents from `input`). Defaults to
+/// `("1.0.0", "1")` when absent — matching `bundle_ios.rs`. Shared by all the
+/// Apple bundlers so tvOS/watchOS stop shipping a hardcoded `1.0`
+/// CFBundleVersion (which made every TestFlight re-upload fail the
+/// "bundle version must be higher" check). #4849.
+pub(super) fn read_apple_app_version(input: &Path) -> (String, String) {
+    let read = (|| -> Option<(String, String)> {
+        let mut dir = input.canonicalize().ok()?;
+        for _ in 0..5 {
+            dir = dir.parent()?.to_path_buf();
+            let toml_path = dir.join("perry.toml");
+            if !toml_path.exists() {
+                continue;
+            }
+            let doc: toml::Table = fs::read_to_string(&toml_path).ok()?.parse().ok()?;
+            let project = doc.get("project").and_then(|v| v.as_table());
+            let version = project
+                .and_then(|p| p.get("version"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("1.0.0")
+                .to_string();
+            let build_number = project
+                .and_then(|p| p.get("build_number"))
+                .and_then(|v| {
+                    v.as_integer()
+                        .map(|n| n.to_string())
+                        .or_else(|| v.as_str().map(|s| s.to_string()))
+                })
+                .unwrap_or_else(|| "1".to_string());
+            return Some((version, build_number));
+        }
+        None
+    })();
+    read.unwrap_or_else(|| ("1.0.0".to_string(), "1".to_string()))
+}
+
+/// Read the SDK marketing version (e.g. `26.2`) from the cross sysroot's
+/// `SDKSettings.json` so the plist DT* version matches the SDK that actually
+/// links the binary (its Mach-O `LC_BUILD_VERSION` sdk field). Returns `None`
+/// if the sysroot/JSON is unavailable. #4849.
+fn sdk_version_from_sysroot(sysroot_env: &str, default_sysroot: &str) -> Option<String> {
+    let sysroot = std::env::var(sysroot_env).unwrap_or_else(|_| default_sysroot.to_string());
+    let data = fs::read_to_string(Path::new(&sysroot).join("SDKSettings.json")).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&data).ok()?;
+    doc.get("Version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Build the DT* (SDK / Xcode toolchain marker) Info.plist key block for an
+/// Apple bundle. These are what App Store Connect inspects to reject builds
+/// made with a beta/non-GM SDK ("Apps built with beta versions aren't
+/// allowed"). Resolution order per value:
+///   1. `PERRY_DT_*` env override (the build worker pins its GM toolchain),
+///   2. the cross sysroot's `SDKSettings.json` (version only),
+///   3. a public-GM constant fallback.
+///
+/// `platform_name` is the DTPlatformName / DTSDKName prefix
+/// (`iphoneos` / `appletvos` / `macosx` / `xros` / `watchos`). #4849.
+pub(super) fn apple_dt_plist_block(
+    platform_name: &str,
+    sysroot_env: &str,
+    default_sysroot: &str,
+) -> String {
+    let version = std::env::var("PERRY_DT_PLATFORM_VERSION")
+        .ok()
+        .or_else(|| sdk_version_from_sysroot(sysroot_env, default_sysroot))
+        .unwrap_or_else(|| DEFAULT_DT_PLATFORM_VERSION.to_string());
+    let sdk_build =
+        std::env::var("PERRY_DT_SDK_BUILD").unwrap_or_else(|_| DEFAULT_DT_SDK_BUILD.to_string());
+    // The platform build usually equals the SDK build; allow a separate
+    // override but default to the SDK build.
+    let platform_build =
+        std::env::var("PERRY_DT_PLATFORM_BUILD").unwrap_or_else(|_| sdk_build.clone());
+    let dt_xcode = std::env::var("PERRY_DT_XCODE").unwrap_or_else(|_| DEFAULT_DT_XCODE.to_string());
+    let dt_xcode_build = std::env::var("PERRY_DT_XCODE_BUILD")
+        .unwrap_or_else(|_| DEFAULT_DT_XCODE_BUILD.to_string());
+    format!(
+        r#"    <key>DTPlatformName</key>
+    <string>{platform_name}</string>
+    <key>DTPlatformVersion</key>
+    <string>{version}</string>
+    <key>DTSDKName</key>
+    <string>{platform_name}{version}</string>
+    <key>DTPlatformBuild</key>
+    <string>{platform_build}</string>
+    <key>DTSDKBuild</key>
+    <string>{sdk_build}</string>
+    <key>DTXcode</key>
+    <string>{dt_xcode}</string>
+    <key>DTXcodeBuild</key>
+    <string>{dt_xcode_build}</string>
+    <key>DTCompiler</key>
+    <string>com.apple.compilers.llvm.clang.1_0</string>
+"#
+    )
+}
+
 /// Create a watchOS `.app` bundle: copy the linked binary into the
 /// bundle, write `Info.plist` (CFBundleExecutable / CFBundleIdentifier
 /// / WKApplication), copy project asset directories, then run the
@@ -49,6 +159,9 @@ pub(super) fn bundle_for_watchos(
         .or_else(|| lookup_bundle_id_from_toml(input, "app"))
         .unwrap_or_else(|| crate::commands::sanitize::default_perry_bundle_id(exe_stem));
 
+    // #4849: read version/build_number from perry.toml (was hardcoded "1.0").
+    let (app_version, app_build_number) = read_apple_app_version(input);
+
     let info_plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -61,9 +174,9 @@ pub(super) fn bundle_for_watchos(
     <key>CFBundleName</key>
     <string>{exe_stem}</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>{app_build_number}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>{app_version}</string>
     <key>MinimumOSVersion</key>
     <string>10.0</string>
     <key>UIDeviceFamily</key>
@@ -147,6 +260,33 @@ pub(super) fn bundle_for_tvos(
         .or_else(|| lookup_bundle_id_from_toml(input, "app"))
         .unwrap_or_else(|| crate::commands::sanitize::default_perry_bundle_id(exe_stem));
 
+    // #4849: read version/build_number from perry.toml (was hardcoded "1.0",
+    // so every TestFlight re-upload was rejected with "bundle version must be
+    // higher than the previously uploaded version: '1.0'").
+    let (app_version, app_build_number) = read_apple_app_version(input);
+
+    // #4849: tvOS previously emitted no DT* keys at all, so App Store Connect
+    // rejected it ("must be built with the latest public GM SDK"). Emit the
+    // shared DT* block (SDK version from the sysroot, build strings from
+    // PERRY_DT_* env / GM fallback) and the CFBundleSupportedPlatforms /
+    // package-type keys the iOS bundler already carries.
+    let is_sim = matches!(target, Some("tvos-simulator"));
+    let plist_supported_platform = if is_sim {
+        "AppleTVSimulator"
+    } else {
+        "AppleTVOS"
+    };
+    let (dt_platform_name, dt_sysroot_env, dt_default_sysroot) = if is_sim {
+        (
+            "appletvsimulator",
+            "PERRY_TVOS_SIMULATOR_SYSROOT",
+            "/opt/apple-sysroot/tvos-simulator",
+        )
+    } else {
+        ("appletvos", "PERRY_TVOS_SYSROOT", "/opt/apple-sysroot/tvos")
+    };
+    let dt_block = apple_dt_plist_block(dt_platform_name, dt_sysroot_env, dt_default_sysroot);
+
     let info_plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -159,12 +299,20 @@ pub(super) fn bundle_for_tvos(
     <key>CFBundleName</key>
     <string>{exe_stem}</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>{app_build_number}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>{app_version}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
     <key>MinimumOSVersion</key>
     <string>17.0</string>
-    <key>UIDeviceFamily</key>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>{plist_supported_platform}</string>
+    </array>
+{dt_block}    <key>UIDeviceFamily</key>
     <array>
         <integer>3</integer>
     </array>
@@ -467,4 +615,84 @@ pub(super) fn bundle_for_visionos(
     }
 
     Ok((app_dir, bundle_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_apple_app_version_reads_project_table() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            "[project]\nversion = \"3.2.1\"\nbuild_number = 47\n",
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let input = src.join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+
+        let (version, build) = read_apple_app_version(&input);
+        assert_eq!(version, "3.2.1");
+        // build_number may be a TOML integer — must serialize to the string.
+        assert_eq!(build, "47");
+    }
+
+    #[test]
+    fn read_apple_app_version_defaults_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+        assert_eq!(
+            read_apple_app_version(&input),
+            ("1.0.0".to_string(), "1".to_string())
+        );
+    }
+
+    #[test]
+    fn dt_block_reads_version_from_sysroot_json() {
+        // A sysroot whose SDKSettings.json reports 26.2 must drive
+        // DTPlatformVersion + the DTSDKName suffix (so the plist matches the
+        // SDK that links the binary, not a stale hardcoded version).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("SDKSettings.json"),
+            r#"{"Version":"26.2","CanonicalName":"appletvos26.2"}"#,
+        )
+        .unwrap();
+        let block = apple_dt_plist_block(
+            "appletvos",
+            "PERRY_DT_TEST_SYSROOT_DOES_NOT_EXIST",
+            dir.path().to_str().unwrap(),
+        );
+        assert!(
+            block.contains("<key>DTPlatformVersion</key>\n    <string>26.2</string>"),
+            "expected sysroot version 26.2 in:\n{block}"
+        );
+        assert!(
+            block.contains("<key>DTSDKName</key>\n    <string>appletvos26.2</string>"),
+            "expected DTSDKName appletvos26.2 in:\n{block}"
+        );
+        assert!(block.contains("<key>DTPlatformName</key>\n    <string>appletvos</string>"));
+    }
+
+    #[test]
+    fn dt_block_falls_back_to_gm_constants_without_sysroot() {
+        let block = apple_dt_plist_block(
+            "appletvos",
+            "PERRY_DT_TEST_SYSROOT_DOES_NOT_EXIST",
+            "/nonexistent/sysroot/path",
+        );
+        assert!(block.contains(&format!(
+            "<key>DTPlatformVersion</key>\n    <string>{DEFAULT_DT_PLATFORM_VERSION}</string>"
+        )));
+        assert!(block.contains(&format!(
+            "<key>DTSDKBuild</key>\n    <string>{DEFAULT_DT_SDK_BUILD}</string>"
+        )));
+        assert!(block.contains(&format!(
+            "<key>DTXcodeBuild</key>\n    <string>{DEFAULT_DT_XCODE_BUILD}</string>"
+        )));
+    }
 }
