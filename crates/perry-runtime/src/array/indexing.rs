@@ -79,6 +79,7 @@ unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
     js_array_get_f64(proto_arr, index)
 }
 
+#[inline]
 unsafe fn array_sparse_index_property_get(arr: *const ArrayHeader, index: u32) -> Option<f64> {
     let arr = clean_arr_ptr(arr);
     if arr.is_null() || index < (*arr).capacity {
@@ -200,10 +201,13 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
         if index >= length {
             return array_oob_prototype_get(arr as usize, index);
         }
-        if let Some(value) = array_sparse_index_property_get(arr, index) {
-            return value;
-        }
+        // Sparse consult only when the index is past the dense backing store:
+        // `array_sparse_index_property_get` always returns None below capacity,
+        // so checking capacity first keeps the dense hot path call-free.
         if index >= (*arr).capacity {
+            if let Some(value) = array_sparse_index_property_get(arr, index) {
+                return value;
+            }
             return array_oob_prototype_get(arr as usize, index);
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
@@ -332,10 +336,13 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             // see `array_oob_prototype_get`). Common case is one atomic load.
             return array_oob_prototype_get(arr as usize, index);
         }
-        if let Some(value) = array_sparse_index_property_get(arr, index) {
-            return value;
-        }
+        // Capacity check first: the sparse helper always returns None below
+        // capacity, so the dense hot path stays call-free (#4648 put the
+        // sparse consult unconditionally first — +28% on 04_array_read).
         if index >= (*arr).capacity {
+            if let Some(value) = array_sparse_index_property_get(arr, index) {
+                return value;
+            }
             return array_oob_prototype_get(arr as usize, index);
         }
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
