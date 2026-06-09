@@ -20,16 +20,26 @@ use super::resources::{
 use super::targets::{compile_metallib_for_bundle, lookup_bundle_id_from_toml};
 use super::CompilationContext;
 
-// Fallback DT* (SDK / Xcode toolchain marker) values, used only when neither
-// an env override nor the cross sysroot supplies a value (#4849). These mirror
-// the public GM toolchain shipped in the worker's Apple sysroot. The *version*
-// is normally read from `<sysroot>/SDKSettings.json` so it tracks whatever SDK
-// actually links the binary; the build strings (not carried by the slim cross
-// sysroot) come from `PERRY_DT_*` env vars set by the build worker.
-const DEFAULT_DT_PLATFORM_VERSION: &str = "26.4";
-const DEFAULT_DT_SDK_BUILD: &str = "23E237";
-const DEFAULT_DT_XCODE: &str = "2640";
-const DEFAULT_DT_XCODE_BUILD: &str = "17E192";
+// Public-GM DT* (SDK / Xcode toolchain marker) fallbacks, used when neither a
+// `PERRY_DT_*` env override nor the cross sysroot supplies the value (#4849).
+// Verified GM toolchain on the build/sign worker (Xcode 26.3 / 17C529, SDK
+// 26.2) via `xcrun --show-sdk-build-version`. DTXcode/DTXcodeBuild are one
+// Xcode, so they're shared; the SDK *build* string differs per platform
+// (tvOS 23K50 ≠ iOS 23C57 ≠ macOS 25C58), hence the per-platform table.
+const DEFAULT_DT_XCODE: &str = "2630";
+const DEFAULT_DT_XCODE_BUILD: &str = "17C529";
+
+/// Per-platform `(sdk_version, sdk_build)` GM fallbacks. `platform_name` is the
+/// DTPlatformName (`appletvos` / `iphoneos` / `macosx` / simulator variants).
+fn gm_dt_defaults(platform_name: &str) -> (&'static str, &'static str) {
+    match platform_name {
+        "appletvos" | "appletvsimulator" => ("26.2", "23K50"),
+        "macosx" => ("26.2", "25C58"),
+        // iphoneos / iphonesimulator (and any future device platform) default
+        // to the iOS SDK build.
+        _ => ("26.2", "23C57"),
+    }
+}
 
 /// Read `[project].version` and `[project].build_number` from the nearest
 /// `perry.toml` (walking up to 5 parents from `input`). Defaults to
@@ -96,12 +106,13 @@ pub(super) fn apple_dt_plist_block(
     sysroot_env: &str,
     default_sysroot: &str,
 ) -> String {
+    let (default_version, default_sdk_build) = gm_dt_defaults(platform_name);
     let version = std::env::var("PERRY_DT_PLATFORM_VERSION")
         .ok()
         .or_else(|| sdk_version_from_sysroot(sysroot_env, default_sysroot))
-        .unwrap_or_else(|| DEFAULT_DT_PLATFORM_VERSION.to_string());
+        .unwrap_or_else(|| default_version.to_string());
     let sdk_build =
-        std::env::var("PERRY_DT_SDK_BUILD").unwrap_or_else(|_| DEFAULT_DT_SDK_BUILD.to_string());
+        std::env::var("PERRY_DT_SDK_BUILD").unwrap_or_else(|_| default_sdk_build.to_string());
     // The platform build usually equals the SDK build; allow a separate
     // override but default to the SDK build.
     let platform_build =
@@ -680,19 +691,24 @@ mod tests {
 
     #[test]
     fn dt_block_falls_back_to_gm_constants_without_sysroot() {
-        let block = apple_dt_plist_block(
+        // No sysroot → per-platform GM fallbacks. tvOS SDK build (23K50) must
+        // differ from iOS (23C57); the shared Xcode build is 17C529.
+        let tvos = apple_dt_plist_block(
             "appletvos",
             "PERRY_DT_TEST_SYSROOT_DOES_NOT_EXIST",
             "/nonexistent/sysroot/path",
         );
-        assert!(block.contains(&format!(
-            "<key>DTPlatformVersion</key>\n    <string>{DEFAULT_DT_PLATFORM_VERSION}</string>"
-        )));
-        assert!(block.contains(&format!(
-            "<key>DTSDKBuild</key>\n    <string>{DEFAULT_DT_SDK_BUILD}</string>"
-        )));
-        assert!(block.contains(&format!(
+        assert!(tvos.contains("<key>DTPlatformVersion</key>\n    <string>26.2</string>"));
+        assert!(tvos.contains("<key>DTSDKBuild</key>\n    <string>23K50</string>"));
+        assert!(tvos.contains(&format!(
             "<key>DTXcodeBuild</key>\n    <string>{DEFAULT_DT_XCODE_BUILD}</string>"
         )));
+
+        let ios = apple_dt_plist_block(
+            "iphoneos",
+            "PERRY_DT_TEST_SYSROOT_DOES_NOT_EXIST",
+            "/nonexistent/sysroot/path",
+        );
+        assert!(ios.contains("<key>DTSDKBuild</key>\n    <string>23C57</string>"));
     }
 }

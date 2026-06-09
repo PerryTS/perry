@@ -125,38 +125,9 @@ pub(super) fn build_ios_app_bundle(
             crate::commands::sanitize::default_perry_bundle_id(exe_stem)
         });
 
-    // Read perry.toml for version, build_number, name
-    let (toml_version, toml_build_number, _toml_name) =
-        (|| -> Option<(Option<String>, Option<String>, Option<String>)> {
-            let mut dir = input.canonicalize().ok()?;
-            for _ in 0..5 {
-                dir = dir.parent()?.to_path_buf();
-                let toml_path = dir.join("perry.toml");
-                if toml_path.exists() {
-                    let data = fs::read_to_string(&toml_path).ok()?;
-                    let doc: toml::Table = data.parse().ok()?;
-                    let project = doc.get("project")?.as_table()?;
-                    let version = project
-                        .get("version")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let build_number = project.get("build_number").and_then(|v| {
-                        v.as_integer()
-                            .map(|n| n.to_string())
-                            .or_else(|| v.as_str().map(|s| s.to_string()))
-                    });
-                    let name = project
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    return Some((version, build_number, name));
-                }
-            }
-            None
-        })()
-        .unwrap_or((None, None, None));
-    let app_version = toml_version.as_deref().unwrap_or("1.0.0");
-    let app_build_number = toml_build_number.as_deref().unwrap_or("1");
+    // Read perry.toml for version + build_number via the shared Apple helper
+    // (#4849: same logic the watchOS/tvOS/visionOS bundlers use).
+    let (app_version, app_build_number) = super::bundle_apple::read_apple_app_version(input);
 
     let encryption_exempt_plist = (|| -> Option<String> {
         let mut dir = input.canonicalize().ok()?;
@@ -225,11 +196,23 @@ pub(super) fn build_ios_app_bundle(
     } else {
         "iphoneos"
     };
-    let plist_sdk_name = if is_sim {
-        "iphonesimulator"
+    // #4849: emit the shared DT* block (SDK version from the sysroot, build
+    // strings from PERRY_DT_* env / GM fallback) instead of hardcoded beta SDK
+    // markers (was 26.4 / 23E237, which is neither the SDK that links the
+    // binary nor a current public-GM build).
+    let (dt_sysroot_env, dt_default_sysroot) = if is_sim {
+        (
+            "PERRY_IOS_SIMULATOR_SYSROOT",
+            "/opt/apple-sysroot/ios-simulator",
+        )
     } else {
-        "iphoneos"
+        ("PERRY_IOS_SYSROOT", "/opt/apple-sysroot/ios")
     };
+    let dt_block = super::bundle_apple::apple_dt_plist_block(
+        plist_platform_name,
+        dt_sysroot_env,
+        dt_default_sysroot,
+    );
     let info_plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -255,23 +238,7 @@ pub(super) fn build_ios_app_bundle(
 <string>17.0</string>
 <key>CFBundleSupportedPlatforms</key>
 <array><string>{plist_supported_platform}</string></array>
-<key>DTPlatformName</key>
-<string>{plist_platform_name}</string>
-<key>DTPlatformVersion</key>
-<string>26.4</string>
-<key>DTSDKName</key>
-<string>{plist_sdk_name}26.4</string>
-<key>DTPlatformBuild</key>
-<string>23E237</string>
-<key>DTSDKBuild</key>
-<string>23E237</string>
-<key>DTXcode</key>
-<string>2640</string>
-<key>DTXcodeBuild</key>
-<string>17E192</string>
-<key>DTCompiler</key>
-<string>com.apple.compilers.llvm.clang.1_0</string>
-<key>UIRequiredDeviceCapabilities</key>
+{dt_block}<key>UIRequiredDeviceCapabilities</key>
 <array><string>arm64</string></array>
 <key>CFBundleIcons</key>
 <dict>
