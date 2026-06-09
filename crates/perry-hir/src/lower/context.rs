@@ -149,6 +149,7 @@ impl LoweringContext {
             strict_mode_stack: Vec::new(),
             is_external_module: false,
             optional_require_try_depth: 0,
+            fn_ctor_env: super::fn_ctor_env::FnCtorEnv::default(),
         }
     }
 

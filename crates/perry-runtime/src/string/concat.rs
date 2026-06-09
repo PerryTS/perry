@@ -519,8 +519,10 @@ pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut Stri
             continue;
         }
 
-        // INT32_TAG = 0x7FFE — extract int from lower 32 bits.
-        if tag == 0x7FFE {
+        // INT32_TAG = 0x7FFE — extract int from lower 32 bits. A registered
+        // class id (Expr::ClassRef) stringifies via the slow path so it
+        // renders as function source, not its numeric id.
+        if tag == 0x7FFE && !crate::object::is_class_id_registered((bits & 0xFFFF_FFFF) as u32) {
             let v = (bits & 0xFFFF_FFFF) as u32 as i32;
             let len = if v >= 0 {
                 fast_itoa_u32(v as u32, &mut num_bufs[i])

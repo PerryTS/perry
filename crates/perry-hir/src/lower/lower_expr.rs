@@ -544,9 +544,20 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // 0.0 (perry-codegen/src/expr.rs Expr::GlobalGet arm).
                 let known_global = is_known_global_identifier_name(&name);
                 if !known_global && !ctx.unresolved_ident_as_global {
-                    return Ok(throw_reference_error_expr(
-                        "js_throw_reference_error_unresolved_get",
-                    ));
+                    // A global created at RUNTIME (sloppy `this.y = 2` with
+                    // `this` = globalThis inside a dynamic function) is
+                    // invisible to compile-time resolution — look it up on
+                    // globalThis first; only a true miss throws the spec
+                    // ReferenceError, with the identifier in the message.
+                    return Ok(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_global_get_or_throw_unresolved".to_string(),
+                            param_types: vec![Type::Any],
+                            return_type: Type::Any,
+                        }),
+                        args: vec![Expr::String(name.clone())],
+                        type_args: Vec::new(),
+                    });
                 }
                 if !known_global {
                     eprintln!(
@@ -1555,7 +1566,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         }
         ast::Expr::Object(obj) => expr_object::lower_object(ctx, obj),
         ast::Expr::This(_) => {
-            // Always use Expr::This - the codegen will handle it with ThisContext
+            // Module TOP-LEVEL `this` is Node-CJS `module.exports` — a fresh
+            // plain object, not `globalThis` (the oracle runs assembled test
+            // files as CommonJS). Function/class/with bodies keep dynamic
+            // `Expr::This` semantics, handled by codegen's ThisContext.
+            if ctx.scope_depth == 0
+                && ctx.current_class.is_none()
+                && ctx.with_env_stack.is_empty()
+                && !ctx.is_external_module
+            {
+                return Ok(Expr::ModuleTopThis);
+            }
             Ok(Expr::This)
         }
         ast::Expr::New(new_expr) => expr_new::lower_new(ctx, new_expr),

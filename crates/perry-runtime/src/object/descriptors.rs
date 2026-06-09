@@ -308,6 +308,23 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         );
                     }
                 }
+                // Class accessors reflect as accessor descriptors: instance
+                // `get x(){}` is an own property of `C.prototype`, a static
+                // accessor an own property of `C` itself. The raw vtable
+                // func_ptrs are wrapped as callable function values.
+                let accessor = if super::class_prototype_ref_id(obj_value).is_some() {
+                    super::class_registry::class_own_accessor_ptrs(class_id, &method_name)
+                } else {
+                    super::class_registry::class_own_static_accessor_ptrs(class_id, &method_name)
+                };
+                if let Some((g, s)) = accessor {
+                    return build_accessor_descriptor(
+                        super::class_registry::class_accessor_function_value(g, false),
+                        super::class_registry::class_accessor_function_value(s, true),
+                        false,
+                        true,
+                    );
+                }
                 if method_name == "constructor" || class_has_own_method(class_id, &method_name) {
                     let value = if method_name == "constructor"
                         && super::class_prototype_ref_id(obj_value).is_some()
@@ -687,6 +704,22 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         return build_data_descriptor(value, false, true, false);
                     }
                     return build_data_descriptor(f64::from_bits(value.bits()), true, true, true);
+                }
+            }
+        }
+
+        // A declared class's materialized `.prototype` object: instance
+        // accessors (`get x(){}`) live in the class vtable, not the object's
+        // fields, but they ARE own properties of the prototype.
+        if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
+            if let Some(ref name) = key_rust {
+                if let Some((g, s)) = super::class_registry::class_own_accessor_ptrs(cid, name) {
+                    return build_accessor_descriptor(
+                        super::class_registry::class_accessor_function_value(g, false),
+                        super::class_registry::class_accessor_function_value(s, true),
+                        false,
+                        true,
+                    );
                 }
             }
         }

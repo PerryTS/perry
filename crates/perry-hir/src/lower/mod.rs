@@ -63,6 +63,7 @@ mod pre_scan;
 pub(crate) use pre_scan::*;
 mod closure_analysis;
 mod const_fold_fn;
+mod fn_ctor_env;
 pub(crate) use closure_analysis::*;
 mod decorators;
 pub(crate) use decorators::*;

@@ -1864,6 +1864,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::EnvGetDynamic(..)
         | Expr::ProcessEnv => array_methods::lower(ctx, expr),
         Expr::GlobalThisExpr
+        | Expr::ModuleTopThis
         | Expr::DateToISOString(..)
         | Expr::DateToLocaleString(..)
         | Expr::FetchGetWithAuth { .. }

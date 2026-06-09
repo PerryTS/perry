@@ -90,6 +90,57 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     result
 }
 
+/// OrdinaryCallBindThis for the `call`/`apply`/`bind` entry points: box a
+/// primitive `thisArg` to its wrapper object ONCE, up front, so writes the
+/// callee makes through `this` land on the same object it later returns
+/// (`Function("this.touched = true; return this;").apply(1)` must yield a
+/// Number wrapper with `.touched`). Per-access boxing inside the callee
+/// created a fresh wrapper per `this` expression, losing the writes.
+///
+/// Boxing is gated on the CALLEE: only a *sloppy user* function coerces its
+/// `this`. A strict callee observes the raw primitive (`fun.call("")` under
+/// `"use strict"` must see `this instanceof String === false`), and built-in
+/// thunks (no registered source) do their own receiver coercion — handing
+/// them a pre-boxed wrapper would change generic-`this` method semantics.
+/// `undefined`/`null` pass through (sloppy global substitution happens
+/// elsewhere), as do existing objects.
+pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
+    let jv = crate::value::JSValue::from_bits(this_arg.to_bits());
+    if jv.is_undefined() || jv.is_null() || jv.is_pointer() {
+        return this_arg;
+    }
+    let tj = crate::value::JSValue::from_bits(target.to_bits());
+    if !tj.is_pointer() {
+        return this_arg;
+    }
+    let mut closure = tj.as_pointer::<ClosureHeader>();
+    // Look through bound-function wrappers to the ultimate target — the
+    // bound `this` is what reaches it, so its strictness decides.
+    for _ in 0..8 {
+        if closure.is_null() || unsafe { (*closure).type_tag } != CLOSURE_MAGIC {
+            return this_arg;
+        }
+        if unsafe { (*closure).func_ptr } as usize == BOUND_FUNCTION_FUNC_PTR as usize {
+            let inner = unsafe { js_closure_get_capture_f64(closure, 0) };
+            let ij = crate::value::JSValue::from_bits(inner.to_bits());
+            if !ij.is_pointer() {
+                return this_arg;
+            }
+            closure = ij.as_pointer::<ClosureHeader>();
+            continue;
+        }
+        break;
+    }
+    let func_ptr = get_valid_func_ptr(closure);
+    if func_ptr.is_null()
+        || crate::builtins::function_source_for_ptr(func_ptr as usize).is_none()
+        || crate::closure::is_registered_strict_function(func_ptr)
+    {
+        return this_arg;
+    }
+    crate::object::js_object_coerce(this_arg)
+}
+
 /// Read a callable's own `name` *property* as a Rust `String`, if present and a
 /// String value. Covers names installed by `Object.defineProperty(fn, "name",
 /// …)` and the `"bound …"` name a prior `.bind()` stores, neither of which is
@@ -123,8 +174,18 @@ pub unsafe extern "C" fn js_function_bind(
     use crate::value::JSValue;
 
     let target_jv = JSValue::from_bits(target_value.to_bits());
-    // Only closures can be bound; non-callable receivers fall back to
-    // returning the receiver unchanged (the prior conservative behavior).
+    // Spec brand check: `Function.prototype.bind` on a non-callable receiver
+    // throws a TypeError. Callable non-closures (small native function
+    // handles, proxies wrapping callables) keep the prior conservative
+    // pass-through — they can't be wrapped in a BOUND_FUNCTION closure yet.
+    if !crate::object::value_is_callable(target_value)
+        && crate::proxy::js_proxy_is_proxy(target_value) != 1
+    {
+        let message = b"Bind must be called on a function";
+        let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let err = crate::error::js_typeerror_new(msg);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
     if !target_jv.is_pointer() {
         return target_value;
     }
@@ -134,7 +195,7 @@ pub unsafe extern "C" fn js_function_bind(
     }
 
     let bound_this = if args_len >= 1 && !args_ptr.is_null() {
-        *args_ptr
+        coerce_call_this(target_value, *args_ptr)
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
@@ -158,10 +219,41 @@ pub unsafe extern "C" fn js_function_bind(
     js_closure_set_capture_f64(bound, 1, bound_this);
     js_closure_set_capture_ptr(bound, 2, bound_args_arr as i64);
 
-    // Spec `.length` = max(0, target.length - boundArgs.length).
-    let target_len = crate::closure::closure_length(target_closure).unwrap_or(0);
-    let bound_len = target_len.saturating_sub(bound_arg_count as u32);
-    crate::object::set_builtin_closure_length(bound as usize, bound_len);
+    // Spec `.length` = max(0, ToIntegerOrInfinity(Get(target, "length")) -
+    // boundArgs.length). An `Object.defineProperty(fn, "length", {value})`
+    // override (own dynamic prop) wins over the registered declared length,
+    // and the value may be NaN (→ 0), ±Infinity, or beyond int32.
+    let target_len_f =
+        match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
+            Some(v) => {
+                let jv = JSValue::from_bits(v.to_bits());
+                if jv.is_int32() {
+                    jv.as_int32() as f64
+                } else if jv.is_number() {
+                    jv.as_number()
+                } else {
+                    0.0
+                }
+            }
+            None => crate::closure::closure_length(target_closure).unwrap_or(0) as f64,
+        };
+    let target_len_f = if target_len_f.is_nan() {
+        0.0
+    } else {
+        target_len_f.trunc()
+    };
+    let bound_len = (target_len_f - bound_arg_count as f64).max(0.0);
+    if bound_len.is_finite() && bound_len <= u32::MAX as f64 {
+        crate::object::set_builtin_closure_length(bound as usize, bound_len as u32);
+    } else {
+        // +Infinity (or beyond u32): store as an own dynamic prop, which the
+        // `.length` read path prefers over the registered builtin length.
+        crate::closure::closure_set_dynamic_prop(
+            bound as usize,
+            "length",
+            f64::from_bits(JSValue::number(bound_len).bits()),
+        );
+    }
 
     // Spec `.name` = "bound " + targetName, where targetName is `Get(Target,
     // "name")` (the empty string when that is not a String). Read the target's
@@ -178,6 +270,20 @@ pub unsafe extern "C" fn js_function_bind(
         crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
     let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
     crate::closure::closure_set_dynamic_prop(bound as usize, "name", name_value);
+    // Spec attributes for a function's own `name`/`length`:
+    // { writable: false, enumerable: false, configurable: true }. Without
+    // these the dynamic-prop `name` slot defaults to enumerable and shows
+    // up in for-in / Object.keys (Test262 bind/instance-name*).
+    crate::object::set_builtin_property_attrs(
+        bound as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
+    crate::object::set_builtin_property_attrs(
+        bound as usize,
+        "length".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
 
     crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
     f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
@@ -215,6 +321,17 @@ pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static
     // read back sensibly (e.g. `"bind"`).
     if let Ok(name) = std::str::from_utf8(method) {
         crate::object::set_bound_native_closure_name(closure, name);
+        // Spec `.length` of the Function.prototype methods: call/bind take
+        // `(thisArg, ...)` → 1, apply `(thisArg, argArray)` → 2. Built-in
+        // methods are also not constructors — `new (f.apply)` is a TypeError
+        // and they expose no own `.prototype`.
+        let len = match name {
+            "apply" => 2,
+            "call" | "bind" => 1,
+            _ => 0,
+        };
+        crate::object::set_builtin_closure_length(closure as usize, len);
+        crate::object::set_builtin_closure_non_constructable(closure as usize);
     }
     crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *mut u8).bits())
@@ -1223,6 +1340,16 @@ pub unsafe extern "C" fn js_native_call_value(
         // TAG_UNDEFINED, TAG_NULL, or other NaN values are not callable
         return f64::from_bits(JSValue::undefined().bits());
     } else {
+        // A genuine double (bits outside the NaN-box tag space), a string, or
+        // a boolean is never callable — `fn.length()` must throw a TypeError,
+        // not get reinterpreted as a raw pointer. Raw-i64 heap pointers
+        // (top 16 bits zero) and INT32/class-ref/bigint tags keep the legacy
+        // pointer treatment below.
+        let bits = func_value.to_bits();
+        let top = (bits >> 48) & 0x7FFF;
+        if (top != 0 && (top & 0x7FF8) != 0x7FF8) || top == 0x7FFF || top == 0x7FFC {
+            throw_not_callable();
+        }
         // Try treating the value directly as a pointer (for i64 representation)
         func_value.to_bits() as *const ClosureHeader
     };
@@ -1253,6 +1380,13 @@ pub unsafe extern "C" fn js_native_call_value(
     // own registry path via `lookup_closure_rest` which already pads, so we
     // skip the arity lookup when the rest registry has an entry.
     let func_ptr = get_valid_func_ptr(closure);
+    // %Function.prototype% is itself callable: it accepts any arguments and
+    // returns `undefined` (ECMA-262 20.2.3). It is stored as a plain object,
+    // so it lands here with no valid func_ptr — short-circuit before the
+    // not-callable throw.
+    if func_ptr.is_null() && crate::object::is_function_prototype_object_value(func_value) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     let dispatch_args_len = if !func_ptr.is_null() && lookup_closure_rest(func_ptr).is_none() {
         match lookup_closure_arity(func_ptr) {
             Some(declared) if (declared as usize) > args_len => declared as usize,

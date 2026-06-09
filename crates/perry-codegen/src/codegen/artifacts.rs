@@ -1386,6 +1386,29 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         }
     }
+    // Strict-mode user functions (file-level `"use strict"` or body
+    // directive), for OrdinaryCallBindThis in `call`/`apply`/`bind`: a
+    // strict callee must observe the raw primitive `thisArg`, a sloppy one
+    // gets it boxed. Same two symbol forms as the generator registries.
+    let mut user_fn_wrapper_strict: std::collections::HashSet<String> = hir
+        .functions
+        .iter()
+        .filter(|f| f.is_strict)
+        .filter_map(|f| {
+            func_names
+                .get(&f.id)
+                .map(|name| format!("__perry_wrap_{}", name))
+        })
+        .collect();
+    for (func_id, expr) in closures {
+        if let perry_hir::Expr::Closure { is_strict, .. } = expr {
+            if *is_strict {
+                user_fn_wrapper_strict
+                    .insert(format!("perry_closure_{}__{}", module_prefix, func_id));
+            }
+        }
+    }
+
     // #3664: async-generator wrapper symbols, identified by the func_ids the
     // generator transform recorded (it cleared `is_async` before we get here,
     // so the body shape alone can't tell async generators from sync ones).
@@ -1541,6 +1564,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_wrapper_async,
         &user_fn_wrapper_generator,
         &user_fn_wrapper_async_generator,
+        &user_fn_wrapper_strict,
         &user_fn_display_names,
         &user_fn_source,
     );

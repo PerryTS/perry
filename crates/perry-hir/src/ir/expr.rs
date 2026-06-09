@@ -582,6 +582,11 @@ pub enum Expr {
     // value is not a function` at module init and the import
     // resolves to undefined. Followup to #957 / PR #959.
     GlobalThisExpr,
+    /// `this` in module top-level code. Node runs the assembled test files
+    /// as CJS, where top-level `this` is `module.exports` — a fresh plain
+    /// object distinct from `globalThis`. Lowered separately from
+    /// `Expr::This` so function-body `this` semantics are untouched.
+    ModuleTopThis,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,
     // Process current working directory: process.cwd() -> string

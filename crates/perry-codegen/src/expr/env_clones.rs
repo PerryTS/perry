@@ -58,6 +58,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // this same singleton for `globalThis.process.env` etc.
             Ok(ctx.block().call(DOUBLE, "js_get_global_this", &[]))
         }
+        Expr::ModuleTopThis => {
+            // CJS-style module top-level `this`: a lazily-allocated plain
+            // object (the module's `exports` stand-in), NOT `globalThis`.
+            Ok(ctx.block().call(DOUBLE, "js_module_top_this", &[]))
+        }
         Expr::DateToISOString(d) => {
             let v = lower_expr(ctx, d)?;
             let blk = ctx.block();

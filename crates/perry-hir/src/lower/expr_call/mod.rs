@@ -220,6 +220,9 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     // native function, and fold the `(0, eval)('this')` globalThis idiom.
     // Runs after the `Function('return this')()` fold; before the Phase 0
     // refusal so const-foldable sites compile instead of being classified.
+    if let Some(expr) = super::const_fold_fn::try_eval_function_member_call_fold(ctx, call)? {
+        return Ok(expr);
+    }
     if let Some(expr) = super::const_fold_fn::try_eval_function_call_fold(ctx, call)? {
         return Ok(expr);
     }

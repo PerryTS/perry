@@ -175,6 +175,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_length", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_arrow_function", VOID, &[PTR]);
+    module.declare_function("js_register_closure_strict_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_async_generator_function", VOID, &[PTR]);
@@ -1198,6 +1199,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_with_implicit_read", DOUBLE, &[DOUBLE, DOUBLE]);
     // Iterator-protocol result validation (for-of lazy loop).
     module.declare_function("js_iterator_result_validate", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_global_get_or_throw_unresolved", DOUBLE, &[DOUBLE]);
     module.declare_function("js_throw_reference_error_this_before_super", DOUBLE, &[]);
     module.declare_function("js_throw_reference_error_super_delete", DOUBLE, &[]);
     module.declare_function(

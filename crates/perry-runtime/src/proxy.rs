@@ -244,6 +244,30 @@ pub(crate) fn is_array_proxy_step(value: f64) -> Option<f64> {
     Some(target)
 }
 
+/// Whether a Proxy value's (possibly nested) [[ProxyTarget]] is callable —
+/// the predicate behind `typeof proxyOfFn === "function"` and
+/// `Function.prototype.toString` accepting a proxy receiver. A revoked
+/// proxy's recorded target is retained, so callability survives revocation
+/// (per spec, `typeof` of a revoked proxy is unchanged).
+pub(crate) fn proxy_wraps_callable(value: f64) -> bool {
+    let mut v = value;
+    for _ in 0..32 {
+        match lookup(v) {
+            Some(id) => {
+                v = PROXIES.with(|p| {
+                    p.borrow()
+                        .get(id as usize)
+                        .and_then(|o| o.as_ref())
+                        .map(|e| e.target)
+                        .unwrap_or(f64::from_bits(TAG_UNDEFINED))
+                });
+            }
+            None => return crate::object::value_is_callable(v),
+        }
+    }
+    false
+}
+
 /// Return the proxy's target (for Proxy.revocable.proxy revocation checks).
 #[no_mangle]
 pub extern "C" fn js_proxy_target(proxy_boxed: f64) -> f64 {

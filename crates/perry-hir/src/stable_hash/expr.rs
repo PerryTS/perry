@@ -99,6 +99,7 @@ impl SH for Expr {
             Expr::EnvGetDynamic(e) => { tag(h, 54); e.as_ref().hash(h); }
             Expr::ProcessEnv => tag(h, 55),
             Expr::GlobalThisExpr => tag(h, 474),
+            Expr::ModuleTopThis => tag(h, 4741),
             Expr::ProcessUptime => tag(h, 56),
             Expr::ProcessCwd => tag(h, 57),
             Expr::ProcessArgv => tag(h, 58),

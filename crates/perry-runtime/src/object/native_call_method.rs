@@ -1427,6 +1427,17 @@ pub unsafe extern "C" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
+            // `fn.length()` / `fn.name()` — the own slots hold a number /
+            // string, never a callable; calling one is a TypeError
+            // (`f.length is not a function`), not a read.
+            if matches!(method_name, "length" | "name") {
+                crate::error::js_throw_type_error_not_a_function(
+                    std::ptr::null(),
+                    0,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                );
+            }
         }
     }
 
@@ -4298,7 +4309,7 @@ pub unsafe extern "C" fn js_native_call_method(
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
-                    *args_ptr
+                    crate::closure::coerce_call_this(object, *args_ptr)
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
@@ -4353,7 +4364,7 @@ pub unsafe extern "C" fn js_native_call_method(
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
-                    *args_ptr
+                    crate::closure::coerce_call_this(object, *args_ptr)
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
@@ -4363,22 +4374,34 @@ pub unsafe extern "C" fn js_native_call_method(
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
                 let args_arr_jsval = JSValue::from_bits(args_arr_val.to_bits());
-                let buf: Vec<f64> = if args_arr_jsval.is_pointer() {
-                    let raw_ptr = (args_arr_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                // The argArray may arrive NaN-boxed (POINTER_TAG) or as a
+                // legacy RAW i64 pointer bit-cast to f64 (a function's
+                // synthetic `arguments` array local) — top 16 bits zero.
+                let args_arr_bits = args_arr_val.to_bits();
+                let arr_raw: usize = if args_arr_jsval.is_pointer() {
+                    (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+                } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
+                    args_arr_bits as usize
+                } else {
+                    0
+                };
+                // Spec CreateListFromArrayLike: a non-nullish, non-object
+                // argArray (`fn.apply(null, true)` / `NaN` / `'1,2,3'`) is a
+                // TypeError. null/undefined mean "no arguments".
+                if arr_raw == 0 && !args_arr_jsval.is_undefined() && !args_arr_jsval.is_null() {
+                    throw_type_error_message(b"CreateListFromArrayLike called on non-object");
+                }
+                let buf: Vec<f64> = if arr_raw != 0 {
                     if let Some(values) = crate::object::arguments_object_to_vec(
-                        raw_ptr as *const crate::object::ObjectHeader,
+                        arr_raw as *const crate::object::ObjectHeader,
                     ) {
                         values
                     } else {
-                        let arr_ptr = raw_ptr as *const crate::array::ArrayHeader;
-                        if arr_ptr.is_null() {
-                            Vec::new()
-                        } else {
-                            let n = crate::array::js_array_length(arr_ptr) as usize;
-                            (0..n)
-                                .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
-                                .collect()
-                        }
+                        let arr_ptr = arr_raw as *const crate::array::ArrayHeader;
+                        let n = crate::array::js_array_length(arr_ptr) as usize;
+                        (0..n)
+                            .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
+                            .collect()
                     }
                 } else {
                     Vec::new()
@@ -4403,6 +4426,19 @@ pub unsafe extern "C" fn js_native_call_method(
 
         // Common string methods on string values
         "toString" => {
+            // A class REFERENCE (INT32-tagged registered class id) is a
+            // function value: `C.toString()` must produce function source,
+            // not the numeric rendering of its class id ("1"). Perry doesn't
+            // retain class source text, so emit the NativeFunction form —
+            // Test262's assertToStringOrNativeFunction accepts it.
+            if super::class_prototype_ref_id(object).is_none() {
+                if let Some(cid) = super::native_module::class_ref_id(object) {
+                    let name = super::class_registry::class_name_for_id(cid).unwrap_or_default();
+                    let s = format!("function {name}() {{ [native code] }}");
+                    let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                    return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+                }
+            }
             if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
                 let payload_jsv = JSValue::from_bits(payload.to_bits());
                 match crate::builtins::boxed_primitive_to_string_tag(object) {

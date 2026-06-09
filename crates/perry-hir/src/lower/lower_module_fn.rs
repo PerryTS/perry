@@ -349,6 +349,11 @@ pub fn lower_module_full(
     }
     let mut module = Module::new(name);
 
+    // Pre-scan for `new Function` / `Function(...)` constant-argument
+    // resolution: single-assignment module vars, `toString`-bearing object
+    // literals, and counter vars (see `fn_ctor_env`).
+    ctx.fn_ctor_env = super::fn_ctor_env::build_fn_ctor_env(ast_module);
+
     // Pre-scan for WeakRef/FinalizationRegistry variable declarations so subsequent
     // method-call lowering (`x.deref()`, `x.register(...)`, `x.unregister(...)`) can
     // route via the dedicated HIR variants without relying on type inference.

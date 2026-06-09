@@ -381,6 +381,80 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         }
         break;
     }
+    // Every function's [[Prototype]] is %Function.prototype% — an expando
+    // installed there (`Function.prototype.property = 12`) must be readable
+    // through any closure (`fn.property`, `boundFn.property`,
+    // `Function.indicator`). Synthesized own slots (`prototype`/`name`/
+    // `length`/`caller`/`arguments`/`constructor`) never come from the
+    // expando walk; excluding `prototype` also breaks the recursion through
+    // `builtin_prototype_value` (which reads `Function.prototype` via this
+    // very function). A re-entrancy guard covers the rest of that resolution
+    // cycle.
+    if !matches!(
+        prop,
+        "prototype" | "name" | "length" | "caller" | "arguments" | "constructor"
+    ) {
+        thread_local! {
+            static IN_FN_PROTO_FALLBACK: std::cell::Cell<bool> =
+                const { std::cell::Cell::new(false) };
+        }
+        let reentrant = IN_FN_PROTO_FALLBACK.with(|c| c.replace(true));
+        if !reentrant {
+            let proto_val = crate::object::builtin_prototype_value("Function");
+            IN_FN_PROTO_FALLBACK.with(|c| c.set(false));
+            let proto_jv = crate::value::JSValue::from_bits(proto_val.to_bits());
+            if proto_jv.is_pointer() {
+                let proto_ptr = (proto_jv.bits() & crate::value::POINTER_MASK) as usize;
+                // USER expandos walk through (a `Function.prototype.x = …`
+                // write records no attrs), as do the spec call-routing
+                // methods `apply`/`call`/`bind` (so an OBJECT whose proto
+                // chain contains a function resolves `obj.apply` —
+                // S15.3.4.3_A1_T1). Every OTHER method installed at init
+                // (`hasOwnProperty`, `propertyIsEnumerable`, …) stays
+                // excluded: serving those generic object thunks to closure
+                // reads would hijack the dedicated closure-aware dispatch
+                // arms.
+                let routed_method = matches!(prop, "apply" | "call" | "bind");
+                if proto_ptr != 0
+                    && proto_ptr != ptr
+                    && !is_closure_ptr(proto_ptr)
+                    && (routed_method
+                        || crate::object::get_property_attrs(proto_ptr, prop).is_none())
+                {
+                    // A defineProperty accessor on Function.prototype
+                    // (`{ get: () => 12 }`) is invoked with the reading
+                    // closure as receiver.
+                    if !routed_method {
+                        if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+                            if acc.get != 0 {
+                                let getter = (acc.get & crate::value::POINTER_MASK)
+                                    as *const crate::closure::ClosureHeader;
+                                if !getter.is_null() {
+                                    let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+                                    let prev = crate::object::js_implicit_this_set(receiver);
+                                    let result = crate::closure::js_closure_call0(getter);
+                                    crate::object::js_implicit_this_set(prev);
+                                    return result;
+                                }
+                            }
+                            return f64::from_bits(crate::value::TAG_UNDEFINED);
+                        }
+                    }
+                    unsafe {
+                        let key_hdr =
+                            crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+                        let v = crate::object::js_object_get_field_by_name(
+                            proto_ptr as *const crate::object::ObjectHeader,
+                            key_hdr as *const crate::StringHeader,
+                        );
+                        if !v.is_undefined() {
+                            return f64::from_bits(v.bits());
+                        }
+                    }
+                }
+            }
+        }
+    }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -397,6 +471,16 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
             keys.remove(prop);
         }
     }
+}
+
+/// Read an OWN dynamic property without any prototype/builtin fallback.
+/// Used by `bind` to honor an `Object.defineProperty(fn, "length", …)`
+/// override before falling back to the registered declared length.
+pub fn closure_get_own_dynamic_prop(ptr: usize, prop: &str) -> Option<f64> {
+    if let Ok(props) = get_closure_props().lock() {
+        return props.get(&ptr).and_then(|m| m.get(prop).copied());
+    }
+    None
 }
 
 /// #3655: remove an OWN user dynamic property from a closure (used by

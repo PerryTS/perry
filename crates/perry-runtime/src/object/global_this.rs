@@ -17,6 +17,34 @@ thread_local! {
     static THREAD_GLOBAL_THIS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    /// Module top-level `this` (Node-CJS `module.exports` stand-in) — a
+    /// lazily-allocated plain object distinct from `globalThis`. See
+    /// `Expr::ModuleTopThis`.
+    static THREAD_MODULE_TOP_THIS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// `this` in module top-level code. Node runs files as CommonJS where
+/// top-level `this` is `module.exports`: a fresh ordinary object, NOT the
+/// global. One object per thread (Perry links the whole program into one
+/// binary; the test corpus is single-module).
+#[no_mangle]
+pub extern "C" fn js_module_top_this() -> f64 {
+    let cached = THREAD_MODULE_TOP_THIS.with(|c| c.get());
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    let obj = super::alloc::js_object_alloc(0, 0);
+    let val = crate::value::js_nanbox_pointer(obj as i64);
+    THREAD_MODULE_TOP_THIS.with(|c| c.set(val.to_bits()));
+    // Keep it alive across GCs — the cell is a raw bits cache, not a scanned
+    // root, so register the slot address as a global root once.
+    crate::gc::runtime_write_barrier_root_heap_word(obj as u64);
+    let slot = THREAD_MODULE_TOP_THIS.with(|c| c.as_ptr() as usize);
+    crate::gc::js_gc_register_global_root(slot as i64);
+    val
+}
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
@@ -623,6 +651,21 @@ pub(crate) extern "C" fn uri_error_constructor_call_thunk(
     error_constructor_call(crate::error::ERROR_KIND_URI_ERROR, message)
 }
 
+/// Whether `value` is the %Function.prototype% intrinsic object. It is the
+/// one ordinary-object-shaped value that is itself a Function: callable
+/// (returns `undefined`), tagged `[object Function]`, but NOT a constructor.
+/// Only consulted on slow paths (failed call dispatch, `Object.prototype.
+/// toString`), so the per-call re-resolution through the global registry is
+/// fine — and safer than caching a raw pointer across GC cycles.
+pub(crate) fn is_function_prototype_object_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let proto = builtin_prototype_value("Function");
+    proto.to_bits() == value.to_bits()
+}
+
 pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
     let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
     let ctor_bits = ctor.to_bits();
@@ -1198,6 +1241,7 @@ extern "C" fn function_prototype_call_thunk(
     } else {
         (args.as_ptr(), args.len())
     };
+    let this_arg = crate::closure::coerce_call_this(target, this_arg);
     let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
     let result = unsafe { crate::closure::js_native_call_value(target, args_ptr, args_len) };
     IMPLICIT_THIS.with(|c| c.set(prev_this));
@@ -1544,6 +1588,7 @@ extern "C" fn function_prototype_apply_thunk(
     unsafe {
         let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
         let args = function_apply_args(args_array);
+        let this_arg = crate::closure::coerce_call_this(target, this_arg);
         let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
         let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
         IMPLICIT_THIS.with(|c| c.set(prev_this));
@@ -1570,6 +1615,27 @@ extern "C" fn function_prototype_to_string_thunk(
         0
     };
     if raw == 0 || !crate::closure::is_closure_ptr(raw) {
+        // A Proxy whose target is callable is itself callable; its source is
+        // never introspectable, so the spec mandates the NativeFunction form.
+        let this_val = f64::from_bits(this_bits);
+        if crate::proxy::js_proxy_is_proxy(this_val) == 1
+            && crate::proxy::proxy_wraps_callable(this_val)
+        {
+            let s = "function () { [native code] }";
+            let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+        }
+        // A class reference (INT32-tagged registered class id) is a function
+        // value; Perry retains no class source, so emit the NativeFunction
+        // form with the class name.
+        if super::class_prototype_ref_id(this_val).is_none() {
+            if let Some(cid) = super::native_module::class_ref_id(this_val) {
+                let name = super::class_registry::class_name_for_id(cid).unwrap_or_default();
+                let s = format!("function {name}() {{ [native code] }}");
+                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
+            }
+        }
         super::object_ops::throw_object_type_error(
             b"Function.prototype.toString requires that 'this' be a Function",
         );

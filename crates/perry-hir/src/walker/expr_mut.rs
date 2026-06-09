@@ -36,6 +36,7 @@ where
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
         | Expr::GlobalThisExpr
+        | Expr::ModuleTopThis
         | Expr::ProcessUptime
         | Expr::ProcessCwd
         | Expr::ProcessArgv

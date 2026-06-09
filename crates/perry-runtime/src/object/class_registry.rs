@@ -260,6 +260,24 @@ pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
         .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
 }
 
+/// Reverse lookup: which declared class's `.prototype` is this heap object?
+/// Used by `Object.getOwnPropertyDescriptor(C.prototype, name)` to surface
+/// vtable accessors as own properties of the prototype object. Linear scan —
+/// the table is small (one entry per materialized declared-class prototype)
+/// and this only runs on the reflection slow path.
+pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
+    if ptr == 0 {
+        return None;
+    }
+    CLASS_DECL_PROTOTYPE_OBJECTS
+        .read()
+        .ok()?
+        .as_ref()?
+        .iter()
+        .find(|(_, &p)| p == ptr)
+        .map(|(k, _)| *k)
+}
+
 pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
     if let Ok(read) = CLASS_DECL_PROTOTYPE_OBJECTS.read() {
         if let Some(map) = read.as_ref() {
@@ -1453,6 +1471,12 @@ pub unsafe extern "C" fn js_new_function_construct(
     }
     if is_non_constructable_builtin_function_value(func_value) {
         throw_non_constructable_builtin_function();
+    }
+    // `new Function.prototype` — %Function.prototype% is callable but NOT a
+    // constructor (ECMA-262 20.2.3: "does not have a [[Construct]] internal
+    // method").
+    if super::global_this::is_function_prototype_object_value(func_value) {
+        super::object_ops::throw_object_type_error(b"is not a constructor");
     }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
         if module == "sqlite"
@@ -3284,6 +3308,89 @@ pub unsafe extern "C" fn js_register_class_method(
         },
     );
     VTABLE_GEN.fetch_add(1, Ordering::Release);
+}
+
+/// Own (non-inherited) instance accessor func_ptrs for `class_id` + `name`:
+/// `(getter_ptr, setter_ptr)`, each 0 when that half is absent. Consulted by
+/// `Object.getOwnPropertyDescriptor(C.prototype, name)`.
+pub(crate) fn class_own_accessor_ptrs(class_id: u32, name: &str) -> Option<(usize, usize)> {
+    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+    let reg = guard.as_ref()?;
+    let vt = reg.get(&class_id)?;
+    let g = vt.getters.get(name).copied().unwrap_or(0);
+    let s = vt.setters.get(name).copied().unwrap_or(0);
+    if g == 0 && s == 0 {
+        None
+    } else {
+        Some((g, s))
+    }
+}
+
+/// Own static accessor func_ptrs for the class *constructor*. Mirrors
+/// `class_own_accessor_ptrs` against `CLASS_STATIC_ACCESSORS`.
+pub(crate) fn class_own_static_accessor_ptrs(class_id: u32, name: &str) -> Option<(usize, usize)> {
+    let guard = CLASS_STATIC_ACCESSORS.read().ok()?;
+    let reg = guard.as_ref()?;
+    let pair = reg.get(&class_id)?.get(name).copied()?;
+    if pair.0 == 0 && pair.1 == 0 {
+        None
+    } else {
+        Some(pair)
+    }
+}
+
+/// Trampoline giving a raw vtable getter func_ptr (`fn(this) -> f64`) the
+/// closure calling convention. The receiver comes from `IMPLICIT_THIS`, set
+/// by the method-call dispatch the closure value travels through.
+extern "C" fn class_accessor_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
+    let raw = unsafe { crate::closure::js_closure_get_capture_ptr(closure, 0) } as usize;
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let this = crate::object::js_implicit_this_get();
+    let f: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(raw) };
+    f(this)
+}
+
+/// Trampoline for a raw vtable setter func_ptr (`fn(this, value) -> f64`).
+extern "C" fn class_accessor_setter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let raw = unsafe { crate::closure::js_closure_get_capture_ptr(closure, 0) } as usize;
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let this = crate::object::js_implicit_this_get();
+    let f: extern "C" fn(f64, f64) -> f64 = unsafe { std::mem::transmute(raw) };
+    f(this, value)
+}
+
+/// Wrap a raw class accessor func_ptr as a callable function VALUE for
+/// descriptor reflection (`Object.getOwnPropertyDescriptor(C.prototype,
+/// "x").get`). Built-in-shaped: `.length` 0/1, no `.prototype`, native
+/// `toString` form.
+pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> f64 {
+    if raw_ptr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let thunk = if is_setter {
+        class_accessor_setter_thunk as *const u8
+    } else {
+        class_accessor_getter_thunk as *const u8
+    };
+    let closure = crate::closure::js_closure_alloc(thunk, 1);
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    unsafe { crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64) };
+    super::native_module::set_builtin_closure_length(
+        closure as usize,
+        if is_setter { 1 } else { 0 },
+    );
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 /// Register a class getter in the vtable registry.

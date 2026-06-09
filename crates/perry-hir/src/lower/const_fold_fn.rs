@@ -49,8 +49,24 @@ fn synth_function_syntax_error(
             surface.label()
         );
     }
-    let src = "(function () { throw new SyntaxError(\"Function constructor: invalid function body\"); })();\n";
-    let module = perry_parser::parse_typescript(src, "<new Function syntaxerror>.cjs")
+    synth_throwing_iife(
+        ctx,
+        "throw new SyntaxError(\"Function constructor: invalid function body\");",
+        span,
+    )
+}
+
+/// Lower an IIFE-in-value-position that executes `throw_stmt` — used both
+/// for the runtime-`SyntaxError` path above and for a constant-`toString`
+/// argument that throws (`new Function({toString(){throw 1}})` must throw
+/// `1` when the call site is evaluated, before any parsing).
+fn synth_throwing_iife(
+    ctx: &mut LoweringContext,
+    throw_stmt: &str,
+    span: swc_common::Span,
+) -> Result<Expr> {
+    let src = format!("(function () {{ {throw_stmt} }})();\n");
+    let module = perry_parser::parse_typescript(&src, "<new Function syntaxerror>.cjs")
         .map_err(|e| anyhow::Error::new(LowerError::new(format!("internal: {e}"), span)))?;
     let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) =
         module.body.first().ok_or_else(|| {
@@ -75,7 +91,7 @@ fn synth_function_syntax_error(
 /// invalid identifier anyway, so the synth fails to parse and both runtimes
 /// reject); in a *body* slot the literal statement is never executed by these
 /// tests.
-fn js_number_to_string(n: f64) -> String {
+pub(crate) fn js_number_to_string(n: f64) -> String {
     if n.is_nan() {
         return "NaN".to_string();
     }
@@ -135,23 +151,64 @@ pub(crate) fn try_const_fold_function_construct(
     surface: EvalSurface,
     span: swc_common::Span,
 ) -> Result<Option<Expr>> {
+    try_const_fold_function_construct_kind(
+        ctx,
+        args,
+        surface,
+        span,
+        super::fn_ctor_env::DynFnCtorKind::Plain,
+    )
+}
+
+/// Kind-aware core of the fold: `AsyncFunction(...)` assembles
+/// `async function anonymous(...)`, `GeneratorFunction(...)` a
+/// `function* anonymous(...)`, etc.
+pub(crate) fn try_const_fold_function_construct_kind(
+    ctx: &mut LoweringContext,
+    args: &[ast::ExprOrSpread],
+    surface: EvalSurface,
+    span: swc_common::Span,
+    kind: super::fn_ctor_env::DynFnCtorKind,
+) -> Result<Option<Expr>> {
     // A spread argument can't be expanded into a static param/body list.
     if args.iter().any(|a| a.spread.is_some()) {
         return Ok(None);
     }
-    // Every argument must coerce to a compile-time-constant string the way
-    // Node's `ToString` would (params *and* body). This covers string and
-    // template literals plus the primitive literals Test262 passes —
-    // `null` / `undefined` / `void 0` / numbers / booleans — so
-    // `new Function("a,b,c", null)` folds (body `null` → `"null"`) instead
-    // of being refused. Objects / identifiers / calls stay non-constant and
-    // bail to the runtime path (keeping throwing-`toString` cases there).
+    // Every argument must resolve to a compile-time-constant string the way
+    // Node's `ToString` would (params *and* body): literals, substitution-free
+    // templates, `null`/`undefined`/`void 0`/numbers/booleans, plus —
+    // via the pre-scanned `fn_ctor_env` — single-assignment module variables,
+    // object literals with a constant `toString`, and `Object(<lit>)`
+    // wrappers. ToString runs left-to-right; an argument whose `toString`
+    // throws a constant aborts the sequence and the call site lowers to an
+    // IIFE that throws that value (`new Function({toString(){throw 1}})`
+    // throws `1`). Anything outside the subset bails to the runtime path.
     let mut consts: Vec<String> = Vec::with_capacity(args.len());
+    let mut thrown: Option<super::fn_ctor_env::ConstVal> = None;
+    ctx.fn_ctor_env.pending_side_effects.clear();
     for a in args {
-        match coerce_arg_to_string(&a.expr) {
-            Some(s) => consts.push(s),
+        match resolve_fn_ctor_arg(ctx, &a.expr) {
+            Some(super::fn_ctor_env::ResolvedArg::Str(s)) => consts.push(s),
+            Some(super::fn_ctor_env::ResolvedArg::Thrown(v)) => {
+                thrown = Some(v);
+                break;
+            }
             None => return Ok(None),
         }
+    }
+    if let Some(v) = thrown {
+        if eval_diag_enabled() {
+            eprintln!(
+                "[perry-eval-diag] {} -> constant toString throws at runtime (#1679)",
+                surface.label()
+            );
+        }
+        // Replay the toString side effects (`p = 1`) before throwing — the
+        // synthesized IIFE lowers in the enclosing scope, so the assignments
+        // resolve to the same module-level bindings.
+        let effects = ctx.fn_ctor_env.pending_side_effects.join(" ");
+        let stmt = format!("{effects} throw {};", v.to_js_literal());
+        return synth_throwing_iife(ctx, stmt.trim_start(), span).map(Some);
     }
 
     // Node treats the last argument as the body and every earlier argument
@@ -159,12 +216,21 @@ pub(crate) fn try_const_fold_function_construct(
     // 'return a+b')` ≡ `new Function('a, b', 'return a+b')`. Joining the
     // param args with `,` reproduces either spelling.
     let (body_src, params_src) = match consts.split_last() {
-        Some((body, params)) => (body.clone(), params.join(", ")),
+        Some((body, params)) => (body.clone(), params.join(",")),
         // `new Function()` / `Function()` — empty params, empty body.
         None => (String::new(), String::new()),
     };
 
-    let synth = format!("(function ({params_src}) {{\n{body_src}\n}});\n");
+    // Assemble the exact source text the spec's CreateDynamicFunction
+    // prescribes: newlines around the body and *before the closing paren*
+    // so a `//` comment in the params or body can't swallow a delimiter.
+    // This text is also what `fn.toString()` must return, and the function's
+    // name is `anonymous`.
+    let assembled = format!(
+        "{} anonymous({params_src}\n) {{\n{body_src}\n}}",
+        kind.prefix()
+    );
+    let synth = format!("({assembled});\n");
     // A `new Function(...)` / `Function(...)` whose params+body don't form a
     // syntactically valid function is a *runtime* `SyntaxError` in JS — the
     // parse happens inside the constructor call, not at our compile time.
@@ -182,6 +248,14 @@ pub(crate) fn try_const_fold_function_construct(
     let Some(fn_expr) = extract_fn_expr(&module) else {
         return synth_function_syntax_error(ctx, surface, span).map(Some);
     };
+
+    // Early errors SWC's parser doesn't surface: a `"use strict"` directive
+    // prologue makes duplicate or `eval`/`arguments` parameter names a
+    // SyntaxError, and a private name (`o.#f`) outside any class body is a
+    // SyntaxError regardless of mode (AllPrivateIdentifiersValid).
+    if fn_ctor_strict_param_early_error(fn_expr) || fn_body_has_stray_private_name(fn_expr) {
+        return synth_function_syntax_error(ctx, surface, span).map(Some);
+    }
 
     let outer_strict = ctx.current_strict;
     ctx.current_strict = false;
@@ -212,6 +286,12 @@ pub(crate) fn try_const_fold_function_construct(
         }
     };
 
+    // `fn.toString()` must return the spec-assembled source, not a slice of
+    // the enclosing module at the synthetic span (which would be garbage).
+    if let Expr::Closure { func_id, .. } = &lowered {
+        ctx.closure_source_text.insert(*func_id, assembled);
+    }
+
     if eval_diag_enabled() {
         eprintln!(
             "[perry-eval-diag] {} -> const-foldable: compiled to native function (#1679)",
@@ -219,6 +299,191 @@ pub(crate) fn try_const_fold_function_construct(
         );
     }
     Ok(Some(lowered))
+}
+
+/// A `"use strict"` directive prologue in a dynamic function's body makes
+/// duplicate parameter names and parameters named `eval` / `arguments`
+/// SyntaxErrors — early errors SWC's parser accepts in sloppy mode.
+fn fn_ctor_strict_param_early_error(fn_expr: &ast::FnExpr) -> bool {
+    let Some(body) = &fn_expr.function.body else {
+        return false;
+    };
+    let mut strict = false;
+    for stmt in &body.stmts {
+        let Some(directive) = super::string_directive_stmt_lit(stmt) else {
+            break;
+        };
+        if super::is_raw_use_strict_directive(directive) {
+            strict = true;
+            break;
+        }
+    }
+    if !strict {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for p in &fn_expr.function.params {
+        if let ast::Pat::Ident(b) = &p.pat {
+            let name = b.id.sym.to_string();
+            if name == "eval" || name == "arguments" || !seen.insert(name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// AllPrivateIdentifiersValid: a private name (`o.#f`, `#f in o`) outside
+/// any class body is a SyntaxError. SWC parses it without complaint, so walk
+/// the synthesized body — skipping class expressions/declarations, where
+/// private names are legal — and report any stray use.
+fn fn_body_has_stray_private_name(fn_expr: &ast::FnExpr) -> bool {
+    fn expr_has(e: &ast::Expr) -> bool {
+        match e {
+            ast::Expr::Member(m) => {
+                matches!(m.prop, ast::MemberProp::PrivateName(_)) || expr_has(&m.obj)
+            }
+            ast::Expr::Bin(b) => {
+                matches!(b.left.as_ref(), ast::Expr::PrivateName(_))
+                    || expr_has(&b.left)
+                    || expr_has(&b.right)
+            }
+            ast::Expr::PrivateName(_) => true,
+            ast::Expr::Paren(p) => expr_has(&p.expr),
+            ast::Expr::Unary(u) => expr_has(&u.arg),
+            ast::Expr::Update(u) => expr_has(&u.arg),
+            ast::Expr::Assign(a) => expr_has(&a.right),
+            ast::Expr::Cond(c) => expr_has(&c.test) || expr_has(&c.cons) || expr_has(&c.alt),
+            ast::Expr::Seq(s) => s.exprs.iter().any(|e| expr_has(e)),
+            ast::Expr::Call(c) => {
+                let callee = match &c.callee {
+                    ast::Callee::Expr(e) => expr_has(e),
+                    _ => false,
+                };
+                callee || c.args.iter().any(|a| expr_has(&a.expr))
+            }
+            ast::Expr::New(n) => {
+                expr_has(&n.callee)
+                    || n.args
+                        .as_ref()
+                        .map(|args| args.iter().any(|a| expr_has(&a.expr)))
+                        .unwrap_or(false)
+            }
+            ast::Expr::Array(arr) => arr.elems.iter().flatten().any(|elem| expr_has(&elem.expr)),
+            ast::Expr::Object(obj) => obj.props.iter().any(|p| match p {
+                ast::PropOrSpread::Spread(s) => expr_has(&s.expr),
+                ast::PropOrSpread::Prop(p) => match p.as_ref() {
+                    ast::Prop::KeyValue(kv) => expr_has(&kv.value),
+                    _ => false,
+                },
+            }),
+            ast::Expr::Fn(f) => f
+                .function
+                .body
+                .as_ref()
+                .map(|b| b.stmts.iter().any(stmt_has))
+                .unwrap_or(false),
+            ast::Expr::Arrow(a) => match a.body.as_ref() {
+                ast::BlockStmtOrExpr::BlockStmt(b) => b.stmts.iter().any(stmt_has),
+                ast::BlockStmtOrExpr::Expr(e) => expr_has(e),
+            },
+            // Private names are legal inside class bodies.
+            ast::Expr::Class(_) => false,
+            _ => false,
+        }
+    }
+    fn stmt_has(s: &ast::Stmt) -> bool {
+        match s {
+            ast::Stmt::Expr(e) => expr_has(&e.expr),
+            ast::Stmt::Return(r) => r.arg.as_deref().map(expr_has).unwrap_or(false),
+            ast::Stmt::Throw(t) => expr_has(&t.arg),
+            ast::Stmt::If(i) => {
+                expr_has(&i.test)
+                    || stmt_has(&i.cons)
+                    || i.alt.as_deref().map(stmt_has).unwrap_or(false)
+            }
+            ast::Stmt::Block(b) => b.stmts.iter().any(stmt_has),
+            ast::Stmt::Decl(ast::Decl::Var(v)) => v
+                .decls
+                .iter()
+                .any(|d| d.init.as_deref().map(expr_has).unwrap_or(false)),
+            ast::Stmt::Decl(ast::Decl::Fn(f)) => f
+                .function
+                .body
+                .as_ref()
+                .map(|b| b.stmts.iter().any(stmt_has))
+                .unwrap_or(false),
+            ast::Stmt::While(w) => expr_has(&w.test) || stmt_has(&w.body),
+            ast::Stmt::Try(t) => {
+                t.block.stmts.iter().any(stmt_has)
+                    || t.handler
+                        .as_ref()
+                        .map(|h| h.body.stmts.iter().any(stmt_has))
+                        .unwrap_or(false)
+                    || t.finalizer
+                        .as_ref()
+                        .map(|f| f.stmts.iter().any(stmt_has))
+                        .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+    fn_expr
+        .function
+        .body
+        .as_ref()
+        .map(|b| b.stmts.iter().any(stmt_has))
+        .unwrap_or(false)
+}
+
+/// Resolve one `Function(...)` argument to the string `ToString` would
+/// produce (or the constant it would throw). Extends [`coerce_arg_to_string`]
+/// with inline object literals and — at module top level, where shadowing
+/// can't bite — identifiers resolved through the pre-scanned
+/// [`super::fn_ctor_env::FnCtorEnv`].
+fn resolve_fn_ctor_arg(
+    ctx: &mut LoweringContext,
+    expr: &ast::Expr,
+) -> Option<super::fn_ctor_env::ResolvedArg> {
+    use super::fn_ctor_env::{eval_tostring, object_tostring_body, FnCtorShape, ResolvedArg};
+    if let Some(s) = coerce_arg_to_string(expr) {
+        return Some(ResolvedArg::Str(s));
+    }
+    let mut e = expr;
+    loop {
+        match e {
+            ast::Expr::Paren(p) => e = p.expr.as_ref(),
+            ast::Expr::TsAs(t) => e = t.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(t) => e = t.expr.as_ref(),
+            _ => break,
+        }
+    }
+    if let ast::Expr::Object(obj) = e {
+        if obj.props.is_empty() {
+            return Some(ResolvedArg::Str("[object Object]".to_string()));
+        }
+        if let Some(body) = object_tostring_body(e) {
+            return eval_tostring(&mut ctx.fn_ctor_env, &body);
+        }
+        return None;
+    }
+    if let Some(s) = super::fn_ctor_env::wrapper_const_string(e) {
+        return Some(ResolvedArg::Str(s));
+    }
+    if ctx.scope_depth == 0 {
+        if let ast::Expr::Ident(id) = e {
+            let shape = ctx.fn_ctor_env.entries.get(id.sym.as_str()).cloned()?;
+            return match shape {
+                FnCtorShape::Str(s) => Some(ResolvedArg::Str(s)),
+                FnCtorShape::UndefinedVar => Some(ResolvedArg::Str("undefined".to_string())),
+                FnCtorShape::ObjToString(body) => eval_tostring(&mut ctx.fn_ctor_env, &body),
+                // A dynamic-function ctor VALUE used as a ToString-able arg
+                // isn't a constant string.
+                FnCtorShape::DynCtor(_) | FnCtorShape::FnLiteral(_) => None,
+            };
+        }
+    }
+    None
 }
 
 /// Fold the indirect-eval `globalThis` idiom — `(0, eval)('this')` /
@@ -513,7 +778,88 @@ pub(crate) fn try_eval_function_call_fold(
     {
         return try_const_fold_eval(ctx, &call.args, call.span);
     }
+    // `var AsyncFunction = (async function(){}).constructor; AsyncFunction(...)`
+    // — a single-assignment module var recorded as a dynamic-function ctor.
+    if ctx.scope_depth == 0 {
+        if let Some(super::fn_ctor_env::FnCtorShape::DynCtor(kind)) =
+            ctx.fn_ctor_env.entries.get(id.sym.as_str()).cloned()
+        {
+            return try_const_fold_function_construct_kind(
+                ctx,
+                &call.args,
+                EvalSurface::FunctionCall,
+                call.span,
+                kind,
+            );
+        }
+    }
     Ok(None)
+}
+
+/// Fold `Function.call(thisArg, ...ctorArgs)` / `Function.apply(thisArg,
+/// [ctorArgs])` — CreateDynamicFunction ignores its `this`, so these are the
+/// plain constructor call with the leading argument dropped (Test262
+/// S15.3_A2_T*: `Function.call(this, "var x / = 1;")` must throw a
+/// SyntaxError at runtime).
+pub(crate) fn try_eval_function_member_call_fold(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+) -> Result<Option<Expr>> {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return Ok(None);
+    };
+    let mut c = callee.as_ref();
+    while let ast::Expr::Paren(p) = c {
+        c = p.expr.as_ref();
+    }
+    let ast::Expr::Member(m) = c else {
+        return Ok(None);
+    };
+    let ast::Expr::Ident(obj) = m.obj.as_ref() else {
+        return Ok(None);
+    };
+    let ast::MemberProp::Ident(prop) = &m.prop else {
+        return Ok(None);
+    };
+    if obj.sym.as_ref() != "Function"
+        || ctx.lookup_local("Function").is_some()
+        || ctx.lookup_func("Function").is_some()
+        || ctx.lookup_imported_func("Function").is_some()
+    {
+        return Ok(None);
+    }
+    match prop.sym.as_ref() {
+        "call" if !call.args.is_empty() && call.args.iter().all(|a| a.spread.is_none()) => {
+            try_const_fold_function_construct(
+                ctx,
+                &call.args[1..],
+                EvalSurface::FunctionCall,
+                call.span,
+            )
+        }
+        "apply" if call.args.len() == 2 && call.args.iter().all(|a| a.spread.is_none()) => {
+            let mut arg1 = call.args[1].expr.as_ref();
+            while let ast::Expr::Paren(p) = arg1 {
+                arg1 = p.expr.as_ref();
+            }
+            let ast::Expr::Array(arr) = arg1 else {
+                return Ok(None);
+            };
+            if arr.elems.iter().any(|e| e.is_none())
+                || arr.elems.iter().flatten().any(|e| e.spread.is_some())
+            {
+                return Ok(None);
+            }
+            let synth_args: Vec<ast::ExprOrSpread> = arr.elems.iter().flatten().cloned().collect();
+            try_const_fold_function_construct(
+                ctx,
+                &synth_args,
+                EvalSurface::FunctionCall,
+                call.span,
+            )
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Pull the `FnExpr` out of a synthesized `(function (...) { ... });`

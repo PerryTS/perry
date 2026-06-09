@@ -521,8 +521,17 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             crate::string::js_string_from_bytes(b"false".as_ptr(), 5)
         }
     } else if jsval.is_int32() {
-        // Convert int32 to string
+        // A registered class id shares the INT32 encoding (`Expr::ClassRef`)
+        // — `String(C)` / `"" + C` must produce function source, not the
+        // numeric id. Perry keeps no class source, so the NativeFunction
+        // form with the class name.
         let n = jsval.as_int32();
+        let cid = (value.to_bits() & 0xFFFF_FFFF) as u32;
+        if crate::object::is_class_id_registered(cid) {
+            let name = crate::object::class_name_for_id(cid).unwrap_or_default();
+            let s = format!("function {name}() {{ [native code] }}");
+            return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        }
         let s = n.to_string();
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     } else if jsval.is_bigint() {
@@ -534,6 +543,19 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
         // stringify via `Array.prototype.join(",")` per JS semantics; other
         // objects fall back to "[object Object]".
         let ptr: *const u8 = jsval.as_pointer();
+        // Proxy ids can be SMALLER than the 0x10000 heap floor — check the
+        // registry (a by-value lookup, no deref) before the gate.
+        if crate::proxy::js_proxy_is_proxy(value) != 0 {
+            if crate::proxy::proxy_wraps_callable(value) {
+                let s = "function () { [native code] }";
+                return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            }
+            let target = crate::proxy::js_proxy_target(value);
+            if target.to_bits() != value.to_bits() {
+                return js_jsvalue_to_string(target);
+            }
+            return crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15);
+        }
         if !ptr.is_null() && (ptr as usize) >= 0x10000 {
             // A Proxy is a small registered id, not a heap object — the GC-header
             // probes / ToPrimitive dispatch below would deref the fake pointer
@@ -542,6 +564,15 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // stringify that ("[object Object]" for an ordinary object target),
             // which matches Node for the trap-less case. (Proxy crash cluster.)
             if crate::proxy::js_proxy_is_proxy(value) != 0 {
+                // A callable-target proxy's default ToString runs
+                // Function.prototype.toString with the PROXY as receiver —
+                // never introspectable, so the NativeFunction form (matches
+                // Node: `String(new Proxy(fn, {}))`). Non-callable targets
+                // resolve through the target.
+                if crate::proxy::proxy_wraps_callable(value) {
+                    let s = "function () { [native code] }";
+                    return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                }
                 let target = crate::proxy::js_proxy_target(value);
                 if target.to_bits() != value.to_bits() {
                     return js_jsvalue_to_string(target);

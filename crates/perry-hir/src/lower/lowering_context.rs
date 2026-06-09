@@ -565,4 +565,9 @@ pub struct LoweringContext {
     /// observe the failure instead of rejecting the whole user source at
     /// compile time. Outside try blocks, `require(literal)` still hard-errors.
     pub(crate) optional_require_try_depth: u32,
+    /// Pre-scanned constant environment for `new Function` / `Function(...)`
+    /// argument resolution (single-assignment module vars, `toString`-bearing
+    /// object literals, counters). Built once per module in
+    /// `lower_module_full`; consumed by `const_fold_fn`.
+    pub(crate) fn_ctor_env: super::fn_ctor_env::FnCtorEnv,
 }

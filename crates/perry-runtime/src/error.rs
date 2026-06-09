@@ -733,6 +733,31 @@ pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
     throw_reference_error_message(b"identifier is not defined")
 }
 
+/// Read a compile-time-unresolved identifier off `globalThis` (a global the
+/// program created dynamically — `Function("this.y = 2")()` — exists only at
+/// runtime), throwing the spec ReferenceError when no such global property
+/// exists.
+#[no_mangle]
+pub extern "C" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
+    let g = crate::object::js_get_global_this();
+    let gj = crate::value::JSValue::from_bits(g.to_bits());
+    if gj.is_pointer() {
+        let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
+        let key = crate::builtins::js_string_coerce(name_value);
+        if !gptr.is_null() && !key.is_null() {
+            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            if !v.is_undefined() {
+                return f64::from_bits(v.bits());
+            }
+        }
+    }
+    let name = value_to_lossy_string(name_value);
+    let msg = format!("{} is not defined", name);
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_referenceerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+}
+
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
     throw_reference_error_message(b"assignment to undeclared variable")

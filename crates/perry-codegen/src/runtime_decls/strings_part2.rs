@@ -195,6 +195,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // The codegen IndexGet/IndexSet paths on `Expr::GlobalGet` route
     // through this helper.
     module.declare_function("js_get_global_this", DOUBLE, &[]);
+    module.declare_function("js_module_top_this", DOUBLE, &[]);
     module.declare_function("js_global_or_console_property_by_name", DOUBLE, &[I64]);
     // Refs #420: register a static computed-key Symbol field on a class.
     // Called from `init_static_fields` for each `static [Symbol.X] = init`.

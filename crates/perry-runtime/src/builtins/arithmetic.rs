@@ -498,6 +498,16 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         // Reading a fake handle's `[ptr+12]` type tag otherwise segfaults
         // (e.g. zlib's reserved stream base).
         let ptr = jsval.as_pointer::<u8>();
+        // A Proxy id is a SMALL pointer (below the heap floor), so check the
+        // registry before the floor gate. typeof proxy is "function" iff its
+        // (possibly nested) [[ProxyTarget]] is callable.
+        if crate::proxy::js_proxy_is_proxy(value) == 1 {
+            return if crate::proxy::proxy_wraps_callable(value) {
+                get_cached(&TYPEOF_FUNCTION, "function")
+            } else {
+                get_cached(&TYPEOF_OBJECT, "object")
+            };
+        }
         if !ptr.is_null() && (ptr as usize) >= 0x100000 {
             // Symbols: registered in SYMBOL_POINTERS (handles both gc_malloc'd
             // and Box-leaked symbols, which have no GcHeader).

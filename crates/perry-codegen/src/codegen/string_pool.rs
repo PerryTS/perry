@@ -75,6 +75,10 @@ pub(super) fn emit_string_pool(
     // `%AsyncGeneratorFunction%`/`%AsyncGenerator%` intrinsic chain (and
     // `util.types.isAsyncFunction`) resolve correctly for them.
     user_fn_wrapper_async_generator: &std::collections::HashSet<String>,
+    // Strict-mode user functions (wrapper or inline-closure symbols).
+    // Each entry produces one `js_register_closure_strict_function` call so
+    // call/apply/bind can apply spec OrdinaryCallBindThis (#4850).
+    user_fn_wrapper_strict: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
     // JS name. Each entry produces one `js_register_function_name` call
@@ -990,6 +994,13 @@ pub(super) fn emit_string_pool(
             "js_register_closure_async_generator_function",
             &[(PTR, &func_ref)],
         );
+    }
+
+    let mut sorted_strict_wrappers: Vec<String> = user_fn_wrapper_strict.iter().cloned().collect();
+    sorted_strict_wrappers.sort();
+    for wrap_sym in sorted_strict_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void("js_register_closure_strict_function", &[(PTR, &func_ref)]);
     }
 
     blk.ret_void();
