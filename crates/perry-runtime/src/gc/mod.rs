@@ -243,7 +243,53 @@ pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
         .into_json(GcStepSnapshot::current())
 }
 
+thread_local! {
+    /// Whether `gc_init` has registered this thread's root scanners yet. The
+    /// scanner list (`MUTABLE_ROOT_SCANNERS`) is thread-local, so soundness
+    /// requires every thread that can trigger a collection to register
+    /// independently — not just the main thread that runs `js_gc_init()`.
+    static GC_INIT_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, `ensure_gc_initialized` is a no-op. The GC unit tests take
+    /// manual control of the thread's scanner registry (see
+    /// `ScopedRootScannerRegistryGuard`) and must collect with exactly the
+    /// roots they install — lazy auto-init would pollute that controlled set.
+    static AUTO_GC_INIT_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Suppress (or re-enable) lazy `ensure_gc_initialized` on this thread, returning
+/// the previous value. Used by the GC tests' `ScopedRootScannerRegistryGuard` to
+/// run collections against a hand-controlled root set.
+pub(crate) fn set_auto_gc_init_suppressed(suppressed: bool) -> bool {
+    AUTO_GC_INIT_SUPPRESSED.with(|c| c.replace(suppressed))
+}
+
+/// Register the runtime root scanners on the current thread if they haven't been
+/// registered yet. Idempotent per thread; a no-op while auto-init is suppressed.
+///
+/// `js_gc_init()` runs this at the production entrypoint, but spawned worker
+/// threads and the unit-test harness never call it — so without this a collection
+/// on those threads runs with an empty scanner set and reclaims live objects
+/// reachable only through a registered root (most importantly the realm global at
+/// `GLOBAL_THIS_PTR` and the `Array`/`Object` intrinsics it holds). Called from
+/// `js_get_global_this` before the global is created, so the global is born under
+/// a registered scanner and survives later collections on this thread.
+pub(crate) fn ensure_gc_initialized() {
+    if AUTO_GC_INIT_SUPPRESSED.with(|c| c.get()) {
+        return;
+    }
+    if !GC_INIT_DONE.with(|c| c.get()) {
+        gc_init();
+    }
+}
+
 pub fn gc_init() {
+    // Idempotent per thread: production calls this at startup, and
+    // `ensure_gc_initialized` calls it lazily on threads that don't. Latch the
+    // flag before any registration so a re-entrant call can't double-register
+    // the thread-local scanner list.
+    if GC_INIT_DONE.with(|c| c.replace(true)) {
+        return;
+    }
     crate::perf_hooks::init_time_origin();
     gc_register_budgeted_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,

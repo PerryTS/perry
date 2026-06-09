@@ -198,20 +198,32 @@ pub(super) fn root_scanner_registry_counts() -> (usize, usize, usize, usize) {
 
 pub(super) struct ScopedRootScannerRegistryGuard {
     rust_roots_len: usize,
-    mutable_roots_len: usize,
+    /// The thread's mutable scanner registry is taken whole (not just length-
+    /// recorded) so a prior test's lazy `ensure_gc_initialized` registration
+    /// can't leak into this test's controlled root set. Restored on drop.
+    saved_mutable_roots: Vec<MutableRootScannerEntry>,
     ffi_roots_len: usize,
     ffi_mutable_roots_len: usize,
+    prev_auto_init_suppressed: bool,
 }
 
 impl ScopedRootScannerRegistryGuard {
     pub(super) fn new() -> Self {
-        let (rust_roots_len, mutable_roots_len, ffi_roots_len, ffi_mutable_roots_len) =
+        let (rust_roots_len, _mutable_roots_len, ffi_roots_len, ffi_mutable_roots_len) =
             root_scanner_registry_counts();
+        // Take control of the thread's mutable scanner registry: snapshot it,
+        // clear it so the test starts from a known-empty set, and suppress the
+        // runtime's lazy auto-init (`ensure_gc_initialized`) for the guard's
+        // lifetime so collections see exactly the roots the test installs.
+        let saved_mutable_roots =
+            MUTABLE_ROOT_SCANNERS.with(|scanners| std::mem::take(&mut *scanners.borrow_mut()));
+        let prev_auto_init_suppressed = crate::gc::set_auto_gc_init_suppressed(true);
         Self {
             rust_roots_len,
-            mutable_roots_len,
+            saved_mutable_roots,
             ffi_roots_len,
             ffi_mutable_roots_len,
+            prev_auto_init_suppressed,
         }
     }
 }
@@ -220,12 +232,13 @@ impl Drop for ScopedRootScannerRegistryGuard {
     fn drop(&mut self) {
         ROOT_SCANNERS.with(|scanners| scanners.borrow_mut().truncate(self.rust_roots_len));
         MUTABLE_ROOT_SCANNERS.with(|scanners| {
-            scanners.borrow_mut().truncate(self.mutable_roots_len);
+            *scanners.borrow_mut() = std::mem::take(&mut self.saved_mutable_roots);
         });
         FFI_ROOT_SCANNERS.with(|scanners| scanners.borrow_mut().truncate(self.ffi_roots_len));
         FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
             scanners.borrow_mut().truncate(self.ffi_mutable_roots_len);
         });
+        crate::gc::set_auto_gc_init_suppressed(self.prev_auto_init_suppressed);
     }
 }
 

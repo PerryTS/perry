@@ -5,44 +5,47 @@ use super::*;
 #[path = "global_this_webassembly.rs"]
 mod global_this_webassembly;
 
-/// Issue #611: lazily allocate shared `globalThis` for computed global access.
+thread_local! {
+    /// This thread's `globalThis`. The realm global is allocated in a *per-thread*
+    /// arena, but `GLOBAL_THIS_PTR` (the GC-root slot) is a process-global static.
+    /// A pointer published there by another, now-finished thread (the unit-test
+    /// harness runs each test on its own thread; `perry/thread` workers have their
+    /// own arenas) points into freed/reused memory — reading `globalThis.Array`
+    /// through it returns `undefined`, or worse derefs an invalid header. Caching
+    /// the global per thread means we only ever hand back a global this thread
+    /// created, and never dereference another thread's pointer to "validate" it.
+    static THREAD_GLOBAL_THIS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+/// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
-    let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
-    let ptr = if cached != 0 {
-        while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
-            std::hint::spin_loop();
-        }
-        cached
-    } else {
-        // First access — allocate. Race-tolerant: if two threads race the
-        // initial alloc, the loser's allocation leaks (never freed) but
-        // both threads see the winner's pointer afterward via CAS.
-        let new_ptr = js_object_alloc(0, 0) as i64;
-        // GC_STORE_AUDIT(ROOT): GLOBAL_THIS_PTR is a mutable root visited by scan_object_cache_roots_mut.
-        match crate::gc::runtime_compare_exchange_root_atomic_raw_i64(
-            &GLOBAL_THIS_PTR,
-            0,
-            new_ptr,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
-                // Populate constructor values for `globalThis.Array` /
-                // `context.Array` style reads without changing bare `new Array`.
-                populate_global_this_builtins(new_ptr as *mut ObjectHeader);
-                GLOBAL_THIS_READY.store(true, Ordering::Release);
-                new_ptr
-            }
-            Err(other) => {
-                while !GLOBAL_THIS_READY.load(Ordering::Acquire) {
-                    std::hint::spin_loop();
-                }
-                other
-            }
-        }
-    };
-    crate::value::js_nanbox_pointer(ptr)
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
+    if mine != 0 {
+        return crate::value::js_nanbox_pointer(mine);
+    }
+    // Register this thread's GC root scanners before the global exists, so the
+    // global (and the `Array`/`Object` intrinsics it holds) is born under a live
+    // root and survives later collections on this thread. Worker threads and the
+    // unit-test harness never run `js_gc_init()`, so without this a collection
+    // would reclaim the global mid-use, leaving a dangling intrinsic. No-op in
+    // production (already initialized) and inside the GC tests' controlled scopes.
+    crate::gc::ensure_gc_initialized();
+    // First access on this thread — allocate our own global.
+    let new_ptr = js_object_alloc(0, 0) as i64;
+    THREAD_GLOBAL_THIS.with(|c| c.set(new_ptr));
+    // Publish to the process-global GC-root slot so this thread's collector marks
+    // it (the unit-test harness runs tests sequentially, so the slot always holds
+    // the running thread's global). `GLOBAL_THIS_READY` is toggled around
+    // population so any concurrent reader spins until the field bag is complete.
+    GLOBAL_THIS_READY.store(false, Ordering::Release);
+    // GC_STORE_AUDIT(ROOT): GLOBAL_THIS_PTR is a mutable root visited by scan_object_cache_roots_mut.
+    crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, new_ptr, Ordering::Release);
+    // Populate constructor values for `globalThis.Array` / `context.Array` style
+    // reads without changing bare `new Array`.
+    populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    GLOBAL_THIS_READY.store(true, Ordering::Release);
+    crate::value::js_nanbox_pointer(new_ptr)
 }
 
 #[no_mangle]
