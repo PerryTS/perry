@@ -97,6 +97,24 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Initialize COM as a single-threaded apartment for the current (UI) thread.
+/// WebView2 environment creation requires an STA with a running message pump;
+/// without it the async completion handler never fires. Idempotent — a thread
+/// already in an apartment returns `S_FALSE` / `RPC_E_CHANGED_MODE`, both of
+/// which are fine for our purposes (we just need an STA to exist).
+#[cfg(target_os = "windows")]
+fn ensure_com_sta() {
+    use std::sync::Once;
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    static COM_INIT: Once = Once::new();
+    COM_INIT.call_once(|| unsafe {
+        // Result intentionally ignored: S_OK on first init, S_FALSE if already
+        // initialized STA, RPC_E_CHANGED_MODE if the thread is already MTA
+        // (in which case WebView2 still works via the existing apartment).
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    });
+}
+
 #[cfg(target_os = "windows")]
 fn host_of_url_string(s: &str) -> String {
     let after_scheme = match s.find("://") {
@@ -176,6 +194,17 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
 
     #[cfg(target_os = "windows")]
     {
+        // WebView2's `CreateCoreWebView2EnvironmentWithOptions` requires the
+        // calling thread to be a COM single-threaded apartment (STA) with a
+        // running message loop — otherwise the async environment-creation
+        // completion handler is never posted back to our pump and init times
+        // out with HRESULT(0x80070005) "no result", leaving the pane blank
+        // and firing no navigation events (issue #4835). The dialog / file
+        // picker paths already call `CoInitializeEx(APARTMENTTHREADED)` for
+        // the same reason; WebView never did. This call is idempotent and
+        // tolerates a prior init (`S_FALSE` / `RPC_E_CHANGED_MODE`).
+        ensure_com_sta();
+
         let class_name = to_wide("STATIC");
         let window_text = to_wide("");
         let host = unsafe {
@@ -288,9 +317,18 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
         None => return Ok(()),
     };
 
+    // `env_done` holds the (non-Copy) result; `env_ready` is a separate Copy
+    // flag the message-pump predicate can poll *without* consuming the result.
+    // The previous code polled `env_done.take().is_some()`, which removed the
+    // value inside the predicate — so the subsequent `env_done.take()` always
+    // saw `None` and reported a spurious "no result" error even on a fully
+    // successful init (issue #4835). Keep the result intact; only `take()` it
+    // once, after the loop exits.
     let env_done: Rc<Cell<Option<windows::core::Result<ICoreWebView2Environment>>>> =
         Rc::new(Cell::new(None));
+    let env_ready: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let env_done_clone = env_done.clone();
+    let env_ready_clone = env_ready.clone();
 
     let user_data_wide = to_wide(user_data_dir.to_string_lossy().as_ref());
 
@@ -305,6 +343,7 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
             } else {
                 env_done_clone.set(Some(Err(windows::core::Error::from_win32())));
             }
+            env_ready_clone.set(true);
             Ok(())
         },
     ));
@@ -317,8 +356,7 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
             &env_handler,
         )?;
     }
-    pump_messages_until(|| env_done.take().is_some());
-    // We just took the result. We need to re-set it to retrieve below.
+    pump_messages_until(|| env_ready.get());
     let env_result = env_done.take().unwrap_or_else(|| {
         Err(windows::core::Error::new(
             windows::core::HRESULT(0x8007_0005_u32 as i32),
@@ -330,7 +368,9 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
     // Step 2: create controller bound to host_hwnd.
     let ctrl_done: Rc<Cell<Option<windows::core::Result<ICoreWebView2Controller>>>> =
         Rc::new(Cell::new(None));
+    let ctrl_ready: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let ctrl_done_clone = ctrl_done.clone();
+    let ctrl_ready_clone = ctrl_ready.clone();
 
     let ctrl_handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
         move |error_code, controller| {
@@ -343,6 +383,7 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
             } else {
                 ctrl_done_clone.set(Some(Err(windows::core::Error::from_win32())));
             }
+            ctrl_ready_clone.set(true);
             Ok(())
         },
     ));
@@ -350,7 +391,8 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
     unsafe {
         env.CreateCoreWebView2Controller(host_hwnd, &ctrl_handler)?;
     }
-    pump_messages_until(|| ctrl_done.take().is_some());
+    // Same peek-don't-consume pattern as the environment handler above.
+    pump_messages_until(|| ctrl_ready.get());
     let ctrl_result = ctrl_done.take().unwrap_or_else(|| {
         Err(windows::core::Error::new(
             windows::core::HRESULT(0x8007_0005_u32 as i32),

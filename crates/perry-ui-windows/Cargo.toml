@@ -34,6 +34,11 @@ webview2-com = "=0.34"
 geisterhand = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# The `#[implement]` macro from `windows` 0.58 expands to absolute
+# `::windows_core::` paths, so the consuming crate must depend on
+# `windows-core` directly or the COM authoring in drag_drop.rs fails to
+# resolve `windows_core` (E0433). Pinned to 0.58 to match `windows`.
+windows-core = "0.58"
 windows = { version = "0.58", features = [
     # `#[implement]` — needed to author the IDropTarget / IDropSource /
     # IDataObject COM objects for native drag-and-drop (#4773).

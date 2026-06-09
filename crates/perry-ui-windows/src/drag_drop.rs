@@ -239,7 +239,7 @@ mod imp {
     }
 
     #[allow(non_snake_case)]
-    impl IDataObject_Impl for PerryDataObject {
+    impl IDataObject_Impl for PerryDataObject_Impl {
         fn GetData(&self, pformatetcin: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
             let fmt = unsafe { &*pformatetcin };
             let Some(stored) = self.matches(fmt) else {
@@ -329,7 +329,7 @@ mod imp {
     struct PerryDropSource;
 
     #[allow(non_snake_case)]
-    impl IDropSource_Impl for PerryDropSource {
+    impl IDropSource_Impl for PerryDropSource_Impl {
         fn QueryContinueDrag(
             &self,
             fescapepressed: BOOL,
@@ -362,7 +362,7 @@ mod imp {
     }
 
     #[allow(non_snake_case)]
-    impl IDropTarget_Impl for PerryDropTarget {
+    impl IDropTarget_Impl for PerryDropTarget_Impl {
         fn DragEnter(
             &self,
             _pdataobj: Option<&IDataObject>,
