@@ -367,7 +367,7 @@ pub(super) fn emit_string_pool(
     // subclass whose parent is a class-expression value inherits the parent's
     // static methods (`class Sub extends make(...) {}; Sub.greet()`); has_rest
     // tells the dispatcher to bundle trailing args for a `...rest` param.
-    let mut static_method_triples: Vec<(u32, String, String, u32, bool)> = Vec::new();
+    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32)> = Vec::new();
     // #1787: (cid, standalone-constructor symbol, total_param_count).
     // Registered into CLASS_CONSTRUCTORS so `new <classObjectValue>()` (a
     // class-expression value constructed dynamically) can replay the class's
@@ -446,12 +446,25 @@ pub(super) fn emit_string_pool(
         for sm in &class.static_methods {
             let llvm_name = scoped_static_method_name(module_prefix, cid, class_name, &sm.name);
             let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
+            // Spec `.length`: leading formal params before the first default/rest
+            // (and excluding the synthesized `arguments` slot). For static
+            // generator/async methods the raw param_count over-counts (`static
+            // *gen(a, b = 1,).length === 1`, not 2). (Test262 *-method-static
+            // dflt-params-trailing-comma / -length.)
+            let mut spec_length = 0u32;
+            for p in &sm.params {
+                if p.arguments_object.is_some() || p.is_rest || p.default.is_some() {
+                    break;
+                }
+                spec_length += 1;
+            }
             static_method_triples.push((
                 cid,
                 sm.name.clone(),
                 llvm_name,
                 sm.params.len() as u32,
                 has_rest,
+                spec_length,
             ));
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -522,7 +535,7 @@ pub(super) fn emit_string_pool(
     // static methods (subclass extends a class-expression value) resolve at
     // runtime via the class_id parent-chain walk.
     static_method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count, has_rest) in static_method_triples {
+    for (cid, method_name, llvm_name, param_count, has_rest, spec_length) in static_method_triples {
         let entry = match strings.iter().find(|e| e.value == method_name) {
             Some(e) => e,
             None => continue,
@@ -542,6 +555,18 @@ pub(super) fn emit_string_pool(
                 (I64, &func_i64),
                 (I64, &param_count.to_string()),
                 (I64, has_rest_str),
+            ],
+        );
+        // Record the default-aware spec `.length` for the static method so
+        // `C.staticGen.length` reflects params-before-first-default rather than
+        // the raw param count (which over-counts generator/async methods).
+        blk.call_void(
+            "js_register_class_static_method_bind_length",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, &spec_length.to_string()),
             ],
         );
     }

@@ -504,6 +504,44 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // member keys for their spec-mandated side effects. See
                 // `push_deduped_class_computed_keys`.
                 push_deduped_class_computed_keys(ctx, &class_decl.class, &mut result)?;
+                // A duplicate-named class is skipped above, so its `extends`
+                // expression is never evaluated and its IsConstructor check
+                // never fires. Test262's superclass-* / invalid-extends cases
+                // reuse the SAME class name (`class C extends X`) across several
+                // `assert.throws` blocks, so without this the 2nd+ `class C
+                // extends <non-constructor>` silently fails to throw. Re-evaluate
+                // a dynamic (non-statically-resolvable) super-class here and run
+                // its IsConstructor check via `RegisterClassParentDynamic` (which
+                // throws before touching the conflated parent edge).
+                if let Some(super_class) = class_decl.class.super_class.as_deref() {
+                    let dynamic_parent = match super_class {
+                        ast::Expr::Ident(ident) => {
+                            let parent_name = ident.sym.to_string();
+                            let is_native = matches!(
+                                parent_name.as_str(),
+                                "EventEmitter"
+                                    | "EventEmitterAsyncResource"
+                                    | "AsyncLocalStorage"
+                                    | "AsyncResource"
+                                    | "WebSocketServer"
+                                    | "ReadableStream"
+                                    | "WritableStream"
+                                    | "TransformStream"
+                            );
+                            !is_native && ctx.lookup_class(&parent_name).is_none()
+                        }
+                        ast::Expr::Member(_) => false,
+                        _ => true,
+                    };
+                    if dynamic_parent {
+                        if let Ok(expr) = lower_expr(ctx, super_class) {
+                            result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                class_name,
+                                parent_expr: Box::new(expr),
+                            }));
+                        }
+                    }
+                }
             }
         }
         ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) => {

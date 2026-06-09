@@ -334,6 +334,16 @@ pub fn closure_is_arrow(closure: *const ClosureHeader) -> bool {
     is_registered_arrow_function(func_ptr)
 }
 
+/// True if `closure` is a bound-method / bound-function value (its body is the
+/// `BOUND_METHOD_FUNC_PTR` sentinel). Class method/getter/setter values read
+/// via `C.prototype.m`, instance method reads, and `Function.prototype.bind`
+/// results all use this sentinel. None of them are constructors, so they have
+/// no `prototype` own property (ECMA-262: methods, accessors, and bound
+/// functions are non-constructors).
+pub fn closure_is_bound_method(closure: *const ClosureHeader) -> bool {
+    get_valid_func_ptr(closure) == BOUND_METHOD_FUNC_PTR
+}
+
 #[no_mangle]
 pub extern "C" fn js_register_closure_generator_function(func_ptr: *const u8) {
     if func_ptr.is_null() {
