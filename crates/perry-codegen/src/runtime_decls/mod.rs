@@ -48,6 +48,11 @@ pub fn declare_phase1(module: &mut LlModule) {
     // the runtime always provides the symbol; main only emits the call
     // when `app_metadata.app_group` is `Some`.
     module.declare_function("perry_app_group_init", VOID, &[PTR, I32]);
+    // macOS asset-CWD fix: a macOS `.app` launched from Finder starts with
+    // CWD=`/`, but the worker bundles assets into `Contents/Resources/`. The
+    // `main` prelude calls this unconditionally; the runtime symbol no-ops on
+    // non-macOS targets and on binaries that aren't inside an `.app` bundle.
+    module.declare_function("perry_macos_bundle_chdir", VOID, &[]);
     // Function-name registry — populated by `main()` once per top-level
     // named function so `console.log(named)` prints `[Function: named]`
     // instead of `[Function (anonymous)]`. See #1202.

@@ -54,6 +54,7 @@ pub mod fs;
 pub mod gc;
 pub mod intl;
 pub mod iterator_helpers;
+pub mod macos_bundle;
 pub mod map;
 pub mod math;
 pub mod messaging;

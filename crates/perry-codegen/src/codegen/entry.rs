@@ -141,6 +141,11 @@ pub(super) fn compile_module_entry(
             if write_barriers_enabled() {
                 blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);
             }
+            // macOS `.app` assets live in `Contents/Resources/`, but a Finder
+            // launch starts at CWD=`/`. chdir there before any user code or
+            // native engine init so relative asset paths (`assets/...`) resolve.
+            // No-op on non-macOS and on non-bundle binaries (see the runtime fn).
+            blk.call_void("perry_macos_bundle_chdir", &[]);
             if let Some((const_name, byte_len)) = app_group_init.as_ref() {
                 let suite_ptr = format!("@{}", const_name);
                 let len_str = byte_len.to_string();
