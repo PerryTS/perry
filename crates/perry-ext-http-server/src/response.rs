@@ -21,8 +21,8 @@ use tokio::sync::oneshot;
 
 use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
 use crate::types::{
-    js_json_stringify, jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, PTR_MASK,
-    STRING_TAG, TAG_NULL, TAG_UNDEFINED,
+    js_json_stringify, jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header,
+    PTR_MASK, STRING_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 
 pub type ResponseBody = BoxBody<Bytes, Infallible>;
@@ -360,8 +360,10 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
                 sr.headers.insert(lower.clone(), elems.join(", "));
                 sr.header_value_lists.insert(lower.clone(), elems);
             } else {
-                sr.headers
-                    .insert(lower.clone(), jsvalue_to_owned_string(value).unwrap_or_default());
+                sr.headers.insert(
+                    lower.clone(),
+                    jsvalue_to_owned_string(value).unwrap_or_default(),
+                );
                 sr.header_value_lists.remove(&lower);
             }
             sr.raw_header_names.insert(lower, name);
