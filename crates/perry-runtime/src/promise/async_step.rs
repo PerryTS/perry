@@ -315,12 +315,58 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
     let trap = INLINE_TRAP.with(|c| c.get());
     if !trap.trap_next.is_null() && trap.current_step == step_closure as usize {
         bump(&MT_STEP_DONE_REUSE_HIT);
-        js_promise_resolve(trap.trap_next, value);
+        // Issue #4828: an async fn whose tail is `return <promise>` must
+        // ADOPT the returned promise/thenable's eventual state into its
+        // own result promise (`trap_next`), not store the promise object
+        // as the literal resolution value. The slow path below already
+        // does this via `js_promise_resolved`; the in-place reuse fast
+        // path bypassed it with a raw `js_promise_resolve`, so awaiting
+        // the outer fn yielded the inner Promise object itself (typeof
+        // "object", JSON.stringify === "", every property undefined).
+        // Mirror `js_promise_resolved`'s adoption probes here, but settle
+        // the existing `trap_next` instead of allocating a fresh promise
+        // so the runner's self-chain fast path still fires.
+        resolve_trap_next_with_adoption(trap.trap_next, value);
         trap.trap_next
     } else {
         bump(&MT_STEP_DONE_REUSE_MISS);
         js_promise_resolved(value)
     }
+}
+
+/// Settle `target` with `value`, adopting `value`'s state when it is a
+/// native Promise or an assimilable thenable (ECMAScript "Promise
+/// Resolve Functions" thenable-adoption). Used by the `js_async_step_done`
+/// reuse fast path so `return <promise>` from an async fn unwraps the
+/// inner promise into the outer result promise (Issue #4828). Mirrors the
+/// adoption arms of `js_promise_resolved`, but resolves an existing
+/// `target` rather than constructing a new one.
+fn resolve_trap_next_with_adoption(target: *mut Promise, value: f64) {
+    // Primitives can never be a promise/thenable — settle directly.
+    if is_definitely_primitive(value) {
+        js_promise_resolve(target, value);
+        return;
+    }
+    // Native Promise: chain `target` to follow its eventual state.
+    if js_value_is_promise(value) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+        if !inner.is_null() && inner != target {
+            js_promise_resolve_with_promise(target, inner);
+            return;
+        }
+    }
+    // User thenable (e.g. Drizzle QueryPromise, #586): assimilate, then
+    // chain the wrapper promise into `target`.
+    let assim = js_assimilate_thenable(value);
+    if assim.to_bits() != value.to_bits() && js_value_is_promise(assim) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(assim) as *mut Promise;
+        if !inner.is_null() && inner != target {
+            js_promise_resolve_with_promise(target, inner);
+            return;
+        }
+    }
+    // Plain object / non-thenable value: store as-is.
+    js_promise_resolve(target, value);
 }
 
 /// #691 Phase 2 helper. Returns the currently-dispatching step
