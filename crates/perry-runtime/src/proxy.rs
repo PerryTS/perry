@@ -920,6 +920,27 @@ fn prototype_of_for_set(value: f64) -> Option<f64> {
     if !reflect_value_is_object(value) {
         return None;
     }
+    // A Proxy is a small registered id (`POINTER_TAG | (PROXY_TAG_BASE + id)`),
+    // NOT a heap object. The POINTER_TAG block below would treat that id as a
+    // raw pointer; on Linux (`is_valid_obj_ptr` HEAP_MIN = 0x1000) the ~1MB id
+    // passes the range check and dereferences unmapped low memory → SIGSEGV.
+    // drizzle nests proxies (a proxy whose target is itself a proxy), so this is
+    // reachable when `is(value, type)` walks `getPrototypeOf` over a
+    // proxy-wrapped table/column. Route it through the Proxy `[[GetPrototypeOf]]`
+    // (no-trap → the target's prototype) instead. Returns `None` for a null /
+    // self prototype, matching the heap-object handling below.
+    if lookup(value).is_some() {
+        let proto = proxy_get_prototype_of_impl(value);
+        let proto_bits = proto.to_bits();
+        return if proto_bits == TAG_NULL
+            || proto_bits == TAG_UNDEFINED
+            || proto_bits == value.to_bits()
+        {
+            None
+        } else {
+            Some(proto)
+        };
+    }
     let bits = value.to_bits();
     if (bits >> 48) == (POINTER_TAG >> 48) {
         let raw = (bits & POINTER_MASK) as usize;
