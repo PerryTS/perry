@@ -2,6 +2,26 @@
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.
 
+## v0.5.1149 — Honor `dangerouslySetInnerHTML` in hono/jsx rendering (#4827)
+
+Perry's built-in JSX server renderer (`crates/perry-runtime/src/jsx.rs`, which
+`hono/jsx`'s `jsx`/`jsxs` thunks forward into) treated the React/hono special
+prop `dangerouslySetInnerHTML={{ __html }}` as an ordinary attribute. The
+attribute-serialization loop in `render_props_attrs` stringified its object
+value via the canonical stringifier, producing `[object Object]`, so
+`<div dangerouslySetInnerHTML={{ __html: "<b>hi</b>" }} />` rendered as
+`<div dangerouslySetInnerHTML="[object Object]"></div>` and the raw HTML (e.g.
+`<style dangerouslySetInnerHTML={{ __html: baseCss }} />`) was dropped entirely.
+
+Fix: match upstream hono/jsx (and React) semantics. A new `dangerous_inner_html`
+helper reads the prop's `__html` field; when present, `dispatch` splices that
+string as the element's inner content **unescaped** in place of normal
+`children`, and forces a normal (non-void) element so the raw HTML has a body
+even when the source used a self-closing tag (`<div .../>` → `<div>...</div>`).
+`render_props_attrs` now skips the `dangerouslySetInnerHTML` key so it is never
+emitted as an attribute. Void elements without the prop (e.g. `<br />`) and
+ordinary text/attribute escaping are unchanged.
+
 ## v0.5.1147 — Wire the fancy-regex fallback through every RegExp operation (#4797)
 
 `fancy-regex` (lookbehind, lookahead, backreferences, named groups) was already
