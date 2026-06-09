@@ -30,6 +30,23 @@ use crate::lower_types::{extract_param_type_with_ctx, extract_ts_type_with_ctx};
 
 use super::{lower_expr, LoweringContext};
 
+/// Lower an object-literal property *value* with NamedEvaluation: when the
+/// value is an anonymous function / arrow / class expression and the property
+/// has a static string key, the resulting function's `.name` is the key
+/// (spec PropertyDefinitionEvaluation → SetFunctionName). Mirrors the
+/// assignment / destructuring-default paths via `ctx.assignment_inferred_name`;
+/// a *named* function expression ignores the hint and keeps its own name.
+fn lower_prop_value_named(ctx: &mut LoweringContext, key: &str, value: &ast::Expr) -> Result<Expr> {
+    if crate::lower::expr_assign::rhs_accepts_assignment_name(value) {
+        let old = ctx.assignment_inferred_name.replace(key.to_string());
+        let lowered = lower_expr(ctx, value);
+        ctx.assignment_inferred_name = old;
+        lowered
+    } else {
+        lower_expr(ctx, value)
+    }
+}
+
 fn is_fetch_global_value_name(name: &str) -> bool {
     matches!(
         name,
@@ -232,6 +249,7 @@ fn lower_method_prop(
         let stmts = generate_param_destructuring_stmts(ctx, pat, *param_id)?;
         destructuring_stmts.extend(stmts);
     }
+    let destructuring_prologue_len = destructuring_stmts.len();
     let return_type = method
         .function
         .return_type
@@ -280,6 +298,18 @@ fn lower_method_prop(
     // `{ m(a = 23) {} }; obj.m(undefined)` reads `a === undefined`. Defaults
     // must run BEFORE destructuring (`m([x] = [1]) {}`), so prepend them last.
     let default_stmts = crate::lower_decl::build_default_param_stmts(&params);
+    // Record the param-prologue length for generator methods so the generator
+    // transform lifts param binding (default guards + destructuring) into the
+    // outer wrapper and runs it synchronously at call time (spec
+    // FunctionDeclarationInstantiation). Without this, `{ *m({}) {} }.m(null)`
+    // and async-generator equivalents defer the destructuring TypeError into
+    // the state machine instead of throwing at the call. Mirrors fn_decl.rs.
+    if method.function.is_generator {
+        let prologue_len = default_stmts.len() + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.append(&mut body);
@@ -569,7 +599,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         break;
                     }
                     let ty = crate::lower_types::infer_type_from_expr(&kv.value, ctx);
-                    let value = lower_expr(ctx, &kv.value)?;
+                    let value = lower_prop_value_named(ctx, &key, &kv.value)?;
                     fields.push((key, ty, value));
                 }
                 ast::Prop::Shorthand(ident) => {
@@ -768,10 +798,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     ast::Prop::KeyValue(kv) => match resolve_keyvalue_key(ctx, &kv.key) {
                         KeyResolution::Skip => {}
                         KeyResolution::Static(key) => {
-                            let value = lower_expr(ctx, &kv.value)?;
                             if is_noncomputed_proto_key(&kv.key) {
+                                let value = lower_expr(ctx, &kv.value)?;
                                 ops.push(SpreadOp::SetPrototype { value });
                             } else {
+                                let value = lower_prop_value_named(ctx, &key, &kv.value)?;
                                 ops.push(SpreadOp::Set {
                                     key: Expr::String(key),
                                     value,

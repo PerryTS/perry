@@ -656,7 +656,10 @@ pub(crate) unsafe fn js_object_define_symbol_accessor(
     obj_f64
 }
 
-unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
+/// Set a closure value's `.name` (if not already named) given its NaN-boxed
+/// bits. Returns silently for non-closure values. Shared by the symbol-key and
+/// string-key computed-name inference paths.
+unsafe fn register_closure_name_if_absent(val_bits: u64, name: &str) {
     let val_tag = val_bits & 0xFFFF_0000_0000_0000;
     if val_tag != POINTER_TAG {
         return;
@@ -674,12 +677,23 @@ unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
     if func_ptr.is_null() {
         return;
     }
+    crate::builtins::register_function_name_if_absent(func_ptr as usize, name);
+}
+
+unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
     let sym_ptr = sym_key as *const SymbolHeader;
+    // Spec: a symbol key with an *undefined* description names the function the
+    // empty string `""`; a symbol with a (possibly empty) string description
+    // names it `"[" + description + "]"`. Distinguish "no description" (→ `""`)
+    // from `Symbol("")` (→ `"[]"`).
     let desc = registered_symbol_description(sym_ptr as usize)
         .map(|s| s.as_ref().to_string())
-        .unwrap_or_else(|| str_from_header((*sym_ptr).description).unwrap_or_default());
-    let inferred = format!("[{}]", desc);
-    crate::builtins::register_function_name_if_absent(func_ptr as usize, &inferred);
+        .or_else(|| str_from_header((*sym_ptr).description));
+    let inferred = match desc {
+        Some(d) => format!("[{}]", d),
+        None => String::new(),
+    };
+    register_closure_name_if_absent(val_bits, &inferred);
 }
 
 fn publish_symbol_side_table_root_edges(sym_key: usize, value_bits: u64) {
@@ -800,6 +814,15 @@ pub unsafe extern "C" fn js_object_literal_infer_computed_function_name(
     let sym_key = sym_key_from_f64(key_f64);
     if sym_key != 0 {
         infer_symbol_function_name(sym_key, value_f64.to_bits());
+        return value_f64;
+    }
+    // A computed *string* (or stringified numeric) key names the function after
+    // the key itself: `{ ["sk"]: function(){} }.sk.name === "sk"`,
+    // `{ [1]: () => {} }[1].name === "1"`. The key arriving here has already
+    // passed through ToPropertyKey, so a non-symbol key is a string value.
+    let key_ptr = crate::value::js_get_string_pointer_unified(key_f64) as *const StringHeader;
+    if let Some(name) = str_from_header(key_ptr) {
+        register_closure_name_if_absent(value_f64.to_bits(), &name);
     }
     value_f64
 }
