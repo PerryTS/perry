@@ -518,7 +518,30 @@ pub(super) fn try_array_only_methods(
                 // `!recv_is_class` (which already excludes Map/Set/class
                 // receivers — those keep their own forEach contract) and on the
                 // 2nd argument being a plain positional (no spread).
+                // `recv_is_class` does NOT cover Map/Set/URLSearchParams locals,
+                // which keep their own `forEach` contract (callback signature +
+                // thisArg binding via `js_{map,set}_foreach`). Folding a 2-arg
+                // `set.forEach(cb, thisArg)` into the array-like path here ran the
+                // callback against an array view → zero iterations (test262
+                // Set/Map forEach this-arg-explicit). Exclude them explicitly.
+                let recv_is_non_array_collection = {
+                    let is_nac = |ty: &Type| {
+                        matches!(ty, Type::Generic { base, .. } if base == "Map" || base == "Set")
+                            || matches!(ty, Type::Named(n) if n == "URLSearchParams")
+                    };
+                    match member.obj.as_ref() {
+                        ast::Expr::Ident(ident) => {
+                            match ctx.lookup_local_type(ident.sym.as_ref()) {
+                                Some(ty) if is_nac(ty) => true,
+                                Some(Type::Union(variants)) => variants.iter().any(is_nac),
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    }
+                };
                 if !recv_is_class
+                    && !recv_is_non_array_collection
                     && matches!(
                         method_name,
                         "map"

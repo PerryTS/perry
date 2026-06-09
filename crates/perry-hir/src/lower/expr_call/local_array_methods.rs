@@ -171,18 +171,37 @@ pub(super) fn try_local_array_methods(
                         // through the spec-complete `Expr::ArrayLikeMethod`
                         // lowering (which binds the callback `this`) when an
                         // explicit thisArg is supplied with no spread.
-                        if matches!(
-                            method_name,
-                            "map"
-                                | "filter"
-                                | "forEach"
-                                | "find"
-                                | "findIndex"
-                                | "findLast"
-                                | "findLastIndex"
-                                | "some"
-                                | "every"
-                        ) && call.args.len() >= 2
+                        // Map/Set/URLSearchParams keep their own forEach contract
+                        // (thisArg binding via `js_{map,set}_foreach`); folding
+                        // `set.forEach(cb, thisArg)` into the array-like path ran
+                        // the callback against an array view → zero iterations
+                        // (test262 Set/Map forEach this-arg-explicit). The 1-arg
+                        // `match` below already excludes them; mirror that here.
+                        let recv_is_non_array_collection = {
+                            let is_nac = |ty: &Type| {
+                                matches!(ty, Type::Generic { base, .. } if base == "Map" || base == "Set")
+                                    || matches!(ty, Type::Named(n) if n == "URLSearchParams")
+                            };
+                            match ctx.lookup_local_type(&arr_name) {
+                                Some(ty) if is_nac(ty) => true,
+                                Some(Type::Union(variants)) => variants.iter().any(is_nac),
+                                _ => false,
+                            }
+                        };
+                        if !recv_is_non_array_collection
+                            && matches!(
+                                method_name,
+                                "map"
+                                    | "filter"
+                                    | "forEach"
+                                    | "find"
+                                    | "findIndex"
+                                    | "findLast"
+                                    | "findLastIndex"
+                                    | "some"
+                                    | "every"
+                            )
+                            && call.args.len() >= 2
                             && call.args.iter().all(|a| a.spread.is_none())
                         {
                             return Ok(Ok(Expr::ArrayLikeMethod {
