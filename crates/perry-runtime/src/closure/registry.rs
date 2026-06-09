@@ -346,6 +346,12 @@ pub extern "C" fn js_register_closure_strict_function(func_ptr: *const u8) {
     });
 }
 
+/// Keepalive anchor for the auto-optimize whole-program build — the strict
+/// registration is emitted only from generated module-init code.
+#[used]
+static KEEP_JS_REGISTER_CLOSURE_STRICT_FUNCTION: extern "C" fn(*const u8) =
+    js_register_closure_strict_function;
+
 #[inline(always)]
 pub fn is_registered_strict_function(func_ptr: *const u8) -> bool {
     if func_ptr.is_null() {

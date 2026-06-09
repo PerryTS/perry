@@ -210,6 +210,21 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
             set_integrity_level_proxy(obj_value, /*frozen=*/ false)
         };
     }
+    // A TypedArray is NOT an ObjectHeader: reading `keys_array` off its
+    // header yields garbage that `mark_all_keys` then dereferences
+    // (`Object.seal(new Uint32Array())` segfaulted on Linux). Seal on a TA
+    // only needs the no-extend/sealed flags — integer-indexed elements are
+    // exotic and never configurable through this table.
+    if crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some() {
+        unsafe {
+            let obj = extract_obj_ptr(obj_value);
+            if !obj.is_null() && (obj as usize) > 0x10000 {
+                let gc = gc_header_for(obj);
+                (*gc)._reserved |= crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+            }
+        }
+        return obj_value;
+    }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if !obj.is_null() && (obj as usize) > 0x10000 {

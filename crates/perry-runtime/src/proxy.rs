@@ -566,6 +566,31 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_get(target, key);
     }
+    // `p.apply` / `p.call` / `p.bind` VALUE reads on a callable-wrapping
+    // proxy resolve to Function.prototype's methods with the PROXY as the
+    // receiver — reify a bound method so a later invocation dispatches
+    // `js_native_call_method(proxy, "call", …)` and routes through the
+    // proxy's [[Call]] (apply trap). Reading off the target instead would
+    // bypass the trap. (Test262 proxy-toString reads `.apply` as a value;
+    // Function.prototype.toString on the reified method is the
+    // NativeFunction form.)
+    if crate::object::value_is_callable(target) {
+        if let Some(name) = key_to_rust_string(key) {
+            let method: Option<&'static [u8]> = match name.as_str() {
+                "apply" => Some(b"apply"),
+                "call" => Some(b"call"),
+                "bind" => Some(b"bind"),
+                _ => None,
+            };
+            if let Some(m) = method {
+                // Only when the target has no OWN override of the slot.
+                let t_ptr = extract_pointer(target.to_bits()) as usize;
+                if !crate::closure::closure_has_own_dynamic_prop(t_ptr, &name) {
+                    return unsafe { crate::closure::reify_function_method_value(proxy_boxed, m) };
+                }
+            }
+        }
+    }
     target_get(target, key)
 }
 
@@ -1558,8 +1583,12 @@ pub extern "C" fn js_proxy_revocable(target: f64, handler: f64) -> f64 {
     let proxy = js_proxy_new(target, handler);
 
     // Build the revoke closure capturing the proxy value.
-    let revoke_closure = crate::closure::js_closure_alloc(reflect_misc::proxy_revoke_trampoline as *const u8, 1);
-    crate::closure::js_register_closure_arity(reflect_misc::proxy_revoke_trampoline as *const u8, 0);
+    let revoke_closure =
+        crate::closure::js_closure_alloc(reflect_misc::proxy_revoke_trampoline as *const u8, 1);
+    crate::closure::js_register_closure_arity(
+        reflect_misc::proxy_revoke_trampoline as *const u8,
+        0,
+    );
     crate::closure::js_closure_set_capture_f64(revoke_closure, 0, proxy);
     let revoke_boxed = f64::from_bits(POINTER_TAG | ((revoke_closure as u64) & POINTER_MASK));
 

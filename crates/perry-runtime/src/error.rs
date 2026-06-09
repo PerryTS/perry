@@ -733,6 +733,12 @@ pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
     throw_reference_error_message(b"identifier is not defined")
 }
 
+/// Keepalive anchor for the auto-optimize whole-program build (generated-code
+///-only callee; see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_GLOBAL_GET_OR_THROW_UNRESOLVED: extern "C" fn(f64) -> f64 =
+    js_global_get_or_throw_unresolved;
+
 /// Read a compile-time-unresolved identifier off `globalThis` (a global the
 /// program created dynamically — `Function("this.y = 2")()` — exists only at
 /// runtime), throwing the spec ReferenceError when no such global property

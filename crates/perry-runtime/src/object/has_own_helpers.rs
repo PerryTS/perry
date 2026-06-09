@@ -24,12 +24,13 @@ pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
         // A constructor-capable function's `.prototype` is an own property
         // from birth even though Perry materializes the object lazily —
         // `f.hasOwnProperty('prototype')` must be true BEFORE any read of
-        // `f.prototype`. The for-read helper materializes (idempotently) and
-        // returns None for arrows/builtins, which really have no own slot.
+        // `f.prototype`. Predicate only: materializing here would lock the
+        // slot's attributes ahead of a later `defineProperty(fn,
+        // "prototype", …)`.
         "prototype" => {
             crate::closure::closure_has_own_dynamic_prop(ptr, key) || {
                 let val = crate::value::js_nanbox_pointer(ptr as i64);
-                super::class_registry::ordinary_function_prototype_value_for_read(val).is_some()
+                super::class_registry::function_would_have_own_prototype(val)
             }
         }
         // User props are real own dynamic props in the side table.

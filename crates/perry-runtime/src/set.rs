@@ -116,13 +116,20 @@ pub fn is_registered_set(addr: usize) -> bool {
     if addr < 0x100000 {
         return false;
     }
+    // Registry FIRST: it is authoritative and dereference-free. Probing the
+    // GC header before consulting the registry dereferenced `addr - 8` for
+    // arbitrary candidate pointers (e.g. garbage read off a TypedArray
+    // header by a mis-typed caller) — segfaults on Linux where freed/foreign
+    // pages get unmapped (mimalloc on macOS retains them, hiding the bug).
+    if !SET_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+        return false;
+    }
+    // A registered address is a live arena Set; the header read is safe and
+    // guards against a stale entry whose memory was reused by another type.
     unsafe {
         let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_SET {
-            return false;
-        }
+        (*header).obj_type == crate::gc::GC_TYPE_SET
     }
-    SET_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
 /// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Set`

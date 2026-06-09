@@ -45,6 +45,13 @@ pub extern "C" fn js_module_top_this() -> f64 {
     val
 }
 
+/// Keepalive anchor: `js_module_top_this` is referenced only from
+/// codegen-generated `.o` files, so the auto-optimize whole-program LLVM
+/// rebuild would dead-strip it without this `#[used]` pin (see
+/// project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {

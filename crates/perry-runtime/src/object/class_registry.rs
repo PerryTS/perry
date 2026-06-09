@@ -2591,6 +2591,22 @@ fn is_arrow_function_value(value: f64) -> bool {
     crate::closure::closure_is_arrow(ptr)
 }
 
+/// Predicate-only sibling of `ordinary_function_prototype_value_for_read`:
+/// would this function have an own `.prototype` slot? Crucially does NOT
+/// materialize the prototype object — `fn.hasOwnProperty('prototype')` must
+/// not lock the slot's attributes before a later
+/// `Object.defineProperty(fn, "prototype", …)` (TypedArrayConstructors
+/// custom-proto tests).
+pub(crate) fn function_would_have_own_prototype(func_value: f64) -> bool {
+    if !is_callable_function_value(func_value) || is_arrow_function_value(func_value) {
+        return false;
+    }
+    if super::native_module::builtin_closure_is_non_constructable_value(func_value) {
+        return false;
+    }
+    synthetic_class_id_for_function(func_value) != 0
+}
+
 pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Option<f64> {
     if !is_callable_function_value(func_value) || is_arrow_function_value(func_value) {
         return None;

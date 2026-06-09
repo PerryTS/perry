@@ -350,9 +350,10 @@ pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
 /// `Proxy.revocable`. The closure captures the proxy value in capture slot 0;
 /// invoking it revokes that specific proxy. Idempotent — revoking an
 /// already-revoked proxy is a no-op (Node's `revoke()` is idempotent). (#2846)
-pub(super) extern "C" fn proxy_revoke_trampoline(closure: *const crate::closure::ClosureHeader) -> f64 {
+pub(super) extern "C" fn proxy_revoke_trampoline(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
     let proxy = crate::closure::js_closure_get_capture_f64(closure, 0);
     js_proxy_revoke(proxy);
     f64::from_bits(TAG_UNDEFINED)
 }
-

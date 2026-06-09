@@ -393,7 +393,8 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
     if !matches!(
         prop,
         "prototype" | "name" | "length" | "caller" | "arguments" | "constructor"
-    ) {
+    ) && !prop.as_bytes().first().is_some_and(|b| b.is_ascii_digit())
+    {
         thread_local! {
             static IN_FN_PROTO_FALLBACK: std::cell::Cell<bool> =
                 const { std::cell::Cell::new(false) };
@@ -405,16 +406,15 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             let proto_jv = crate::value::JSValue::from_bits(proto_val.to_bits());
             if proto_jv.is_pointer() {
                 let proto_ptr = (proto_jv.bits() & crate::value::POINTER_MASK) as usize;
-                // USER expandos walk through (a `Function.prototype.x = …`
-                // write records no attrs), as do the spec call-routing
-                // methods `apply`/`call`/`bind` (so an OBJECT whose proto
-                // chain contains a function resolves `obj.apply` —
-                // S15.3.4.3_A1_T1). Every OTHER method installed at init
-                // (`hasOwnProperty`, `propertyIsEnumerable`, …) stays
-                // excluded: serving those generic object thunks to closure
-                // reads would hijack the dedicated closure-aware dispatch
-                // arms.
-                let routed_method = matches!(prop, "apply" | "call" | "bind");
+                // ONLY user expandos walk through (a `Function.prototype.x
+                // = …` write records no attrs). Methods installed at init
+                // (`apply`, `call`, `hasOwnProperty`, …) stay excluded:
+                // serving those generic thunks to closure reads hijacks the
+                // dedicated dispatch arms (`p.call(...)`'s undefined-read
+                // fallback to method-dispatch-by-name is what routes the
+                // proxy APPLY trap). `fn.apply`-style VALUE reads through a
+                // proxy are reified receiver-correctly by `js_proxy_get`.
+                let routed_method = false;
                 if proto_ptr != 0
                     && proto_ptr != ptr
                     && !is_closure_ptr(proto_ptr)
