@@ -301,6 +301,73 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &lowered,
                 ));
             }
+            // #4831 (Stripe-style `StripeResource.extend(...)`): the receiver
+            // is an imported *function* (or class-ref) that carries the called
+            // method as a DYNAMIC own property — e.g. `function StripeResource()
+            // {}; StripeResource.extend = protoExtend;` in one module, then
+            // `StripeResource.extend({...})` in another. The HIR's "uppercase
+            // imported Ident looks like a class" rule lifts this to a
+            // `StaticMethodCall`, but there is no compile-time class static to
+            // resolve (`ctx.methods` miss above), it isn't a namespace import,
+            // and it isn't a V8-fallback specifier — so the pre-fix code fell
+            // here and returned the literal `0`. That made every Stripe resource
+            // method (`stripe.products.create`, etc.) `undefined`/non-callable.
+            //
+            // When the receiver name resolves to a materializable imported value
+            // (a native `import_function_prefixes` symbol or a `class_ids`
+            // class-ref), route the call through the runtime method dispatcher:
+            // materialize the receiver, read the named method off its dynamic
+            // props, and invoke it with `this` bound to the receiver. This is
+            // the same dispatch the same-module `Base.extend()` path already
+            // uses, and it is strictly better than the `0` stub for every other
+            // case that reached here. Related: #4656 (general prototype-chain
+            // `[[Get]]` inheritance); this fix is scoped to the cross-module
+            // dynamic-method-on-imported-function call shape.
+            if ctx.import_function_prefixes.contains_key(class_name)
+                || ctx.class_ids.contains_key(class_name)
+            {
+                let recv_box = lower_expr(
+                    ctx,
+                    &Expr::ExternFuncRef {
+                        name: class_name.clone(),
+                        param_types: vec![],
+                        return_type: HirType::Any,
+                    },
+                )?;
+                let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered_args.push(lower_expr(ctx, a)?);
+                }
+                let (args_ptr, args_len) = if lowered_args.is_empty() {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let n = lowered_args.len();
+                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                    {
+                        let blk = ctx.block();
+                        for (i, value) in lowered_args.iter().enumerate() {
+                            let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                            blk.store(DOUBLE, value, &slot);
+                        }
+                    }
+                    (buf, n.to_string())
+                };
+                let method_idx = ctx.strings.intern(method_name);
+                let entry = ctx.strings.entry(method_idx);
+                let bytes_global = format!("@{}", entry.bytes_global);
+                let name_len = entry.byte_len.to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method",
+                    &[
+                        (DOUBLE, &recv_box),
+                        (PTR, &bytes_global),
+                        (I64, &name_len),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
+                ));
+            }
             for a in args {
                 let _ = lower_expr(ctx, a)?;
             }
