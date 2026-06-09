@@ -399,7 +399,10 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         method: "setHeader",
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_set_header_self",
-        args: &[NA_STR, NA_STR],
+        // #4826: value passed as a raw JSValue (NA_F64) so array values
+        // (e.g. Set-Cookie) are detected and emitted as one wire line per
+        // element instead of a single comma-joined / JSON-stringified line.
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {

@@ -1183,15 +1183,10 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
             sr.headers_sent = true;
             sr.writable_finished = true;
             let body = std::mem::take(&mut sr.buffered_body);
-            let mut headers = Vec::with_capacity(sr.headers.len());
-            for (lower_k, v) in &sr.headers {
-                let orig = sr
-                    .raw_header_names
-                    .get(lower_k)
-                    .cloned()
-                    .unwrap_or_else(|| lower_k.clone());
-                headers.push((orig, v.clone()));
-            }
+            // `snapshot_headers` expands array-valued headers (e.g.
+            // Set-Cookie) into one entry per element so they emit a separate
+            // wire line each (#4826).
+            let mut headers = sr.snapshot_headers();
             if !sr.headers.contains_key("content-length")
                 && !sr.headers.contains_key("transfer-encoding")
             {

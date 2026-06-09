@@ -205,8 +205,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_res_set_status", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_get_status", DOUBLE, &[I64]);
     module.declare_function("js_node_http_res_set_status_message", VOID, &[I64, I64]);
-    module.declare_function("js_node_http_res_set_header", VOID, &[I64, I64, I64]);
-    module.declare_function("js_node_http_res_set_header_self", I64, &[I64, I64, I64]);
+    module.declare_function("js_node_http_res_set_header", VOID, &[I64, I64, DOUBLE]);
+    module.declare_function("js_node_http_res_set_header_self", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_node_http_res_get_header", DOUBLE, &[I64, I64]);
     module.declare_function("js_node_http_res_remove_header", VOID, &[I64, I64]);
     module.declare_function("js_node_http_res_has_header", I32, &[I64, I64]);

@@ -21,8 +21,8 @@ use tokio::sync::oneshot;
 
 use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
 use crate::types::{
-    js_json_stringify, jsvalue_to_body_bytes, read_string_header, PTR_MASK, STRING_TAG, TAG_NULL,
-    TAG_UNDEFINED,
+    js_json_stringify, jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, PTR_MASK,
+    STRING_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 
 pub type ResponseBody = BoxBody<Bytes, Infallible>;
@@ -60,8 +60,16 @@ impl Body for TrailerBody {
 pub struct ServerResponse {
     pub status_code: u16,
     pub status_message: Option<String>,
-    /// Lowercase-keyed header map (the lookup table).
+    /// Lowercase-keyed header map (the lookup table). For array-valued
+    /// headers this holds Node's scalar coercion (the array's elements
+    /// joined with `, `); the per-element values live in
+    /// `header_value_lists` so the wire layer can emit one line each.
     pub headers: HashMap<String, String>,
+    /// Lowercase-keyed multi-value header map. Populated when a header is
+    /// assigned an array value (e.g. `Set-Cookie`): Node emits one header
+    /// line per element rather than a single comma-joined line, so the wire
+    /// serializer expands these into repeated `name: value` lines (#4826).
+    pub header_value_lists: HashMap<String, Vec<String>>,
     /// Lowercase-keyed trailer map for HTTP trailers emitted after the
     /// response body, per Node's `ServerResponse.addTrailers` contract.
     pub trailers: HashMap<String, String>,
@@ -187,6 +195,7 @@ impl ServerResponse {
             status_code: 200,
             status_message: None,
             headers: HashMap::new(),
+            header_value_lists: HashMap::new(),
             trailers: HashMap::new(),
             raw_header_names: HashMap::new(),
             raw_trailer_names: HashMap::new(),
@@ -208,8 +217,10 @@ impl ServerResponse {
     }
 
     /// Snapshot the current header map as `Vec<(orig_name, value)>`
-    /// preserving original case.
-    fn snapshot_headers(&self) -> Vec<(String, String)> {
+    /// preserving original case. Array-valued headers (tracked in
+    /// `header_value_lists`) expand to one entry per element so the wire
+    /// layer emits a separate header line each (#4826).
+    pub fn snapshot_headers(&self) -> Vec<(String, String)> {
         let mut out = Vec::with_capacity(self.headers.len());
         for (lower_k, v) in &self.headers {
             let orig = self
@@ -217,7 +228,13 @@ impl ServerResponse {
                 .get(lower_k)
                 .cloned()
                 .unwrap_or_else(|| lower_k.clone());
-            out.push((orig, v.clone()));
+            if let Some(values) = self.header_value_lists.get(lower_k) {
+                for elem in values {
+                    out.push((orig.clone(), elem.clone()));
+                }
+            } else {
+                out.push((orig, v.clone()));
+            }
         }
         out
     }
@@ -292,24 +309,61 @@ pub unsafe extern "C" fn js_node_http_res_set_status_message(
     }
 }
 
-/// `res.setHeader(name, value)` — string value form. Object/array
-/// values get JSON-stringified by the TS-side wrapper before reaching
-/// here so the FFI surface stays simple.
+/// `res.setHeader(name, value)`. `value` arrives as a raw NaN-boxed
+/// JSValue (`NA_F64`) so array values (e.g. `Set-Cookie`) can be detected
+/// and stored as a per-element list — Node emits one header line per array
+/// element rather than a single comma-joined / JSON-stringified line
+/// (#4826). Scalar values are coerced to a string as before.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_set_header(
     handle: i64,
     name_ptr: *const StringHeader,
-    value_ptr: *const StringHeader,
+    value: f64,
 ) {
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
-    let value = read_string_header(value_ptr as *mut _).unwrap_or_default();
     if name.is_empty() {
         return;
     }
     let lower = name.to_lowercase();
+
+    // Detect an array value via JSON: an array serializes to `[ … ]` and
+    // parses back to `serde_json::Value::Array`. Anything else is coerced
+    // to its string form (matching the previous `NA_STR` behavior).
+    let jsv = JsValue::from_bits(value.to_bits());
+    let array_elems: Option<Vec<String>> = if jsv.is_pointer() {
+        let ptr = js_json_stringify(value, 0);
+        if ptr.is_null() {
+            None
+        } else {
+            read_string_header(ptr).and_then(|json| {
+                match serde_json::from_str::<serde_json::Value>(&json) {
+                    Ok(serde_json::Value::Array(items)) => Some(
+                        items
+                            .into_iter()
+                            .map(|item| match item {
+                                serde_json::Value::String(s) => s,
+                                other => other.to_string(),
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                }
+            })
+        }
+    } else {
+        None
+    };
+
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.headers_sent {
-            sr.headers.insert(lower.clone(), value);
+            if let Some(elems) = array_elems {
+                sr.headers.insert(lower.clone(), elems.join(", "));
+                sr.header_value_lists.insert(lower.clone(), elems);
+            } else {
+                sr.headers
+                    .insert(lower.clone(), jsvalue_to_owned_string(value).unwrap_or_default());
+                sr.header_value_lists.remove(&lower);
+            }
             sr.raw_header_names.insert(lower, name);
         }
     }
@@ -320,9 +374,9 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
 pub unsafe extern "C" fn js_node_http_res_set_header_self(
     handle: i64,
     name_ptr: *const StringHeader,
-    value_ptr: *const StringHeader,
+    value: f64,
 ) -> i64 {
-    js_node_http_res_set_header(handle, name_ptr, value_ptr);
+    js_node_http_res_set_header(handle, name_ptr, value);
     handle
 }
 
@@ -359,6 +413,7 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.headers_sent {
             sr.headers.remove(&name);
+            sr.header_value_lists.remove(&name);
             sr.raw_header_names.remove(&name);
         }
     }
@@ -408,13 +463,21 @@ pub unsafe extern "C" fn js_node_http_res_append_header(
     let lower = name.to_lowercase();
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.headers_sent {
-            sr.headers
-                .entry(lower.clone())
-                .and_modify(|existing| {
-                    existing.push(',');
-                    existing.push_str(&value);
-                })
-                .or_insert(value);
+            if let Some(list) = sr.header_value_lists.get_mut(&lower) {
+                // Already a multi-value header (e.g. Set-Cookie): append a new
+                // element so it emits its own wire line (#4826).
+                list.push(value.clone());
+                let joined = list.join(", ");
+                sr.headers.insert(lower.clone(), joined);
+            } else {
+                sr.headers
+                    .entry(lower.clone())
+                    .and_modify(|existing| {
+                        existing.push(',');
+                        existing.push_str(&value);
+                    })
+                    .or_insert(value);
+            }
             sr.raw_header_names.entry(lower).or_insert(name);
         }
     }
@@ -561,11 +624,29 @@ fn apply_headers_json(sr: &mut ServerResponse, json: &str) {
     if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(json) {
         for (k, v) in obj {
             let lower = k.to_lowercase();
+            // Array values (e.g. Set-Cookie) emit one wire line per element.
+            // Node coerces the scalar `getHeader`/lookup value to the
+            // elements joined with `, `, and keeps the per-element list so
+            // the response serializer can emit each on its own line (#4826).
+            if let serde_json::Value::Array(items) = v {
+                let elems: Vec<String> = items
+                    .into_iter()
+                    .map(|item| match item {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    })
+                    .collect();
+                sr.headers.insert(lower.clone(), elems.join(", "));
+                sr.header_value_lists.insert(lower.clone(), elems);
+                sr.raw_header_names.insert(lower, k);
+                continue;
+            }
             let value = match v {
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),
             };
             sr.headers.insert(lower.clone(), value);
+            sr.header_value_lists.remove(&lower);
             sr.raw_header_names.insert(lower, k);
         }
     }

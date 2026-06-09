@@ -113,11 +113,7 @@ extern "C" {
     fn js_node_http_res_set_status(handle: i64, code: f64);
     fn js_node_http_res_get_status(handle: i64) -> f64;
     fn js_node_http_res_set_status_message(handle: i64, msg_ptr: *const StringHeader);
-    fn js_node_http_res_set_header(
-        handle: i64,
-        name_ptr: *const StringHeader,
-        value_ptr: *const StringHeader,
-    );
+    fn js_node_http_res_set_header(handle: i64, name_ptr: *const StringHeader, value: f64);
     fn js_node_http_res_get_header(handle: i64, name_ptr: *const StringHeader) -> f64;
     fn js_node_http_res_remove_header(handle: i64, name_ptr: *const StringHeader);
     fn js_node_http_res_has_header(handle: i64, name_ptr: *const StringHeader) -> i32;
@@ -518,7 +514,9 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         "setHeader" if args.len() >= 2 => {
             let name = string_value_arg(args[0]);
             if !name.is_null() {
-                js_node_http_res_set_header(handle, name, string_value_arg(args[1]));
+                // Pass the raw JSValue so array values (Set-Cookie) keep their
+                // per-element structure for one-line-per-element wire output.
+                js_node_http_res_set_header(handle, name, args[1]);
             }
             self_ref
         }
