@@ -369,6 +369,30 @@ pub(crate) fn ensure_function_prototype_object(
     if class_id == 0 {
         return std::ptr::null_mut();
     }
+    // A `Temporal.<X>` constructor pre-populates its `prototype` (a real object
+    // with the type's accessor getters / methods) during globalThis init and
+    // stamps it on the closure's `prototype` dynamic prop — but intentionally
+    // NOT in the GC-scanned class-prototype cache (rooting an init-time arena
+    // object there dangles across the test-suite's arena-fixture swaps). So when
+    // `new Temporal.X()` / a reflective `.prototype` read lands here, return that
+    // pre-set object as-is instead of allocating a fresh empty one (which would
+    // overwrite the populated prototype). Gated on `temporal_ctor_kind` so the
+    // ordinary class-prototype flow (which relies on the cache for method
+    // registration) is unaffected.
+    if super::global_this::temporal_ctor_kind(func_value).is_some() {
+        let fv_bits = func_value.to_bits();
+        let fp = (fv_bits & crate::value::POINTER_MASK) as usize;
+        if fp != 0 {
+            let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
+            let dp = JSValue::from_bits(dyn_proto.to_bits());
+            if dp.is_pointer() {
+                let pp = dp.as_pointer::<ObjectHeader>();
+                if !pp.is_null() {
+                    return pp as *mut ObjectHeader;
+                }
+            }
+        }
+    }
     let existing = class_prototype_object(class_id);
     if !existing.is_null() {
         return existing;

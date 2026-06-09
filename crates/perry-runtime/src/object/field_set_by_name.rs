@@ -180,6 +180,17 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // A `Temporal.*` value is an opaque, immutable NaN-boxed cell — writing an
+    // arbitrary property (e.g. test262's `instance.constructor = …` subclassing
+    // probes) must be a no-op, not interpret the cell as an `ObjectHeader` and
+    // corrupt its boxed payload (which segfaults on the next deref). `obj` still
+    // carries its NaN-box tag here (`0x7FFD…` for a real cell, `0x7FFE…` for a
+    // class-ref), so route through `is_temporal_value`, which checks the
+    // POINTER_TAG before masking to the cleaned heap address — passing the raw
+    // tagged bits to `is_temporal_cell_addr` would deref a wild address.
+    if crate::temporal::is_temporal_value(f64::from_bits(obj as u64)) {
+        return;
+    }
     if let Some(addr) =
         crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
     {

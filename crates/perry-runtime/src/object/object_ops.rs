@@ -2232,6 +2232,14 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
         return crate::proxy::js_proxy_get_prototype_of(obj_value);
     }
+    // A Temporal value is a NaN-boxed opaque cell, not an `ObjectHeader` — the
+    // heap-object resolution below would deref its boxed payload as a class id
+    // and crash. The reflective prototype is reachable directly as
+    // `Temporal.<Type>.prototype`, so for a cell receiver return `null` rather
+    // than faulting on the cell.
+    if crate::temporal::is_temporal_value(obj_value) {
+        return f64::from_bits(TAG_NULL);
+    }
     let bits = obj_value.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFD {

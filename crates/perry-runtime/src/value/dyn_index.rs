@@ -227,6 +227,11 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     if jsval.is_string() || jsval.is_short_string() {
         return value;
     }
+    // A `Temporal.*` value is an opaque immutable cell — a dynamic property
+    // write (`temporalValue[key] = v`) is a no-op, never an ObjectHeader write.
+    if crate::temporal::is_temporal_value(obj) {
+        return value;
+    }
     // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key] = v` where `C` is
     // a runtime class-ref value (e.g. a function parameter). Route to the
     // by-name setter, which detects the class-ref tag and stores into the

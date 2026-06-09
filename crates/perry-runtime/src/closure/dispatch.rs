@@ -1343,6 +1343,13 @@ pub unsafe extern "C" fn js_native_call_value(
             arg_at(6),
             arg_at(7),
         ),
+        // Arities 9..=16 must each dispatch through their own
+        // `js_closure_call{N}` so the func-ptr is transmuted to a signature
+        // with the matching number of `f64` params. Collapsing these into
+        // `js_closure_call8` (the pre-fix `_` arm) silently dropped args 9+ for
+        // any closure VALUE / method invoked with >8 args — the codegen-side
+        // wrapper now carries up to 16 params (see artifacts.rs), so the runtime
+        // dispatch must reach them. >16 args fall back to the array path.
         9 => js_closure_call9(
             closure,
             arg_at(0),
@@ -1448,12 +1455,7 @@ pub unsafe extern "C" fn js_native_call_value(
             arg_at(13),
             arg_at(14),
         ),
-        // 16+ positional args: the closure-call ABI tops out at
-        // `js_closure_call16`. Functions with more must be reached through a
-        // rest-bundling path (handled above for closures with a registered
-        // rest param); plain functions with >16 positional params are
-        // vanishingly rare, so the surplus is truncated here.
-        _ => js_closure_call16(
+        16 => js_closure_call16(
             closure,
             arg_at(0),
             arg_at(1),
@@ -1472,6 +1474,15 @@ pub unsafe extern "C" fn js_native_call_value(
             arg_at(14),
             arg_at(15),
         ),
+        // >16 args: marshal into a stack buffer and dispatch via the variadic
+        // array path (which itself fans back out to `js_closure_call{N}`).
+        _ => {
+            let mut buf: Vec<f64> = Vec::with_capacity(dispatch_args_len);
+            for i in 0..dispatch_args_len {
+                buf.push(arg_at(i));
+            }
+            js_closure_call_array(closure as i64, buf.as_ptr(), buf.len() as i64)
+        }
     }
 }
 

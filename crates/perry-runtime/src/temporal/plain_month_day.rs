@@ -22,7 +22,7 @@ fn calendar_arg(v: f64) -> Calendar {
     if jv.is_string() {
         return ok_or_throw(dispatch::read_string(v).parse::<Calendar>());
     }
-    Calendar::default()
+    crate::object::throw_object_type_error(b"calendar must be a calendar identifier string")
 }
 
 /// `new Temporal.PlainMonthDay(month, day, calendar?, referenceYear?)`.
@@ -56,29 +56,43 @@ fn coerce_md(v: f64) -> PlainMonthDay {
         return ok_or_throw(dispatch::read_string(v).parse::<PlainMonthDay>());
     }
     if jv.is_pointer() {
+        if crate::symbol::is_registered_symbol(jv.as_pointer::<u8>() as usize) {
+            crate::object::throw_object_type_error(
+                b"Cannot convert a Symbol to a Temporal.PlainMonthDay",
+            );
+        }
         let obj = jv.as_pointer::<crate::object::ObjectHeader>();
         if !obj.is_null() {
-            let f = |name: &str| -> f64 {
+            let has_field = |name: &str| -> bool {
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                JSValue::from_bits(
-                    crate::object::js_object_get_field_by_name_f64(obj, key).to_bits(),
-                )
-                .to_number()
+                crate::object::js_object_get_field_by_name_f64(obj, key).to_bits()
+                    != crate::value::TAG_UNDEFINED
             };
+            if !["month", "monthCode", "day", "year", "era", "eraYear"]
+                .iter()
+                .any(|n| has_field(n))
+            {
+                crate::object::throw_object_type_error(
+                    b"object is not a valid Temporal.PlainMonthDay property bag",
+                );
+            }
+            // Build via the calendar's `month_day_from_fields` so `monthCode`,
+            // `year`/`era` disambiguation, and overflow handling all work
+            // (the old `month`/`day`-only path dropped monthCode entirely).
             let cal_key = crate::string::js_string_from_bytes(b"calendar".as_ptr(), 8);
             let cal_raw = crate::object::js_object_get_field_by_name_f64(obj, cal_key);
-            return ok_or_throw(PlainMonthDay::new_with_overflow(
-                f("month") as u8,
-                f("day") as u8,
-                calendar_arg(cal_raw),
-                Overflow::default(),
-                None,
+            let partial = temporal_rs::partial::PartialDate {
+                calendar_fields: super::options::calendar_fields(obj),
+                calendar: calendar_arg(cal_raw),
+            };
+            return ok_or_throw(PlainMonthDay::from_partial(
+                partial,
+                Some(Overflow::Constrain),
             ));
         }
     }
-    crate::fs::validate::throw_range_error_with_code(
-        "Cannot convert value to a Temporal.PlainMonthDay",
-    )
+    // Non-string, non-object primitive → TypeError per ToTemporalMonthDay.
+    crate::object::throw_object_type_error(b"Cannot convert value to a Temporal.PlainMonthDay")
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
@@ -104,6 +118,8 @@ pub fn call(recv: f64, md: &PlainMonthDay, name: &str, args: &[f64]) -> f64 {
                     && md.calendar_id() == other.calendar_id(),
             )
         }
+        // `toString` honors `{ calendarName }`; `toJSON`/`toLocaleString` use the
+        // default ("auto") calendar display.
         "toString" => {
             string(&md.to_ixdtf_string(super::options::display_calendar(raw_arg(args, 0))))
         }
