@@ -223,8 +223,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 // MakeConstructor). Only the constructor ref carries it — the
                 // prototype ref's own `prototype` lookup falls through.
                 // (Test262 definition/prototype-property.)
-                if method_name == "prototype"
-                    && super::class_prototype_ref_id(obj_value).is_none()
+                if method_name == "prototype" && super::class_prototype_ref_id(obj_value).is_none()
                 {
                     let proto = super::native_module::class_prototype_ref_value(class_id);
                     return build_data_descriptor(proto, false, false, false);

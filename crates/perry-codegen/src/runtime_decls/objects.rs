@@ -53,7 +53,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_set_unboxed_f64_field", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_object_get_unboxed_f64_field", DOUBLE, &[I64, I32]);
     module.declare_function("js_object_set_field_by_name", VOID, &[I64, I64, DOUBLE]);
-    module.declare_function("js_object_set_field_by_name_nonenum", VOID, &[I64, I64, DOUBLE]);
+    module.declare_function(
+        "js_object_set_field_by_name_nonenum",
+        VOID,
+        &[I64, I64, DOUBLE],
+    );
     module.declare_function("js_with_has_binding", I32, &[DOUBLE, I64]);
     module.declare_function("js_with_get_binding", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_with_set_binding", DOUBLE, &[DOUBLE, I64, DOUBLE, I32]);
