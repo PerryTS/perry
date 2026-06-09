@@ -482,6 +482,12 @@ fn resolve_fn_ctor_arg(
                 FnCtorShape::DynCtor(_) | FnCtorShape::FnLiteral(_) => None,
             };
         }
+        // A constant EXPRESSION over env entries — `Function(p + "," + p,
+        // …)` where `p` is a recorded toString object. The partial
+        // evaluator runs the toStrings (counters, side effects) in order.
+        if let Some(v) = super::fn_ctor_env::eval_arg_expr(&mut ctx.fn_ctor_env, e) {
+            return Some(ResolvedArg::Str(v));
+        }
     }
     None
 }

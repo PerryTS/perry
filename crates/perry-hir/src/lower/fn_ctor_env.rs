@@ -269,6 +269,52 @@ pub(crate) fn build_fn_ctor_env(module: &ast::Module) -> FnCtorEnv {
             }
         }
     }
+    // Top-level function DECLARATIONS too (`async function f() {}` then
+    // `f.constructor`). The declaration itself counted as the name's one
+    // write; any further write disqualifies.
+    fn collect_fn_decl_kinds(
+        stmts: &[ast::Stmt],
+        decls: &HashMap<String, (usize, Option<ast::Expr>)>,
+        writes: &HashMap<String, usize>,
+        out: &mut HashMap<String, DynFnCtorKind>,
+    ) {
+        for stmt in stmts {
+            match stmt {
+                ast::Stmt::Decl(ast::Decl::Fn(f)) => {
+                    let name = f.ident.sym.to_string();
+                    if writes.get(&name).copied().unwrap_or(0) == 1 && !decls.contains_key(&name) {
+                        let kind = match (f.function.is_async, f.function.is_generator) {
+                            (false, false) => DynFnCtorKind::Plain,
+                            (true, false) => DynFnCtorKind::Async,
+                            (false, true) => DynFnCtorKind::Generator,
+                            (true, true) => DynFnCtorKind::AsyncGenerator,
+                        };
+                        out.insert(name, kind);
+                    }
+                }
+                ast::Stmt::Block(b) => collect_fn_decl_kinds(&b.stmts, decls, writes, out),
+                ast::Stmt::Try(t) => {
+                    collect_fn_decl_kinds(&t.block.stmts, decls, writes, out);
+                    if let Some(h) = &t.handler {
+                        collect_fn_decl_kinds(&h.body.stmts, decls, writes, out);
+                    }
+                    if let Some(fin) = &t.finalizer {
+                        collect_fn_decl_kinds(&fin.stmts, decls, writes, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let top_stmts: Vec<ast::Stmt> = module
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            ast::ModuleItem::Stmt(stmt) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect();
+    collect_fn_decl_kinds(&top_stmts, &decls, &writes, &mut fn_literal_vars);
 
     for (name, (decl_count, init)) in &decls {
         if *decl_count != 1 {
@@ -532,6 +578,17 @@ pub(crate) fn eval_tostring(env: &mut FnCtorEnv, body: &ToStringBody) -> Option<
     }
 }
 
+/// Evaluate a whole `Function(...)` ARGUMENT expression (Bin-add chains over
+/// env entries) to the string ToString would produce.
+pub(crate) fn eval_arg_expr(env: &mut FnCtorEnv, expr: &ast::Expr) -> Option<String> {
+    // Only composite expressions — bare idents/literals are handled (with
+    // throw support) by the caller.
+    if !matches!(expr, ast::Expr::Bin(_)) {
+        return None;
+    }
+    eval_const_expr(env, expr).map(|v| v.to_js_string())
+}
+
 fn eval_const_expr(env: &mut FnCtorEnv, expr: &ast::Expr) -> Option<ConstVal> {
     if let Some(v) = literal_const_val(expr) {
         return Some(v);
@@ -546,6 +603,23 @@ fn eval_const_expr(env: &mut FnCtorEnv, expr: &ast::Expr) -> Option<ConstVal> {
             match env.entries.get(&name) {
                 Some(FnCtorShape::Str(s)) => Some(ConstVal::Str(s.clone())),
                 Some(FnCtorShape::UndefinedVar) => Some(ConstVal::Undefined),
+                // An object-with-toString var inside a larger expression
+                // (`Function(p + "," + p, …)`) — ToString runs its body,
+                // counters and all. Throwing bodies bail (conservative).
+                Some(FnCtorShape::ObjToString(body)) => {
+                    let body = body.clone();
+                    if body.is_throw {
+                        return None;
+                    }
+                    let v = eval_const_expr(env, &body.expr)?;
+                    env.pending_side_effects
+                        .extend(body.assigns.iter().cloned());
+                    for name in &body.poisoned {
+                        env.entries.remove(name);
+                        env.counters.remove(name);
+                    }
+                    Some(ConstVal::Str(v.to_js_string()))
+                }
                 _ => None,
             }
         }

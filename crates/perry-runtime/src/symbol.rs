@@ -263,7 +263,13 @@ pub unsafe extern "C" fn js_is_symbol(value: f64) -> i32 {
         return 1;
     }
     let ptr = ptr_usize as *const SymbolHeader;
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
+    // Registry handles (proxies, fetch/stream handles, …) are POINTER_TAG'd
+    // small ids, NOT heap allocations — dereferencing one for the magic
+    // probe segfaults on Linux (unmapped page; mimalloc on macOS happens to
+    // retain, hiding it). Real heap symbols live above the 0x100000 floor
+    // (same rationale as the typeof / iterator guards, #1843/#4800), and
+    // registered symbols already returned above.
+    if ptr.is_null() || (ptr as usize) < 0x100000 {
         return 0;
     }
     if (*ptr).magic == SYMBOL_MAGIC {

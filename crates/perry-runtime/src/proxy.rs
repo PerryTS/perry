@@ -1066,6 +1066,19 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
             };
         }
         if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {
+            // ECMAScript poison pill: `fn.caller = v` / `fn.arguments = v` on
+            // a strict-mode function (all Perry-compiled code) throws via the
+            // %ThrowTypeError% accessor's absent setter. A genuine own data
+            // prop (defineProperty round-trip) still wins via the descriptor
+            // arm above.
+            let cur_ptr = extract_pointer(current.to_bits()) as usize;
+            if let Some(name) = key_to_rust_string(key) {
+                if matches!(name.as_str(), "caller" | "arguments")
+                    && !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name)
+                {
+                    throw_type_error("Restricted function property assignment");
+                }
+            }
             return create_or_update_receiver_property(receiver, key, value);
         }
         let Some(proto) = prototype_of_for_set(current) else {

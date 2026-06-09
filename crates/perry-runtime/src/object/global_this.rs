@@ -1556,6 +1556,14 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
     if value.is_undefined() || value.is_null() {
         return Vec::new();
     }
+    // An arguments OBJECT is array-like but fails the IsArray check below —
+    // unpack it via its registry (`fn.apply(this, arguments)`).
+    if value.is_pointer() {
+        let raw = (value.bits() & crate::value::POINTER_MASK) as usize;
+        if let Some(values) = super::arguments_object_to_vec(raw as *const super::ObjectHeader) {
+            return values;
+        }
+    }
     let is_array = JSValue::from_bits(crate::array::js_array_is_array(args_array).to_bits());
     if !is_array.is_bool() || !is_array.as_bool() {
         return Vec::new();

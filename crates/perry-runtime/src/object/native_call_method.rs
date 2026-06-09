@@ -1419,6 +1419,12 @@ pub unsafe extern "C" fn js_native_call_method(
         if raw_addr >= 0x100000
             && crate::closure::is_closure_ptr(raw_addr)
             && !crate::closure::closure_is_key_deleted(raw_addr, method_name)
+            // apply/call/bind/toString on a closure receiver have dedicated
+            // spec-accurate arms below; the dynamic-prop read would resolve
+            // them through the Function.prototype expando fallback to the
+            // GENERIC thunks, which lose arguments-object argArrays
+            // (`G.apply(this, arguments)`).
+            && !matches!(method_name, "apply" | "call" | "bind" | "toString")
         {
             let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
