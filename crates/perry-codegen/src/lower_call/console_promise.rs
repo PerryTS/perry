@@ -17,7 +17,7 @@ use crate::expr::{
     emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
 };
-use crate::nanbox::double_literal;
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
@@ -855,6 +855,24 @@ pub fn try_lower_class_static_accessor_call(
     Ok(None)
 }
 
+/// A method-call receiver that must be lowered exactly once because
+/// re-evaluating it would re-run side effects (or re-construct a fresh
+/// value). The closure-call fallthrough otherwise lowers the receiver
+/// twice — once for the `this` binding and once inside the full callee
+/// PropertyGet — which double-runs these.
+fn receiver_must_eval_once(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Call { .. }
+            | Expr::CallSpread { .. }
+            | Expr::NativeMethodCall { .. }
+            | Expr::StaticMethodCall { .. }
+            | Expr::New { .. }
+            | Expr::NewDynamic { .. }
+            | Expr::Await(_)
+    )
+}
+
 pub fn try_lower_closure_call_fallthrough(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -892,7 +910,29 @@ pub fn try_lower_closure_call_fallthrough(
     // `js_closure_call17`+ exists) marshal the args through a stack buffer
     // and dispatch via `js_closure_call_array`. Refs #3527 (qs's recursive
     // `stringify` self-calls with 18 args).
-    let method_recv: Option<String> = if let Expr::PropertyGet { object, .. } = callee {
+    // When the receiver is itself side-effecting (a call / construct /
+    // await — e.g. a chained `C.staticMethod(g()).next()`), it MUST be
+    // evaluated exactly once. The straightforward shape below lowers
+    // `object` for the `this` binding AND lowers the full `callee`
+    // PropertyGet for the closure value, which re-lowers `object` and so
+    // re-runs its side effects. That double-stepped `g()` in test262
+    // `language/{statements,expressions}/class/dstr/async-gen-meth-static-*`
+    // (`C.method(g()).next()`). For a side-effecting receiver, evaluate it
+    // once here and read the method off that value directly.
+    let prelowered_recv: Option<(String, String)> =
+        if let Expr::PropertyGet { object, property } = callee {
+            if receiver_must_eval_once(object.as_ref()) {
+                Some((lower_expr(ctx, object)?, property.clone()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+    let method_recv: Option<String> = if let Some((ref obj_v, _)) = prelowered_recv {
+        Some(obj_v.clone())
+    } else if let Expr::PropertyGet { object, .. } = callee {
         // Skip the method-binding when the receiver is a global,
         // namespace import, or NativeModuleRef — those aren't
         // user objects and shouldn't influence `this`.
@@ -908,7 +948,26 @@ pub fn try_lower_closure_call_fallthrough(
         None
     };
 
-    let recv_box = lower_expr(ctx, callee)?;
+    let recv_box = if let Some((ref obj_v, ref property)) = prelowered_recv {
+        // Read `property` off the once-lowered receiver value via the
+        // generic by-name getter (walks the prototype chain, so
+        // `gen.next` etc. resolve). Mirrors the dynamic by-name read in
+        // `expr::property_get::lower`.
+        let key_idx = ctx.strings.intern(property);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(obj_v);
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let key_bits = blk.bitcast_double_to_i64(&key_box);
+        let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+        blk.call(
+            DOUBLE,
+            "js_object_get_field_by_name_f64",
+            &[(I64, &obj_bits), (I64, &key_handle)],
+        )
+    } else {
+        lower_expr(ctx, callee)?
+    };
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
         lowered_args.push(lower_expr(ctx, a)?);

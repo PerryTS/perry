@@ -583,6 +583,10 @@ pub fn lower_class_method_with_name(
         Vec::new()
     };
 
+    // Capture the destructuring-prologue length before it is drained into the
+    // body, so generator methods can replay param binding synchronously at call
+    // time (see the `gen_param_prologue_len` recording below).
+    let destructuring_prologue_len = destructuring_stmts.len();
     if !destructuring_stmts.is_empty() {
         destructuring_stmts.append(&mut body);
         body = destructuring_stmts;
@@ -598,6 +602,7 @@ pub fn lower_class_method_with_name(
     // `undefined` post-padding because the method body just did `return a + b`
     // with no default check.
     let default_stmts = build_default_param_stmts(&params);
+    let default_prologue_len = default_stmts.len();
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.extend(body);
@@ -634,8 +639,22 @@ pub fn lower_class_method_with_name(
     // Exit method's type param scope
     ctx.exit_type_param_scope();
 
+    let func_id = ctx.fresh_func();
+    // Record the param-prologue length for generator methods so the generator
+    // transform runs param binding (default guards + destructuring) synchronously
+    // at call time per spec FunctionDeclarationInstantiation order. Without this,
+    // a `*method`/`async *method` with a destructuring/default param leaves the
+    // binding inside the lazy state-machine body, so a throwing default
+    // initializer never fires at call time (test262 class/dstr async-gen-meth-*).
+    if method.function.is_generator {
+        let prologue_len = default_prologue_len + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
+
     Ok(Function {
-        id: ctx.fresh_func(),
+        id: func_id,
         name,
         type_params,
         params,

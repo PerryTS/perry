@@ -113,6 +113,10 @@ pub fn lower_private_method(
         Vec::new()
     };
 
+    // Capture the destructuring-prologue length before it is drained into the
+    // body so generator methods can replay param binding synchronously at call
+    // time (see the `gen_param_prologue_len` recording below).
+    let destructuring_prologue_len = destructuring_stmts.len();
     if !destructuring_stmts.is_empty() {
         destructuring_stmts.append(&mut body);
         body = destructuring_stmts;
@@ -125,6 +129,7 @@ pub fn lower_private_method(
     // destructuring prologue, matching the public-method ordering in
     // `lower_method`.
     let default_stmts = build_default_param_stmts(&params);
+    let default_prologue_len = default_stmts.len();
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.extend(body);
@@ -135,8 +140,20 @@ pub fn lower_private_method(
     ctx.exit_scope(scope_mark);
     ctx.exit_type_param_scope();
 
+    let func_id = ctx.fresh_func();
+    // Record the param-prologue length for private generator methods so the
+    // generator transform replays param binding synchronously at call time
+    // (spec FunctionDeclarationInstantiation order). See the matching comment
+    // in `lower_class_method_with_name` (test262 class/dstr private-gen-meth-*).
+    if method.function.is_generator {
+        let prologue_len = default_prologue_len + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
+
     Ok(Function {
-        id: ctx.fresh_func(),
+        id: func_id,
         name,
         type_params,
         params,

@@ -5945,6 +5945,20 @@ fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
     if jsv.is_pointer() {
         let obj = jsv.as_pointer::<ObjectHeader>();
         if !obj.is_null() && (obj as usize) >= 0x100000 {
+            // A callable (closure / function object) is never a class-method
+            // receiver for bound-method marker substitution. Its allocation is a
+            // `ClosureHeader`, so reading `class_id` off it as an `ObjectHeader`
+            // is a type confusion that can yield a stray non-zero id. Without
+            // this guard, a free call to a `C.prototype.method` bound-method
+            // value made from inside a function-object method body (e.g.
+            // test262's `assert.throws(…, function(){ m(...) })`, where
+            // `IMPLICIT_THIS` is the `assert` function) would mis-substitute the
+            // function object as the receiver and dispatch `assert.method(...)`
+            // instead of `C.prototype.method`, bypassing the generator wrapper's
+            // param prologue. See `canonical_bound_method_receiver`.
+            if crate::closure::is_closure_ptr(obj as usize) {
+                return None;
+            }
             let cid = unsafe { (*obj).class_id };
             if cid != 0 {
                 return Some(cid);
