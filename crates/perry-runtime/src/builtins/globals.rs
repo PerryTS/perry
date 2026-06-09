@@ -58,33 +58,94 @@ fn percent_encode(input: &[u8], safe_chars: &[u8]) -> String {
     result
 }
 
-fn percent_decode(input: &str, preserve_reserved: bool) -> Result<String, ()> {
-    let bytes = input.as_bytes();
-    let mut result = Vec::with_capacity(bytes.len());
+/// Read a `%XX` escape at byte offset `i`, returning the decoded octet.
+/// Fails (URIError) when there is no `%`, the string is too short, or the two
+/// following code units are not hexadecimal digits.
+fn read_pct_octet(bytes: &[u8], i: usize) -> Result<u8, ()> {
+    if i + 2 >= bytes.len() || bytes[i] != b'%' {
+        return Err(());
+    }
+    match (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+        (Some(h), Some(l)) => Ok(h * 16 + l),
+        _ => Err(()),
+    }
+}
+
+/// ECMAScript `Decode` (sec-decode), operating on the input's WTF-8 bytes so
+/// lone surrogates pass through unchanged. `reserved` is the set whose
+/// single-octet members are left as their original `%XX` escape (decodeURI);
+/// decodeURIComponent passes `None`.
+///
+/// Unlike a naive "decode every `%XX`, then validate the whole buffer", this
+/// validates each multi-octet UTF-8 run at the point it is decoded: a lead
+/// octet must be followed by the correct number of `%`-escaped continuation
+/// octets, and the assembled code point must be a non-overlong, non-surrogate
+/// scalar value — otherwise URIError. Non-`%` code units (including multi-byte
+/// and lone-surrogate WTF-8 bytes) are copied through verbatim.
+fn percent_decode(bytes: &[u8], reserved: Option<&[u8]>) -> Result<Vec<u8>, ()> {
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if i + 2 >= bytes.len() {
+        if bytes[i] != b'%' {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        let b = read_pct_octet(bytes, i)?;
+        if b < 0x80 {
+            if reserved.is_some_and(|set| set.contains(&b)) {
+                out.extend_from_slice(&bytes[i..i + 3]);
+            } else {
+                out.push(b);
+            }
+            i += 3;
+            continue;
+        }
+        // Multi-octet sequence: derive the length from the leading 1-bits.
+        let n = if b & 0xE0 == 0xC0 {
+            2
+        } else if b & 0xF0 == 0xE0 {
+            3
+        } else if b & 0xF8 == 0xF0 {
+            4
+        } else {
+            return Err(()); // lone continuation (10xxxxxx) or 5+-byte lead
+        };
+        let mut cp: u32 = (b as u32) & (0x7F >> n);
+        let mut j = i + 3;
+        for _ in 1..n {
+            let cont = read_pct_octet(bytes, j)?;
+            if cont & 0xC0 != 0x80 {
                 return Err(());
             }
-            let hi = hex_digit(bytes[i + 1]);
-            let lo = hex_digit(bytes[i + 2]);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                let decoded = h * 16 + l;
-                if preserve_reserved && URI_RESERVED.contains(&decoded) {
-                    result.extend_from_slice(&bytes[i..i + 3]);
-                } else {
-                    result.push(decoded);
-                }
-                i += 3;
-                continue;
-            }
+            cp = (cp << 6) | (cont as u32 & 0x3F);
+            j += 3;
+        }
+        let min = match n {
+            2 => 0x80,
+            3 => 0x800,
+            _ => 0x1_0000,
+        };
+        if cp < min || cp > 0x10_FFFF || (0xD800..=0xDFFF).contains(&cp) {
             return Err(());
         }
-        result.push(bytes[i]);
-        i += 1;
+        let ch = char::from_u32(cp).ok_or(())?;
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        i = j;
     }
-    String::from_utf8(result).map_err(|_| ())
+    Ok(out)
+}
+
+/// Build a result string from decoded bytes, choosing the WTF-8 constructor
+/// when lone surrogates survived the round-trip so `.length`/`isWellFormed`
+/// stay correct.
+fn string_from_decoded(out: &[u8]) -> i64 {
+    if std::str::from_utf8(out).is_ok() {
+        js_string_from_bytes(out.as_ptr(), out.len() as u32) as i64
+    } else {
+        js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32) as i64
+    }
 }
 
 fn throw_uri_malformed() -> ! {
@@ -118,6 +179,22 @@ fn extract_str_from_nanbox(value: f64) -> String {
         let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
         let bytes = std::slice::from_raw_parts(data, len);
         std::str::from_utf8(bytes).unwrap_or("").to_string()
+    }
+}
+
+/// ToString-coerce `value` and return its raw WTF-8 bytes (lone surrogates
+/// preserved). Used by the decode family, which must operate byte-wise per the
+/// Decode algorithm rather than dropping non-UTF-8 input.
+fn extract_coerced_bytes(value: f64) -> Vec<u8> {
+    let str_ptr = crate::builtins::js_string_coerce(value);
+    if (str_ptr as usize) < 0x1000 {
+        return Vec::new();
+    }
+    unsafe {
+        let header = str_ptr as *const StringHeader;
+        let len = (*header).byte_len as usize;
+        let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+        std::slice::from_raw_parts(data, len).to_vec()
     }
 }
 
@@ -166,10 +243,10 @@ pub extern "C" fn js_encode_uri(value: f64) -> i64 {
 /// decodeURI(string) -> string
 #[no_mangle]
 pub extern "C" fn js_decode_uri(value: f64) -> i64 {
-    let input = extract_str_from_nanbox(value);
-    let decoded = percent_decode(&input, true).unwrap_or_else(|_| throw_uri_malformed());
-    let ptr = js_string_from_bytes(decoded.as_ptr(), decoded.len() as u32);
-    ptr as i64
+    let input = extract_coerced_bytes(value);
+    let decoded =
+        percent_decode(&input, Some(URI_RESERVED)).unwrap_or_else(|_| throw_uri_malformed());
+    string_from_decoded(&decoded)
 }
 
 /// encodeURIComponent(string) -> string
@@ -185,10 +262,9 @@ pub extern "C" fn js_encode_uri_component(value: f64) -> i64 {
 /// decodeURIComponent(string) -> string
 #[no_mangle]
 pub extern "C" fn js_decode_uri_component(value: f64) -> i64 {
-    let input = extract_str_from_nanbox(value);
-    let decoded = percent_decode(&input, false).unwrap_or_else(|_| throw_uri_malformed());
-    let ptr = js_string_from_bytes(decoded.as_ptr(), decoded.len() as u32);
-    ptr as i64
+    let input = extract_coerced_bytes(value);
+    let decoded = percent_decode(&input, None).unwrap_or_else(|_| throw_uri_malformed());
+    string_from_decoded(&decoded)
 }
 
 // ============================================================

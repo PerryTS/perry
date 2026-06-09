@@ -286,17 +286,20 @@ pub unsafe extern "C" fn js_symbol_new_empty() -> f64 {
 pub unsafe extern "C" fn js_symbol_new(description_f64: f64) -> f64 {
     let bits = description_f64.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
-    let desc_ptr: *mut StringHeader = if tag == STRING_TAG {
-        (bits & POINTER_MASK) as *mut StringHeader
-    } else if bits == TAG_UNDEFINED {
+    let desc_ptr: *mut StringHeader = if bits == TAG_UNDEFINED {
+        // `Symbol()` — no description.
         std::ptr::null_mut()
+    } else if tag == STRING_TAG {
+        (bits & POINTER_MASK) as *mut StringHeader
     } else {
-        // Try to coerce — if it's a raw pointer, trust it.
-        if (0x1000..0x0000_FFFF_FFFF_FFFF).contains(&bits) {
-            bits as *mut StringHeader
-        } else {
-            std::ptr::null_mut()
+        // Spec step 2 (sec-symbol-constructor): descString = ToString(description).
+        // ToString rejects a Symbol with a TypeError (test262 desc-to-string-symbol);
+        // objects/numbers/booleans coerce, running `toString`/`valueOf`
+        // (test262 desc-to-string). `js_string_coerce` is the full ToString.
+        if js_is_symbol(description_f64) != 0 {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
         }
+        crate::builtins::js_string_coerce(description_f64) as *mut StringHeader
     };
     let sym = alloc_symbol(desc_ptr, false);
     f64::from_bits(POINTER_TAG | (sym as u64 & POINTER_MASK))
@@ -372,19 +375,14 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
 /// string for registered symbols, or undefined for non-registered symbols.
 #[no_mangle]
 pub unsafe extern "C" fn js_symbol_key_for(sym_f64: f64) -> f64 {
+    // Spec step 1 (sec-symbol.keyfor): if Type(sym) is not Symbol, throw a
+    // TypeError — distinct from the `undefined` returned for a real-but-
+    // unregistered symbol below (test262 keyFor/arg-non-symbol).
+    if js_is_symbol(sym_f64) == 0 {
+        crate::collection_iter::throw_type_error("Symbol.keyFor requires a symbol argument");
+    }
     let bits = sym_f64.to_bits();
-    let tag = bits & 0xFFFF_0000_0000_0000;
-    let sym_ptr = if tag == POINTER_TAG {
-        (bits & POINTER_MASK) as *const SymbolHeader
-    } else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    if sym_ptr.is_null() || (sym_ptr as usize) < 0x1000 {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    if (*sym_ptr).magic != SYMBOL_MAGIC {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
+    let sym_ptr = (bits & POINTER_MASK) as *const SymbolHeader;
     // Well-known symbols (Symbol.toPrimitive, etc.) are NOT in the registry.
     if is_well_known_symbol(sym_ptr as usize) {
         return f64::from_bits(TAG_UNDEFINED);

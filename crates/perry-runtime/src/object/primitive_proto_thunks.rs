@@ -198,6 +198,13 @@ fn boolean_receiver_or_throw(method: &str) -> f64 {
     if jv.is_bool() {
         return receiver;
     }
+    // ECMA-262 20.3.3: `Boolean.prototype` is itself a Boolean object whose
+    // [[BooleanData]] is `false`. A method invoked with `this === Boolean.prototype`
+    // (`Boolean.prototype.valueOf()`, or `Boolean.prototype == false` coercing via
+    // valueOf) sees `false` rather than throwing (test262 prototype/valueOf/A1, S15.6.3.1_A1).
+    if receiver.to_bits() == super::global_this::builtin_prototype_value("Boolean").to_bits() {
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
     throw_incompatible_receiver("Boolean.prototype", method)
 }
 

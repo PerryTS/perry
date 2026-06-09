@@ -35,7 +35,7 @@ macro_rules! println {
 #[cfg(feature = "ohos-napi")]
 pub(crate) use println;
 
-pub(crate) use crate::string::{js_string_from_bytes, StringHeader};
+pub(crate) use crate::string::{js_string_from_bytes, js_string_from_wtf8_bytes, StringHeader};
 pub(crate) use crate::JSValue;
 
 mod arithmetic;

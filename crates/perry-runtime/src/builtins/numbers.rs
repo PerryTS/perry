@@ -22,7 +22,9 @@ pub extern "C" fn js_parse_int(str_ptr: *const StringHeader, radix: f64) -> f64 
         let bytes = std::slice::from_raw_parts(data, len);
 
         if let Ok(s) = std::str::from_utf8(bytes) {
-            let trimmed = s.trim_start();
+            // StrWhiteSpace per spec (NBSP/BOM in, NEL out) — not Rust's
+            // `trim_start`, whose White_Space set diverges from JS's.
+            let trimmed = s.trim_start_matches(crate::string::is_js_whitespace);
             if trimmed.is_empty() {
                 return f64::NAN;
             }
@@ -125,8 +127,12 @@ pub extern "C" fn js_parse_float(str_ptr: *const StringHeader) -> f64 {
 /// Core parseFloat logic operating on raw bytes — no heap allocation.
 /// Exposed as `pub(crate)` so unit tests can call it directly.
 pub(crate) fn parse_float_bytes(bytes: &[u8]) -> f64 {
-    // JS spec: strip leading StrWhiteSpace (ASCII subset covers all common cases)
-    let bytes = bytes.trim_ascii_start();
+    // JS spec: strip leading StrWhiteSpace — the full set (NBSP, VT, LS/PS, BOM,
+    // Unicode space separators), not just ASCII. Trim by char so multi-byte
+    // whitespace (U+00A0, U+2028, …) is consumed (test262 parseFloat A2_T3/5/8/9),
+    // but operate byte-wise so a *trailing* lone surrogate elsewhere in the WTF-8
+    // input doesn't poison the whole parse (A6: `parseFloat("0.1e1" + cu)`).
+    let bytes = trim_leading_js_whitespace(bytes);
     if bytes.is_empty() {
         return f64::NAN;
     }
@@ -155,6 +161,39 @@ pub(crate) fn parse_float_bytes(bytes: &[u8]) -> f64 {
     // from_utf8_unchecked is safe.
     let s = unsafe { std::str::from_utf8_unchecked(&bytes[..end]) };
     s.parse::<f64>().unwrap_or(f64::NAN)
+}
+
+/// Strip leading StrWhiteSpace, decoding one UTF-8 scalar at a time so that
+/// invalid bytes *after* the leading run (e.g. a lone surrogate in WTF-8 input)
+/// don't abort the whole trim. ASCII whitespace is the common case and stays a
+/// single-byte check.
+fn trim_leading_js_whitespace(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    while start < bytes.len() {
+        let b = bytes[start];
+        if b < 0x80 {
+            if crate::string::is_js_whitespace(b as char) {
+                start += 1;
+                continue;
+            }
+            break;
+        }
+        // Multi-byte lead: decode just the next scalar value from the valid
+        // UTF-8 prefix; stop at the first byte that isn't valid UTF-8.
+        let rest = &bytes[start..];
+        let valid = match std::str::from_utf8(rest) {
+            Ok(s) => s,
+            Err(e) if e.valid_up_to() > 0 => unsafe {
+                std::str::from_utf8_unchecked(&rest[..e.valid_up_to()])
+            },
+            Err(_) => break,
+        };
+        match valid.chars().next() {
+            Some(c) if crate::string::is_js_whitespace(c) => start += c.len_utf8(),
+            _ => break,
+        }
+    }
+    &bytes[start..]
 }
 
 /// Returns the byte length of the leading StrDecimalLiteral prefix in `bytes`.

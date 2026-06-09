@@ -747,14 +747,18 @@ fn dataview_to_index(value: f64, what: &str) -> i64 {
         // ToIntegerOrInfinity(NaN) = 0.
         return 0;
     }
-    if n < 0.0 {
+    // ToIndex truncates toward zero (ToIntegerOrInfinity) *before* the sign and
+    // range checks, so e.g. `-0.1`/`-0.99999` become `-0` (== 0), not a
+    // RangeError (test262 toindex-byteoffset/-bytelength).
+    let int = n.trunc();
+    if int < 0.0 {
         throw_dataview_range_error(&format!("Invalid DataView {what}"));
     }
     // ToIndex rejects values above 2^53-1 (and thus +Infinity).
-    if n > 9_007_199_254_740_991.0 {
+    if int > 9_007_199_254_740_991.0 {
         throw_dataview_range_error(&format!("Invalid DataView {what}"));
     }
-    n.trunc() as i64
+    int as i64
 }
 
 /// `new DataView(buffer, byteOffset?, byteLength?)` — Perry models a DataView

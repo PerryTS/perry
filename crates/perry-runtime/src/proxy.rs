@@ -1728,6 +1728,11 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64
         }
         return crate::object::reflect_define_property(target, key, descriptor);
     }
+    // ECMA-262 28.1.3: Reflect.defineProperty throws when target is not an
+    // Object (a Symbol / BigInt primitive slips past the heap-pointer probe).
+    if !reflect_value_is_object(obj) {
+        return reflect_non_object_typeerror("defineProperty");
+    }
     crate::object::reflect_define_property(obj, key, descriptor)
 }
 
@@ -1852,7 +1857,7 @@ pub extern "C" fn js_reflect_is_extensible(target: f64) -> f64 {
         }
         return crate::object::js_object_is_extensible(inner);
     }
-    if !crate::object::js_value_is_heap_object(target) {
+    if !reflect_value_is_object(target) {
         return reflect_non_object_typeerror("isExtensible");
     }
     crate::object::js_object_is_extensible(target)
@@ -1901,7 +1906,7 @@ pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
         crate::object::js_object_prevent_extensions(inner);
         return nanbox_bool(true);
     }
-    if !crate::object::js_value_is_heap_object(target) {
+    if !reflect_value_is_object(target) {
         return reflect_non_object_typeerror("preventExtensions");
     }
     crate::object::js_object_prevent_extensions(target);

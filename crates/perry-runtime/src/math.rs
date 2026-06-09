@@ -256,19 +256,26 @@ pub extern "C" fn js_math_min_array(arr_ptr: i64) -> f64 {
     if len == 0 {
         return f64::INFINITY;
     }
+    // Spec (sec-math.min) step 2: ToNumber EVERY arg first (observable via
+    // valueOf), then reduce. A NaN must not short-circuit before later args are
+    // coerced (test262 min/Math.min_each-element-coerced).
     let mut result = f64::INFINITY;
+    let mut saw_nan = false;
     for i in 0..len {
         let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
-            return f64::NAN;
-        }
-        // ECMAScript Math.min treats -0 as smaller than +0; IEEE `<` treats
-        // them as equal, so add an explicit sign-of-zero tiebreaker.
-        if num < result || (num == 0.0 && result == 0.0 && num.is_sign_negative()) {
+            saw_nan = true;
+        } else if num < result || (num == 0.0 && result == 0.0 && num.is_sign_negative()) {
+            // ECMAScript Math.min treats -0 as smaller than +0; IEEE `<` treats
+            // them as equal, so add an explicit sign-of-zero tiebreaker.
             result = num;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
 }
 
 /// Math.max(...array) -> number — find maximum value in an array
@@ -282,17 +289,24 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
     if len == 0 {
         return f64::NEG_INFINITY;
     }
+    // Spec (sec-math.max) step 2: ToNumber EVERY arg first (observable via
+    // valueOf), then reduce — a NaN must not short-circuit before later args
+    // are coerced (test262 max/Math.max_each-element-coerced).
     let mut result = f64::NEG_INFINITY;
+    let mut saw_nan = false;
     for i in 0..len {
         let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
-            return f64::NAN;
-        }
-        // ECMAScript Math.max treats +0 as greater than -0; IEEE `>` treats
-        // them as equal, so add an explicit sign-of-zero tiebreaker.
-        if num > result || (num == 0.0 && result == 0.0 && num.is_sign_positive()) {
+            saw_nan = true;
+        } else if num > result || (num == 0.0 && result == 0.0 && num.is_sign_positive()) {
+            // ECMAScript Math.max treats +0 as greater than -0; IEEE `>` treats
+            // them as equal, so add an explicit sign-of-zero tiebreaker.
             result = num;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
 }

@@ -88,6 +88,7 @@ pub use locale::{
 };
 pub use pad::{js_string_alloc_space, js_string_pad_end, js_string_pad_start, js_string_repeat};
 pub use raw::js_string_raw;
+pub(crate) use slice_ops::is_js_whitespace;
 pub use slice_ops::{
     js_string_index_of, js_string_index_of_from, js_string_last_index_of,
     js_string_last_index_of_from, js_string_slice, js_string_substr, js_string_substring,
