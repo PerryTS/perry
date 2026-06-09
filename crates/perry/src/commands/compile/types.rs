@@ -113,6 +113,16 @@ pub struct CompileArgs {
     #[arg(long)]
     pub target: Option<String>,
 
+    /// C library / linkage for Linux targets: `glibc` (default, dynamic) or
+    /// `musl` (fully static). `--libc musl` upgrades a Linux target
+    /// (`linux` / `linux-aarch64`, or the native-host default) to its musl
+    /// variant, producing a binary with no glibc loader dependency that runs
+    /// on AWS Lambda `provided.al2023`, scratch/distroless containers, Cloud
+    /// Run, etc. Equivalent to passing `--target linux-musl`. Ignored for
+    /// non-Linux targets. See #4826.
+    #[arg(long)]
+    pub libc: Option<String>,
+
     /// App bundle identifier (required for widget targets)
     #[arg(long)]
     pub app_bundle_id: Option<String>,

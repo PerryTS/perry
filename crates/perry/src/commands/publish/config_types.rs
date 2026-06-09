@@ -193,6 +193,10 @@ pub(super) struct LinuxConfig {
     pub(super) format: Option<String>,
     pub(super) category: Option<String>,
     pub(super) description: Option<String>,
+    /// C library / linkage: `glibc` (default, dynamic) or `musl` (fully
+    /// static — runs on AWS Lambda provided.al2023, scratch/distroless,
+    /// Cloud Run, with no glibc loader dependency). #4826.
+    pub(super) libc: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -59,7 +59,12 @@ pub(super) fn native_manifest_target_key(target: Option<&str>) -> &'static str {
         Some("tvos-simulator") | Some("tvos") => "tvos",
         Some("watchos-simulator") | Some("watchos") => "watchos",
         Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
-        Some("linux") => "linux",
+        // musl resolves the same native-library platform as glibc Linux
+        // (#4826). Prebuilt native addons are typically glibc; static-musl
+        // apps using them is an inherent limitation, but the platform key
+        // stays "linux" so resolution behaves consistently.
+        Some("linux") | Some("linux-musl") | Some("linux-x86_64-musl")
+        | Some("linux-aarch64-musl") => "linux",
         // WinUI (#4680) is the same OS/arch as the Win32 target for native
         // library resolution (D3d12/Vulkan backends, x64 prebuilts).
         Some("windows") | Some("windows-winui") => "windows",

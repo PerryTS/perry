@@ -6,6 +6,15 @@ pub struct PublishArgs {
     #[arg(value_enum)]
     pub platform: Option<Platform>,
 
+    /// C library for the `linux` target: `glibc` (default, dynamic) or
+    /// `musl` (fully static). `--libc musl` produces a binary with no glibc
+    /// loader dependency that runs on AWS Lambda `provided.al2023`,
+    /// scratch/distroless containers, and Cloud Run. Overrides the
+    /// `[linux] libc` setting in perry.toml. Ignored for non-Linux targets.
+    /// See #4826.
+    #[arg(long)]
+    pub libc: Option<String>,
+
     /// Build server URL
     #[arg(long, default_value = "https://hub.perryts.com")]
     pub server: Option<String>,

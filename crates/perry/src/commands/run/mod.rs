@@ -70,6 +70,12 @@ pub struct RunArgs {
     #[arg(long)]
     pub type_check: bool,
 
+    /// C library for Linux targets: `glibc` (default) or `musl` (fully
+    /// static). `--libc musl` upgrades a Linux target to its musl variant
+    /// (e.g. `perry run linux --libc musl`). See #4826.
+    #[arg(long)]
+    pub libc: Option<String>,
+
     /// Force local compilation (error if toolchain missing)
     #[arg(long)]
     pub local: bool,
@@ -206,6 +212,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         no_codegen: false,
         enable_wasm_runtime: args.enable_wasm_runtime,
         target: target.clone(),
+        libc: args.libc.clone(),
         app_bundle_id: Some(bundle_id),
         output_type: "executable".to_string(),
         bundle_extensions: None,

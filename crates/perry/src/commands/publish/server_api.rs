@@ -140,6 +140,10 @@ pub(super) struct BuildManifest {
     pub(super) linux_category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) linux_description: Option<String>,
+    /// `glibc` (default) or `musl` (fully static). Drives the worker's
+    /// `perry compile --target linux[-musl]` selection. #4826.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) linux_libc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) release_notes: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

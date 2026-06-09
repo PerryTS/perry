@@ -176,6 +176,30 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let is_android = target_name == "android";
     let is_linux = target_name == "linux";
 
+    // --- Resolve Linux libc (#4826) ---
+    // `--libc` CLI flag wins over the `[linux] libc` perry.toml setting.
+    // Normalize + validate here so the worker only ever receives `glibc`
+    // (or absent) / `musl`. Non-Linux targets ignore it.
+    let linux_libc: Option<String> = if is_linux {
+        let raw = args
+            .libc
+            .clone()
+            .or_else(|| config.linux.as_ref().and_then(|l| l.libc.clone()));
+        match raw.as_deref().map(|s| s.trim().to_ascii_lowercase()) {
+            None => None,
+            Some(ref s) if s == "glibc" || s == "gnu" || s.is_empty() => {
+                Some("glibc".to_string())
+            }
+            Some(ref s) if s == "musl" => Some("musl".to_string()),
+            Some(other) => bail!(
+                "Invalid [linux] libc / --libc value '{other}'. \
+                 Supported: glibc (default) or musl."
+            ),
+        }
+    } else {
+        None
+    };
+
     // --- Resolve server URL ---
     let server_url = args
         .server
@@ -1280,6 +1304,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else {
             None
         },
+        linux_libc: linux_libc.clone(),
         release_notes: config.release_notes.clone(),
         features: config.project.as_ref().and_then(|p| p.features.clone()),
     };

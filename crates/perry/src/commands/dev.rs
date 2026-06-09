@@ -285,6 +285,7 @@ fn build_once(
         no_codegen: false,
         enable_wasm_runtime: false,
         target: None,
+        libc: None,
         app_bundle_id: None,
         output_type: "executable".to_string(),
         bundle_extensions: None,

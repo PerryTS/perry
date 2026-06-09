@@ -596,6 +596,61 @@ pub fn select_linker_command(
             }
             c
         }
+    } else if matches!(
+        target,
+        Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl")
+    ) {
+        // Fully-static musl Linux target (#4826). Produces a binary with no
+        // dynamic-loader / glibc dependency, so it runs unchanged on AWS
+        // Lambda `provided.al2023` (glibc 2.34), scratch/distroless
+        // containers, Cloud Run, etc. — the GLIBC_2.39-not-found failures
+        // happen in the *loader*, before Perry's tiny-init ever runs, so a
+        // static binary sidesteps them entirely.
+        //
+        // Driver: prefer the musl gcc wrapper (`musl-gcc` for x86_64, from
+        // the `musl-tools` package) which carries musl's specs + sysroot +
+        // crt objects. Fall back to clang/cc with an explicit musl triple +
+        // a sysroot from PERRY_LINUX_MUSL_SYSROOT (mirrors the glibc-cross
+        // fallback below). The perry-runtime / perry-stdlib `.a` files for
+        // the musl triple are built by release-packages.yml and resolved by
+        // library_search.rs via rust_target_triple().
+        let is_musl_aarch64 = target == Some("linux-aarch64-musl");
+        let (cc_env, default_musl_gcc, clang_triple) = if is_musl_aarch64 {
+            (
+                "PERRY_LINUX_MUSL_AARCH64_CC",
+                "aarch64-linux-musl-gcc",
+                "aarch64-unknown-linux-musl",
+            )
+        } else {
+            (
+                "PERRY_LINUX_MUSL_CC",
+                "musl-gcc",
+                "x86_64-unknown-linux-musl",
+            )
+        };
+        let musl_gcc =
+            std::env::var(cc_env).unwrap_or_else(|_| default_musl_gcc.to_string());
+        let musl_gcc_on_path = std::env::var_os("PATH")
+            .map(|paths| {
+                std::env::split_paths(&paths).any(|d| d.join(&musl_gcc).is_file())
+            })
+            .unwrap_or(false);
+        let mut c = if musl_gcc_on_path {
+            Command::new(musl_gcc)
+        } else {
+            let mut c = Command::new("cc");
+            c.arg("-target").arg(clang_triple);
+            c.arg("-fuse-ld=lld");
+            if let Ok(sysroot) = std::env::var("PERRY_LINUX_MUSL_SYSROOT") {
+                c.arg(format!("--sysroot={}", sysroot));
+            }
+            c
+        };
+        // Fully static link: no interpreter, libc/libm/libpthread/libdl all
+        // folded into the executable. musl's libc.a is self-contained, so
+        // this is the supported/portable mode (unlike a fully-static glibc).
+        c.arg("-static");
+        c
     } else if is_linux {
         // Linux target: when running on Linux natively, just use "cc".
         // When cross-compiling from macOS, use clang + ld.lld + a glibc

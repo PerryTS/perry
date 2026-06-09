@@ -278,6 +278,49 @@ pub fn run(
     run_with_parse_cache(args, None, format, use_color, verbose)
 }
 
+/// Fold the `--libc <glibc|musl>` flag into the effective `--target` (#4826).
+///
+/// `--libc musl` upgrades a Linux target to its fully-static musl variant:
+/// `linux`/`linux-x86_64`/native-host-default → `linux-musl`, and
+/// `linux-aarch64`/`linux-arm64` → `linux-aarch64-musl`. It is a no-op for an
+/// already-musl target. `glibc`/`gnu` (or no flag) leave the target untouched.
+/// `--libc musl` against a non-Linux target is a hard error rather than a
+/// silently-ignored flag.
+pub(crate) fn apply_libc_to_target(
+    target: Option<String>,
+    libc: Option<&str>,
+) -> Result<Option<String>> {
+    let libc = match libc {
+        None => return Ok(target),
+        Some(l) => l.trim().to_ascii_lowercase(),
+    };
+    match libc.as_str() {
+        // Default / explicit glibc: nothing to do.
+        "glibc" | "gnu" | "" => Ok(target),
+        "musl" => match target.as_deref() {
+            // Default (native host) or explicit x86_64 Linux → x86_64 musl.
+            None | Some("linux") | Some("linux-x86_64") => {
+                Ok(Some("linux-musl".to_string()))
+            }
+            Some("linux-aarch64") | Some("linux-arm64") => {
+                Ok(Some("linux-aarch64-musl".to_string()))
+            }
+            // Already a musl target — idempotent.
+            Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl") => {
+                Ok(target)
+            }
+            Some(other) => anyhow::bail!(
+                "--libc musl only applies to Linux targets, but --target is \
+                 '{other}'. Drop --libc musl, or build a Linux target \
+                 (e.g. --target linux)."
+            ),
+        },
+        other => anyhow::bail!(
+            "unknown --libc value '{other}'. Supported: glibc (default) or musl."
+        ),
+    }
+}
+
 fn object_cache_project_root(input: &Path, fallback_project_root: &Path) -> PathBuf {
     let input_parent = input
         .canonicalize()
@@ -315,6 +358,12 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    // #4826: fold `--libc musl` into the effective target up-front (before any
+    // downstream code reads `args.target`) so the rest of the pipeline only
+    // ever sees the concrete `linux-musl` triple family.
+    let mut args = args;
+    args.target = apply_libc_to_target(args.target.take(), args.libc.as_deref())?;
+
     // #835 + #846: clear the codegen-side FFI provenance set up-front
     // so any leftover entries from a prior `perry dev` rebuild (or a
     // failed-build early-return that skipped our drain below) don't
@@ -4391,7 +4440,7 @@ pub fn run_with_parse_cache(
             target.as_deref(),
             Some("harmonyos") | Some("harmonyos-simulator")
         );
-        let is_linux = matches!(target.as_deref(), Some("linux"))
+        let is_linux = matches!(target.as_deref(), Some(t) if t.starts_with("linux"))
             || (!cfg!(target_os = "macos") && !cfg!(target_os = "windows") && target.is_none());
         let is_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
             || (cfg!(target_os = "windows") && target.is_none());
@@ -4943,7 +4992,7 @@ pub fn run_with_parse_cache(
         target.as_deref(),
         Some("harmonyos") | Some("harmonyos-simulator")
     );
-    let is_linux = matches!(target.as_deref(), Some("linux"))
+    let is_linux = matches!(target.as_deref(), Some(t) if t.starts_with("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
     let _is_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
         || (target.is_none() && cfg!(target_os = "windows"));

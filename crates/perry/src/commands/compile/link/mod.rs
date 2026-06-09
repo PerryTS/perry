@@ -273,6 +273,27 @@ pub(super) fn build_and_run_link(
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
     let is_linux = matches!(target, Some(t) if t.starts_with("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
+    // Fully-static musl Linux target (#4826) — a sub-case of is_linux. The
+    // link command itself is built in select_linker_command (musl driver +
+    // `-static`); here it only changes which system libs we request.
+    let is_musl = matches!(
+        target,
+        Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl")
+    );
+
+    // The musl target is meant for headless/serverless binaries (Lambda,
+    // scratch, distroless). The GTK4 UI backend (perry/ui) links the system
+    // GTK/glib/webkit stack, which is only shipped for glibc and cannot be
+    // statically linked into a musl binary. Fail fast with an actionable
+    // message rather than emitting cryptic undefined-symbol errors (#4826).
+    if is_musl && ctx.needs_ui {
+        anyhow::bail!(
+            "perry/ui is not supported with the static musl Linux target \
+             (--libc musl / [linux] libc = \"musl\"): the GTK4 UI backend \
+             requires dynamic glibc. Build the GUI app with the default \
+             (glibc) Linux target, or drop perry/ui for a headless musl build."
+        );
+    }
     let is_windows = matches!(target, Some("windows") | Some("windows-winui"))
         || (target.is_none() && cfg!(target_os = "windows"));
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
@@ -879,7 +900,11 @@ pub(super) fn build_and_run_link(
             .arg("-lpthread")
             .arg("-ldl");
 
-        if ctx.needs_stdlib {
+        // -lssl/-lcrypto are vestigial — Perry's stdlib is rustls-only (no
+        // system OpenSSL). On glibc they happen to be present so the link
+        // tolerates them, but a static musl sysroot has no libssl.a/libcrypto.a
+        // and the link would fail. Skip them for musl (#4826).
+        if ctx.needs_stdlib && !is_musl {
             cmd.arg("-lssl").arg("-lcrypto");
         }
     } else if is_windows {
