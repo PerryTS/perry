@@ -295,7 +295,12 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                 let layout = Layout::from_size_align(block.size, 16).unwrap();
                 unregister_block_generation(base, size);
                 deallocated_ranges.push((base, size));
-                std::alloc::dealloc(block.data, layout);
+                // #4665: in test builds keep freed blocks mapped (no munmap) so
+                // unit tests holding raw GC pointers across a collection read stale
+                // bytes instead of SIGSEGV-ing on an unmapped page.
+                if !cfg!(test) {
+                    std::alloc::dealloc(block.data, layout);
+                }
                 ARENA_TOTAL_BYTES.with(|t| t.set(t.get().saturating_sub(block.size)));
                 block.data = std::ptr::null_mut();
                 block.size = 0;
@@ -566,7 +571,12 @@ impl ArenaResetEmptyBlocksState {
             let size = block.size;
             let layout = Layout::from_size_align(block.size, 16).unwrap();
             unregister_block_generation(base, size);
-            std::alloc::dealloc(block.data, layout);
+            // #4665: in test builds keep freed blocks mapped (no munmap) so
+            // unit tests holding raw GC pointers across a collection read stale
+            // bytes instead of SIGSEGV-ing on an unmapped page.
+            if !cfg!(test) {
+                std::alloc::dealloc(block.data, layout);
+            }
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
@@ -757,7 +767,12 @@ impl SurvivorArenaReclaimState {
             let size = block.size;
             let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            std::alloc::dealloc(block.data, layout);
+            // #4665: in test builds keep freed blocks mapped (no munmap) so
+            // unit tests holding raw GC pointers across a collection read stale
+            // bytes instead of SIGSEGV-ing on an unmapped page.
+            if !cfg!(test) {
+                std::alloc::dealloc(block.data, layout);
+            }
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
@@ -1008,7 +1023,12 @@ impl OldArenaReclaimDeadBlocksState {
 
             let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            std::alloc::dealloc(block.data, layout);
+            // #4665: in test builds keep freed blocks mapped (no munmap) so
+            // unit tests holding raw GC pointers across a collection read stale
+            // bytes instead of SIGSEGV-ing on an unmapped page.
+            if !cfg!(test) {
+                std::alloc::dealloc(block.data, layout);
+            }
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
@@ -1094,7 +1114,12 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
 
             let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            std::alloc::dealloc(block.data, layout);
+            // #4665: in test builds keep freed blocks mapped (no munmap) so
+            // unit tests holding raw GC pointers across a collection read stale
+            // bytes instead of SIGSEGV-ing on an unmapped page.
+            if !cfg!(test) {
+                std::alloc::dealloc(block.data, layout);
+            }
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
@@ -1188,7 +1213,12 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
 
             let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            std::alloc::dealloc(block.data, layout);
+            // #4665: in test builds keep freed blocks mapped (no munmap) so
+            // unit tests holding raw GC pointers across a collection read stale
+            // bytes instead of SIGSEGV-ing on an unmapped page.
+            if !cfg!(test) {
+                std::alloc::dealloc(block.data, layout);
+            }
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;
@@ -1283,7 +1313,12 @@ fn reclaim_dead_survivor_arena_blocks(
             let size = block.size;
             let layout = Layout::from_size_align(size, 16).unwrap();
             unregister_block_generation(base, size);
-            std::alloc::dealloc(block.data, layout);
+            // #4665: in test builds keep freed blocks mapped (no munmap) so
+            // unit tests holding raw GC pointers across a collection read stale
+            // bytes instead of SIGSEGV-ing on an unmapped page.
+            if !cfg!(test) {
+                std::alloc::dealloc(block.data, layout);
+            }
             ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
             block.data = std::ptr::null_mut();
             block.size = 0;

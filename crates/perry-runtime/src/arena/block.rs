@@ -173,7 +173,12 @@ impl Drop for Arena {
             }
             let layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
             unsafe {
-                std::alloc::dealloc(block.data, layout);
+                // #4665: in test builds keep freed blocks mapped (no munmap) so
+                // unit tests holding raw GC pointers across a collection read stale
+                // bytes instead of SIGSEGV-ing on an unmapped page.
+                if !cfg!(test) {
+                    std::alloc::dealloc(block.data, layout);
+                }
             }
         }
     }
