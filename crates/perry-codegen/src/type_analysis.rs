@@ -10,6 +10,13 @@ use perry_types::Type as HirType;
 use crate::expr::FnCtx;
 use crate::type_analysis_net::{net_result_class, net_result_type};
 
+// Class-field layout / declared-type resolution lives in a sibling module
+// (file-size gate). Re-exported here so existing `type_analysis::*` call
+// sites keep resolving, and brought into scope for local callers.
+pub(crate) use crate::type_analysis_class_fields::{
+    class_field_declared_type, class_field_global_index, declared_field_type,
+};
+
 pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
     matches!(e, Expr::GlobalGet(_))
         || matches!(
@@ -1081,40 +1088,6 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// `.stack` / `.name` string assumption) from hijacking a user class
 /// whose own field happens to share that name with a non-string type
 /// (e.g. `effect`'s `RedBlackTreeIterator.stack: Array<...>` — #321).
-pub(crate) fn declared_field_type(ctx: &FnCtx<'_>, object: &Expr, field: &str) -> Option<HirType> {
-    let receiver_class = receiver_class_name(ctx, object)?;
-    if let Some(class) = ctx.classes.get(&receiver_class) {
-        if let Some(f) = class.fields.iter().find(|f| f.name == field) {
-            return Some(f.ty.clone());
-        }
-        // Walk the inheritance chain.
-        let mut parent = class.extends_name.as_deref();
-        while let Some(p) = parent {
-            let Some(pc) = ctx.classes.get(p) else { break };
-            if let Some(f) = pc.fields.iter().find(|f| f.name == field) {
-                return Some(f.ty.clone());
-            }
-            parent = pc.extends_name.as_deref();
-        }
-        return None;
-    }
-    if let Some(iface) = ctx.interfaces.get(&receiver_class) {
-        if let Some(p) = iface.properties.iter().find(|p| p.name == field) {
-            return Some(p.ty.clone());
-        }
-        for ext in &iface.extends {
-            if let HirType::Named(parent_name) = ext {
-                if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
-                    if let Some(p) = parent_iface.properties.iter().find(|p| p.name == field) {
-                        return Some(p.ty.clone());
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
 pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) => true,
@@ -1525,118 +1498,6 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         },
         _ => false,
     }
-}
-
-/// Look up a field's global index in the object's slot layout, walking
-/// the inheritance chain. Returns `Some(index)` only if the field is a
-/// plain instance field (no getter/setter shadowing) and the entire
-/// parent chain is resolvable from `ctx.classes`.
-///
-/// Layout convention: parent class fields come first (in declaration
-/// order), then the child's own fields. So `Child` with parent `Base`
-/// and `Base.fields = [a, b]`, `Child.fields = [c]` produces slot order
-/// `[a, b, c]` — `Base.b` is index 1, `Child.c` is index 2.
-///
-/// This mirrors how `js_object_alloc_with_parent` lays out the inline
-/// field array (parent first, then child) and how the constructor
-/// codegen at `lower_call.rs::compile_new` walks parent constructors
-/// before the child's own initializers.
-///
-/// Returns `None` when:
-/// - The class has a getter or setter for this property (the dispatch
-///   path needs to call the synthesized accessor instead).
-/// - The field name doesn't exist anywhere in the chain.
-/// - A parent class isn't in `ctx.classes` (imported class with no HIR).
-pub(crate) fn class_field_global_index(
-    ctx: &FnCtx<'_>,
-    class_name: &str,
-    property: &str,
-) -> Option<u32> {
-    // Walk parent chain to find the field. Parent fields come first in
-    // the slot layout, so we sum parent counts as we descend.
-    //
-    // Refs #420: must skip computed-key fields (`[Symbol.X] = init`) when
-    // counting positions — the inline-slot layout in `packed_keys` only
-    // includes string-keyed fields. If we count computed-key fields here,
-    // the index used for `this.config = {...}` writes shifts past where
-    // readers look for "config", and every cross-module access reads from
-    // an uninitialised slot (raw f64 zero, which presents as `number 0`
-    // when treated as a NaN-boxed value). drizzle's `class ColumnBuilder
-    // { config; $default = this.$defaultFn; $onUpdate = this.$onUpdateFn; }`
-    // shape — where the `config;` declaration sits among method-ref class
-    // fields — surfaces this as `column.config = 0` for every column
-    // builder when read from the importing module.
-    fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
-        fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
-    }
-    fn walk(ctx: &FnCtx<'_>, class_name: &str, property: &str, offset: u32) -> Option<u32> {
-        let class = ctx.classes.get(class_name)?;
-        // Bail if a getter/setter shadows the field — those need real
-        // method dispatch, not a direct memory access.
-        if class.getters.iter().any(|(n, _)| n == property)
-            || class.setters.iter().any(|(n, _)| n == property)
-        {
-            return None;
-        }
-        // Compute the byte-offset contribution from this class's parent.
-        let parent_count = if let Some(parent_name) = class.extends_name.as_deref() {
-            let mut p_count = 0u32;
-            let mut p = Some(parent_name.to_string());
-            while let Some(name) = p {
-                if let Some(parent) = ctx.classes.get(&name) {
-                    p_count += count_keyable(&parent.fields);
-                    p = parent.extends_name.clone();
-                } else {
-                    return None; // unresolvable parent — no inline path
-                }
-            }
-            p_count
-        } else {
-            0
-        };
-        // Look for the field on this class first (the most-derived
-        // declaration shadows parents in TypeScript). Position within the
-        // own-fields list must skip computed-key entries to match the
-        // packed_keys layout the runtime sees.
-        let mut own_idx: u32 = 0;
-        for f in &class.fields {
-            if f.key_expr.is_some() {
-                continue;
-            }
-            if f.name == property {
-                return Some(offset + parent_count + own_idx);
-            }
-            own_idx += 1;
-        }
-        // Otherwise walk into the parent chain looking for the field.
-        if let Some(parent_name) = class.extends_name.as_deref() {
-            return walk(ctx, parent_name, property, offset);
-        }
-        None
-    }
-    walk(ctx, class_name, property, 0)
-}
-
-pub(crate) fn class_field_declared_type(
-    ctx: &FnCtx<'_>,
-    class_name: &str,
-    property: &str,
-) -> Option<HirType> {
-    let mut current = ctx.classes.get(class_name).copied();
-    while let Some(cls) = current {
-        if let Some(field) = cls
-            .fields
-            .iter()
-            .find(|field| field.key_expr.is_none() && field.name == property)
-        {
-            return Some(field.ty.clone());
-        }
-        current = cls
-            .extends_name
-            .as_deref()
-            .and_then(|parent| ctx.classes.get(parent).copied());
-    }
-    None
 }
 
 /// If the expression is a known instance of a Named class type, return
