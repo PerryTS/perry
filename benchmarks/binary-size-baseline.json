@@ -1,10 +1,10 @@
 {
-  "commit": "efd9286b",
-  "generated_at": "2026-06-04T20:47:55Z",
+  "commit": "bc0d1d2b",
+  "generated_at": "2026-06-09T12:35:49Z",
   "sizes": {
-    "perry": 27385088,
-    "libperry_runtime": 60365288,
-    "libperry_stdlib": 263376488
+    "perry": 29341680,
+    "libperry_runtime": 81398624,
+    "libperry_stdlib": 280492032
   },
-  "_note": "Refreshed at v0.5.1122 after the v0.5.1021 → v0.5.1122 release cycle. This interval added substantial Node/runtime compatibility surface across child_process, crypto/WebCrypto, fs, streams, DNS, Atomics, Date, TypedArray/DataView, EventEmitter, and native compile/link cache paths. Compared with the v0.5.1021 f7aaed1a baseline: perry +43.7%, libperry_runtime +42.1%, and libperry_stdlib +16.8%. Those deltas are above the 15% per-release threshold, which is meant for incremental drift rather than multi-release catch-up gates. Production binaries are stripped by the linker; these .a/.bin sizes are the unstripped release-build artefacts used as a regression-trend signal, not a deployment-size measurement. Sizes captured from `cargo build --release` on the Regression Check macos-14 runner (aarch64-apple-darwin), release run 26960786294, binary-sizes artifact for commit efd9286bfbb96e20be245bd3c6866cfa3220a2bf."
+  "_note": "Refreshed at v0.5.1150 after the v0.5.1122 → v0.5.1150 release cycle. This interval was dominated by the test262/Node parity push: 317 commits since the v0.5.1122 efd9286b baseline, 198 of them touching perry-runtime (+30.6k insertions in that crate alone) across Promise/unhandled-rejection tracking, async generators, class elements + private brand checks, destructuring, Temporal Duration/Instant, Annex B web-compat, explicit resource management (using/Symbol.dispose), WTF-8 lone surrogates, and Object/Function/Date/Number/JSON built-ins tails. Compared with the efd9286b baseline: perry +7.1%, libperry_runtime +34.8%, libperry_stdlib +6.5%. The runtime delta is above the 15% per-release threshold, which is meant for incremental drift rather than multi-release catch-up gates; growth was verified to be broad organic feature surface, not a single pathological commit. Production binaries are stripped by the linker; these .a/.bin sizes are the unstripped release-build artefacts used as a regression-trend signal, not a deployment-size measurement. Sizes captured from `cargo build --release` on the Regression Check macos-14 runner (aarch64-apple-darwin), tag run 27200427184, binary-sizes artifact for commit bc0d1d2b93c5b73eaec4ff1fdf027d25573f38d9."
 }

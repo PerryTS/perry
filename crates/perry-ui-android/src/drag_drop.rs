@@ -335,8 +335,9 @@ fn read_string_array(env: &mut jni::JNIEnv, arr: &jni::objects::JObjectArray) ->
                     continue;
                 }
                 let jstr: jni::objects::JString = item.into();
-                if let Ok(s) = env.get_string(&jstr) {
-                    out.push(s.into());
+                let s: Result<String, _> = env.get_string(&jstr).map(Into::into);
+                if let Ok(s) = s {
+                    out.push(s);
                 }
             }
         }
