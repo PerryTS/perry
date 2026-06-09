@@ -159,6 +159,15 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
             }
         }
         Stmt::Labeled { body, .. } => scan_stmt_for_max_local(body, max_id),
+        // PreallocateBoxes carries raw LocalIds (the boxed locals of a
+        // closure-conversion pass that ran before this scan); they are
+        // usually also visible via captures lists, but max them here so the
+        // scan does not depend on that invariant.
+        Stmt::PreallocateBoxes(ids) => {
+            for id in ids {
+                *max_id = (*max_id).max(*id);
+            }
+        }
         _ => {}
     }
 }
@@ -172,13 +181,27 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
 /// locals collide with them. The collision corrupts every LocalGet/LocalSet
 /// in either the IIFE body or the generator state machine and produces
 /// silent miscompilation or segfaults.
+///
+/// Per-variant handling below covers only the LocalId fields an Expr owns
+/// directly; descent into sub-expressions is delegated to
+/// `perry_hir::walker::walk_expr_children` (exhaustively matched, so a new
+/// Expr variant that forgets the walker is a compile error). Pre-#4851 this
+/// fn carried its own ad-hoc child walker with a `_ => {}` catch-all, which
+/// silently skipped any variant without an explicit arm — `Expr::ObjectAssign`
+/// (`Object.assign(p, { a: () => 1, b: () => 2 })`) hid its sources' closures
+/// from the scan, the transform minted colliding ids, and codegen (one LLVM
+/// function per id) compiled the wrong body for the async-step closure.
 pub fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
     match expr {
-        Expr::LocalGet(id) => *max_id = (*max_id).max(*id),
-        Expr::LocalSet(id, value) => {
-            *max_id = (*max_id).max(*id);
-            scan_expr_for_max_local(value, max_id);
-        }
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) => *max_id = (*max_id).max(*id),
+        Expr::Update { id, .. } => *max_id = (*max_id).max(*id),
+        Expr::ArrayPush { array_id, .. }
+        | Expr::ArrayPushSpread { array_id, .. }
+        | Expr::ArrayUnshift { array_id, .. }
+        | Expr::ArraySplice { array_id, .. }
+        | Expr::ArrayCopyWithin { array_id, .. } => *max_id = (*max_id).max(*array_id),
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => *max_id = (*max_id).max(*id),
+        Expr::SetAdd { set_id, .. } => *max_id = (*max_id).max(*set_id),
         Expr::Closure {
             params,
             body,
@@ -186,6 +209,9 @@ pub fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             mutable_captures,
             ..
         } => {
+            // Param DEFAULT exprs are visited by the walker below; the
+            // body is a Stmt list the expr walker cannot see, so scan it
+            // here.
             for p in params {
                 *max_id = (*max_id).max(p.id);
             }
@@ -197,187 +223,9 @@ pub fn scan_expr_for_max_local(expr: &Expr, max_id: &mut LocalId) {
             }
             scan_stmts_for_max_local(body, max_id);
         }
-        Expr::Call { callee, args, .. } => {
-            scan_expr_for_max_local(callee, max_id);
-            for a in args {
-                scan_expr_for_max_local(a, max_id);
-            }
-        }
-        Expr::CallSpread { callee, args, .. } => {
-            scan_expr_for_max_local(callee, max_id);
-            for a in args {
-                let inner = match a {
-                    CallArg::Expr(e) | CallArg::Spread(e) => e,
-                };
-                scan_expr_for_max_local(inner, max_id);
-            }
-        }
-        Expr::New { args, .. } => {
-            for a in args {
-                scan_expr_for_max_local(a, max_id);
-            }
-        }
-        Expr::NewDynamic { callee, args } => {
-            scan_expr_for_max_local(callee, max_id);
-            for a in args {
-                scan_expr_for_max_local(a, max_id);
-            }
-        }
-        // Issue #393: NativeMethodCall args carry the route handler
-        // closures emitted by `app.post('/route', async (req, reply) => { ... })`
-        // and the WS callback closures from `wss.on('listening', () => ...)`.
-        // Without this arm those closures' params are invisible to the scanner,
-        // and the async-to-generator step closures the next pass synthesizes
-        // collide with their LocalIds — manifesting as `js_box_set: invalid box
-        // pointer` warnings + a SIGSEGV at hub-scale (perry-hub).
-        Expr::NativeMethodCall { object, args, .. } => {
-            if let Some(obj) = object {
-                scan_expr_for_max_local(obj, max_id);
-            }
-            for a in args {
-                scan_expr_for_max_local(a, max_id);
-            }
-        }
-        Expr::StaticMethodCall { args, .. } => {
-            for a in args {
-                scan_expr_for_max_local(a, max_id);
-            }
-        }
-        Expr::SuperCall(args) => {
-            for a in args {
-                scan_expr_for_max_local(a, max_id);
-            }
-        }
-        Expr::SuperMethodCall { args, .. } => {
-            for a in args {
-                scan_expr_for_max_local(a, max_id);
-            }
-        }
-        Expr::Await(inner) | Expr::Unary { operand: inner, .. } => {
-            scan_expr_for_max_local(inner, max_id);
-        }
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. } => {
-            scan_expr_for_max_local(left, max_id);
-            scan_expr_for_max_local(right, max_id);
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            scan_expr_for_max_local(condition, max_id);
-            scan_expr_for_max_local(then_expr, max_id);
-            scan_expr_for_max_local(else_expr, max_id);
-        }
-        Expr::PropertyGet { object, .. } => scan_expr_for_max_local(object, max_id),
-        Expr::PropertySet { object, value, .. } => {
-            scan_expr_for_max_local(object, max_id);
-            scan_expr_for_max_local(value, max_id);
-        }
-        // Mirror the func-id scan: `PutValueSet` (strict `obj.f = …`) hides a
-        // Closure in `value` whose locals must bump the max, or the generator
-        // transform's synthesized closures reuse colliding local ids.
-        Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } => {
-            scan_expr_for_max_local(target, max_id);
-            scan_expr_for_max_local(key, max_id);
-            scan_expr_for_max_local(value, max_id);
-            scan_expr_for_max_local(receiver, max_id);
-        }
-        Expr::IndexGet { object, index } => {
-            scan_expr_for_max_local(object, max_id);
-            scan_expr_for_max_local(index, max_id);
-        }
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => {
-            scan_expr_for_max_local(object, max_id);
-            scan_expr_for_max_local(index, max_id);
-            scan_expr_for_max_local(value, max_id);
-        }
-        Expr::Array(items) => {
-            for item in items {
-                scan_expr_for_max_local(item, max_id);
-            }
-        }
-        Expr::Object(fields) => {
-            for (_, v) in fields {
-                scan_expr_for_max_local(v, max_id);
-            }
-        }
-        Expr::Sequence(exprs) => {
-            for e in exprs {
-                scan_expr_for_max_local(e, max_id);
-            }
-        }
-        Expr::Yield { value: Some(v), .. } => scan_expr_for_max_local(v, max_id),
-        // Issue #531: ArrayPush/ArrayPushSpread carry a `value`/`source`
-        // expression that frequently nests `Closure { func_id, ... }` —
-        // e.g. `ops.push(await runOp('name', N, async () => ...))` lowers
-        // to `ArrayPush { value: Await(Call { args: [..., Closure {...}] }) }`.
-        // Without these arms the scanner misses the closure's params/captures
-        // (and the matching arm in `scan_expr_for_max_func` misses its
-        // FuncId), and the synthesized async-step closures the next pass
-        // emits collide with them — manifesting as `js_box_set/get: invalid
-        // box pointer 0x0` warnings + silently elided closure bodies.
-        Expr::ArrayPush { value, .. } => scan_expr_for_max_local(value, max_id),
-        Expr::ArrayPushSpread { source, .. } => scan_expr_for_max_local(source, max_id),
-        // Array fast-path variants — each has a closure callback whose
-        // parameter LocalIds would otherwise be invisible to the scanner.
-        Expr::ArrayForEach { array, callback }
-        | Expr::ArrayMap { array, callback }
-        | Expr::ArrayFilter { array, callback }
-        | Expr::ArrayFind { array, callback }
-        | Expr::ArrayFindIndex { array, callback }
-        | Expr::ArrayFindLast { array, callback }
-        | Expr::ArrayFindLastIndex { array, callback }
-        | Expr::ArraySome { array, callback }
-        | Expr::ArrayEvery { array, callback }
-        | Expr::ArrayFlatMap { array, callback } => {
-            scan_expr_for_max_local(array, max_id);
-            scan_expr_for_max_local(callback, max_id);
-        }
-        Expr::ArraySort { array, comparator } => {
-            scan_expr_for_max_local(array, max_id);
-            scan_expr_for_max_local(comparator, max_id);
-        }
-        Expr::ArrayReduce {
-            array,
-            callback,
-            initial,
-        }
-        | Expr::ArrayReduceRight {
-            array,
-            callback,
-            initial,
-        } => {
-            scan_expr_for_max_local(array, max_id);
-            scan_expr_for_max_local(callback, max_id);
-            if let Some(i) = initial {
-                scan_expr_for_max_local(i, max_id);
-            }
-        }
-        Expr::ArrayToSorted { array, comparator } => {
-            scan_expr_for_max_local(array, max_id);
-            if let Some(c) = comparator {
-                scan_expr_for_max_local(c, max_id);
-            }
-        }
-        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
-            scan_expr_for_max_local(items, max_id);
-            scan_expr_for_max_local(key_fn, max_id);
-        }
         _ => {}
     }
+    perry_hir::walker::walk_expr_children(expr, &mut |e| scan_expr_for_max_local(e, max_id));
 }
 
 /// Find the maximum func ID used in the module.
@@ -444,13 +292,34 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
                 scan_stmts_for_max_func(eb, max_id);
             }
         }
-        Stmt::While { body, .. } => scan_stmts_for_max_func(body, max_id),
         // Mirror scan_stmt_for_max_local: a closure declared inside a
         // do-while or labeled loop must still bump the max func id, or the
         // generator transform can mint a colliding func id (#1824 gap class).
-        Stmt::DoWhile { body, .. } => scan_stmts_for_max_func(body, max_id),
+        // Loop/switch HEAD expressions can nest closures too (`while
+        // ((() => f())())`, `for (let g = () => 1;;)`), so scan them like
+        // the local-id twin does, not just the bodies.
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            scan_expr_for_max_func(condition, max_id);
+            scan_stmts_for_max_func(body, max_id);
+        }
         Stmt::Labeled { body, .. } => scan_stmt_for_max_func(body, max_id),
-        Stmt::For { body, .. } => scan_stmts_for_max_func(body, max_id),
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_stmt_for_max_func(i, max_id);
+            }
+            if let Some(c) = condition {
+                scan_expr_for_max_func(c, max_id);
+            }
+            if let Some(u) = update {
+                scan_expr_for_max_func(u, max_id);
+            }
+            scan_stmts_for_max_func(body, max_id);
+        }
         Stmt::Try {
             body,
             catch,
@@ -464,7 +333,11 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
                 scan_stmts_for_max_func(f, max_id);
             }
         }
-        Stmt::Switch { cases, .. } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            scan_expr_for_max_func(discriminant, max_id);
             for case in cases {
                 scan_stmts_for_max_func(&case.body, max_id);
             }
@@ -473,202 +346,98 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
     }
 }
 
+/// Walk an expression for any FuncIds it carries — `FuncRef`s and `Closure`s,
+/// recursively through all sub-expressions and closure bodies.
+///
+/// Per-variant handling below covers only the FuncId fields an Expr owns
+/// directly; descent into sub-expressions is delegated to
+/// `perry_hir::walker::walk_expr_children` (exhaustively matched, so a new
+/// Expr variant that forgets the walker is a compile error). Pre-#4851 this
+/// fn carried its own ad-hoc child walker with a `_ => {}` catch-all that
+/// silently skipped any variant without an explicit arm. The catch-all bit
+/// repeatedly (#393, #531, #1824 each added one more arm); #4851 was the
+/// same class: `Object.assign(promise, { a: () => 1, b: () => 2 })` lowers
+/// to `ObjectAssign { sources: [New { __AnonShape, args: [Closure, ...] }] }`,
+/// no `ObjectAssign` arm existed, so the literal's closures were invisible
+/// here. `transform_generators` then minted the SAME FuncId for the
+/// `__async_step` closure of a caller awaiting that function, codegen (one
+/// LLVM function per FuncId) compiled the arrow body in place of the step
+/// closure, and the await's continuation was silently dropped — `await
+/// makeReq()` never resumed (the Stripe SDK's auto-pagination
+/// `Object.assign` hit exactly this).
 pub fn scan_expr_for_max_func(expr: &Expr, max_id: &mut FuncId) {
     match expr {
         Expr::FuncRef(id) => *max_id = (*max_id).max(*id),
         Expr::Closure { func_id, body, .. } => {
+            // Param DEFAULT exprs are visited by the walker below; the
+            // body is a Stmt list the expr walker cannot see, so scan it
+            // here.
             *max_id = (*max_id).max(*func_id);
             scan_stmts_for_max_func(body, max_id);
         }
-        Expr::Call { callee, args, .. } => {
-            scan_expr_for_max_func(callee, max_id);
-            for a in args {
-                scan_expr_for_max_func(a, max_id);
-            }
-        }
-        Expr::CallSpread { callee, args, .. } => {
-            scan_expr_for_max_func(callee, max_id);
-            for a in args {
-                let inner = match a {
-                    CallArg::Expr(e) | CallArg::Spread(e) => e,
-                };
-                scan_expr_for_max_func(inner, max_id);
-            }
-        }
-        Expr::New { args, .. } => {
-            for a in args {
-                scan_expr_for_max_func(a, max_id);
-            }
-        }
-        Expr::NewDynamic { callee, args } => {
-            scan_expr_for_max_func(callee, max_id);
-            for a in args {
-                scan_expr_for_max_func(a, max_id);
-            }
-        }
-        // Issue #393: see the matching arm in `scan_expr_for_max_local`.
-        // Same gap on the FuncId side — async route handlers passed to
-        // `app.post('/r', async (req, reply) => { ... })` register here as
-        // `NativeMethodCall { args: [..., Closure { func_id, .. }] }`. Without
-        // this arm `transform_generators`'s `next_func_id` starts below those
-        // closures' ids and the synthesized async-step closures collide with
-        // them at codegen, leaving the alloc site emitting `i32 1` capture
-        // slots while the body reads capture[16] off the end of the
-        // allocation.
-        Expr::NativeMethodCall { object, args, .. } => {
-            if let Some(obj) = object {
-                scan_expr_for_max_func(obj, max_id);
-            }
-            for a in args {
-                scan_expr_for_max_func(a, max_id);
-            }
-        }
-        Expr::StaticMethodCall { args, .. } => {
-            for a in args {
-                scan_expr_for_max_func(a, max_id);
-            }
-        }
-        Expr::SuperCall(args) => {
-            for a in args {
-                scan_expr_for_max_func(a, max_id);
-            }
-        }
-        Expr::SuperMethodCall { args, .. } => {
-            for a in args {
-                scan_expr_for_max_func(a, max_id);
-            }
-        }
-        Expr::Await(inner) | Expr::Unary { operand: inner, .. } => {
-            scan_expr_for_max_func(inner, max_id);
-        }
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. } => {
-            scan_expr_for_max_func(left, max_id);
-            scan_expr_for_max_func(right, max_id);
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            scan_expr_for_max_func(condition, max_id);
-            scan_expr_for_max_func(then_expr, max_id);
-            scan_expr_for_max_func(else_expr, max_id);
-        }
-        Expr::PropertyGet { object, .. } => scan_expr_for_max_func(object, max_id),
-        Expr::IndexGet { object, index } => {
-            scan_expr_for_max_func(object, max_id);
-            scan_expr_for_max_func(index, max_id);
-        }
-        Expr::PropertySet { object, value, .. } => {
-            scan_expr_for_max_func(object, max_id);
-            scan_expr_for_max_func(value, max_id);
-        }
-        // Strict `obj.f = function(){...}` lowers to `PutValueSet`, whose
-        // `value` Closure is otherwise invisible to the scan. Without this arm
-        // the generator transform's `next_func_id` starts below that closure's
-        // id, so the synthesized iter `next`/`return`/`throw` closures reuse it —
-        // and at codegen `o.f(...)` dispatches into the generator's `next`,
-        // returning a `{value, done}` iterator result instead of calling `o.f`.
-        Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } => {
-            scan_expr_for_max_func(target, max_id);
-            scan_expr_for_max_func(key, max_id);
-            scan_expr_for_max_func(value, max_id);
-            scan_expr_for_max_func(receiver, max_id);
-        }
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => {
-            scan_expr_for_max_func(object, max_id);
-            scan_expr_for_max_func(index, max_id);
-            scan_expr_for_max_func(value, max_id);
-        }
-        Expr::LocalSet(_, v) => scan_expr_for_max_func(v, max_id),
-        Expr::Array(items) => {
-            for item in items {
-                scan_expr_for_max_func(item, max_id);
-            }
-        }
-        Expr::Object(fields) => {
-            for (_, v) in fields {
-                scan_expr_for_max_func(v, max_id);
-            }
-        }
-        Expr::Sequence(exprs) => {
-            for e in exprs {
-                scan_expr_for_max_func(e, max_id);
-            }
-        }
-        Expr::Yield { value: Some(v), .. } => scan_expr_for_max_func(v, max_id),
-        // Issue #531: see the matching arm in `scan_expr_for_max_local`.
-        // `ops.push(await runOp(..., async () => ...))` buries the user
-        // closure inside `ArrayPush.value`. Without this arm, its FuncId
-        // is invisible to `compute_max_func_id`, and the generator
-        // transform's synthesized iter `next`/`return`/`throw` closures
-        // get func_ids that collide with it — codegen emits one LLVM
-        // function per func_id, so one definition wins and the other
-        // closure invokes it with mismatched captures (null box pointer).
-        Expr::ArrayPush { value, .. } => scan_expr_for_max_func(value, max_id),
-        Expr::ArrayPushSpread { source, .. } => scan_expr_for_max_func(source, max_id),
-        // Array fast-path variants — each carries a `callback` Closure that
-        // would otherwise hide its FuncId from the scanner. Without these
-        // arms, hoisting a nested `function*` (which my v0.4.146-followup
-        // commit added) caused the generator-state-machine transform's
-        // `next_func_id` to start lower than the existing user closure
-        // ids, producing duplicate FuncIds and a SIGSEGV at codegen.
-        Expr::ArrayForEach { array, callback }
-        | Expr::ArrayMap { array, callback }
-        | Expr::ArrayFilter { array, callback }
-        | Expr::ArrayFind { array, callback }
-        | Expr::ArrayFindIndex { array, callback }
-        | Expr::ArrayFindLast { array, callback }
-        | Expr::ArrayFindLastIndex { array, callback }
-        | Expr::ArraySome { array, callback }
-        | Expr::ArrayEvery { array, callback }
-        | Expr::ArrayFlatMap { array, callback } => {
-            scan_expr_for_max_func(array, max_id);
-            scan_expr_for_max_func(callback, max_id);
-        }
-        Expr::ArraySort { array, comparator } => {
-            scan_expr_for_max_func(array, max_id);
-            scan_expr_for_max_func(comparator, max_id);
-        }
-        Expr::ArrayReduce {
-            array,
-            callback,
-            initial,
-        }
-        | Expr::ArrayReduceRight {
-            array,
-            callback,
-            initial,
-        } => {
-            scan_expr_for_max_func(array, max_id);
-            scan_expr_for_max_func(callback, max_id);
-            if let Some(i) = initial {
-                scan_expr_for_max_func(i, max_id);
-            }
-        }
-        Expr::ArrayToSorted { array, comparator } => {
-            scan_expr_for_max_func(array, max_id);
-            if let Some(c) = comparator {
-                scan_expr_for_max_func(c, max_id);
-            }
-        }
-        // ObjectGroupBy / MapGroupBy carry a key_fn closure.
-        Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
-            scan_expr_for_max_func(items, max_id);
-            scan_expr_for_max_func(key_fn, max_id);
-        }
-        _ => {} // Other variants don't carry FuncIds
+        _ => {}
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |e| scan_expr_for_max_func(e, max_id));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_types::Type;
+
+    /// #4851: `Object.assign(p, { a: () => 1, b: () => 2 })` lowers to
+    /// `ObjectAssign { sources: [New { __AnonShape, args: [Closure, ...] }] }`.
+    /// The pre-#4851 ad-hoc scanners had no `ObjectAssign` arm, so the
+    /// literal's closures were invisible to the max-id scans —
+    /// `transform_generators` minted the same FuncId for its synthesized
+    /// `__async_step` closure and codegen compiled the arrow body in its
+    /// place, silently dropping the await continuation of any caller that
+    /// awaited the function directly. The scans now recurse through
+    /// `perry_hir::walker::walk_expr_children`, so ANY variant that nests a
+    /// closure keeps its ids visible.
+    #[test]
+    fn object_assign_sources_visible_to_id_scans() {
+        let closure = Expr::Closure {
+            func_id: 7,
+            params: vec![Param {
+                id: 9,
+                name: "x".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            }],
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        };
+        let expr = Expr::ObjectAssign {
+            target: Box::new(Expr::LocalGet(3)),
+            sources: vec![Expr::New {
+                class_name: "__AnonShape_test".to_string(),
+                args: vec![closure],
+                type_args: Vec::new(),
+            }],
+        };
+
+        let mut max_func: FuncId = 0;
+        scan_expr_for_max_func(&expr, &mut max_func);
+        assert_eq!(max_func, 7, "closure FuncId inside ObjectAssign sources");
+
+        let mut max_local: LocalId = 0;
+        scan_expr_for_max_local(&expr, &mut max_local);
+        assert_eq!(
+            max_local, 9,
+            "closure param LocalId inside ObjectAssign sources"
+        );
     }
 }
