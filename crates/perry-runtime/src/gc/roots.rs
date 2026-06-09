@@ -130,7 +130,7 @@ pub(super) fn exit_gc_root_lock() {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ConservativeStackScanMode {
+pub(crate) enum ConservativeStackScanMode {
     Auto,
     Disabled,
     Full,
@@ -172,10 +172,46 @@ pub(super) fn conservative_stack_scan_mode_from_value(
     }
 }
 
+thread_local! {
+    /// Per-thread override for the conservative-scan mode, taking precedence over
+    /// the `#[cfg(test)]` default but not an explicit env var. The GC unit tests
+    /// set this to `Auto` (skip) inside their controlled-root scopes so a forced
+    /// collection still reclaims the objects they hold only as native-stack
+    /// locals; see `ScopedRootScannerRegistryGuard`.
+    static CONSERVATIVE_STACK_SCAN_OVERRIDE: std::cell::Cell<Option<ConservativeStackScanMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Set (or clear) this thread's conservative-scan mode override, returning the
+/// previous value.
+pub(crate) fn set_conservative_stack_scan_override(
+    mode: Option<ConservativeStackScanMode>,
+) -> Option<ConservativeStackScanMode> {
+    CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.replace(mode))
+}
+
 pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
-    match std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
-        Ok(value) => conservative_stack_scan_mode_from_value(Some(&value)),
-        Err(_) => ConservativeStackScanMode::Auto,
+    // Explicit env var wins (so the dedicated mode tests and ops bisection keep
+    // working), then a per-thread override, then the build-time default.
+    if let Ok(value) = std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
+        return conservative_stack_scan_mode_from_value(Some(&value));
+    }
+    if let Some(mode) = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()) {
+        return mode;
+    }
+    // Unit tests root GC-managed pointers as raw locals on the *native* (Rust)
+    // stack, not the shadow stack, so without the conservative native scan any
+    // collection triggered mid-test (e.g. by an allocation in a helper) reclaims
+    // them and a later header deref faults. Default the test build to a full
+    // scan so those locals survive; production keeps live values on the shadow
+    // stack and skips the imprecise, costly native scan.
+    #[cfg(test)]
+    {
+        ConservativeStackScanMode::Full
+    }
+    #[cfg(not(test))]
+    {
+        ConservativeStackScanMode::Auto
     }
 }
 

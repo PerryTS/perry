@@ -703,6 +703,7 @@ fn test_old_page_defrag_re_remembers_young_child_after_collection_clear() {
     }
 
     let _reset = ResetGcTestState;
+    let _scan = ConservativeScanAutoGuard::new();
     let _isolation = copying_nursery_isolation_lock();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");

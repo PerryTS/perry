@@ -196,6 +196,31 @@ pub(super) fn root_scanner_registry_counts() -> (usize, usize, usize, usize) {
     (rust_roots, mutable_roots, ffi_roots, ffi_mutable_roots)
 }
 
+/// Opt this thread out of the test build's full-conservative-scan default for
+/// the guard's lifetime, restoring the prior override on drop. GC tests that
+/// verify collection of objects they hold only as native-stack locals — and
+/// don't go through `ScopedRootScannerRegistryGuard` — use this so the native
+/// scan is *skipped* (production `Auto` behavior) and those locals are reclaimed.
+pub(super) struct ConservativeScanAutoGuard {
+    prev: Option<crate::gc::ConservativeStackScanMode>,
+}
+
+impl ConservativeScanAutoGuard {
+    pub(super) fn new() -> Self {
+        Self {
+            prev: crate::gc::set_conservative_stack_scan_override(Some(
+                crate::gc::ConservativeStackScanMode::Auto,
+            )),
+        }
+    }
+}
+
+impl Drop for ConservativeScanAutoGuard {
+    fn drop(&mut self) {
+        crate::gc::set_conservative_stack_scan_override(self.prev);
+    }
+}
+
 pub(super) struct ScopedRootScannerRegistryGuard {
     rust_roots_len: usize,
     /// The thread's mutable scanner registry is taken whole (not just length-
@@ -205,6 +230,7 @@ pub(super) struct ScopedRootScannerRegistryGuard {
     ffi_roots_len: usize,
     ffi_mutable_roots_len: usize,
     prev_auto_init_suppressed: bool,
+    prev_conservative_override: Option<crate::gc::ConservativeStackScanMode>,
 }
 
 impl ScopedRootScannerRegistryGuard {
@@ -218,12 +244,20 @@ impl ScopedRootScannerRegistryGuard {
         let saved_mutable_roots =
             MUTABLE_ROOT_SCANNERS.with(|scanners| std::mem::take(&mut *scanners.borrow_mut()));
         let prev_auto_init_suppressed = crate::gc::set_auto_gc_init_suppressed(true);
+        // Opt out of the test build's full-conservative-scan default (see
+        // `conservative_stack_scan_mode`): GC tests verify collection of objects
+        // they hold only as native-stack locals, so they need the native scan
+        // *skipped* — exactly the production `Auto` behavior.
+        let prev_conservative_override = crate::gc::set_conservative_stack_scan_override(Some(
+            crate::gc::ConservativeStackScanMode::Auto,
+        ));
         Self {
             rust_roots_len,
             saved_mutable_roots,
             ffi_roots_len,
             ffi_mutable_roots_len,
             prev_auto_init_suppressed,
+            prev_conservative_override,
         }
     }
 }
@@ -238,6 +272,7 @@ impl Drop for ScopedRootScannerRegistryGuard {
         FFI_MUTABLE_ROOT_SCANNERS.with(|scanners| {
             scanners.borrow_mut().truncate(self.ffi_mutable_roots_len);
         });
+        crate::gc::set_conservative_stack_scan_override(self.prev_conservative_override);
         crate::gc::set_auto_gc_init_suppressed(self.prev_auto_init_suppressed);
     }
 }
