@@ -307,63 +307,109 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //      spread_arr_handle: i64) -> f64
             let cb_box = lower_expr(ctx, callee)?;
 
-            // Marshal regular args into a stack buffer (or null/0 if none).
-            let (regs_ptr, regs_len) = if regular_count == 0 {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, regular_count);
-                let mut idx = 0usize;
-                for a in args {
-                    if let CallArg::Expr(e) = a {
-                        let v = lower_expr(ctx, e)?;
-                        let slot = ctx
-                            .block()
-                            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", idx))]);
-                        ctx.block().store(DOUBLE, &v, &slot);
-                        idx += 1;
-                    }
-                }
-                let ptr_reg = ctx.block().next_reg();
-                ctx.block().emit_raw(format!(
-                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                    ptr_reg, regular_count, buf_reg
-                ));
-                (ptr_reg, regular_count.to_string())
-            };
+            // `js_closure_call_apply_with_spread` appends the spread array
+            // AFTER the register args, which silently reorders interleaved
+            // calls like `f(5, ...[6,7,8], 9)` → `[5, 9, 6, 7, 8]`. Detect a
+            // regular arg appearing *after* a spread and, in that case, build a
+            // single source-ordered array and pass everything through the
+            // spread channel (regs = none) so positional order is preserved
+            // (spec ArgumentListEvaluation). The split path stays for the
+            // common `f(a, b, ...c)` shape (regs strictly before spreads).
+            let first_spread = args.iter().position(|a| matches!(a, CallArg::Spread(_)));
+            let interleaved = first_spread
+                .map(|fs| args[fs + 1..].iter().any(|a| matches!(a, CallArg::Expr(_))))
+                .unwrap_or(false);
 
-            // Marshal spread sources. 0 → "0" handle; 1 → unbox the one
-            // array; multiple → concat onto a fresh array.
-            let spread_handle = if spread_count == 0 {
-                "0".to_string()
-            } else if spread_count == 1 {
-                let spread_expr = args
-                    .iter()
-                    .find_map(|a| match a {
-                        CallArg::Spread(e) => Some(e),
-                        _ => None,
-                    })
-                    .expect("spread_count == 1 guarantees one Spread");
-                let arr_box = lower_expr(ctx, spread_expr)?;
-                let blk = ctx.block();
-                blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)])
-            } else {
-                // Concat all spread sources into a fresh array.
-                let acc = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                let mut acc_handle = acc;
+            let (regs_ptr, regs_len, spread_handle) = if interleaved {
+                // Build one array containing every arg in source order, then
+                // apply it as the entire argument list.
+                let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
                 for a in args {
-                    if let CallArg::Spread(e) = a {
-                        let part_box = lower_expr(ctx, e)?;
-                        let blk = ctx.block();
-                        let part_handle =
-                            blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
-                        acc_handle = ctx.block().call(
-                            I64,
-                            "js_array_concat",
-                            &[(I64, &acc_handle), (I64, &part_handle)],
-                        );
+                    match a {
+                        CallArg::Expr(e) => {
+                            let v = lower_expr(ctx, e)?;
+                            acc_handle = ctx.block().call(
+                                I64,
+                                "js_array_push_f64",
+                                &[(I64, &acc_handle), (DOUBLE, &v)],
+                            );
+                        }
+                        CallArg::Spread(e) => {
+                            let part_box = lower_expr(ctx, e)?;
+                            let part_handle = ctx.block().call(
+                                I64,
+                                "js_array_like_to_array",
+                                &[(DOUBLE, &part_box)],
+                            );
+                            acc_handle = ctx.block().call(
+                                I64,
+                                "js_array_concat",
+                                &[(I64, &acc_handle), (I64, &part_handle)],
+                            );
+                        }
                     }
                 }
-                acc_handle
+                ("null".to_string(), "0".to_string(), acc_handle)
+            } else {
+                // Marshal regular args into a stack buffer (or null/0 if none).
+                let (regs_ptr, regs_len) = if regular_count == 0 {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, regular_count);
+                    let mut idx = 0usize;
+                    for a in args {
+                        if let CallArg::Expr(e) = a {
+                            let v = lower_expr(ctx, e)?;
+                            let slot =
+                                ctx.block()
+                                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", idx))]);
+                            ctx.block().store(DOUBLE, &v, &slot);
+                            idx += 1;
+                        }
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg, regular_count, buf_reg
+                    ));
+                    (ptr_reg, regular_count.to_string())
+                };
+
+                // Marshal spread sources. 0 → "0" handle; 1 → unbox the one
+                // array; multiple → concat onto a fresh array.
+                let spread_handle = if spread_count == 0 {
+                    "0".to_string()
+                } else if spread_count == 1 {
+                    let spread_expr = args
+                        .iter()
+                        .find_map(|a| match a {
+                            CallArg::Spread(e) => Some(e),
+                            _ => None,
+                        })
+                        .expect("spread_count == 1 guarantees one Spread");
+                    let arr_box = lower_expr(ctx, spread_expr)?;
+                    let blk = ctx.block();
+                    blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)])
+                } else {
+                    // Concat all spread sources into a fresh array.
+                    let acc = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+                    let mut acc_handle = acc;
+                    for a in args {
+                        if let CallArg::Spread(e) = a {
+                            let part_box = lower_expr(ctx, e)?;
+                            let blk = ctx.block();
+                            let part_handle =
+                                blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
+                            acc_handle = ctx.block().call(
+                                I64,
+                                "js_array_concat",
+                                &[(I64, &acc_handle), (I64, &part_handle)],
+                            );
+                        }
+                    }
+                    acc_handle
+                };
+                (regs_ptr, regs_len, spread_handle)
             };
 
             let result = ctx.block().call(
