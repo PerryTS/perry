@@ -504,11 +504,15 @@ pub extern "C" fn js_promise_new_with_executor(
     // resolve fn also assimilates thenables/promises and rejects self-resolution.
     let (resolve_closure, reject_closure) = make_resolving_functions(promise);
 
-    // Call the executor with (resolve_closure, reject_closure)
-    // The closures are passed as f64 by bitcasting the pointer bits
-    // This preserves the exact bits of the pointer when passed through f64 ABI
-    let resolve_f64: f64 = f64::from_bits(i64::cast_unsigned(resolve_closure as i64));
-    let reject_f64: f64 = f64::from_bits(i64::cast_unsigned(reject_closure as i64));
+    // Call the executor with (resolve_closure, reject_closure) as proper
+    // NaN-boxed POINTER_TAG closure values — so user code that *reflects* on
+    // them (`resolve.length` === 1, `resolve.name` === "", `new resolve()`
+    // throws, `Object.getOwnPropertyNames(resolve)`) sees a real function
+    // object, not a bare number. The call path already accepts POINTER_TAG
+    // closures (this mirrors `NewPromiseCapability`'s fast path, which has
+    // always boxed them). test262 `resolve-function-*` / `reject-function-*`.
+    let resolve_f64: f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
+    let reject_f64: f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
     js_closure_call2(executor, resolve_f64, reject_f64);
 
     promise
@@ -569,6 +573,15 @@ pub(super) fn make_resolving_functions(
     let reject = js_closure_alloc(promise_reject_fn as *const u8, 2);
     js_closure_set_capture_ptr(reject, 0, promise as i64);
     js_closure_set_capture_ptr(reject, 1, guard as i64);
+    // Spec 27.2.1.3: the resolving functions are anonymous built-in functions
+    // with own `length` = 1, `name` = "" (both non-writable, non-enumerable,
+    // configurable), and NO `[[Construct]]` (`new resolve()` throws). test262
+    // `resolve-function-*` / `reject-function-*` assert all four.
+    for f in [resolve, reject] {
+        crate::object::set_builtin_closure_length(f as usize, 1);
+        crate::object::set_bound_native_closure_name(f, "");
+        crate::object::set_builtin_closure_non_constructable(f as usize);
+    }
     (resolve, reject)
 }
 

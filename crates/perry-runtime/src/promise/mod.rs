@@ -57,11 +57,12 @@ pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_r
 pub(crate) use scanners::{new_promise_root_scan_state, scan_promise_roots_mut_step};
 pub use spec_combinators::{
     js_promise_all_settled_spec, js_promise_all_spec, js_promise_any_spec, js_promise_race_spec,
-    js_promise_reject_spec, js_promise_resolve_spec,
+    js_promise_reject_spec, js_promise_resolve_spec, js_promise_try_spec,
+    js_promise_with_resolvers_spec,
 };
 pub(crate) use then::{
-    js_promise_attach_handlers, js_promise_attach_settle_listener, promise_prototype_catch_thunk,
-    promise_prototype_finally_thunk, promise_prototype_then_thunk,
+    js_promise_attach_handlers, js_promise_attach_settle_listener, mark_rejection_handled,
+    promise_prototype_catch_thunk, promise_prototype_finally_thunk, promise_prototype_then_thunk,
 };
 pub use then::{
     js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free, js_promise_new,

@@ -499,6 +499,11 @@ pub(super) fn compile_module_entry(
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
+                // After the event loop drains, surface any still-unhandled
+                // promise rejection (Node exits non-zero; this matches the
+                // oracle for `Promise.reject`/combinator-reject programs).
+                ctx.block()
+                    .call_void("js_promise_report_unhandled_rejections", &[]);
                 ctx.block().ret(I32, "0");
             }
         }

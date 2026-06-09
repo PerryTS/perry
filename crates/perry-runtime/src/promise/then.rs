@@ -29,6 +29,83 @@ unsafe fn store_promise_next_slot(
     crate::gc::runtime_store_gc_heap_word_slot(promise as usize, slot as usize, value as u64);
 }
 
+// ---------------------------------------------------------------------------
+// Unhandled-rejection tracking (HostPromiseRejectionTracker, simplified).
+//
+// A promise that rejects with NO reaction attached at rejection time is
+// "currently unhandled". If, by the time the program's event loop drains, it
+// still has no handler, Node reports an unhandled rejection and exits non-zero
+// (the v15+ `--unhandled-rejections=throw` default). test262 leans on this:
+// `Promise.all` over a throwing iterator, a bare `Promise.reject(x)`, etc. all
+// leave an unhandled rejection and the oracle exits non-zero.
+//
+// We track only the promise POINTER (no reason value — the harness judges on
+// exit code, not the stderr text, and not storing a `f64` reason avoids rooting
+// a heap value across the whole program). A handler attached LATER
+// (`then`/`catch`/`finally`/`await`/settle-listener) removes the promise from
+// the set via `mark_rejection_handled`.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static UNHANDLED_REJECTIONS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Record a rejection that has no reaction attached yet.
+pub(crate) fn track_unhandled_rejection(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    UNHANDLED_REJECTIONS.with(|m| m.borrow_mut().push(promise as usize));
+}
+
+/// A handler was attached to `promise` — it is no longer an unhandled rejection.
+/// Cheap no-op for the common case (the set is empty on the hot async path).
+pub(crate) fn mark_rejection_handled(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    let key = promise as usize;
+    UNHANDLED_REJECTIONS.with(|m| {
+        let mut v = m.borrow_mut();
+        if !v.is_empty() {
+            v.retain(|p| *p != key);
+        }
+    });
+}
+
+/// Program-end hook (emitted by codegen's event-loop exit block, after the
+/// final microtask/timer drain). If any rejection went unhandled, mirror Node:
+/// print to stderr and exit with a non-zero code.
+#[no_mangle]
+pub extern "C" fn js_promise_report_unhandled_rejections() {
+    // Backstop re-check: a tracked promise is only *still* unhandled if, at
+    // program end, it is rejected AND no reaction was ever wired onto it. Any
+    // consumer — `then`/`catch`/`finally`, chaining (`resolve_with_promise`),
+    // or `attach_handlers` — sets `on_rejected` or `next` on the promise, so
+    // re-reading those fields catches handlers attached through direct-field
+    // paths we don't explicitly hook. (Settle-listener consumers don't touch
+    // these fields, so `attach_settle_listener` removes them from the set at
+    // attach time.) This makes the detector robust to internal machinery
+    // (async generators, async-from-sync iterators) adopting a rejection.
+    let any_unhandled = UNHANDLED_REJECTIONS.with(|m| {
+        m.borrow().iter().any(|&p| {
+            let pr = p as *const Promise;
+            unsafe {
+                (*pr).state == PromiseState::Rejected
+                    && (*pr).on_rejected.is_null()
+                    && (*pr).next.is_null()
+            }
+        })
+    });
+    if !any_unhandled {
+        return;
+    }
+    eprintln!("Uncaught (in promise)");
+    // Match Node's unhandled-rejection exit code (1). The event loop has
+    // already drained, so there is no pending work to lose.
+    std::process::exit(1);
+}
+
 pub(super) struct PromiseSettleListener {
     pub(super) on_fulfilled: ClosurePtr,
     pub(super) on_rejected: ClosurePtr,
@@ -48,6 +125,7 @@ pub(crate) fn js_promise_attach_settle_listener(
     if promise.is_null() {
         return;
     }
+    mark_rejection_handled(promise);
 
     let context = capture_context();
     unsafe {
@@ -204,6 +282,13 @@ pub extern "C" fn js_promise_reason(promise: *mut Promise) -> f64 {
     if promise.is_null() {
         return 0.0;
     }
+    // Reading a promise's rejection reason to consume it (the codegen `await`
+    // lowering does exactly this on an already-settled promise) counts as
+    // handling the rejection. Marking here is the robust catch-all for the
+    // await consume path, which reads the reason directly instead of attaching
+    // a reject reaction. Eager marking is safe: it can only suppress a report,
+    // never produce a spurious one.
+    mark_rejection_handled(promise);
     unsafe { (*promise).reason }
 }
 
@@ -217,6 +302,9 @@ pub extern "C" fn js_promise_result(promise: *mut Promise) -> f64 {
     if promise.is_null() {
         return 0.0;
     }
+    // `await`/async-step consumes the settled result here — observing a
+    // rejection's reason counts as handling it (see `js_promise_reason`).
+    mark_rejection_handled(promise);
     unsafe {
         match (*promise).state {
             PromiseState::Fulfilled => (*promise).value,
@@ -302,6 +390,13 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
     if outer.is_null() || inner.is_null() {
         return;
     }
+    // `outer` is adopting `inner`'s eventual state — `inner`'s rejection (now or
+    // later) is consumed by `outer`, so `inner` is no longer an unhandled
+    // rejection (HostPromiseRejectionTracker "handle"). Without this, a thenable
+    // assimilated synchronously (`assimilate_via_then_property` rejects its
+    // wrapper before chaining) would leave that wrapper flagged unhandled even
+    // though its rejection flows into `outer`. Tracking moves to `outer`.
+    mark_rejection_handled(inner);
 
     unsafe {
         if (*outer).state != PromiseState::Pending {
@@ -425,6 +520,15 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         let has_settle_listeners = !settle_listeners.is_empty();
         let promise_all_states = combinators::promise_all_take_all_handlers(promise);
         let has_normal_handler = !(*promise).on_rejected.is_null() || !(*promise).next.is_null();
+        if !has_settle_listeners && promise_all_states.is_empty() && !has_normal_handler {
+            // No reaction attached at rejection time → currently unhandled.
+            // A later `then`/`catch`/`await`/settle-listener removes it. If
+            // a `.then(onFulfilled)` (no reject handler) is attached, `next`
+            // is non-null so `has_normal_handler` is true here and the
+            // rejection propagates to `next`, whose own settlement re-runs
+            // this check — the leaf unhandled promise is the one tracked.
+            track_unhandled_rejection(promise);
+        }
         if has_settle_listeners || !promise_all_states.is_empty() || has_normal_handler {
             let task_context = context_for_promise(promise);
             TASK_QUEUE.with(|q| {
@@ -474,6 +578,9 @@ pub extern "C" fn js_promise_then(
     if promise.is_null() {
         return ptr::null_mut();
     }
+    // Attaching a reaction (`then`/`catch`/`finally`/`await`) marks any prior
+    // rejection on `promise` as handled, per HostPromiseRejectionTracker.
+    mark_rejection_handled(promise);
 
     // `js_promise_new_with_parent` can allocate via the GC and fire
     // `v8.promiseHooks` `init` callbacks (running JS), so root the inputs across
@@ -553,6 +660,7 @@ pub(crate) fn js_promise_attach_handlers(
     if promise.is_null() {
         return;
     }
+    mark_rejection_handled(promise);
     unsafe {
         store_promise_closure_slot(
             promise,
@@ -627,6 +735,14 @@ pub extern "C" fn js_promise_finally(
     on_finally: ClosurePtr,
 ) -> *mut Promise {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+
+    // `.finally()` is a reaction — it marks any prior rejection on `promise`
+    // handled, even though it wires the wrapper handlers via direct field
+    // stores below (not `js_promise_then`). Without this, `Promise.reject(x)
+    // .finally(cb)` leaves the source promise flagged as an unhandled
+    // rejection. Done before the GC alloc; promise objects are stable
+    // malloc-GC payloads so the address used as the tracking key is unchanged.
+    mark_rejection_handled(promise);
 
     // Create the `next` promise that callers chain off. Root inputs across the
     // allocation since `v8.promiseHooks` `init` may run JS (#3139).

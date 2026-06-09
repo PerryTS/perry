@@ -401,6 +401,11 @@ fn call_original(original: *const ClosureHeader, arg: f64) -> f64 {
 
 fn after_initial_result(state_id: usize, result: f64) {
     if let Some(promise) = promise_ptr(result) {
+        // The async generator is the consumer of this step promise — its
+        // rejection (now or later) is observed here, so it is not an unhandled
+        // rejection even though the already-settled paths read `reason`
+        // directly rather than attaching a reaction.
+        crate::promise::mark_rejection_handled(promise);
         let state = unsafe { (*promise).state };
         if state == PromiseState::Pending {
             attach_pending_settle(state_id, promise, std::ptr::null_mut());
@@ -412,6 +417,7 @@ fn after_initial_result(state_id: usize, result: f64) {
 
 fn after_queued_result(state_id: usize, out: *mut Promise, result: f64) {
     if let Some(promise) = promise_ptr(result) {
+        crate::promise::mark_rejection_handled(promise);
         match unsafe { (*promise).state } {
             PromiseState::Pending => {
                 attach_pending_settle(state_id, promise, out);

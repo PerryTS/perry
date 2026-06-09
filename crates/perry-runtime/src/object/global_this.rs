@@ -5124,8 +5124,8 @@ extern "C" fn promise_any_static(
 }
 
 extern "C" fn promise_with_resolvers_static(_closure: *const crate::closure::ClosureHeader) -> f64 {
-    let obj = crate::promise::js_promise_with_resolvers();
-    crate::value::js_nanbox_pointer(obj as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_with_resolvers_spec(this_ctor)
 }
 
 // `Promise.try(fn, ...args)`: call-arity 1 (callback) + rest (forwarded args).
@@ -5134,9 +5134,8 @@ extern "C" fn promise_try_static(
     callback: f64,
     rest: f64,
 ) -> f64 {
-    let rest_ptr = crate::value::js_nanbox_get_pointer(rest) as *const crate::array::ArrayHeader;
-    let p = crate::promise::js_promise_try(callback, rest_ptr);
-    crate::value::js_nanbox_pointer(p as i64)
+    let this_ctor = crate::object::js_implicit_this_get();
+    crate::promise::js_promise_try_spec(this_ctor, callback, rest)
 }
 
 // #4627: reified `String.raw(callSite, ...substitutions)` tag function. One
@@ -5299,102 +5298,21 @@ extern "C" fn typed_array_of_thunk(
     typed_array_create_from_values(kind_opt, arr)
 }
 
-fn require_promise_constructor_this() {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    let promise_ctor = js_get_global_this_builtin_value(b"Promise".as_ptr(), 7);
-    if this_value.to_bits() != promise_ctor.to_bits() {
-        super::object_ops::throw_object_type_error(
-            b"Promise static method requires a Promise constructor receiver",
-        );
-    }
-}
-
-extern "C" fn promise_resolve_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    value: f64,
-) -> f64 {
-    require_promise_constructor_this();
-    let promise = crate::promise::js_promise_resolved(value);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-extern "C" fn promise_reject_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    reason: f64,
-) -> f64 {
-    require_promise_constructor_this();
-    let promise = crate::promise::js_promise_rejected(reason);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-extern "C" fn promise_all_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    iterable: f64,
-) -> f64 {
-    require_promise_constructor_this();
-    let promise = crate::promise::combinators::js_promise_all_iterable(iterable);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-extern "C" fn promise_race_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    iterable: f64,
-) -> f64 {
-    require_promise_constructor_this();
-    let promise = crate::promise::combinators::js_promise_race_iterable(iterable);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-extern "C" fn promise_all_settled_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    iterable: f64,
-) -> f64 {
-    require_promise_constructor_this();
-    let promise = crate::promise::combinators::js_promise_all_settled_iterable(iterable);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-extern "C" fn promise_any_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    iterable: f64,
-) -> f64 {
-    require_promise_constructor_this();
-    let promise = crate::promise::combinators::js_promise_any_iterable(iterable);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
-extern "C" fn promise_with_resolvers_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
-    require_promise_constructor_this();
-    let result = crate::promise::js_promise_with_resolvers();
-    crate::value::js_nanbox_pointer(result as i64)
-}
-
-extern "C" fn promise_try_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    callback: f64,
-    rest: f64,
-) -> f64 {
-    require_promise_constructor_this();
-    let rest_value = JSValue::from_bits(rest.to_bits());
-    let rest_ptr = if rest_value.is_pointer() {
-        rest_value.as_pointer::<crate::array::ArrayHeader>()
-    } else {
-        std::ptr::null()
-    };
-    let promise = crate::promise::js_promise_try(callback, rest_ptr);
-    crate::value::js_nanbox_pointer(promise as i64)
-}
-
 fn promise_static_function_spec(name: &str) -> Option<(*const u8, u32, u32, bool)> {
+    // All eight statics use the spec-aware `*_static` thunks, which honor the
+    // `this` constructor via `NewPromiseCapability(this)` — so a `Promise`
+    // subclass (`class P extends Promise{}; P.all([...])`) or a valid custom
+    // constructor (`Promise.all.call(C, ...)`) is accepted, while a
+    // non-constructor `this` throws a TypeError from the capability flow.
     match name {
-        "resolve" => Some((promise_resolve_thunk as *const u8, 1, 1, false)),
-        "reject" => Some((promise_reject_thunk as *const u8, 1, 1, false)),
-        "all" => Some((promise_all_thunk as *const u8, 1, 1, false)),
-        "race" => Some((promise_race_thunk as *const u8, 1, 1, false)),
-        "allSettled" => Some((promise_all_settled_thunk as *const u8, 1, 1, false)),
-        "any" => Some((promise_any_thunk as *const u8, 1, 1, false)),
-        "withResolvers" => Some((promise_with_resolvers_thunk as *const u8, 0, 0, false)),
-        "try" => Some((promise_try_thunk as *const u8, 1, 1, true)),
+        "resolve" => Some((promise_resolve_static as *const u8, 1, 1, false)),
+        "reject" => Some((promise_reject_static as *const u8, 1, 1, false)),
+        "all" => Some((promise_all_static as *const u8, 1, 1, false)),
+        "race" => Some((promise_race_static as *const u8, 1, 1, false)),
+        "allSettled" => Some((promise_all_settled_static as *const u8, 1, 1, false)),
+        "any" => Some((promise_any_static as *const u8, 1, 1, false)),
+        "withResolvers" => Some((promise_with_resolvers_static as *const u8, 0, 0, false)),
+        "try" => Some((promise_try_static as *const u8, 1, 1, true)),
         _ => None,
     }
 }
@@ -5856,53 +5774,6 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 ctor,
                 "raw",
                 string_raw_static as *const u8,
-                1,
-                1,
-                true,
-            );
-        }
-        "Promise" => {
-            // #4521: reify the `Promise` statics as first-class function values
-            // (correct `.name` / `.length`, usable via reference / `.call` /
-            // `.apply` / spread). Direct calls (`Promise.all([...])`) keep the
-            // codegen fast path; these back value reads and rebound usage.
-            install_constructor_static(
-                ctor,
-                "resolve",
-                promise_resolve_static as *const u8,
-                1,
-                false,
-            );
-            install_constructor_static(
-                ctor,
-                "reject",
-                promise_reject_static as *const u8,
-                1,
-                false,
-            );
-            install_constructor_static(ctor, "all", promise_all_static as *const u8, 1, false);
-            install_constructor_static(ctor, "race", promise_race_static as *const u8, 1, false);
-            install_constructor_static(
-                ctor,
-                "allSettled",
-                promise_all_settled_static as *const u8,
-                1,
-                false,
-            );
-            install_constructor_static(ctor, "any", promise_any_static as *const u8, 1, false);
-            // `withResolvers` takes no arguments → spec `.length` 0.
-            install_constructor_static(
-                ctor,
-                "withResolvers",
-                promise_with_resolvers_static as *const u8,
-                0,
-                false,
-            );
-            // `try(fn, ...args)`: 1 fixed param (callback) + rest; spec `.length` 1.
-            install_constructor_static_with_call_arity(
-                ctor,
-                "try",
-                promise_try_static as *const u8,
                 1,
                 1,
                 true,

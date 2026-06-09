@@ -704,3 +704,70 @@ pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
     let _ = call_with_this(cap.resolve, undef(), &[value]);
     cap.promise
 }
+
+/// `Promise.withResolvers()` (ECMA-262 27.2.4.x) with `this` = C:
+/// `NewPromiseCapability(C)` then return `{ promise, resolve, reject }`. Honors a
+/// subclass / custom constructor `this`; a non-constructor `this` throws from the
+/// capability flow (test262 `withResolvers/newpromisecapability-this-value`).
+#[no_mangle]
+pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
+    ensure_arity_registered();
+    if is_default_promise_constructor(this_ctor) {
+        let obj = crate::promise::js_promise_with_resolvers();
+        return js_nanbox_pointer(obj as i64);
+    }
+    let cap = new_promise_capability(this_ctor);
+    let packed = b"promise\0resolve\0reject\0";
+    let obj = crate::object::js_object_alloc_with_shape(
+        0xFFF0_0001,
+        3,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    crate::object::js_object_set_field(obj, 0, JSValue::from_bits(cap.promise.to_bits()));
+    crate::object::js_object_set_field(obj, 1, JSValue::from_bits(cap.resolve.to_bits()));
+    crate::object::js_object_set_field(obj, 2, JSValue::from_bits(cap.reject.to_bits()));
+    js_nanbox_pointer(obj as i64)
+}
+
+/// `Promise.try(callbackfn, ...args)` (ECMA-262 27.2.4.x) with `this` = C:
+/// `NewPromiseCapability(C)`, call the callback synchronously, then resolve with
+/// its return value or reject with the thrown completion. Honors a subclass /
+/// custom constructor `this`; a non-object `this` throws.
+#[no_mangle]
+pub extern "C" fn js_promise_try_spec(this_ctor: f64, callback: f64, rest: f64) -> f64 {
+    ensure_arity_registered();
+    if !is_object_value(this_ctor) {
+        throw_type_error("Promise.try called on non-object");
+    }
+    // Default `Promise`: keep the optimized native path (synchronous call +
+    // resolve/reject), which also assimilates a thenable return value.
+    if is_default_promise_constructor(this_ctor) {
+        let rest_v = JSValue::from_bits(rest.to_bits());
+        let rest_ptr = if rest_v.is_pointer() {
+            rest_v.as_pointer::<crate::array::ArrayHeader>()
+        } else {
+            std::ptr::null()
+        };
+        let p = crate::promise::js_promise_try(callback, rest_ptr);
+        return js_nanbox_pointer(p as i64);
+    }
+    let cap = new_promise_capability(this_ctor);
+    let rest_v = JSValue::from_bits(rest.to_bits());
+    let args: Vec<f64> = if rest_v.is_pointer() {
+        let arr = rest_v.as_pointer::<crate::array::ArrayHeader>();
+        let n = unsafe { (*arr).length };
+        (0..n).map(|i| js_array_get_f64(arr, i)).collect()
+    } else {
+        Vec::new()
+    };
+    match call_with_this(callback, undef(), &args) {
+        Ok(value) => {
+            let _ = call_with_this(cap.resolve, undef(), &[value]);
+        }
+        Err(reason) => {
+            let _ = call_with_this(cap.reject, undef(), &[reason]);
+        }
+    }
+    cap.promise
+}
