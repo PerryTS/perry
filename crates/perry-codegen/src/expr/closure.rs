@@ -57,6 +57,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             captures_this,
             captures_new_target,
             is_async,
+            is_arrow,
             ..
         } => {
             // captures_this used to be a hard error here. Phase H.3
@@ -240,13 +241,59 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // work even though the box pointers are stable across
             // call sites. The relaxed gate plus the multi-slot LRU
             // backing reclaims that overhead.
-            let no_capture_singleton = total_caps == 0;
+            //
+            // IDENTITY CAVEAT (#4831 follow-up — Stripe `protoExtend`):
+            // the singleton-sharing paths (`js_closure_alloc_singleton` /
+            // `js_closure_alloc_with_captures_singleton`) return ONE cached
+            // `ClosureHeader` for a given (func_ptr[, capture-bits]) key, so two
+            // evaluations of the same closure literal observe the SAME function
+            // object — and therefore the SAME `.prototype`. A non-arrow
+            // `function` expression that is used as a CONSTRUCTOR must instead
+            // follow JS identity semantics: every evaluation yields a fresh
+            // function object with its own fresh `.prototype`. Stripe builds
+            // each resource via
+            //   `const Constructor = function (...a) { Super.apply(this, a); };
+            //    Constructor.prototype = Object.create(Super.prototype);
+            //    Object.assign(Constructor.prototype, sub); return Constructor;`
+            // `Constructor` captures only the constant `Super`, so the
+            // (func_ptr, Super-bits) cache key was identical for every resource
+            // and they all shared ONE `Constructor`/`prototype`. Each
+            // `Object.assign(Constructor.prototype, methods)` then clobbered the
+            // previous resource's methods, so every `stripe.<resource>.<method>`
+            // resolved to the last-registered resource (e.g. `products.create`
+            // ran webhook_endpoints' method) — the `replace is not a function`
+            // symptom.
+            //
+            // To preserve the hot-path optimizations while restoring identity,
+            // a closure is singleton-eligible only when sharing one instance is
+            // observationally safe:
+            //   - arrow functions: no own `.prototype`, not constructable, the
+            //     `.map`/ECS callbacks the cache targets; OR
+            //   - non-arrow closures all of whose captures are BOXED (mutable)
+            //     locals: the compiler-synthesized async-step `cb_v`/`cb_e`
+            //     per-await callbacks capture the boxed `__async_step` self-ref
+            //     and are never used as constructors — keeping them cached
+            //     avoids 2 `gc_malloc`s per `await`.
+            // A non-arrow closure capturing an UNBOXED value (Stripe's `Super`,
+            // or no captures at all) is treated as a potential constructor and
+            // always gets a fresh instance.
             let mut write_ids = std::collections::HashSet::new();
             crate::boxed_vars::collect_write_ids_in_stmts(body, &mut write_ids);
             let writes_unboxed_capture = auto_captures
                 .iter()
                 .any(|cap_id| !ctx.boxed_vars.contains(cap_id) && write_ids.contains(cap_id));
-            let captured_singleton = !no_capture_singleton && !writes_unboxed_capture;
+            // All captures boxed (and at least one), with no reserved `this` /
+            // `new.target` slot: the compiler-synthesized async-callback shape.
+            let captures_all_boxed = !*captures_this
+                && !*captures_new_target
+                && !auto_captures.is_empty()
+                && auto_captures
+                    .iter()
+                    .all(|cap_id| ctx.boxed_vars.contains(cap_id));
+            let singleton_identity_safe = *is_arrow || captures_all_boxed;
+            let no_capture_singleton = *is_arrow && total_caps == 0;
+            let captured_singleton =
+                singleton_identity_safe && !no_capture_singleton && !writes_unboxed_capture;
 
             let new_target_value_for_cache = if captured_singleton && *captures_new_target {
                 Some(if let Some(slot) = ctx.new_target_stack.last().cloned() {
