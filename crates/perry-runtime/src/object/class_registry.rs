@@ -153,6 +153,14 @@ pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (u
 pub static CLASS_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
     RwLock::new(None);
 
+/// Default-aware spec `.length` for STATIC methods, keyed (class_id, name).
+/// Distinct from `CLASS_METHOD_BIND_LENGTHS` (instance methods) so a class with
+/// both `static m(a, b = 1)` and `m(c)` keeps independent lengths instead of
+/// colliding on the (class_id, name) key. (Test262 *-method-static
+/// dflt-params-trailing-comma.)
+pub static CLASS_STATIC_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
+    RwLock::new(None);
+
 pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
     RwLock::new(None);
 
@@ -2189,6 +2197,68 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
     true
 }
 
+/// Spec ClassDefinitionEvaluation: a non-`null` superclass that is not a
+/// constructor makes `class X extends <value>` throw a TypeError before any
+/// `.prototype` access. Returns true when `value` is a *definitively* invalid
+/// superclass (so the caller throws). `null` is a valid superclass (creates a
+/// null-`[[Prototype]]` class) and never throws. Ambiguous heap values (not
+/// recognized as callable) return false so legitimate dynamic-extends shapes
+/// (mixins, factory-returned classes) keep their parentless baseline rather
+/// than mis-throwing. (Test262 subclass/superclass-* and definition/invalid-extends.)
+fn extends_target_must_throw(value: f64) -> bool {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_null() {
+        return false;
+    }
+    // Registered class refs / heap class objects are constructors.
+    if constructor_class_ref_id(value).is_some() || is_class_object_value(value) {
+        return false;
+    }
+    // A Proxy is a constructor iff its `[[ProxyTarget]]` is — recurse.
+    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+        return extends_target_must_throw(crate::proxy::js_proxy_target(value));
+    }
+    // Non-object primitives (number, string, boolean, undefined, symbol, bigint)
+    // can never be a superclass.
+    if !jv.is_pointer() {
+        return true;
+    }
+    if is_callable_function_value(value) {
+        if is_arrow_function_value(value) || is_non_constructable_builtin_function_value(value) {
+            return true;
+        }
+        let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+        if !ptr.is_null() && is_valid_obj_ptr(ptr as *const u8) {
+            // A bound *method* (class/instance method read as a value) is never
+            // a constructor.
+            if crate::closure::closure_is_bound_method(ptr) {
+                return true;
+            }
+            let fp = crate::closure::get_valid_func_ptr(ptr);
+            // A bound *function* (`fn.bind(...)`) is a constructor iff its bound
+            // target is — recurse on the captured target.
+            if fp == crate::closure::BOUND_FUNCTION_FUNC_PTR {
+                let target = crate::closure::js_closure_get_capture_f64(ptr, 0);
+                return extends_target_must_throw(target);
+            }
+            // Arrow / async / generator / async-generator function bodies are
+            // non-constructors.
+            if crate::closure::is_registered_arrow_function(fp)
+                || crate::closure::is_registered_async_function(fp)
+                || crate::closure::is_registered_generator_function(fp)
+                || crate::closure::is_registered_async_generator_function(fp)
+            {
+                return true;
+            }
+        }
+        // Ordinary function — a constructor.
+        return false;
+    }
+    // A pointer we don't recognize as callable: stay conservative (no throw).
+    false
+}
+
 fn class_object_class_id(value: f64) -> Option<u32> {
     if !is_class_object_value(value) {
         return None;
@@ -2500,6 +2570,23 @@ fn is_arrow_function_value(value: f64) -> bool {
 pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Option<f64> {
     if !is_callable_function_value(func_value) || is_arrow_function_value(func_value) {
         return None;
+    }
+    // Bound-method / bound-function values (class method/getter/setter reads via
+    // `C.prototype.m`, instance method reads, `fn.bind(...)`) are non-constructors
+    // and have NO `prototype` own property (`C.prototype.m.prototype === undefined`,
+    // `'prototype' in C.prototype.m === false`). (Test262 definition method/accessor
+    // prop-desc.)
+    {
+        let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+        if jv.is_pointer() {
+            let cptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+            if !cptr.is_null()
+                && is_valid_obj_ptr(cptr as *const u8)
+                && crate::closure::closure_is_bound_method(cptr)
+            {
+                return None;
+            }
+        }
     }
     // Built-in methods (`String.prototype.charAt`, `Array.prototype.map`, …) are
     // not constructors and have NO `prototype` own property — `String.prototype.
@@ -3343,6 +3430,39 @@ pub unsafe extern "C" fn js_register_class_method_bind_length(
 static KEEP_REGISTER_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
     js_register_class_method_bind_length;
 
+/// Record the spec `.length` for a STATIC method (params before the first
+/// default/rest). Codegen emits one call per static method at module init.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_static_method_bind_length(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    length: i64,
+) {
+    if name_ptr.is_null() || name_len < 0 {
+        return;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    let mut guard = match CLASS_STATIC_METHOD_BIND_LENGTHS.write() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .insert((class_id as u32, name), length as u32);
+}
+
+#[used]
+static KEEP_REGISTER_STATIC_METHOD_BIND_LENGTH: unsafe extern "C" fn(i64, *const u8, i64, i64) =
+    js_register_class_static_method_bind_length;
+
 unsafe fn register_class_static_accessor_half(
     class_id: i64,
     name_ptr: *const u8,
@@ -3805,6 +3925,13 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// recursive helper that returns its receiver can't create a cycle.
 #[no_mangle]
 pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: f64) {
+    // Spec: a non-`null` superclass that is not a constructor throws a TypeError
+    // at class-definition time (before any `.prototype` access). (Test262
+    // subclass/superclass-* and definition/invalid-extends.)
+    if extends_target_must_throw(parent_value) {
+        super::object_ops::throw_object_type_error(b"Class extends value is not a constructor");
+    }
+
     let bits = parent_value.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
     const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
@@ -4511,7 +4638,28 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
             }
         }
     }
-    // Static methods: CLASS_STATIC_METHODS stores (func_ptr, param_count, has_rest).
+    // Static methods: prefer the default-aware spec length recorded by codegen
+    // (params before the first default/rest), walking the parent chain; fall
+    // back to the raw `CLASS_STATIC_METHODS` param_count otherwise.
+    if let Ok(guard) = CLASS_STATIC_METHOD_BIND_LENGTHS.read() {
+        if let Some(map) = guard.as_ref() {
+            let mut cid = class_id;
+            let mut depth = 0usize;
+            while cid != 0 && depth < 32 {
+                if let Some(&len) = map.get(&(cid, name.to_string())) {
+                    return Some(len);
+                }
+                match get_parent_class_id(cid) {
+                    Some(p) if p != 0 && p != cid => {
+                        cid = p;
+                        depth += 1;
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+    // CLASS_STATIC_METHODS stores (func_ptr, param_count, has_rest).
     if let Some((_, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
         let mut len = param_count;
         if has_rest {
@@ -4555,11 +4703,56 @@ pub(crate) unsafe fn call_static_method(
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
         ),
-        _ => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64) -> f64>(func_ptr))(
+        4 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64) -> f64>(func_ptr))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
             a(args_ptr, args_len, 3),
+        ),
+        5 => {
+            (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64) -> f64>(func_ptr))(
+                a(args_ptr, args_len, 0),
+                a(args_ptr, args_len, 1),
+                a(args_ptr, args_len, 2),
+                a(args_ptr, args_len, 3),
+                a(args_ptr, args_len, 4),
+            )
+        }
+        6 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64, f64) -> f64>(
+            func_ptr,
+        ))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+            a(args_ptr, args_len, 3),
+            a(args_ptr, args_len, 4),
+            a(args_ptr, args_len, 5),
+        ),
+        7 => {
+            (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64, f64, f64) -> f64>(
+                func_ptr,
+            ))(
+                a(args_ptr, args_len, 0),
+                a(args_ptr, args_len, 1),
+                a(args_ptr, args_len, 2),
+                a(args_ptr, args_len, 3),
+                a(args_ptr, args_len, 4),
+                a(args_ptr, args_len, 5),
+                a(args_ptr, args_len, 6),
+            )
+        }
+        _ => (std::mem::transmute::<
+            usize,
+            extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64,
+        >(func_ptr))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+            a(args_ptr, args_len, 3),
+            a(args_ptr, args_len, 4),
+            a(args_ptr, args_len, 5),
+            a(args_ptr, args_len, 6),
+            a(args_ptr, args_len, 7),
         ),
     }
 }

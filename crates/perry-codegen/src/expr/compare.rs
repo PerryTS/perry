@@ -65,11 +65,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 op,
                 CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
             );
-            let bigint_fast_path = if is_relational_op {
-                is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right)
-            } else {
-                is_bigint_expr(ctx, left) || is_bigint_expr(ctx, right)
-            };
+            // The `js_bigint_cmp` fast path is valid ONLY when BOTH operands are
+            // statically BigInt. The previous equality variant fired when *either*
+            // side was BigInt and fed `js_bigint_cmp` a non-BigInt operand
+            // (`0n != undefined`, `0n == ""`), dereferencing an undefined/string
+            // NaN-box as a BigIntHeader → garbage. Mixed-type BigInt equality now
+            // falls through to `js_loose_eq` (loose, with full BigInt coercion) /
+            // `fcmp` (strict, where a type mismatch is correctly never-equal).
+            // Relational mixed-type already fell through to `js_rel_*`.
+            let bigint_fast_path = is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right);
             if bigint_fast_path {
                 let l = lower_expr(ctx, left)?;
                 let r = lower_expr(ctx, right)?;

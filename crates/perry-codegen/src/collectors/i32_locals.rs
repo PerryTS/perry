@@ -13,7 +13,12 @@ pub fn is_strictly_i32_bounded_expr(
     use perry_hir::{BinaryOp, Expr};
     match e {
         Expr::Integer(_) => true,
-        Expr::Update { .. } => true,
+        // `x++`/`x--` is i32-bounded ONLY when the updated local is itself a
+        // known integer (a loop counter). The previous unconditional `true`
+        // truncated `var y = x++` to an i32 slot even when `x` held a
+        // fractional/non-number value — so `var x = 1.1; var y = x++` stored
+        // `y = (i32)1.1 = 1` instead of the spec's coerced old value `1.1`.
+        Expr::Update { id, .. } => known_int_locals.contains(id),
         // `expr | 0` / `expr >>> 0` ToInt32/ToUint32 idioms — explicit i32
         // coercion, hard-bounded.
         Expr::Binary { op, right, .. }

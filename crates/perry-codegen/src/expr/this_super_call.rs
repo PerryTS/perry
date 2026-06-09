@@ -431,8 +431,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let key_box = blk.load(DOUBLE, &key_handle_global);
                                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                // Spec: `super(message)` into a built-in Error
+                                // sets `message` via DefinePropertyOrThrow with
+                                // `{ enumerable: false }` (Test262 NativeError/
+                                // *-message), not an enumerable assignment.
                                 blk.call_void(
-                                    "js_object_set_field_by_name",
+                                    "js_object_set_field_by_name_nonenum",
                                     &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
                                 );
                             }
@@ -583,8 +587,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let key_box = blk.load(DOUBLE, &key_handle_global);
                         let key_bits = blk.bitcast_double_to_i64(&key_box);
                         let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                        // Spec: built-in Error sets `message` non-enumerable.
                         blk.call_void(
-                            "js_object_set_field_by_name",
+                            "js_object_set_field_by_name_nonenum",
                             &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
                         );
                     }

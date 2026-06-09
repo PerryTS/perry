@@ -1229,11 +1229,13 @@ pub extern "C" fn js_super_put_value_set(
         return js_put_value_set(target, key, value, receiver, strict);
     }
 
-    if strict != 0 {
-        let key_name = key_to_rust_string(key).unwrap_or_else(|| "property".to_string());
-        crate::error::throw_immutable_write(0, &key_name);
-    }
-    value
+    // No resolvable parent-class prototype — `super` is `Object.prototype`
+    // (e.g. `class A {}` with no `extends`). Per spec `super.x = v` performs
+    // the home object's prototype `[[Set]]` with `this` as the receiver, which
+    // for a missing key + no inherited setter creates an own data property on
+    // the receiver. Do that ordinary set instead of throwing. (Test262
+    // syntax/class-body-method-definition-super-property.)
+    js_put_value_set(receiver, key, value, receiver, strict)
 }
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to

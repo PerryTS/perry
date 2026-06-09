@@ -664,6 +664,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // module globals.
         Expr::Update { id, op, prefix } => {
             super::invalidate_local_write_facts(ctx, *id);
+            // Spec ToNumber: `x++`/`++x` coerce the operand to a number
+            // (ToNumber on bool/null/string/object-with-valueOf) before the
+            // add/sub, and the *returned* value (postfix) is the coerced
+            // number, not the original boxed operand. Statically-integer loop
+            // counters already hold a real f64 and skip the call to keep the
+            // hot path a single `fadd`. (BigInt operands convert to Number here
+            // — full BigInt-preserving `++`/`--` additionally needs the Update
+            // result's static type to be inferred as BigInt so `===` uses the
+            // value path, not `fcmp`; deferred.)
+            let needs_numeric_coerce =
+                !ctx.integer_locals.contains(id) && !ctx.unsigned_i32_locals.contains(id);
+            let coerce_old = |blk: &mut crate::block::LlBlock, raw: &str| -> String {
+                if needs_numeric_coerce {
+                    blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, raw)])
+                } else {
+                    raw.to_string()
+                }
+            };
+            let step_new = |blk: &mut crate::block::LlBlock, old_num: &str| -> String {
+                match op {
+                    UpdateOp::Increment => blk.fadd(old_num, "1.0"),
+                    UpdateOp::Decrement => blk.fsub(old_num, "1.0"),
+                }
+            };
             // Closure capture path: runtime get + add/sub + runtime set.
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
                 let closure_ptr = ctx
@@ -681,10 +705,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
                     let old = blk.call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]);
-                    let new = match op {
-                        UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                        UpdateOp::Decrement => blk.fsub(&old, "1.0"),
-                    };
+                    let old = coerce_old(blk, &old);
+                    let new = step_new(blk, &old);
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new)]);
                     return Ok(if *prefix { new } else { old });
                 }
@@ -694,10 +716,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(I64, &closure_ptr), (I32, &idx_str)],
                 );
                 let blk = ctx.block();
-                let new = match op {
-                    UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                    UpdateOp::Decrement => blk.fsub(&old, "1.0"),
-                };
+                let old = coerce_old(blk, &old);
+                let new = step_new(blk, &old);
                 blk.call_void(
                     "js_closure_set_capture_f64",
                     &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, &new)],
@@ -713,10 +733,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let box_dbl = blk.load(DOUBLE, &slot);
                     let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
                     let old = blk.call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]);
-                    let new = match op {
-                        UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                        UpdateOp::Decrement => blk.fsub(&old, "1.0"),
-                    };
+                    let old = coerce_old(blk, &old);
+                    let new = step_new(blk, &old);
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new)]);
                     return Ok(if *prefix { new } else { old });
                 }
@@ -731,10 +749,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let blk = ctx.block();
             let old = blk.load(DOUBLE, &storage);
-            let new = match op {
-                UpdateOp::Increment => blk.fadd(&old, "1.0"),
-                UpdateOp::Decrement => blk.fsub(&old, "1.0"),
-            };
+            let old = coerce_old(blk, &old);
+            let new = step_new(blk, &old);
             if storage_is_root {
                 // Module globals are registered mutable GC roots and route
                 // through the root helper; the raw store below is stack-only.

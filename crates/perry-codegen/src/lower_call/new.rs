@@ -1084,8 +1084,10 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
                     let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    // Spec: built-in Error sets `message` non-enumerable via
+                    // DefinePropertyOrThrow (Test262 NativeError/*-message).
                     blk.call_void(
-                        "js_object_set_field_by_name",
+                        "js_object_set_field_by_name_nonenum",
                         &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
                     );
                 }

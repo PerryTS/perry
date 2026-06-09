@@ -1813,6 +1813,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64, I64],
     );
+    module.declare_function(
+        "js_register_class_static_method_bind_length",
+        VOID,
+        &[I64, I64, I64, I64],
+    );
     // Static accessors register on the class constructor (CLASS_STATIC_ACCESSORS).
     module.declare_function(
         "js_register_class_static_getter",

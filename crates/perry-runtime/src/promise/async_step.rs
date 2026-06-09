@@ -234,6 +234,17 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     )
                 }
                 PromiseState::Rejected => {
+                    // `await`ing an already-rejected promise delivers its
+                    // reason to this async step (which re-throws it into the
+                    // suspended function body, where a surrounding try/catch
+                    // can catch it) — so the rejection IS handled. The
+                    // Pending arm below routes through `js_promise_then`, which
+                    // marks the rejection handled; this fast path reads the
+                    // reason field directly, so it must mark it explicitly or
+                    // the program-end detector reports a spurious
+                    // "Uncaught (in promise)" for a rejection that `await`
+                    // already consumed (and exits non-zero).
+                    crate::promise::mark_rejection_handled(inner);
                     let reason = unsafe { (*inner).reason };
                     (
                         if can_reuse {

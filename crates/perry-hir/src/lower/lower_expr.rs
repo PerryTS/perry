@@ -665,7 +665,21 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             None
                         }
                     }
-                    _ => None,
+                    // Any other right-hand side (a primitive literal like
+                    // `x instanceof true`, `this`, a call `x instanceof f()`,
+                    // a parenthesized/conditional class ref, …) is NOT a
+                    // statically-resolvable class name. The old `_ => "Object"`
+                    // `ty` substitution silently treated these as
+                    // `instanceof Object` and returned `false`; ECMAScript
+                    // requires evaluating the operand and throwing a TypeError
+                    // when it is not a constructor (`true instanceof true`,
+                    // `({}) instanceof this`). Lower the operand to a value and
+                    // route through `js_instanceof_dynamic`, which both resolves
+                    // every constructor shape and throws on a non-callable RHS.
+                    _ => match lower_expr(ctx, &bin.right) {
+                        Ok(e) => Some(Box::new(e)),
+                        Err(_) => None,
+                    },
                 };
                 return Ok(Expr::InstanceOf { expr, ty, ty_expr });
             }

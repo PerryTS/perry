@@ -54,6 +54,22 @@ pub extern "C" fn js_eq(a: JSValue, b: JSValue) -> JSValue {
     JSValue::bool(result != 0)
 }
 
+/// Whether `v` has ECMAScript Type Object (not a primitive). True for plain
+/// objects, arrays, functions, Dates and boxed primitive wrappers; false for
+/// Symbols (which are NaN-boxed pointers but are primitives) and for the
+/// native-handle id-space below `0x100000` (sockets, zlib streams, …) which
+/// must not be dereferenced as heap objects in a coercion path.
+fn eq_is_object(v: JSValue) -> bool {
+    if !v.is_pointer() {
+        return false;
+    }
+    let ptr = v.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < 0x100000 {
+        return false;
+    }
+    !crate::symbol::is_registered_symbol(ptr as usize)
+}
+
 /// JS abstract equality (==). Implements the coercion rules:
 /// - Same type: use strict equality
 /// - null == undefined: true
@@ -82,6 +98,14 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     if a.is_null() || a.is_undefined() || b.is_null() || b.is_undefined() {
         return JSValue::bool(false);
     }
+    // Object == Object → reference equality (ES2024 §7.2.15 step 1, same Type).
+    // Distinct object identities already failed the same-bits fast path above,
+    // so two objects here are never equal — and we must NOT unwrap a boxed
+    // wrapper when the other side is also an object (`new Boolean(true) !=
+    // new Boolean(true)` is `true`).
+    if eq_is_object(a) && eq_is_object(b) {
+        return JSValue::bool(false);
+    }
     // Boxed primitives compare via their wrapped primitive value under
     // abstract equality (`new Number(5) == 5`, and sloppy primitive accessors
     // return boxed receivers).
@@ -90,6 +114,56 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     }
     if let Some((_, payload)) = boxed_primitive_payload(f64::from_bits(b.bits())) {
         return js_loose_eq(a, JSValue::from_bits(payload.to_bits()));
+    }
+    // Object == primitive → ToPrimitive(object), then retry (ES2024 §7.2.15
+    // steps 10-11). Object-vs-object was settled above; symbols are primitives
+    // (`eq_is_object` excludes them) and correctly fall through to not-equal.
+    // Done before the BigInt block so `0n == { valueOf() { return 0n } }` works.
+    if eq_is_object(a) {
+        let pa = unsafe { rel_to_primitive(f64::from_bits(a.bits())) };
+        return js_loose_eq(JSValue::from_bits(pa.to_bits()), b);
+    }
+    if eq_is_object(b) {
+        let pb = unsafe { rel_to_primitive(f64::from_bits(b.bits())) };
+        return js_loose_eq(a, JSValue::from_bits(pb.to_bits()));
+    }
+    // BigInt abstract equality (ES2024 §7.2.15). Neither side is
+    // null/undefined here and boxed wrappers (incl. `Object(0n)`) have already
+    // been unwrapped above.
+    if a.is_bigint() || b.is_bigint() {
+        // BigInt == BigInt → compare by mathematical value.
+        if a.is_bigint() && b.is_bigint() {
+            return JSValue::bool(
+                crate::bigint::js_bigint_cmp(a.as_bigint_ptr(), b.as_bigint_ptr()) == 0,
+            );
+        }
+        let (big, other) = if a.is_bigint() { (a, b) } else { (b, a) };
+        // BigInt == Boolean → ToNumber(boolean) then BigInt == Number.
+        let other = if other.is_bool() {
+            JSValue::number(if other.as_bool() { 1.0 } else { 0.0 })
+        } else {
+            other
+        };
+        // BigInt == Number → exact integer comparison (NaN/±Infinity/fractional
+        // are never equal). `bigint_cmp_f64` returns 0 only on exact equality.
+        if other.is_number() {
+            return JSValue::bool(
+                crate::bigint::bigint_cmp_f64(big.as_bigint_ptr(), other.as_number()) == 0,
+            );
+        }
+        // BigInt == String → StringToBigInt(string); a non-numeric string makes
+        // the result `false` (StringToBigInt is undefined → not equal).
+        if other.is_any_string() {
+            let s = unsafe { string_content_for_bigint(f64::from_bits(other.bits())) };
+            return match crate::bigint::string_to_bigint(&s) {
+                Some(ny) => {
+                    JSValue::bool(crate::bigint::js_bigint_cmp(big.as_bigint_ptr(), ny) == 0)
+                }
+                None => JSValue::bool(false),
+            };
+        }
+        // BigInt == Symbol / anything else → not equal.
+        return JSValue::bool(false);
     }
     // Both strings (heap STRING_TAG and/or inline SHORT_STRING_TAG):
     // content compare. The previous `is_string() && is_string()` test
