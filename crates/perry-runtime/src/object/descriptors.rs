@@ -218,6 +218,17 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 if super::class_registry::class_is_key_deleted(class_id, &method_name) {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
+                // `C.prototype` is a non-writable, non-enumerable, non-configurable
+                // own data property of the class constructor (ECMA-262
+                // MakeConstructor). Only the constructor ref carries it — the
+                // prototype ref's own `prototype` lookup falls through.
+                // (Test262 definition/prototype-property.)
+                if method_name == "prototype"
+                    && super::class_prototype_ref_id(obj_value).is_none()
+                {
+                    let proto = super::native_module::class_prototype_ref_value(class_id);
+                    return build_data_descriptor(proto, false, false, false);
+                }
                 if method_name == "name"
                     && super::class_prototype_ref_id(obj_value).is_none()
                     && super::class_registry::lookup_static_method_in_chain(class_id, "name")

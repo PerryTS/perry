@@ -4681,11 +4681,53 @@ pub(crate) unsafe fn call_static_method(
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
         ),
-        _ => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64) -> f64>(func_ptr))(
+        4 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64) -> f64>(func_ptr))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
             a(args_ptr, args_len, 3),
+        ),
+        5 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64) -> f64>(func_ptr))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+            a(args_ptr, args_len, 3),
+            a(args_ptr, args_len, 4),
+        ),
+        6 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64, f64) -> f64>(
+            func_ptr,
+        ))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+            a(args_ptr, args_len, 3),
+            a(args_ptr, args_len, 4),
+            a(args_ptr, args_len, 5),
+        ),
+        7 => (std::mem::transmute::<
+            usize,
+            extern "C" fn(f64, f64, f64, f64, f64, f64, f64) -> f64,
+        >(func_ptr))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+            a(args_ptr, args_len, 3),
+            a(args_ptr, args_len, 4),
+            a(args_ptr, args_len, 5),
+            a(args_ptr, args_len, 6),
+        ),
+        _ => (std::mem::transmute::<
+            usize,
+            extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64,
+        >(func_ptr))(
+            a(args_ptr, args_len, 0),
+            a(args_ptr, args_len, 1),
+            a(args_ptr, args_len, 2),
+            a(args_ptr, args_len, 3),
+            a(args_ptr, args_len, 4),
+            a(args_ptr, args_len, 5),
+            a(args_ptr, args_len, 6),
+            a(args_ptr, args_len, 7),
         ),
     }
 }
