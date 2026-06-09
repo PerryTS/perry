@@ -904,3 +904,473 @@ static KEEP_ARRAYLIKE_AT: extern "C" fn(f64, f64) -> f64 = js_arraylike_at;
 static KEEP_ARRAYLIKE_JOIN: extern "C" fn(f64, f64) -> f64 = js_arraylike_join;
 #[used]
 static KEEP_ARRAYLIKE_SLICE: extern "C" fn(f64, f64, i32, f64, i32) -> f64 = js_arraylike_slice;
+
+// ---------------------------------------------------------------------------
+// Generic array-like MUTATORS over a plain-object receiver (#4742 follow-up).
+//
+// `Array.prototype.{pop,shift,push,unshift,reverse,splice}` are intentionally
+// generic (ECMA-262 §23.1.3) — they operate on `O = ToObject(this)` with live
+// `Get`/`Set`/`Delete`/`HasProperty` and a writable `length`. Perry's dense
+// fast paths assume a real `ArrayHeader`; when the receiver is a plain object
+// (a stored `obj.pop = Array.prototype.pop; obj.pop()` borrow, or
+// `Array.prototype.pop.call(obj, …)`), the dense path read the object's
+// `ObjectHeader` words as an `ArrayHeader` and corrupted/crashed
+// (`TypeError: Cannot convert object to primitive value`).
+//
+// These helpers run the spec algorithm by mutating the *original* receiver
+// object in place via the polymorphic index get/set/delete and a `length`
+// property write. They are dispatched from `js_native_call_method` only when
+// the receiver classifies as a plain `Object` (never a real array / typed
+// array / buffer / primitive), so the hot real-array paths are untouched.
+// ---------------------------------------------------------------------------
+
+/// `Set(O, ToString(k), v, true)` for an array-like object receiver.
+fn al_set(recv: f64, k: i64, v: f64) {
+    crate::object::js_object_set_index_polymorphic(recv.to_bits() as i64, k as f64, v);
+}
+
+/// `DeletePropertyOrThrow(O, ToString(k))` for an array-like object receiver.
+fn al_delete(recv: f64, k: i64) {
+    let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
+    crate::object::js_object_delete_dynamic(raw, k as f64);
+}
+
+/// `Set(O, "length", len, true)` for an array-like object receiver.
+fn al_set_length(recv: f64, len: i64) {
+    let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    crate::object::js_object_set_field_by_name(raw, key, len as f64);
+}
+
+/// `ToIntegerOrInfinity(v)` as an `f64` (NaN → 0; ±Infinity preserved).
+fn to_integer_or_infinity(v: f64) -> f64 {
+    if v.is_nan() {
+        0.0
+    } else if v.is_infinite() {
+        v
+    } else {
+        v.trunc()
+    }
+}
+
+/// Resolve a relative index argument (`splice` start) to an absolute,
+/// clamped `[0, len]` index.
+fn relative_index(v: f64, len: i64) -> i64 {
+    let n = to_integer_or_infinity(v);
+    if n < 0.0 {
+        let r = len as f64 + n;
+        if r < 0.0 {
+            0
+        } else {
+            r as i64
+        }
+    } else if n > len as f64 {
+        len
+    } else {
+        n as i64
+    }
+}
+
+#[inline]
+fn arg_at(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
+    if i < args_len && !args_ptr.is_null() {
+        unsafe { *args_ptr.add(i) }
+    } else {
+        undef()
+    }
+}
+
+/// If `arr` points to a *plain* object (an object literal — `GC_TYPE_OBJECT`
+/// with `class_id == 0` or an anonymous shape id), return it NaN-boxed as a
+/// receiver value, else `None`. Used by the dense `Array.prototype` mutator
+/// entry points to detect a borrowed array-like receiver (`obj.pop =
+/// Array.prototype.pop; obj.pop()`, whose thunk calls the dense helper with the
+/// object pointer) and route it to the spec-generic engine. Real arrays / typed
+/// arrays / buffers / class instances return `None` and keep the dense path.
+pub fn plain_object_value(arr: *const ArrayHeader) -> Option<f64> {
+    let recv = f64::from_bits(JSValue::pointer(arr as *const u8).bits());
+    if !matches!(classify_pointer(recv), Some(PtrKind::Object)) {
+        return None;
+    }
+    let class_id = crate::object::js_object_get_class_id(arr as *const crate::object::ObjectHeader);
+    if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+        return None;
+    }
+    Some(recv)
+}
+
+/// `Array.prototype.pop` over an array-like object receiver.
+pub(crate) fn object_pop(recv: f64) -> f64 {
+    let len = al_length(recv);
+    if len <= 0 {
+        al_set_length(recv, 0);
+        return undef();
+    }
+    let new_len = len - 1;
+    let element = al_get(recv, new_len);
+    al_delete(recv, new_len);
+    al_set_length(recv, new_len);
+    element
+}
+
+/// `Array.prototype.shift` over an array-like object receiver.
+pub(crate) fn object_shift(recv: f64) -> f64 {
+    let len = al_length(recv);
+    if len <= 0 {
+        al_set_length(recv, 0);
+        return undef();
+    }
+    let first = al_get(recv, 0);
+    for k in 1..len {
+        if al_has(recv, k) {
+            al_set(recv, k - 1, al_get(recv, k));
+        } else {
+            al_delete(recv, k - 1);
+        }
+    }
+    al_delete(recv, len - 1);
+    al_set_length(recv, len - 1);
+    first
+}
+
+/// `Array.prototype.push` over an array-like object receiver. Returns the new
+/// length.
+fn object_push(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
+    let len = al_length(recv);
+    for i in 0..args_len {
+        al_set(recv, len + i as i64, arg_at(args_ptr, args_len, i));
+    }
+    let new_len = len + args_len as i64;
+    al_set_length(recv, new_len);
+    new_len as f64
+}
+
+/// `Array.prototype.unshift` over an array-like object receiver. Returns the
+/// new length.
+fn object_unshift(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
+    let len = al_length(recv);
+    let count = args_len as i64;
+    if count > 0 {
+        // Move existing elements up by `count`, high index first so we don't
+        // clobber not-yet-moved slots.
+        let mut k = len;
+        while k > 0 {
+            let from = k - 1;
+            let to = from + count;
+            if al_has(recv, from) {
+                al_set(recv, to, al_get(recv, from));
+            } else {
+                al_delete(recv, to);
+            }
+            k -= 1;
+        }
+        for j in 0..count {
+            al_set(recv, j, arg_at(args_ptr, args_len, j as usize));
+        }
+    }
+    let new_len = len + count;
+    al_set_length(recv, new_len);
+    new_len as f64
+}
+
+/// `Array.prototype.reverse` over an array-like object receiver. Returns the
+/// receiver.
+fn object_reverse(recv: f64) -> f64 {
+    let len = al_length(recv);
+    let middle = len / 2;
+    let mut lower = 0;
+    while lower < middle {
+        let upper = len - 1 - lower;
+        let lower_exists = al_has(recv, lower);
+        let upper_exists = al_has(recv, upper);
+        let lower_val = al_get(recv, lower);
+        let upper_val = al_get(recv, upper);
+        match (lower_exists, upper_exists) {
+            (true, true) => {
+                al_set(recv, lower, upper_val);
+                al_set(recv, upper, lower_val);
+            }
+            (false, true) => {
+                al_set(recv, lower, upper_val);
+                al_delete(recv, upper);
+            }
+            (true, false) => {
+                al_delete(recv, lower);
+                al_set(recv, upper, lower_val);
+            }
+            (false, false) => {}
+        }
+        lower += 1;
+    }
+    recv
+}
+
+/// `Array.prototype.splice` over an array-like object receiver. Returns a fresh
+/// plain array of the removed elements (holes preserved).
+fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
+    let len = al_length(recv);
+    let actual_start = relative_index(arg_at(args_ptr, args_len, 0), len);
+    let delete_count = if args_len == 0 {
+        0
+    } else if args_len == 1 {
+        len - actual_start
+    } else {
+        let dc = to_integer_or_infinity(arg_at(args_ptr, args_len, 1));
+        dc.max(0.0).min((len - actual_start) as f64) as i64
+    };
+    // Removed elements -> fresh plain array (holes preserved).
+    let removed = js_array_alloc_with_length(delete_count.max(0) as u32);
+    let removed_elems =
+        unsafe { (removed as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
+    for k in 0..delete_count {
+        let from = actual_start + k;
+        if al_has(recv, from) {
+            let v = al_get(recv, from);
+            unsafe {
+                ptr::write(removed_elems.add(k as usize), v);
+                note_array_slot(removed, k as usize, v.to_bits());
+            }
+        }
+    }
+    let item_count = if args_len > 2 { args_len - 2 } else { 0 } as i64;
+    if item_count < delete_count {
+        // Shift the tail down to close the gap.
+        let mut k = actual_start;
+        while k < len - delete_count {
+            let from = k + delete_count;
+            let to = k + item_count;
+            if al_has(recv, from) {
+                al_set(recv, to, al_get(recv, from));
+            } else {
+                al_delete(recv, to);
+            }
+            k += 1;
+        }
+        // Delete the now-vacated trailing slots.
+        let mut k = len;
+        while k > len - delete_count + item_count {
+            al_delete(recv, k - 1);
+            k -= 1;
+        }
+    } else if item_count > delete_count {
+        // Open a gap by shifting the tail up.
+        let mut k = len - delete_count;
+        while k > actual_start {
+            let from = k + delete_count - 1;
+            let to = k + item_count - 1;
+            if al_has(recv, from) {
+                al_set(recv, to, al_get(recv, from));
+            } else {
+                al_delete(recv, to);
+            }
+            k -= 1;
+        }
+    }
+    // Write the inserted items.
+    for j in 0..item_count {
+        al_set(
+            recv,
+            actual_start + j,
+            arg_at(args_ptr, args_len, 2 + j as usize),
+        );
+    }
+    al_set_length(recv, len - delete_count + item_count);
+    nanbox_arr(removed)
+}
+
+/// Run a generic `Array.prototype` mutator on `recv` for the reified prototype
+/// method thunks (`Array.prototype.pop`, etc.). A real-array receiver routes to
+/// the dense helpers; a plain array-like object routes to the spec-generic
+/// engine; any other receiver yields `undefined`. `recv` is the call-site
+/// `this` (IMPLICIT_THIS) the thunk read.
+pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_len: usize) -> f64 {
+    let arr = as_real_array(recv);
+    if !arr.is_null() {
+        return unsafe { real_array_mutator(arr, method, args_ptr, args_len) };
+    }
+    run_object_mutator(recv, method, args_ptr, args_len).unwrap_or_else(undef)
+}
+
+#[inline]
+fn arg_or_undef(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
+    if i < args_len && !args_ptr.is_null() {
+        unsafe { *args_ptr.add(i) }
+    } else {
+        undef()
+    }
+}
+
+/// Dense-array branch of [`array_proto_mutator`]. Reuses the existing dense
+/// runtime helpers (matching the `js_native_call_method` array arms).
+unsafe fn real_array_mutator(
+    arr: *mut ArrayHeader,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    match method {
+        "pop" => crate::array::js_array_pop_f64(arr),
+        "shift" => crate::array::js_array_shift_f64(arr),
+        "reverse" => {
+            crate::array::js_array_reverse(arr);
+            nanbox_arr(arr)
+        }
+        "push" => {
+            let mut a = arr;
+            for i in 0..args_len {
+                a = crate::array::js_array_push_f64(a, arg_or_undef(args_ptr, args_len, i));
+            }
+            crate::array::js_array_length(a) as f64
+        }
+        "unshift" => {
+            if args_len == 0 || args_ptr.is_null() {
+                crate::array::js_array_length(arr) as f64
+            } else {
+                let r = crate::array::js_array_unshift_variadic(arr, args_ptr, args_len as u32);
+                crate::array::js_array_length(r) as f64
+            }
+        }
+        "splice" => {
+            let arg_i32 = |i: usize| -> i32 {
+                let v = arg_or_undef(args_ptr, args_len, i);
+                if v.is_nan() || v.is_infinite() {
+                    0
+                } else {
+                    v as i32
+                }
+            };
+            let start = if args_len >= 1 { arg_i32(0) } else { 0 };
+            let delete_count = if args_len == 0 {
+                0
+            } else if args_len == 1 {
+                i32::MAX
+            } else {
+                arg_i32(1)
+            };
+            let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
+                std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
+            } else {
+                Vec::new()
+            };
+            let items_ptr = if items.is_empty() {
+                ptr::null()
+            } else {
+                items.as_ptr()
+            };
+            let mut out_arr: *mut ArrayHeader = ptr::null_mut();
+            let deleted = crate::array::js_array_splice(
+                arr,
+                start,
+                delete_count,
+                items_ptr,
+                items.len() as u32,
+                &mut out_arr,
+            );
+            nanbox_arr(deleted)
+        }
+        _ => undef(),
+    }
+}
+
+/// Classify the own `method_name` slot of an array-like receiver: `Absent`
+/// (no callable), `UserMethod` (a genuine user closure/function), or
+/// `BorrowedBuiltin` (a `BOUND_METHOD` closure — `obj.pop = Array.prototype.pop`).
+/// Only `Absent` and `BorrowedBuiltin` route to the generic engine; a borrowed
+/// builtin, dispatched normally, binds the wrong receiver (its captured
+/// `Array.prototype`) and loops, so the engine must run on the real receiver.
+enum OwnSlot {
+    Absent,
+    UserMethod,
+    BorrowedBuiltin,
+}
+
+fn classify_own_slot(v: f64) -> OwnSlot {
+    let jv = JSValue::from_bits(v.to_bits());
+    if !jv.is_pointer() {
+        return OwnSlot::Absent;
+    }
+    let c = jv.as_pointer::<ClosureHeader>();
+    if c.is_null() {
+        return OwnSlot::Absent;
+    }
+    let fp = crate::closure::get_valid_func_ptr(c);
+    if fp.is_null() {
+        OwnSlot::Absent
+    } else if fp == crate::closure::BOUND_METHOD_FUNC_PTR {
+        OwnSlot::BorrowedBuiltin
+    } else {
+        OwnSlot::UserMethod
+    }
+}
+
+/// Dispatch a generic `Array.prototype` mutator over an array-like receiver.
+///
+/// Returns `Some(result)` only when `object` is a plain heap object / closure
+/// (classified `Object`) — i.e. NOT a real array, typed array, buffer, exotic
+/// cell, or primitive — so the dense real-array fast paths in
+/// `js_native_call_method` keep their existing behavior. The caller routes
+/// `pop` / `shift` / `push` / `unshift` / `reverse` / `splice` here before the
+/// dense array arms that would otherwise read the object as an `ArrayHeader`.
+pub fn try_object_arraylike_mutator(
+    object: f64,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if !matches!(classify_pointer(object), Some(PtrKind::Object)) {
+        return None;
+    }
+    // Restrict to *plain* objects — object literals (`class_id == 0` or an
+    // anonymous shape id). A real user class instance (`class Stack { push(){…} }`)
+    // owns a registered class id; hijacking its same-named method would be a
+    // regression, so leave those to the normal vtable dispatch.
+    let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
+    let class_id = crate::object::js_object_get_class_id(raw);
+    if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+        return None;
+    }
+    // Fire the generic engine when the own `method_name` slot is absent (the
+    // `Array.prototype.<m>.call(obj, …)` borrow, dispatched by name) or holds a
+    // borrowed builtin method (`obj.pop = Array.prototype.pop`, whose normal
+    // dispatch binds its captured `Array.prototype` and loops). A genuine user
+    // method (`{ push(x) {…} }`) is left to the normal dispatch.
+    let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+    let own = crate::object::js_object_get_field_by_name_f64(raw, key);
+    if matches!(classify_own_slot(own), OwnSlot::UserMethod) {
+        return None;
+    }
+    run_object_mutator(object, method, args_ptr, args_len)
+}
+
+/// Run a generic `Array.prototype` mutator over a *plain-object* receiver
+/// (object literal / anonymous shape — never a real array / typed array /
+/// buffer / class instance). Returns `None` for any other receiver so the
+/// caller keeps its existing behavior. Unlike [`try_object_arraylike_mutator`]
+/// this applies NO own-property gate — callers (e.g. the bound-method dispatch
+/// for a borrowed builtin) have already established that the array algorithm
+/// must run on `recv`.
+pub fn run_object_mutator(
+    recv: f64,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if !matches!(classify_pointer(recv), Some(PtrKind::Object)) {
+        return None;
+    }
+    let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
+    let class_id = crate::object::js_object_get_class_id(raw);
+    if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+        return None;
+    }
+    let result = match method {
+        "pop" => object_pop(recv),
+        "shift" => object_shift(recv),
+        "push" => object_push(recv, args_ptr, args_len),
+        "unshift" => object_unshift(recv, args_ptr, args_len),
+        "reverse" => object_reverse(recv),
+        "splice" => object_splice(recv, args_ptr, args_len),
+        _ => return None,
+    };
+    Some(result)
+}

@@ -1630,6 +1630,58 @@ extern "C" fn array_prototype_slice_thunk(
     f64::from_bits(crate::value::js_nanbox_pointer(result as i64).to_bits())
 }
 
+/// Real callable thunks for the generic `Array.prototype` mutators
+/// (`pop`/`shift`/`reverse` — no positional args; `push`/`unshift`/`splice` —
+/// variadic). Each reads the call-site receiver from `IMPLICIT_THIS` (set by
+/// the own-field dispatch and `Function.prototype.call`/`.apply`) and forwards
+/// to the shared engine, which mutates a real array via the dense helpers or a
+/// plain array-like object via live `Get`/`Set`/`Delete`. Without these, the
+/// methods were noop-backed (`global_this_builtin_noop_thunk`), so a borrowed
+/// reference (`obj.pop = Array.prototype.pop; obj.pop()` or
+/// `Array.prototype.pop.call(obj)`) returned `undefined` / looped.
+extern "C" fn array_prototype_pop_thunk(_c: *const crate::closure::ClosureHeader, _a: f64) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::array_proto_mutator(this, "pop", std::ptr::null(), 0)
+}
+extern "C" fn array_prototype_shift_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _a: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::array_proto_mutator(this, "shift", std::ptr::null(), 0)
+}
+extern "C" fn array_prototype_reverse_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _a: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::array_proto_mutator(this, "reverse", std::ptr::null(), 0)
+}
+extern "C" fn array_prototype_push_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    let args = global_this_rest_array_values(rest);
+    crate::array::array_proto_mutator(this, "push", args.as_ptr(), args.len())
+}
+extern "C" fn array_prototype_unshift_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    let args = global_this_rest_array_values(rest);
+    crate::array::array_proto_mutator(this, "unshift", args.as_ptr(), args.len())
+}
+extern "C" fn array_prototype_splice_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    let args = global_this_rest_array_values(rest);
+    crate::array::array_proto_mutator(this, "splice", args.as_ptr(), args.len())
+}
+
 fn array_buffer_receiver_addr() -> Option<usize> {
     let this_bits = IMPLICIT_THIS.with(|c| c.get());
     let this_jsv = JSValue::from_bits(this_bits);
@@ -6313,24 +6365,56 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                     ("keys", 0),
                     ("lastIndexOf", 1),
                     ("map", 1),
-                    ("pop", 0),
-                    ("push", 1),
                     ("reduce", 1),
                     ("reduceRight", 1),
-                    ("reverse", 0),
-                    ("shift", 0),
                     ("some", 1),
                     ("sort", 1),
-                    ("splice", 2),
                     ("toLocaleString", 0),
                     ("toReversed", 0),
                     ("toSorted", 1),
                     ("toSpliced", 2),
                     ("toString", 0),
-                    ("unshift", 1),
                     ("values", 0),
                     ("with", 2),
                 ],
+            );
+            // Generic mutators get REAL thunks (vs the noop above) so a borrowed
+            // reference works: `obj.pop = Array.prototype.pop; obj.pop()` and
+            // `Array.prototype.splice.call(obj, …)`. Each reads IMPLICIT_THIS and
+            // runs the array algorithm on a real array or array-like object.
+            install_proto_method(proto_obj, "pop", array_prototype_pop_thunk as *const u8, 0);
+            install_proto_method(
+                proto_obj,
+                "shift",
+                array_prototype_shift_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "reverse",
+                array_prototype_reverse_thunk as *const u8,
+                0,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "push",
+                array_prototype_push_thunk as *const u8,
+                1,
+                0,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "unshift",
+                array_prototype_unshift_thunk as *const u8,
+                1,
+                0,
+            );
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "splice",
+                array_prototype_splice_thunk as *const u8,
+                2,
+                0,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }

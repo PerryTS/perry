@@ -239,6 +239,12 @@ pub extern "C" fn js_array_push_spread_f64(
 #[no_mangle]
 pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+    // Borrowed array-like receiver (`obj.pop = Array.prototype.pop; obj.pop()`):
+    // the thunk hands this dense helper the plain object pointer. Run the
+    // spec-generic engine instead of reading the object as an `ArrayHeader`.
+    if let Some(recv) = crate::array::plain_object_value(arr) {
+        return crate::array::generic_object_pop(recv);
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
@@ -359,6 +365,10 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+    // Borrowed array-like receiver — see `js_array_pop_f64`.
+    if let Some(recv) = crate::array::plain_object_value(arr) {
+        return crate::array::generic_object_shift(recv);
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return TAG_UNDEFINED_F64;

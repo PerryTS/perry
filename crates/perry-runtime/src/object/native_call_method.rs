@@ -1361,6 +1361,25 @@ pub unsafe extern "C" fn js_native_call_method(
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object, want_async);
     }
+    // Generic `Array.prototype` mutators borrowed onto a plain array-like
+    // object (`Array.prototype.splice.call(obj, …)` whose synthesized member
+    // call dispatches by name with no own method). The dense array arms further
+    // down cast any pointer receiver to `ArrayHeader`, corrupting a real
+    // object's layout. Route a plain-object receiver to the spec-generic engine.
+    // Returns `None` for real arrays / typed arrays / buffers / primitives, and
+    // for objects that own a user method of this name — the hot paths and user
+    // methods are untouched. (The `obj.pop = Array.prototype.pop` borrow shape
+    // is handled by the real prototype-method thunks instead.)
+    if matches!(
+        method_name,
+        "pop" | "shift" | "push" | "unshift" | "reverse" | "splice"
+    ) {
+        if let Some(result) =
+            crate::array::try_object_arraylike_mutator(object, method_name, args_ptr, args_len)
+        {
+            return result;
+        }
+    }
     // #4795: dynamic dispatch for `DisposableStack` / `AsyncDisposableStack`
     // instance methods. The codegen fast path handles statically-typed stack
     // locals, but a stack held in an `any`-typed value — e.g. the result of

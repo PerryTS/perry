@@ -40,12 +40,16 @@ pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
 };
+pub use self::generic::array_proto_mutator;
 pub use self::generic::{
     js_arraylike_at, js_arraylike_every, js_arraylike_filter, js_arraylike_find,
     js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,
     js_arraylike_forEach, js_arraylike_includes, js_arraylike_indexOf, js_arraylike_join,
     js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce, js_arraylike_reduceRight,
-    js_arraylike_slice, js_arraylike_some,
+    js_arraylike_slice, js_arraylike_some, try_object_arraylike_mutator,
+};
+pub(crate) use self::generic::{
+    object_pop as generic_object_pop, object_shift as generic_object_shift, plain_object_value,
 };
 pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
 pub use self::header::{

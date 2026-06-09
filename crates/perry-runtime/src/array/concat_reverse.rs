@@ -194,6 +194,16 @@ pub extern "C" fn js_array_concat_new(
 /// `Array.prototype.reverse` — reverses in place and returns the same pointer.
 #[no_mangle]
 pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    // Borrowed array-like receiver (`obj.reverse = Array.prototype.reverse;
+    // obj.reverse()`): the thunk hands this dense helper the plain object
+    // pointer. `js_array_reverse_value` already implements the spec-generic
+    // (live `Get`/`Set`/`Delete`) reversal, so delegate and return the original
+    // pointer (reverse returns its receiver).
+    if crate::array::plain_object_value(arr).is_some() {
+        let recv = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
+        crate::array::js_array_reverse_value(recv);
+        return arr;
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
