@@ -1,3 +1,31 @@
+## v0.5.1151 — release pipeline green: Android/Windows platform builds, dense-array growth hang, perf gate re-armed
+
+Release-infrastructure release. v0.5.1150 shipped with 5 of 19 platform build jobs red
+(publish steps skipped) and a Regression Check that had been hanging at the 6h timeout
+on every run since v0.5.1129. This release makes the full matrix green and the gates real:
+
+- **Android builds** (both arches): E0597 borrow-lifetime error in
+  `perry-ui-android/src/drag_drop.rs` (if-let tail-expression temporary outliving `jstr`).
+- **Windows builds**: `windows-core` direct dep for `#[implement]` COM authoring landed in
+  #4837 just after the v0.5.1150 tag; first release to actually ship it.
+- **Dense-array growth hang** (PR #4857): #4648's absolute 1M dense cap routed sequential
+  10M-element fills through string-keyed sparse properties (linear-scan Vec per insert →
+  quadratic → `03_array_write` ran 6h instead of ~3s, cancelling every Regression Check).
+  Sparse storage is now gated on the gap the write creates (`index − length > 1024`) in
+  addition to absolute size; sequential growth stays dense at any size. Reads consult
+  sparse storage only past capacity, keeping the dense hot path call-free.
+- **Performance gate was vacuous since ≤ v0.5.1122**: `compare.sh` resolved `--json-out`
+  after `cd benchmarks/suite`, so `current.json` was never written; the comparison crashed
+  and `| tee` (no pipefail) swallowed the exit — release-mode "hard-fail" gates passed
+  without comparing anything. Fixed (absolute path + pipefail + `timeout-minutes: 100`)
+  and `benchmarks/baseline.json` refreshed from a current green run.
+- **Binary-size baseline** refreshed to v0.5.1150 sizes (libperry_runtime +34.8% over the
+  v0.5.1122→1150 parity push; 317 commits, verified organic growth).
+
+Known issue found en route (not fixed here): `date::tests::test_full_year_setters_revive_invalid_date_only`
+fails under non-UTC local timezones (CI is UTC; local CEST repro) — local-time revive of an
+invalid Date via setFullYear returns NaN.
+
 # Changelog
 
 Detailed changelog for Perry. See CLAUDE.md for concise summaries.

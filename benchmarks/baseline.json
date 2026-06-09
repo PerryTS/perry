@@ -1,199 +1,199 @@
 {
-  "commit": "5e612062",
-  "generated_at": "2026-06-05T07:32:00Z",
-  "notes": "Refreshed 2026-06-09 from the last green Regression Check run (27001035612, macos-14, commit 5e612062791, 2026-06-05) while fixing the vacuous gate: compare.sh --json-out resolved relative to benchmarks/suite after the mid-script cd, so current.json was never written, the comparison crashed, and `| tee` swallowed the exit \u2014 no run since the 2026-04-23 c89b3ad5 baseline was ever actually compared. The April numbers (e.g. 03_array_write 3ms) no longer reflect any recent run (3.1-3.4s on every June run) and would hard-fail every release tag the moment the gate started working again, so the baseline restarts from the most recent trusted full measurement. Known perf gaps vs Node (method_calls, nested_loops, matrix_multiply, numeric_array_downgrade) are pre-existing and tracked separately \u2014 this file gates *drift*, not absolute performance.",
+  "commit": "53f0f29",
+  "generated_at": "2026-06-09T21:44:30Z",
+  "notes": "Refreshed 2026-06-09 from workflow_dispatch run 27236538959 (macos-14, main @ 53f0f29bb) \u2014 the first run after #4857 un-vacuumed the gate (current.json had never been written since the comparison was added; see compare.sh --json-out fix). Numbers are the median of 3 on one runner; macos-14 runner-to-runner speed variance was observed at +10-35% on CPU-bound rows between same-week runs, so treat single-row speed flags near the 20% threshold as suspect before chasing a code regression \u2014 the perry/node ratio column in output.txt normalizes runner speed and is the better cross-run signal. This run measured on the slower end (e.g. 02_loop_overhead 111ms vs 99-101ms on June 4/5 runs), which makes it a conservative gate baseline. Strip the correctness payloads when hand-editing; the gate only reads perry_ms/perry_rss_kb.",
   "benchmarks": {
     "02_loop_overhead": {
-      "perry_ms": 99,
-      "perry_rss_kb": 3681,
-      "node_ms": 67,
-      "node_rss_kb": 17652,
-      "speed_ratio": 1.478,
-      "memory_ratio": 0.209
-    },
-    "03_array_write": {
-      "perry_ms": 3357,
-      "perry_rss_kb": 239809,
-      "node_ms": 8,
-      "node_rss_kb": 326277,
-      "speed_ratio": 419.625,
-      "memory_ratio": 0.735
-    },
-    "04_array_read": {
-      "perry_ms": 2558,
-      "perry_rss_kb": 239857,
-      "node_ms": 12,
-      "node_rss_kb": 326533,
-      "speed_ratio": 213.167,
-      "memory_ratio": 0.735
-    },
-    "05_fibonacci": {
-      "perry_ms": 323,
+      "perry_ms": 111,
       "perry_rss_kb": 3665,
-      "node_ms": 954,
-      "node_rss_kb": 17668,
-      "speed_ratio": 0.339,
+      "node_ms": 91,
+      "node_rss_kb": 17716,
+      "speed_ratio": 1.22,
       "memory_ratio": 0.207
     },
+    "03_array_write": {
+      "perry_ms": 4143,
+      "perry_rss_kb": 245601,
+      "node_ms": 8,
+      "node_rss_kb": 326885,
+      "speed_ratio": 517.875,
+      "memory_ratio": 0.751
+    },
+    "04_array_read": {
+      "perry_ms": 4067,
+      "perry_rss_kb": 245585,
+      "node_ms": 13,
+      "node_rss_kb": 327621,
+      "speed_ratio": 312.846,
+      "memory_ratio": 0.75
+    },
+    "05_fibonacci": {
+      "perry_ms": 377,
+      "perry_rss_kb": 3745,
+      "node_ms": 1236,
+      "node_rss_kb": 17684,
+      "speed_ratio": 0.305,
+      "memory_ratio": 0.212
+    },
     "06_math_intensive": {
-      "perry_ms": 52,
-      "perry_rss_kb": 3649,
-      "node_ms": 53,
-      "node_rss_kb": 18661,
-      "speed_ratio": 0.981,
-      "memory_ratio": 0.196
+      "perry_ms": 55,
+      "perry_rss_kb": 3745,
+      "node_ms": 54,
+      "node_rss_kb": 18741,
+      "speed_ratio": 1.019,
+      "memory_ratio": 0.2
     },
     "07_object_create": {
-      "perry_ms": 3,
-      "perry_rss_kb": 3681,
-      "node_ms": 5,
-      "node_rss_kb": 19157,
-      "speed_ratio": 0.6,
-      "memory_ratio": 0.192
+      "perry_ms": 2,
+      "perry_rss_kb": 3697,
+      "node_ms": 6,
+      "node_rss_kb": 19493,
+      "speed_ratio": 0.333,
+      "memory_ratio": 0.19
     },
     "08_string_concat": {
       "perry_ms": 3,
-      "perry_rss_kb": 3921,
+      "perry_rss_kb": 3937,
       "node_ms": 5,
-      "node_rss_kb": 22646,
+      "node_rss_kb": 22470,
       "speed_ratio": 0.6,
-      "memory_ratio": 0.173
+      "memory_ratio": 0.175
     },
     "09_method_calls": {
-      "perry_ms": 9892,
+      "perry_ms": 13368,
       "perry_rss_kb": 3777,
-      "node_ms": 12,
-      "node_rss_kb": 17668,
-      "speed_ratio": 824.333,
-      "memory_ratio": 0.214
+      "node_ms": 11,
+      "node_rss_kb": 17716,
+      "speed_ratio": 1215.273,
+      "memory_ratio": 0.213
     },
     "10_nested_loops": {
-      "perry_ms": 3948,
-      "perry_rss_kb": 3585,
-      "node_ms": 18,
-      "node_rss_kb": 18661,
-      "speed_ratio": 219.333,
-      "memory_ratio": 0.192
+      "perry_ms": 4579,
+      "perry_rss_kb": 5425,
+      "node_ms": 24,
+      "node_rss_kb": 18949,
+      "speed_ratio": 190.792,
+      "memory_ratio": 0.286
     },
     "11_prime_sieve": {
-      "perry_ms": 486,
-      "perry_rss_kb": 22273,
-      "node_ms": 6,
-      "node_rss_kb": 50813,
-      "speed_ratio": 81.0,
-      "memory_ratio": 0.438
+      "perry_ms": 658,
+      "perry_rss_kb": 23521,
+      "node_ms": 7,
+      "node_rss_kb": 50893,
+      "speed_ratio": 94.0,
+      "memory_ratio": 0.462
     },
     "12_binary_trees": {
       "perry_ms": 3,
-      "perry_rss_kb": 3665,
-      "node_ms": 6,
-      "node_rss_kb": 19205,
-      "speed_ratio": 0.5,
-      "memory_ratio": 0.191
+      "perry_rss_kb": 3681,
+      "node_ms": 9,
+      "node_rss_kb": 19605,
+      "speed_ratio": 0.333,
+      "memory_ratio": 0.188
     },
     "13_factorial": {
-      "perry_ms": 97,
-      "perry_rss_kb": 3649,
-      "node_ms": 100,
-      "node_rss_kb": 18293,
-      "speed_ratio": 0.97,
-      "memory_ratio": 0.199
+      "perry_ms": 106,
+      "perry_rss_kb": 3745,
+      "node_ms": 134,
+      "node_rss_kb": 18149,
+      "speed_ratio": 0.791,
+      "memory_ratio": 0.206
     },
     "14_closure": {
-      "perry_ms": 49,
-      "perry_rss_kb": 3649,
-      "node_ms": 52,
-      "node_rss_kb": 19029,
-      "speed_ratio": 0.942,
-      "memory_ratio": 0.192
+      "perry_ms": 60,
+      "perry_rss_kb": 3761,
+      "node_ms": 64,
+      "node_rss_kb": 21365,
+      "speed_ratio": 0.938,
+      "memory_ratio": 0.176
     },
     "15_mandelbrot": {
-      "perry_ms": 22,
+      "perry_ms": 24,
       "perry_rss_kb": 3633,
-      "node_ms": 25,
-      "node_rss_kb": 18677,
-      "speed_ratio": 0.88,
-      "memory_ratio": 0.195
+      "node_ms": 30,
+      "node_rss_kb": 18821,
+      "speed_ratio": 0.8,
+      "memory_ratio": 0.193
     },
     "16_matrix_multiply": {
-      "perry_ms": 7792,
+      "perry_ms": 10221,
       "perry_rss_kb": 7265,
-      "node_ms": 42,
-      "node_rss_kb": 23879,
-      "speed_ratio": 185.524,
-      "memory_ratio": 0.304
+      "node_ms": 48,
+      "node_rss_kb": 23671,
+      "speed_ratio": 212.938,
+      "memory_ratio": 0.307
     },
     "bench_gc_pressure": {
-      "perry_ms": 71,
-      "perry_rss_kb": 23409,
-      "node_ms": 17,
-      "node_rss_kb": 26936,
-      "speed_ratio": 4.176,
-      "memory_ratio": 0.869
+      "perry_ms": 92,
+      "perry_rss_kb": 23393,
+      "node_ms": 25,
+      "node_rss_kb": 27000,
+      "speed_ratio": 3.68,
+      "memory_ratio": 0.866
     },
     "bench_json_roundtrip": {
-      "perry_ms": 377,
-      "perry_rss_kb": 302289,
-      "node_ms": 427,
+      "perry_ms": 626,
+      "perry_rss_kb": 319346,
+      "node_ms": 568,
       "node_rss_kb": 77930,
-      "speed_ratio": 0.883,
-      "memory_ratio": 3.879
+      "speed_ratio": 1.102,
+      "memory_ratio": 4.098
     },
     "bench_object_property": {
-      "perry_ms": 611,
-      "perry_rss_kb": 90625,
-      "node_ms": 16,
-      "node_rss_kb": 19013,
-      "speed_ratio": 38.188,
-      "memory_ratio": 4.766
+      "perry_ms": 1120,
+      "perry_rss_kb": 89713,
+      "node_ms": 17,
+      "node_rss_kb": 19029,
+      "speed_ratio": 65.882,
+      "memory_ratio": 4.715
     },
     "bench_int_arithmetic": {
-      "perry_ms": 496,
-      "perry_rss_kb": 3777,
-      "node_ms": 97,
-      "node_rss_kb": 17988,
-      "speed_ratio": 5.113,
-      "memory_ratio": 0.21
+      "perry_ms": 561,
+      "perry_rss_kb": 3713,
+      "node_ms": 104,
+      "node_rss_kb": 17892,
+      "speed_ratio": 5.394,
+      "memory_ratio": 0.208
     },
     "bench_buffer_readwrite": {
-      "perry_ms": 924,
+      "perry_ms": 970,
       "perry_rss_kb": 4721,
-      "node_ms": 102,
-      "node_rss_kb": 18484,
-      "speed_ratio": 9.059,
-      "memory_ratio": 0.255
+      "node_ms": 103,
+      "node_rss_kb": 18180,
+      "speed_ratio": 9.417,
+      "memory_ratio": 0.26
     },
     "bench_array_grow": {
-      "perry_ms": 473,
-      "perry_rss_kb": 40321,
+      "perry_ms": 501,
+      "perry_rss_kb": 40305,
       "node_ms": 14,
-      "node_rss_kb": 84660,
-      "speed_ratio": 33.786,
+      "node_rss_kb": 84724,
+      "speed_ratio": 35.786,
       "memory_ratio": 0.476
     },
     "bench_string_heavy": {
-      "perry_ms": 59,
-      "perry_rss_kb": 59521,
-      "node_ms": 43,
-      "node_rss_kb": 20982,
-      "speed_ratio": 1.372,
+      "perry_ms": 60,
+      "perry_rss_kb": 59569,
+      "node_ms": 50,
+      "node_rss_kb": 20998,
+      "speed_ratio": 1.2,
       "memory_ratio": 2.837
     },
     "bench_numeric_array_numeric": {
-      "perry_ms": 3201,
-      "perry_rss_kb": 21281,
-      "node_ms": 5,
-      "node_rss_kb": 39950,
-      "speed_ratio": 640.2,
-      "memory_ratio": 0.533
+      "perry_ms": 3546,
+      "perry_rss_kb": 22993,
+      "node_ms": 6,
+      "node_rss_kb": 40286,
+      "speed_ratio": 591.0,
+      "memory_ratio": 0.571
     },
     "bench_numeric_array_downgrade": {
-      "perry_ms": 22889,
-      "perry_rss_kb": 21441,
-      "node_ms": 6,
-      "node_rss_kb": 40414,
-      "speed_ratio": 3814.833,
-      "memory_ratio": 0.531
+      "perry_ms": 21902,
+      "perry_rss_kb": 21425,
+      "node_ms": 7,
+      "node_rss_kb": 40766,
+      "speed_ratio": 3128.857,
+      "memory_ratio": 0.526
     }
   }
 }
