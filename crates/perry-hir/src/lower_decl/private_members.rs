@@ -13,6 +13,60 @@ use crate::lower_types::*;
 
 use super::*;
 
+/// Pre-scan a class body and build the private-name scope for it: every
+/// private field / method / accessor it declares, with its kind and
+/// static-ness. Getter+setter pairs of the same name collapse to
+/// `PrivKind::GetSet`. Used to push a `PrivateScope` for the duration of the
+/// class body lowering so `obj.#name` accesses can brand-check on the correct
+/// declaring class and reject illegal read/write operations.
+pub fn build_private_scope(class: &ast::Class, class_name: &str) -> crate::lower::PrivateScope {
+    use crate::lower::{PrivKind, PrivMember, PrivateScope};
+    let mut members: std::collections::HashMap<String, PrivMember> =
+        std::collections::HashMap::new();
+    for member in &class.body {
+        match member {
+            ast::ClassMember::PrivateProp(prop) => {
+                let name = format!("#{}", prop.key.name);
+                members.insert(
+                    name,
+                    PrivMember {
+                        kind: PrivKind::Field,
+                        is_static: prop.is_static,
+                    },
+                );
+            }
+            ast::ClassMember::PrivateMethod(method) => {
+                let name = format!("#{}", method.key.name);
+                let kind = match method.kind {
+                    ast::MethodKind::Getter => PrivKind::Get,
+                    ast::MethodKind::Setter => PrivKind::Set,
+                    ast::MethodKind::Method => PrivKind::Method,
+                };
+                // Collapse a getter+setter pair declared under the same name
+                // into GetSet so a read or a write is legal for either.
+                let merged = match members.get(&name).map(|m| m.kind) {
+                    Some(PrivKind::Get) if kind == PrivKind::Set => PrivKind::GetSet,
+                    Some(PrivKind::Set) if kind == PrivKind::Get => PrivKind::GetSet,
+                    Some(existing) => existing,
+                    None => kind,
+                };
+                members.insert(
+                    name,
+                    PrivMember {
+                        kind: merged,
+                        is_static: method.is_static,
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+    PrivateScope {
+        class_name: class_name.to_string(),
+        members,
+    }
+}
+
 pub fn lower_private_method(
     ctx: &mut LoweringContext,
     method: &ast::PrivateMethod,

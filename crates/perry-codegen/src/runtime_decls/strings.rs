@@ -331,6 +331,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_from_iterable", I64, &[DOUBLE]);
     module.declare_function("js_object_has_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_private_brand_check", DOUBLE, &[DOUBLE, I32, PTR, I32]);
+    module.declare_function(
+        "js_private_guard",
+        DOUBLE,
+        &[DOUBLE, I32, PTR, I32, I32, I32],
+    );
     module.declare_function("js_fs_to_unix_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fs_write_file_sync", I32, &[DOUBLE, DOUBLE]);
     module.declare_function(

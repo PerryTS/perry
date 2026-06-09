@@ -76,6 +76,7 @@ impl LoweringContext {
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
             current_class_member_is_static: false,
+            private_scopes: Vec::new(),
             object_super_home_stack: Vec::new(),
             extern_func_types: Vec::new(),
             source_file_path,
@@ -254,6 +255,29 @@ impl LoweringContext {
         let id = self.next_local_id;
         self.next_local_id += 1;
         id
+    }
+
+    /// Push a private-name scope for a class body (innermost last). Built by
+    /// pre-scanning the class members. See `private_scopes`.
+    pub(crate) fn push_private_scope(&mut self, scope: PrivateScope) {
+        self.private_scopes.push(scope);
+    }
+
+    pub(crate) fn pop_private_scope(&mut self) {
+        self.private_scopes.pop();
+    }
+
+    /// Resolve a private name (`#name`, with the leading `#`) to its declaring
+    /// class and member kind by walking the private-scope stack innermost
+    /// outward — matching the lexical resolution rule for private names. A
+    /// nested class that redeclares the same name shadows the outer one.
+    pub(crate) fn resolve_private(&self, field_name: &str) -> Option<(String, PrivMember)> {
+        for scope in self.private_scopes.iter().rev() {
+            if let Some(m) = scope.members.get(field_name) {
+                return Some((scope.class_name.clone(), *m));
+            }
+        }
+        None
     }
 
     pub(crate) fn mark_local_immutable(&mut self, id: LocalId) {

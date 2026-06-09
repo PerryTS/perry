@@ -17,6 +17,34 @@ pub(crate) struct WithEnvFrame {
     pub(crate) local_mark: usize,
 }
 
+/// Kind of a private class element, for the read/write legality checks that
+/// `obj.#name` access performs (in addition to the brand check). The numeric
+/// values are the wire codes passed to the `js_private_guard` runtime helper —
+/// keep them in sync with `crates/perry-runtime/src/object/field_get_set.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrivKind {
+    Field = 0,
+    Method = 1,
+    Get = 2,
+    Set = 3,
+    GetSet = 4,
+}
+
+/// One private element declared by a class: its kind and whether it is static.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrivMember {
+    pub(crate) kind: PrivKind,
+    pub(crate) is_static: bool,
+}
+
+/// Private-name scope for one class body. `members` is keyed by the
+/// `#name` string (with the leading `#`).
+#[derive(Debug, Clone)]
+pub(crate) struct PrivateScope {
+    pub(crate) class_name: String,
+    pub(crate) members: HashMap<String, PrivMember>,
+}
+
 pub struct LoweringContext {
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
@@ -176,6 +204,15 @@ pub struct LoweringContext {
     pub(crate) current_class: Option<String>,
     /// True while lowering a static class member body.
     pub(crate) current_class_member_is_static: bool,
+    /// Lexical stack of private-name scopes — one entry per enclosing class
+    /// body, innermost last. Each access of `obj.#name` resolves `#name` to
+    /// the nearest enclosing class that DECLARES it, yielding the declaring
+    /// class (for the brand check) and the member kind (for the
+    /// read-on-setter-only / write-on-method etc. TypeError checks). This is
+    /// kept on the context (not derived from `current_class`) so it survives
+    /// nested plain-function / arrow lowering — a private name referenced from
+    /// an inner function still lexically resolves to its declaring class.
+    pub(crate) private_scopes: Vec<PrivateScope>,
     /// Home-object local for object-literal methods while their bodies are
     /// lowered. Used to preserve `super` in object methods.
     pub(crate) object_super_home_stack: Vec<LocalId>,

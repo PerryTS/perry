@@ -40,6 +40,7 @@ mod expr_call;
 mod expr_function;
 pub(crate) use expr_function::{capture_function_source, lower_fn_expr};
 mod expr_member;
+pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE};
 mod expr_misc;
 mod expr_new;
 mod expr_object;
@@ -74,7 +75,9 @@ pub(crate) use widget_decl::*;
 // transitively when downstream files reach into `crate::lower::Name`,
 // so spelling them out keeps the public-and-internal API stable.
 mod lowering_context;
-pub(crate) use lowering_context::{LoweringContext, WithEnvFrame};
+pub(crate) use lowering_context::{
+    LoweringContext, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
+};
 
 mod typed_parse;
 pub(crate) use typed_parse::{extract_typed_parse_source_order, resolve_typed_parse_ty};

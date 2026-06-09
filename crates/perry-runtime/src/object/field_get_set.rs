@@ -2199,6 +2199,22 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         return nanbox_false;
     }
 
+    // Private names are never reflectable via `Reflect.has` / `in`: a
+    // `#name`-prefixed string key on a class instance is a private element
+    // stored in an internal slot, invisible to ordinary [[HasProperty]]. The
+    // genuine private brand check (`#name in obj`) routes through
+    // `js_private_brand_check`, not here. Mirrors `js_object_has_own`'s
+    // `#`-hiding (gated on `class_id != 0`).
+    if unsafe { (*obj_ptr).class_id != 0 } && key_val.is_any_string() {
+        let key_ptr =
+            crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+        if let Some(k) = unsafe { super::has_own_helpers::str_from_string_header(key_ptr) } {
+            if k.starts_with('#') {
+                return nanbox_false;
+            }
+        }
+    }
+
     if unsafe { (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID } {
         if !key_val.is_any_string() {
             return nanbox_false;
@@ -5308,6 +5324,112 @@ pub extern "C" fn js_private_brand_check(
     }
 
     true_value
+}
+
+/// Throw a `TypeError` with `msg` through Perry's exception machinery so a
+/// surrounding `try { ... } catch (e) { ... }` catches it. Diverges.
+fn throw_private_type_error(msg: &str) -> ! {
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    let v = crate::value::JSValue::pointer(err as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(v))
+}
+
+/// Brand check core shared with `js_private_brand_check`: does `obj` carry the
+/// brand of `declaring_class_id` (it is an instance of that class or a
+/// subclass)? Walks the class-id parent chain.
+unsafe fn private_object_has_brand(obj: f64, declaring_class_id: u32) -> bool {
+    if declaring_class_id == 0 {
+        return false;
+    }
+    let value = JSValue::from_bits(obj.to_bits());
+    if !value.is_pointer() {
+        return false;
+    }
+    let obj_ptr = value.as_pointer::<ObjectHeader>();
+    if obj_ptr.is_null() {
+        return false;
+    }
+    let obj_class_id = js_object_get_class_id(obj_ptr);
+    if obj_class_id == 0 {
+        return false;
+    }
+    let mut cur = obj_class_id;
+    for _ in 0..32 {
+        if cur == declaring_class_id {
+            return true;
+        }
+        match super::class_registry::get_parent_class_id(cur) {
+            Some(parent) if parent != 0 && parent != cur => cur = parent,
+            _ => break,
+        }
+    }
+    false
+}
+
+/// Brand + kind/op guard for a private member access `obj.#name`. Returns
+/// `obj` unchanged when the access is legal; otherwise throws a `TypeError`.
+///
+/// The enclosing `PropertyGet` / `PropertySet` / method-call lowering operates
+/// on the returned receiver, so this helper only enforces the two access
+/// preconditions the spec attaches to a PrivateReference:
+///   1. The receiver must carry the private brand (be an instance of the
+///      declaring class). A plain object, or an instance of an unrelated /
+///      enclosing class, throws.
+///   2. The operation must match the member kind — reading a setter-only
+///      accessor, or writing a getter-only accessor or a private method,
+///      throws.
+///
+/// `kind`: 0=field, 1=method, 2=getter-only, 3=setter-only, 4=getter+setter.
+/// `op`:   0=read, 1=write (instance); 2=read, 3=write (static).
+///
+/// For a STATIC private member the brand is identity-based: the receiver must
+/// BE the declaring class constructor itself (static private elements are not
+/// inherited, so a subclass constructor does not carry them). For an INSTANCE
+/// member the receiver must be an instance of the declaring class (or a
+/// subclass).
+///
+/// `declaring_class_id == 0` means codegen could not resolve the declaring
+/// class (e.g. an unusual class-expression shape); the guard then degrades to
+/// a no-op so it can never reject a legal access.
+#[no_mangle]
+pub extern "C" fn js_private_guard(
+    obj: f64,
+    declaring_class_id: u32,
+    _field_name_ptr: *const u8,
+    _field_name_len: u32,
+    kind: u32,
+    op: u32,
+) -> f64 {
+    if declaring_class_id == 0 {
+        return obj;
+    }
+    let is_static = op >= 2;
+    let read_write = op & 1; // 0=read, 1=write
+    let has_brand = if is_static {
+        // Static private brand: the receiver must be exactly the declaring
+        // class constructor (identity), not an instance or a subclass.
+        super::class_ref_id(obj) == Some(declaring_class_id)
+    } else {
+        unsafe { private_object_has_brand(obj, declaring_class_id) }
+    };
+    if !has_brand {
+        throw_private_type_error(
+            "Cannot access private member from an object whose class did not declare it",
+        );
+    }
+    let op = read_write;
+    // Kind/op legality, after the brand check (spec order).
+    let illegal = matches!(
+        (op, kind),
+        (0, 3) /* read setter-only: [[Get]] of accessor without getter */
+            | (1, 2) /* write getter-only: [[Set]] of accessor without setter */
+            | (1, 1) /* write private method */
+    );
+    if illegal {
+        throw_private_type_error("Invalid private member operation for its kind");
+    }
+    obj
 }
 
 #[cfg(test)]

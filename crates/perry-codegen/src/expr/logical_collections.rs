@@ -546,6 +546,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ],
             ))
         }
+        Expr::PrivateGuard {
+            class_name,
+            field_name,
+            kind,
+            op,
+            object,
+        } => {
+            // Evaluate the receiver once, brand+kind check it, and return it
+            // unchanged (or throw TypeError). The enclosing PropertyGet /
+            // PropertySet / method-call lowering then operates on the result.
+            let obj = lower_expr(ctx, object)?;
+            let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+            let key_label = emit_string_literal_global(ctx, field_name);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_private_guard",
+                &[
+                    (DOUBLE, &obj),
+                    (I32, &class_id.to_string()),
+                    (PTR, &key_label),
+                    (I32, &field_name.len().to_string()),
+                    (I32, &kind.to_string()),
+                    (I32, &op.to_string()),
+                ],
+            ))
+        }
 
         // -------- fs.writeFileSync(path, content) --------
         // The runtime takes both args as NaN-boxed doubles directly.

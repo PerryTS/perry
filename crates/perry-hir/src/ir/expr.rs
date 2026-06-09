@@ -251,6 +251,30 @@ pub enum Expr {
         object: Box<Expr>,
     },
 
+    /// Brand+kind guard wrapping the receiver of a private member access
+    /// `obj.#name`. Evaluates `object` exactly once and returns its value
+    /// UNCHANGED when the access is legal; otherwise throws a `TypeError`.
+    ///
+    /// Two checks run, in spec order:
+    ///   1. Brand check — `object` must be an instance of `class_name` (the
+    ///      class that lexically declares `#name`). A wrong receiver (an
+    ///      ordinary object, or an instance of an unrelated/outer class)
+    ///      throws.
+    ///   2. Kind/op check — reading a setter-only accessor, writing a
+    ///      getter-only accessor, or writing a private method all throw.
+    ///
+    /// Because it returns the receiver, it composes with the existing
+    /// `PropertyGet` / `PropertySet` / method-call lowering: those operate on
+    /// the guard's result and need no private-specific changes. `kind` and
+    /// `op` are the wire codes defined by `PrivKind` / 0=get,1=set.
+    PrivateGuard {
+        class_name: String,
+        field_name: String,
+        kind: u8,
+        op: u8,
+        object: Box<Expr>,
+    },
+
     // Await expression (for async functions)
     Await(Box<Expr>),
 

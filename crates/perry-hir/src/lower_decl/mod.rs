@@ -53,6 +53,7 @@ pub(crate) use helpers::{
 };
 pub(crate) use interface_decl::lower_interface_decl;
 pub(crate) use private_members::{
-    lower_private_getter, lower_private_method, lower_private_prop, lower_private_setter,
+    build_private_scope, lower_private_getter, lower_private_method, lower_private_prop,
+    lower_private_setter,
 };
 pub(crate) use type_alias::lower_type_alias_decl;

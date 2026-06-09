@@ -72,6 +72,22 @@ pub(crate) fn lower_destructuring_assignment(
                                                 value: Box::new(index_expr),
                                             });
                                         }
+                                        // `[this.#field] = arr` — brand-guard the
+                                        // receiver so a wrong-receiver write throws.
+                                        ast::MemberProp::PrivateName(private) => {
+                                            let property = format!("#{}", private.name);
+                                            let object = crate::lower::wrap_private_guard(
+                                                ctx,
+                                                object,
+                                                &property,
+                                                crate::lower::PRIV_OP_WRITE,
+                                            );
+                                            exprs.push(Expr::PropertySet {
+                                                object,
+                                                property,
+                                                value: Box::new(index_expr),
+                                            });
+                                        }
                                         _ => {
                                             return Err(anyhow!(
                                                 "Unsupported member expression in destructuring"

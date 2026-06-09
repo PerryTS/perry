@@ -324,6 +324,12 @@ pub(crate) fn lower_expr_assignment(
                 }
                 ast::MemberProp::PrivateName(private) => {
                     let property = format!("#{}", private.name);
+                    let object = expr_member::wrap_private_guard(
+                        ctx,
+                        object,
+                        &property,
+                        expr_member::PRIV_OP_WRITE,
+                    );
                     Ok(Expr::PropertySet {
                         object,
                         property,
@@ -1557,10 +1563,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 index: Box::new(index),
                             }
                         }
-                        ast::MemberProp::PrivateName(private) => Expr::PropertyGet {
-                            object: Box::new(obj_expr.clone()),
-                            property: format!("#{}", private.name),
-                        },
+                        ast::MemberProp::PrivateName(private) => {
+                            let property = format!("#{}", private.name);
+                            let object = expr_member::wrap_private_guard(
+                                ctx,
+                                Box::new(obj_expr.clone()),
+                                &property,
+                                expr_member::PRIV_OP_READ,
+                            );
+                            Expr::PropertyGet { object, property }
+                        }
                     };
 
                     // Issue #388: optional chaining short-circuits on
@@ -1629,10 +1641,19 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                             index: Box::new(idx),
                                         }
                                     }
-                                    ast::MemberProp::PrivateName(private) => Expr::PropertyGet {
-                                        object: Box::new(obj.clone()),
-                                        property: format!("#{}", private.name),
-                                    },
+                                    ast::MemberProp::PrivateName(private) => {
+                                        let property = format!("#{}", private.name);
+                                        let guarded = expr_member::wrap_private_guard(
+                                            ctx,
+                                            Box::new(obj.clone()),
+                                            &property,
+                                            expr_member::PRIV_OP_READ,
+                                        );
+                                        Expr::PropertyGet {
+                                            object: guarded,
+                                            property,
+                                        }
+                                    }
                                 };
                                 Ok((obj, prop))
                             };

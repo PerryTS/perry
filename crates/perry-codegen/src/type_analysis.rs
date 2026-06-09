@@ -1666,6 +1666,9 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // at the top of class_stack (for inlined constructors) or comes
         // from the enclosing method's owning class.
         Expr::This => ctx.class_stack.last().cloned(),
+        // A private-access brand guard returns its receiver unchanged; see
+        // through it so shadowed private-field slot resolution stays accurate.
+        Expr::PrivateGuard { object, .. } => receiver_class_name(ctx, object),
         // `arr[i]` where `arr: ClassFoo[]` — the element type is the
         // array's parameter. Lets `items[2].display()` resolve the
         // method dispatch.

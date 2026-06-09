@@ -966,8 +966,16 @@ fn lower_assignment_target(
                     })
                 }
                 ast::MemberProp::PrivateName(private) => {
-                    // Private field assignment: this.#field = value
+                    // Private field assignment: this.#field = value. Guard the
+                    // receiver so a write to a wrong receiver — or to a
+                    // getter-only accessor / a private method — throws.
                     let property = format!("#{}", private.name);
+                    let object = super::expr_member::wrap_private_guard(
+                        ctx,
+                        object,
+                        &property,
+                        super::expr_member::PRIV_OP_WRITE,
+                    );
                     Ok(Expr::PropertySet {
                         object,
                         property,

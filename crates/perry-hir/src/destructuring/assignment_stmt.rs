@@ -389,6 +389,28 @@ fn prepare_assignment_target(
                             None,
                         ))
                     }
+                    // Private-field assignment target, e.g.
+                    // `[this.#field] = [v]` or `({a: this.#field} = src)`. Brand
+                    // -guard the receiver so a write to a wrong receiver (or to
+                    // a getter-only accessor / private method) throws TypeError,
+                    // matching `this.#field = v`.
+                    ast::MemberProp::PrivateName(private) => {
+                        let property = format!("#{}", private.name);
+                        let guarded = crate::lower::wrap_private_guard(
+                            ctx,
+                            Box::new(Expr::LocalGet(object_id)),
+                            &property,
+                            crate::lower::PRIV_OP_WRITE,
+                        );
+                        Ok((
+                            prepare,
+                            PreparedTarget::Property {
+                                object: *guarded,
+                                property,
+                            },
+                            None,
+                        ))
+                    }
                     _ => Err(anyhow!(
                         "Unsupported member expression in destructuring assignment"
                     )),

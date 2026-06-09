@@ -152,6 +152,11 @@ pub fn lower_class_decl(
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.clone());
 
+    // Push the private-name scope for this class body so `obj.#name` accesses
+    // brand-check against the declaring class and reject illegal read/write
+    // operations. Popped at the matching restore below.
+    ctx.push_private_scope(super::build_private_scope(&class_decl.class, &name));
+
     // Issue #562: track the parent class identifier so the `super({...})`
     // pre-scan in expr_call.rs can register the controller param as a
     // readable_stream instance for stream subclass constructors. Set
@@ -1009,6 +1014,7 @@ pub fn lower_class_decl(
 
     // Restore previous current_class
     ctx.current_class = old_class;
+    ctx.pop_private_scope();
     // Issue #562: restore the prior super-ident slot.
     ctx.current_class_super_ident = old_super_ident;
 
@@ -1097,6 +1103,9 @@ pub fn lower_class_from_ast(
 
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.to_string());
+
+    // Private-name scope for this class-expression body (see lower_class_decl).
+    ctx.push_private_scope(super::build_private_scope(class, name));
 
     // Issue #562: same as the parallel `lower_class_decl` arm — track the
     // parent class identifier so super({...}) controller-param pre-scan
@@ -1400,6 +1409,7 @@ pub fn lower_class_from_ast(
         ctx.register_class_native_extends(name.to_string(), module.clone(), class.clone());
     }
     ctx.current_class = old_class;
+    ctx.pop_private_scope();
     // Issue #562: restore prior super-ident slot.
     ctx.current_class_super_ident = old_super_ident;
 

@@ -849,6 +849,10 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     let (name, key_expr) = match &prop.key {
         ast::PropName::Ident(ident) => (ident.sym.to_string(), None),
         ast::PropName::Str(s) => (s.value.as_str().unwrap_or("").to_string(), None),
+        // Numeric field keys (`0 = 'bar'`, `1e-7;`) use the canonical JS number
+        // -to-string conversion so reads via `c[0]` / `c['1e-7']` agree.
+        ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), None),
+        ast::PropName::BigInt(b) => (b.value.to_string(), None),
         ast::PropName::Computed(c) => {
             let key = lower_expr(ctx, &c.expr)?;
             // Synthetic name — uniqueness within a class is enforced by the
@@ -859,7 +863,6 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             let synth = format!("__computed_field_{}_{}", c.span.lo.0, c.span.hi.0);
             (synth, Some(key))
         }
-        _ => return Err(anyhow!("Unsupported property key")),
     };
 
     // Extract type from type annotation (using context for class type param resolution).
