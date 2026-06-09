@@ -419,6 +419,17 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
     }
 }
 
+/// True for macOS triples only (`*-apple-macosx*` LLVM-style, or
+/// `*-apple-darwin*` rustc-style when a raw triple is passed through).
+/// Deliberately false for every other Apple platform (`apple-ios`,
+/// `apple-tvos`, `apple-xros`, `apple-watchos`): the `.app` CWD fix in
+/// `perry_macos_bundle_chdir` is macOS-only, and emitting the call on
+/// non-macOS targets makes their links depend on the runtime archive
+/// carrying a macOS-only symbol (#4856).
+pub(super) fn is_macos_triple(triple: &str) -> bool {
+    triple.contains("apple-macosx") || triple.contains("apple-darwin")
+}
+
 pub(super) fn emit_buffer_alias_metadata(llmod: &mut LlModule, count: u32) {
     if count == 0 {
         return;

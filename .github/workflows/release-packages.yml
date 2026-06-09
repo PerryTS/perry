@@ -191,6 +191,25 @@ jobs:
         with:
           shared-key: "release-${{ matrix.target }}"
 
+      # #4856 — evict workspace-crate fingerprints from the restored cache.
+      # rust-cache's own workspace cleanup misses cross-target dirs, so a
+      # restored target/ can make cargo treat perry-runtime & co. as
+      # up-to-date and silently reuse a staticlib built from older sources
+      # (v0.5.1150 shipped Apple cross runtimes missing
+      # perry_macos_bundle_chdir that way). Deleting the .fingerprint
+      # entries forces every workspace crate to rebuild from the checkout
+      # while keeping the expensive external-dependency precompiles cached.
+      # Note `cargo clean -p` is NOT equivalent: it only covers the host
+      # layout, not target/<triple>/ dirs (verified on cargo 1.8x).
+      - name: Evict workspace crates from restored cache (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r pkg; do
+            rm -rf target/release/.fingerprint/"$pkg"-* \
+                   target/*/release/.fingerprint/"$pkg"-*
+          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
       # `perry compile foo.ts -o app --target ios[-simulator]` failed at link
       # with `perry/ui imported but libperry_ui_ios.a not found`. Both macOS
@@ -387,6 +406,23 @@ jobs:
           $env:AR_aarch64_linux_android = Join-Path $toolchain "llvm-ar.exe"
           cargo build --release --target aarch64-linux-android -p perry-runtime
           cargo build --release --target aarch64-linux-android -p perry-stdlib
+
+      # #4856 — defense in depth behind the cache eviction above: assert
+      # every runtime archive this leg built (host triple + any Apple/
+      # Android cross triples) defines the sentinel #[no_mangle] symbols.
+      # A stale cached archive fails the release here instead of breaking
+      # consumer links with `undefined symbol: _perry_macos_bundle_chdir`.
+      - name: Verify runtime archives are fresh (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          libs=$(find target -path "*/release/libperry_runtime.a" -o -path "*/release/perry_runtime.lib")
+          if [ -z "$libs" ]; then
+            echo "::error::no built runtime archives found under target/ — nothing to verify"
+            exit 1
+          fi
+          # shellcheck disable=SC2086
+          ./scripts/check_runtime_symbols.sh $libs
 
       - name: Package release archive (Unix)
         if: runner.os != 'Windows'
@@ -725,6 +761,22 @@ jobs:
         with:
           shared-key: "release-cross-${{ matrix.target }}"
 
+      # #4856 — evict workspace-crate fingerprints from the restored cache
+      # so perry-runtime/stdlib/UI always rebuild from the checkout. The
+      # v0.5.1150 Apple cross bundles shipped a stale pre-#4833
+      # libperry_runtime.a (missing perry_macos_bundle_chdir) because the
+      # restored cache let cargo skip the rebuild. Mirrors the eviction
+      # step in `build:` — see the comment there for why `cargo clean -p`
+      # doesn't work (host layout only, misses target/<triple>/).
+      - name: Evict workspace crates from restored cache (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r pkg; do
+            rm -rf target/release/.fingerprint/"$pkg"-* \
+                   target/*/release/.fingerprint/"$pkg"-*
+          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+
       # --- Per-runner toolchain wiring --------------------------------------
       # Each of these blocks installs what the cross target needs that's NOT
       # already on the runner image. Apple runners get Xcode for free; Linux
@@ -802,6 +854,18 @@ jobs:
             -Z build-std=core,std,panic_abort \
             --target ${{ matrix.target }} \
             -p perry-runtime -p perry-stdlib -p ${{ matrix.ui_crate }}
+
+      # #4856 — defense in depth behind the cache eviction above: a stale
+      # cached runtime archive fails the release here instead of breaking
+      # every consumer executable link on the build workers.
+      - name: Verify runtime archive is fresh (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="target/${{ matrix.target }}/release/libperry_runtime.a"
+          # Windows MSVC emits perry_runtime.lib (no `lib` prefix).
+          [ -f "$lib" ] || lib="target/${{ matrix.target }}/release/perry_runtime.lib"
+          ./scripts/check_runtime_symbols.sh "$lib"
 
       # --- Package + manifest ----------------------------------------------
       # Manifest schema (per issue #1083):

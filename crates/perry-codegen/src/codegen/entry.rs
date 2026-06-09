@@ -13,7 +13,8 @@ use crate::types::{DOUBLE, I32, I8, PTR, VOID};
 
 use super::helpers::{
     emit_namespace_populator, enable_module_init_shadow_frame, init_static_fields_early,
-    init_static_fields_late, register_module_globals_as_gc_roots, write_barriers_enabled,
+    init_static_fields_late, is_macos_triple, register_module_globals_as_gc_roots,
+    write_barriers_enabled,
 };
 use super::opts::CrossModuleCtx;
 
@@ -145,7 +146,14 @@ pub(super) fn compile_module_entry(
             // launch starts at CWD=`/`. chdir there before any user code or
             // native engine init so relative asset paths (`assets/...`) resolve.
             // No-op on non-macOS and on non-bundle binaries (see the runtime fn).
-            blk.call_void("perry_macos_bundle_chdir", &[]);
+            // Emitted only for macOS triples (#4856): the runtime fn is a no-op
+            // everywhere else anyway, and referencing it from every `main` made
+            // iOS/tvOS links depend on non-macOS runtime archives carrying a
+            // macOS-only symbol — a stale cross runtime then failed the link
+            // with `undefined symbol: _perry_macos_bundle_chdir`.
+            if is_macos_triple(&cross_module.target_triple) {
+                blk.call_void("perry_macos_bundle_chdir", &[]);
+            }
             if let Some((const_name, byte_len)) = app_group_init.as_ref() {
                 let suite_ptr = format!("@{}", const_name);
                 let len_str = byte_len.to_string();
