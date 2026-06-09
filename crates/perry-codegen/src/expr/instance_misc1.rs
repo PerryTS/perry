@@ -1290,7 +1290,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_string_match",
                 &[(I64, &s_handle), (I64, &r_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            // #4858: js_string_match returns null (0) on no-match. NaN-boxing
+            // 0 with POINTER_TAG yields a value that is neither `null` nor a
+            // valid heap pointer — `s.match(/x/g) === null` was false and
+            // consumers that deref the result (JSON.stringify, .map) crashed.
+            // Branchless null → TAG_NULL select, same as RegExpExec above.
+            let is_null = blk.icmp_eq(I64, &result, "0");
+            let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
+            let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
+            let selected =
+                ctx.block()
+                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &ptr_bits);
+            Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
 
         // -------- string.matchAll(pattern) --------
