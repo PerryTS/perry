@@ -71,6 +71,10 @@ temporal_rs = { version = "0.2.3", default-features = false, features = ["std", 
 
 serde_json = "1"
 unicode-normalization = "0.1"
+# #4877: extended grapheme-cluster / word / sentence segmentation backing
+# Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,
+# so it gates ink). Pure-Rust UAX #29 implementation, already in our lock graph.
+unicode-segmentation = "1"
 idna = "1"
 url = "2"
 # Issue #62: mimalloc replaces the system allocator for gc_malloc/arena/etc.

@@ -14,10 +14,12 @@ use crate::object::{
 use crate::string::{js_string_from_bytes, str_bytes_from_jsvalue};
 use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
 use crate::StringHeader;
+use unicode_segmentation::UnicodeSegmentation;
 
 const KIND_NUMBER: &str = "NumberFormat";
 const KIND_DATE_TIME: &str = "DateTimeFormat";
 const KIND_COLLATOR: &str = "Collator";
+const KIND_SEGMENTER: &str = "Segmenter";
 
 const KEY_KIND: &str = "__intlKind";
 const KEY_LOCALE: &str = "__intlLocale";
@@ -26,6 +28,7 @@ const KEY_CURRENCY: &str = "__intlCurrency";
 const KEY_MAX_FRACTION_DIGITS: &str = "__intlMaxFractionDigits";
 const KEY_DATE_STYLE: &str = "__intlDateStyle";
 const KEY_TIME_ZONE: &str = "__intlTimeZone";
+const KEY_GRANULARITY: &str = "__intlGranularity";
 
 fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -542,6 +545,138 @@ fn collator_resolved_options_object(obj: *const ObjectHeader) -> f64 {
     js_nanbox_pointer(out as i64)
 }
 
+#[cold]
+fn throw_range_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+}
+
+fn normalize_granularity(value: Option<String>) -> String {
+    match value.as_deref() {
+        None | Some("grapheme") => "grapheme".to_string(),
+        Some("word") => "word".to_string(),
+        Some("sentence") => "sentence".to_string(),
+        Some(other) => throw_range_error(&format!(
+            "Value {other} out of range for Intl.Segmenter options property granularity"
+        )),
+    }
+}
+
+/// A segment is "word-like" when it contains at least one alphanumeric
+/// character — i.e. it is not pure whitespace/punctuation. This mirrors the
+/// `isWordLike` flag the spec attaches to word-granularity segments.
+fn segment_is_word_like(segment: &str) -> bool {
+    segment.chars().any(|c| c.is_alphanumeric())
+}
+
+fn utf16_len(segment: &str) -> u32 {
+    segment.chars().map(|c| c.len_utf16() as u32).sum()
+}
+
+fn make_segment_record(
+    segment: &str,
+    index: u32,
+    input_value: f64,
+    word_like: Option<bool>,
+) -> f64 {
+    let obj = js_object_alloc(0, 4);
+    set_field(obj, "segment", string_value(segment));
+    // `index` is a plain Number (UTF-16 code-unit offset into the input).
+    set_field(obj, "index", index as f64);
+    set_field(obj, "input", input_value);
+    if let Some(word_like) = word_like {
+        set_field(obj, "isWordLike", bool_value(word_like));
+    }
+    js_nanbox_pointer(obj as i64)
+}
+
+/// Build the segment list for `input` under `granularity`. We return a plain
+/// JS array of segment records, which is iterable / spreadable — enough for
+/// `[...seg.segment(s)]` and `for (const {segment} of seg.segment(s))`, the
+/// shapes `string-width` / `wrap-ansi` actually use. (The spec's `Segments`
+/// object additionally exposes `.containing()`; that is not yet needed.)
+fn build_segments(granularity: &str, value: f64) -> f64 {
+    let input = value_to_string(value);
+    let input_value = string_value(&input);
+    let mut arr = js_array_alloc(0);
+    let mut index = 0u32;
+    match granularity {
+        "word" => {
+            for segment in input.split_word_bounds() {
+                let record = make_segment_record(
+                    segment,
+                    index,
+                    input_value,
+                    Some(segment_is_word_like(segment)),
+                );
+                arr = js_array_push_f64(arr, record);
+                index += utf16_len(segment);
+            }
+        }
+        "sentence" => {
+            for segment in input.split_sentence_bounds() {
+                let record = make_segment_record(segment, index, input_value, None);
+                arr = js_array_push_f64(arr, record);
+                index += utf16_len(segment);
+            }
+        }
+        // "grapheme" (default): extended grapheme clusters (emoji ZWJ
+        // sequences, combining marks, regional-indicator flags).
+        _ => {
+            for segment in input.graphemes(true) {
+                let record = make_segment_record(segment, index, input_value, None);
+                arr = js_array_push_f64(arr, record);
+                index += utf16_len(segment);
+            }
+        }
+    }
+    js_nanbox_pointer(arr as i64)
+}
+
+extern "C" fn segmenter_segment_thunk(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = this_intl_object("segment", KIND_SEGMENTER);
+    segmenter_segment_object(obj, value)
+}
+
+extern "C" fn segmenter_bound_segment_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = captured_intl_object(closure, "segment", KIND_SEGMENTER);
+    segmenter_segment_object(obj, value)
+}
+
+fn segmenter_segment_object(obj: *const ObjectHeader, value: f64) -> f64 {
+    let granularity =
+        get_string_field(obj, KEY_GRANULARITY).unwrap_or_else(|| "grapheme".to_string());
+    build_segments(&granularity, value)
+}
+
+extern "C" fn segmenter_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+    let obj = this_intl_object("resolvedOptions", KIND_SEGMENTER);
+    segmenter_resolved_options_object(obj)
+}
+
+extern "C" fn segmenter_bound_resolved_options_thunk(closure: *const ClosureHeader) -> f64 {
+    let obj = captured_intl_object(closure, "resolvedOptions", KIND_SEGMENTER);
+    segmenter_resolved_options_object(obj)
+}
+
+fn segmenter_resolved_options_object(obj: *const ObjectHeader) -> f64 {
+    let out = js_object_alloc(0, 2);
+    set_field(
+        out,
+        "locale",
+        string_value(&get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string())),
+    );
+    set_field(
+        out,
+        "granularity",
+        string_value(
+            &get_string_field(obj, KEY_GRANULARITY).unwrap_or_else(|| "grapheme".to_string()),
+        ),
+    );
+    js_nanbox_pointer(out as i64)
+}
+
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
     let locale = locale_or_default(locales);
     let obj = js_object_alloc(0, 8);
@@ -610,6 +745,22 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 0,
             );
         }
+        KIND_SEGMENTER => {
+            let granularity = normalize_granularity(get_option_string(options, "granularity"));
+            set_internal_field(obj, KEY_GRANULARITY, string_value(&granularity));
+            install_bound_instance_function(
+                obj,
+                "segment",
+                segmenter_bound_segment_thunk as *const u8,
+                1,
+            );
+            install_bound_instance_function(
+                obj,
+                "resolvedOptions",
+                segmenter_bound_resolved_options_thunk as *const u8,
+                0,
+            );
+        }
         _ => {}
     }
 
@@ -663,6 +814,15 @@ extern "C" fn date_time_format_constructor_thunk(closure: *const ClosureHeader, 
 
 extern "C" fn collator_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
     make_instance(closure, KIND_COLLATOR, rest_arg(rest, 0), rest_arg(rest, 1))
+}
+
+extern "C" fn segmenter_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    make_instance(
+        closure,
+        KIND_SEGMENTER,
+        rest_arg(rest, 0),
+        rest_arg(rest, 1),
+    )
 }
 
 fn supported_locales_array(locales: f64) -> f64 {
@@ -805,6 +965,19 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
             (
                 "resolvedOptions",
                 collator_resolved_options_thunk as *const u8,
+                0,
+            ),
+        ],
+    );
+    install_constructor(
+        ns_obj,
+        "Segmenter",
+        segmenter_constructor_thunk as *const u8,
+        &[
+            ("segment", segmenter_segment_thunk as *const u8, 1),
+            (
+                "resolvedOptions",
+                segmenter_resolved_options_thunk as *const u8,
                 0,
             ),
         ],

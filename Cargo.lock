@@ -5916,6 +5916,7 @@ dependencies = [
  "temporal_rs",
  "thiserror 1.0.69",
  "unicode-normalization",
+ "unicode-segmentation",
  "url",
  "windows-sys 0.61.2",
 ]
