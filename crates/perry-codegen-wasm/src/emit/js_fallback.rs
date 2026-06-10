@@ -353,6 +353,7 @@ impl WasmModuleEmitter {
                 method,
                 body,
                 headers,
+                headers_dynamic,
             } => {
                 let url_js = self.emit_js_expr(url, locals);
                 let method_js = self.emit_js_expr(method, locals);
@@ -362,7 +363,12 @@ impl WasmModuleEmitter {
                 if !matches!(body.as_ref(), Expr::Undefined) {
                     opts.push_str(&format!(", body: getString({})", body_js));
                 }
-                if !headers.is_empty() {
+                if let Some(hexpr) = headers_dynamic {
+                    // Dynamically-built headers: pass the JS object through so
+                    // fetch enumerates every property (#4932).
+                    let h = self.emit_js_expr(hexpr, locals);
+                    opts.push_str(&format!(", headers: toJsValue({})", h));
+                } else if !headers.is_empty() {
                     opts.push_str(", headers: {");
                     for (i, (key, val)) in headers.iter().enumerate() {
                         if i > 0 {

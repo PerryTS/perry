@@ -79,34 +79,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             let url_box = lower_expr(ctx, url)?;
             let method_box = lower_expr(ctx, method)?;
             let body_box = lower_expr(ctx, body)?;
 
-            // Build the headers object: js_object_alloc(0, N) followed by
-            // js_object_set_field_by_name for each (interned key, value).
-            let n_str = (headers.len() as u32).to_string();
-            let zero_str = "0".to_string();
-            let headers_handle =
-                ctx.block()
-                    .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
-            for (key, val_expr) in headers {
-                let key_idx = ctx.strings.intern(key);
-                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let v_box = lower_expr(ctx, val_expr)?;
-                let blk = ctx.block();
-                let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                blk.call_void(
-                    "js_object_set_field_by_name",
-                    &[(I64, &headers_handle), (I64, &key_raw), (DOUBLE, &v_box)],
+            // Obtain the headers as a NaN-boxed object value, then JSON-stringify
+            // it below. Two cases:
+            //   * `headers_dynamic` — the headers value was a variable, a spread
+            //     literal, or a call (`Object.assign`/`new Headers`/`JSON.parse`).
+            //     Lower it directly; `js_json_stringify` enumerates its own
+            //     properties at runtime (#4932).
+            //   * otherwise — statically-extracted `{ "k": v, ... }` pairs, which
+            //     we build into a fresh object field-by-field.
+            let headers_obj_box = if let Some(hexpr) = headers_dynamic {
+                lower_expr(ctx, hexpr)?
+            } else {
+                // Build the headers object: js_object_alloc(0, N) followed by
+                // js_object_set_field_by_name for each (interned key, value).
+                let n_str = (headers.len() as u32).to_string();
+                let zero_str = "0".to_string();
+                let headers_handle = ctx.block().call(
+                    I64,
+                    "js_object_alloc",
+                    &[(I32, &zero_str), (I32, &n_str)],
                 );
-            }
+                for (key, val_expr) in headers {
+                    let key_idx = ctx.strings.intern(key);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let v_box = lower_expr(ctx, val_expr)?;
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    blk.call_void(
+                        "js_object_set_field_by_name",
+                        &[(I64, &headers_handle), (I64, &key_raw), (DOUBLE, &v_box)],
+                    );
+                }
+                let blk = ctx.block();
+                nanbox_pointer_inline(blk, &headers_handle)
+            };
 
             let blk = ctx.block();
-            let headers_obj_box = nanbox_pointer_inline(blk, &headers_handle);
             // js_json_stringify(value: f64, indent: i32) -> i64 string handle.
             let zero_i = "0".to_string();
             let headers_str = blk.call(

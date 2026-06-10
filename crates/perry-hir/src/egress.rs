@@ -480,6 +480,7 @@ mod tests {
             method: Box::new(Expr::String("GET".into())),
             body: Box::new(Expr::Undefined),
             headers: vec![],
+            headers_dynamic: None,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert_eq!(v.len(), 1);
@@ -496,6 +497,7 @@ mod tests {
             method: Box::new(Expr::String("GET".into())),
             body: Box::new(Expr::Undefined),
             headers: vec![],
+            headers_dynamic: None,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert!(v.is_empty());
@@ -509,6 +511,7 @@ mod tests {
             method: Box::new(Expr::String("GET".into())),
             body: Box::new(Expr::Undefined),
             headers: vec![],
+            headers_dynamic: None,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert_eq!(v.len(), 1);
@@ -527,6 +530,7 @@ mod tests {
             method: Box::new(Expr::String("GET".into())),
             body: Box::new(Expr::Undefined),
             headers: vec![],
+            headers_dynamic: None,
         }));
         let v = audit_module_egress(
             &m,

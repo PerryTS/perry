@@ -514,6 +514,7 @@ mod tests {
             method: Box::new(Expr::String("GET".into())),
             body: Box::new(Expr::Undefined),
             headers: vec![],
+            headers_dynamic: None,
         }));
         let v = audit_module_capabilities(
             &m,
