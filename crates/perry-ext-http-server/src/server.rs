@@ -6,8 +6,11 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use lazy_static::lazy_static;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -159,6 +162,42 @@ pub struct HttpPendingUpgrade {
     pub server_handle: i64,
     pub request_handle: i64,
     pub ws_id: i64,
+}
+
+// ============================================================================
+// #4905 — per-connection tracking for closeAllConnections/closeIdleConnections
+// ============================================================================
+
+/// Live HTTP/1.1 connection tracked so `server.closeAllConnections()` /
+/// `server.closeIdleConnections()` can reach into the per-connection
+/// tokio task. `busy` counts in-flight requests on the connection (0
+/// between keep-alive requests); `close` wakes the connection task's
+/// `select!`, which drops the hyper connection and closes the socket.
+struct TrackedConnection {
+    server_handle: i64,
+    close: Arc<tokio::sync::Notify>,
+    busy: Arc<AtomicUsize>,
+}
+
+lazy_static! {
+    static ref CONNECTIONS: Mutex<HashMap<u64, TrackedConnection>> = Mutex::new(HashMap::new());
+}
+
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Signal tracked connections of `server_handle` to close. With
+/// `only_idle`, connections currently processing a request are left
+/// alone (Node's `closeIdleConnections` semantics; `server.close()`
+/// also closes idle keep-alive sockets since Node 19).
+fn signal_connections_close(server_handle: i64, only_idle: bool) {
+    let conns = CONNECTIONS.lock().unwrap();
+    for entry in conns.values() {
+        if entry.server_handle == server_handle
+            && (!only_idle || entry.busy.load(Ordering::SeqCst) == 0)
+        {
+            entry.close.notify_one();
+        }
+    }
 }
 
 // ============================================================================
@@ -461,22 +500,49 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                                 let request_tx = request_tx_for_spawn.clone();
                                 let upgrade_tx = upgrade_tx_for_spawn.clone();
                                 let server_handle = server_handle;
+                                // #4905 — register the connection so
+                                // closeAllConnections/closeIdleConnections can
+                                // reach this task from the main thread.
+                                let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
+                                let busy = Arc::new(AtomicUsize::new(0));
+                                let close = Arc::new(tokio::sync::Notify::new());
+                                CONNECTIONS.lock().unwrap().insert(
+                                    conn_id,
+                                    TrackedConnection {
+                                        server_handle,
+                                        close: close.clone(),
+                                        busy: busy.clone(),
+                                    },
+                                );
                                 tokio::spawn(async move {
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
                                         let upgrade_tx = upgrade_tx.clone();
+                                        let busy = busy.clone();
                                         async move {
-                                            handle_request(server_handle, peer, req, request_tx, upgrade_tx).await
+                                            busy.fetch_add(1, Ordering::SeqCst);
+                                            let res = handle_request(server_handle, peer, req, request_tx, upgrade_tx).await;
+                                            busy.fetch_sub(1, Ordering::SeqCst);
+                                            res
                                         }
                                     });
-                                    if let Err(e) = http1::Builder::new()
+                                    let conn = http1::Builder::new()
                                         .serve_connection(io, service)
-                                        .with_upgrades()
-                                        .await
-                                    {
-                                        // Common when client closes mid-request — silenced.
-                                        let _ = e;
+                                        .with_upgrades();
+                                    tokio::pin!(conn);
+                                    tokio::select! {
+                                        result = &mut conn => {
+                                            // Common when client closes mid-request — silenced.
+                                            let _ = result;
+                                        }
+                                        _ = close.notified() => {
+                                            // closeAllConnections / closeIdleConnections:
+                                            // dropping the pinned connection closes the
+                                            // socket immediately (in-flight request gets
+                                            // a reset, matching Node's socket.destroy()).
+                                        }
                                     }
+                                    CONNECTIONS.lock().unwrap().remove(&conn_id);
                                 });
                             }
                             Err(e) => eprintln!("[node:http] accept error: {}", e),
@@ -526,6 +592,9 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
     } else {
         close_listeners = Vec::new();
     }
+    // Node 19+: `server.close()` destroys idle keep-alive connections
+    // (active requests are allowed to finish) (#4905).
+    signal_connections_close(server_handle, true);
     emit_no_arg_to_listeners(&close_listeners);
     if callback != 0 {
         let raw = callback as *const RawClosureHeader;
@@ -536,15 +605,37 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
     }
 }
 
-/// `server.closeAllConnections()` — placeholder. Active hyper
-/// connections live in their own tokio tasks; we'd need to thread an
-/// abort handle through every task. For Phase 1 this is a no-op
-/// (matches `closeIdleConnections` too).
+/// `server.closeAllConnections()` — destroy every tracked connection
+/// of this server, including ones with an in-flight request (#4905).
 #[no_mangle]
-pub extern "C" fn js_node_http_server_close_all_connections(_handle: i64) {}
+pub extern "C" fn js_node_http_server_close_all_connections(handle: i64) {
+    signal_connections_close(handle, false);
+    // Parked async requests on the destroyed connections can never flush
+    // a response (the per-request oneshot receiver died with the
+    // connection task) — drop them now so `has_in_flight_requests()`
+    // doesn't pin the event loop for the 300s grace window.
+    let mut to_finalize: Vec<(i64, i64)> = Vec::new();
+    if let Ok(mut guard) = IN_FLIGHT.lock() {
+        guard.retain(|e| {
+            if e.server_handle == handle {
+                to_finalize.push((e.request_handle, e.response_handle));
+                false
+            } else {
+                true
+            }
+        });
+    }
+    for (req, res) in to_finalize {
+        finalize_request_handles(req, res);
+    }
+}
 
+/// `server.closeIdleConnections()` — destroy connections with no
+/// in-flight request (idle keep-alive sockets) (#4905).
 #[no_mangle]
-pub extern "C" fn js_node_http_server_close_idle_connections(_handle: i64) {}
+pub extern "C" fn js_node_http_server_close_idle_connections(handle: i64) {
+    signal_connections_close(handle, true);
+}
 
 /// `server.address()` — returns `{ port, address, family }` as a
 /// JSON-stringified object. TS-side wrapper parses with `JSON.parse`.
@@ -894,6 +985,9 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
 
 /// A request whose handler returned before finishing the response.
 struct InFlightRequest {
+    /// Owning server — lets `closeAllConnections()` drop parked requests
+    /// whose connection it just destroyed (#4905).
+    server_handle: i64,
     request_handle: i64,
     response_handle: i64,
     /// Mirrors `HttpPendingRequest::skip_default_response`: when true the
@@ -994,6 +1088,7 @@ pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
     let deadline = Instant::now() + Duration::from_millis(grace_ms as u64);
     if let Ok(mut guard) = IN_FLIGHT.lock() {
         guard.push(InFlightRequest {
+            server_handle: pending.server_handle,
             request_handle: pending.request_handle,
             response_handle: pending.response_handle,
             skip_default_response: pending.skip_default_response,

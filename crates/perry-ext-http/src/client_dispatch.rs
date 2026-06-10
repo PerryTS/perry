@@ -137,10 +137,16 @@ pub(crate) fn dispatch_request(
                     });
                 }
                 Err(e) => {
-                    push_event(PendingHttpEvent::Error {
-                        request_handle,
-                        error_message: e.to_string(),
-                    });
+                    // #4905: surface transport deadlines as the 'timeout'
+                    // event instead of a generic error.
+                    if e.is_timeout() {
+                        push_event(PendingHttpEvent::Timeout { request_handle });
+                    } else {
+                        push_event(PendingHttpEvent::Error {
+                            request_handle,
+                            error_message: e.to_string(),
+                        });
+                    }
                 }
             }
         });
