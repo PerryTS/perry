@@ -138,17 +138,23 @@ impl NativeRegionFactGraph {
 /// Some subgraphs still delegate to established focused collectors; this
 /// function is the single contract used by codegen entry points so new native
 /// consumers do not need to rediscover facts independently.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_native_region_fact_graph(
     stmts: &[Stmt],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
 ) -> NativeRegionFactGraph {
-    let integer_locals =
-        super::integer_locals::collect_integer_locals(stmts, flat_const_ids, clamp_fn_ids);
+    let integer_locals = super::integer_locals::collect_integer_locals(
+        stmts,
+        flat_const_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+    );
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
@@ -225,6 +231,7 @@ pub(crate) fn collect_hir_facts(
         stmts,
         flat_const_ids,
         clamp_fn_ids,
+        &HashSet::new(),
         &HashSet::new(),
         &HashMap::new(),
         &HashMap::new(),
@@ -458,6 +465,7 @@ mod tests {
             &HashSet::new(),
             &pure_helpers,
             &HashSet::new(),
+            &HashSet::new(),
             &HashMap::new(),
             &HashMap::new(),
             &constants,
@@ -487,6 +495,7 @@ mod tests {
 
         let graph = collect_native_region_fact_graph(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -538,6 +547,7 @@ mod tests {
             &stmts,
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         );
 
         assert!(
@@ -573,6 +583,7 @@ mod tests {
 
         let ints = super::super::integer_locals::collect_integer_locals(
             &stmts,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
         );
@@ -612,6 +623,7 @@ mod tests {
             &stmts,
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         );
 
         assert!(
@@ -625,6 +637,152 @@ mod tests {
         assert!(
             !ints.contains(&3),
             "const copy of the mutable param binding must not be integer"
+        );
+    }
+
+    // Provenance hole #1 (the clamp_fn_ids bypass): a local admitted via a
+    // clamp3-shaped call must be pruned when an *argument* of that call is
+    // disqualified — clamp3 returns one of its arguments verbatim, so the
+    // result is only an integer if the arguments are. Previously
+    // `is_int32_producing_expr` accepted any clamp call unconditionally, so
+    // the candidate kept its i32 slot forever.
+    #[test]
+    fn clamp_admitted_local_is_pruned_when_arg_source_is_disqualified() {
+        let clamp_call = |arg: Expr| Expr::Call {
+            callee: Box::new(Expr::FuncRef(7)),
+            args: vec![arg, Expr::Integer(0), Expr::Integer(100)],
+            type_args: vec![],
+        };
+        // let src = undefined; src = obj.value;       (disqualified seed)
+        // const xx = clamp3(src, 0, 100);             (clamp-admitted)
+        // const yy = xx;                              (downstream copy)
+        let stmts = vec![
+            mutable_number_let(1, Expr::Undefined),
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(99)),
+                    property: "value".to_string(),
+                }),
+            )),
+            const_let(2, clamp_call(Expr::LocalGet(1))),
+            const_let(3, Expr::LocalGet(2)),
+        ];
+        let clamp_ids: HashSet<u32> = [7].into_iter().collect();
+
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &stmts,
+            &HashSet::new(),
+            &clamp_ids,
+            &clamp_ids,
+        );
+        assert!(!ints.contains(&1), "non-int-written seed must be pruned");
+        assert!(
+            !ints.contains(&2),
+            "clamp3-admitted local must follow its disqualified argument"
+        );
+        assert!(
+            !ints.contains(&3),
+            "copy of the clamp3-admitted local must be pruned transitively"
+        );
+
+        // Same shape with integer-stable arguments keeps the optimization.
+        let ok_stmts = vec![
+            mutable_number_let(1, Expr::Integer(5)),
+            const_let(2, clamp_call(Expr::LocalGet(1))),
+            const_let(3, Expr::LocalGet(2)),
+        ];
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &ok_stmts,
+            &HashSet::new(),
+            &clamp_ids,
+            &clamp_ids,
+        );
+        assert!(ints.contains(&2), "int-arg clamp3 result must stay integer");
+        assert!(ints.contains(&3), "copy of live clamp3 result must stay");
+
+        // Argument-INdependent clamp functions (clampU8 / returns_integer —
+        // they coerce internally) must keep admitting double-valued args.
+        let coercing_stmts = vec![const_let(2, clamp_call(Expr::LocalGet(98)))];
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &coercing_stmts,
+            &HashSet::new(),
+            &clamp_ids,
+            &HashSet::new(),
+        );
+        assert!(
+            ints.contains(&2),
+            "internally-coercing clamp result must stay integer regardless of args"
+        );
+    }
+
+    // Provenance hole #2 (init bypass on written locals): a candidate WITH
+    // `LocalSet` writes was never re-validated through its init, so
+    // `let b = a; …use b…; b = 1` kept b integer after `a` was disqualified
+    // — reads between the init and the int write saw a truncated pointer.
+    #[test]
+    fn written_local_is_still_revalidated_through_its_init() {
+        // let a = undefined; a = obj.value;   (disqualified seed)
+        // let b = a;                          (init copies disqualified a)
+        // b = 1;                              (later int write)
+        let stmts = vec![
+            mutable_number_let(1, Expr::Undefined),
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(99)),
+                    property: "value".to_string(),
+                }),
+            )),
+            mutable_number_let(2, Expr::LocalGet(1)),
+            Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::Integer(1)))),
+        ];
+
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        assert!(
+            !ints.contains(&2),
+            "a written local whose init copies a disqualified source must be pruned"
+        );
+    }
+
+    // Provenance hole #3 (Update bypass): `const y = x++` was unconditionally
+    // int-producing even when `x` never was (or stopped being) an integer.
+    #[test]
+    fn update_admitted_local_follows_its_target() {
+        // let x = undefined; x = obj.value; const y = x++;
+        let stmts = vec![
+            mutable_number_let(1, Expr::Undefined),
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(99)),
+                    property: "value".to_string(),
+                }),
+            )),
+            const_let(
+                2,
+                Expr::Update {
+                    id: 1,
+                    op: perry_hir::UpdateOp::Increment,
+                    prefix: false,
+                },
+            ),
+        ];
+
+        let ints = super::super::integer_locals::collect_integer_locals(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        assert!(
+            !ints.contains(&2),
+            "`x++` over a disqualified local must not stay integer"
         );
     }
 }

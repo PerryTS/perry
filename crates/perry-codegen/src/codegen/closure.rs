@@ -233,6 +233,7 @@ pub(super) fn compile_closure(
         body,
         &flat_const_ids,
         &clamp_fn_ids,
+        &cross_module.clamp3_functions,
         &closure_boxed_vars,
         module_globals,
         classes,

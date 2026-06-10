@@ -777,27 +777,6 @@ pub fn collect_integer_let_ids(
 /// `collect_ref_ids_in_expr`: any new HIR Expr variant must recurse into its
 /// sub-expressions here, or the walker may miss a LocalSet hidden inside it
 /// and wrongly mark its target as integer-valued.
-/// Walks the HIR and records LocalIds that have at least one LocalSet whose
-/// rhs is NOT int32-producing. `collect_integer_locals` uses this to remove
-/// locals that lose their integer invariant somewhere in the function.
-pub fn collect_non_int_localset_ids_in_stmts(
-    stmts: &[perry_hir::Stmt],
-    out: &mut HashSet<u32>,
-    known_int_locals: &HashSet<u32>,
-    flat_const_ids: &HashSet<u32>,
-    flat_row_alias_ids: &HashSet<u32>,
-    clamp_fn_ids: &HashSet<u32>,
-) {
-    collect_localset_ids_in_stmts_filtered(
-        stmts,
-        out,
-        Some(known_int_locals),
-        flat_const_ids,
-        flat_row_alias_ids,
-        clamp_fn_ids,
-    );
-}
-
 pub fn collect_localset_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     let empty = HashSet::new();
     collect_localset_ids_in_stmts_filtered(stmts, out, None, &empty, &empty, &empty);

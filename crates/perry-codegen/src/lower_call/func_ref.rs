@@ -28,22 +28,51 @@ pub fn try_lower_func_ref_call(
     // `is_inlinable`) so this path fires at every call site and the
     // `dowhile/break` shape that blocked LLVM's auto-vectorizer
     // never appears in the IR.
+    //
+    // clamp3-shaped functions return one of their ARGUMENTS verbatim, so
+    // the i32 intrinsification is only sound when every argument is
+    // provably i32-lowerable (`can_lower_expr_as_i32` — whose contract
+    // `lower_expr_as_i32` requires anyway). Unconditional intrinsification
+    // fptosi'd fractional doubles (`clamp3(2.5, 0, 5)` returned 2) and
+    // NaN-boxed pointers (i32::MIN — the #4785 `(number).method is not a
+    // function` bug class) at every call site. Non-i32 arguments fall
+    // through to the ordinary direct call, whose compiled body has the
+    // correct verbatim-return semantics. clampU8 stays unconditional: its
+    // detector verifies the body ends in `return v | 0`, and fptosi +
+    // smax(0)/smin(255) agrees with that coercion for every f64 input
+    // (out-of-range values hit the clamp bounds first; NaN and boxed
+    // pointers coerce to 0 either way).
     if ctx.clamp3_functions.contains(fid) && args.len() == 3 {
-        let v = crate::expr::lower_expr_as_i32(ctx, &args[0])?;
-        let lo = crate::expr::lower_expr_as_i32(ctx, &args[1])?;
-        let hi = crate::expr::lower_expr_as_i32(ctx, &args[2])?;
-        let blk = ctx.block();
-        let r1 = blk.fresh_reg();
-        blk.emit_raw(format!(
-            "{} = call i32 @llvm.smax.i32(i32 {}, i32 {})",
-            r1, v, lo
-        ));
-        let r2 = blk.fresh_reg();
-        blk.emit_raw(format!(
-            "{} = call i32 @llvm.smin.i32(i32 {}, i32 {})",
-            r2, r1, hi
-        ));
-        return Ok(Some(blk.sitofp(I32, &r2, DOUBLE)));
+        let args_are_i32 = args.iter().all(|a| {
+            crate::expr::can_lower_expr_as_i32(
+                a,
+                &ctx.i32_counter_slots,
+                ctx.flat_const_arrays,
+                &ctx.array_row_aliases,
+                ctx.integer_locals,
+                ctx.clamp3_functions,
+                ctx.clamp_u8_functions,
+                ctx.integer_returning_functions,
+                ctx.i32_identity_functions,
+            )
+        });
+        if args_are_i32 {
+            let v = crate::expr::lower_expr_as_i32(ctx, &args[0])?;
+            let lo = crate::expr::lower_expr_as_i32(ctx, &args[1])?;
+            let hi = crate::expr::lower_expr_as_i32(ctx, &args[2])?;
+            let blk = ctx.block();
+            let r1 = blk.fresh_reg();
+            blk.emit_raw(format!(
+                "{} = call i32 @llvm.smax.i32(i32 {}, i32 {})",
+                r1, v, lo
+            ));
+            let r2 = blk.fresh_reg();
+            blk.emit_raw(format!(
+                "{} = call i32 @llvm.smin.i32(i32 {}, i32 {})",
+                r2, r1, hi
+            ));
+            return Ok(Some(blk.sitofp(I32, &r2, DOUBLE)));
+        }
     }
     if ctx.clamp_u8_functions.contains(fid) && args.len() == 1 {
         let v = crate::expr::lower_expr_as_i32(ctx, &args[0])?;

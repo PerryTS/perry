@@ -1,5 +1,49 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use std::collections::HashSet;
+//! Integer-local analysis: which locals are provably integer-valued, making
+//! them eligible for an i32 shadow slot (see `needs_i32_slot` in
+//! `stmt/let_stmt.rs`).
+//!
+//! ## Soundness invariant (regression #4785 and its bug class)
+//!
+//! A wrong i32 slot is a miscompile: the f64 slot holds a NaN-boxed pointer,
+//! the i32 read does `fptosi` on the NaN and produces `i32::MIN`, and user
+//! code crashes with `(number).method is not a function`. Losing a slot on a
+//! rare pattern is only a missed optimization. The analysis is therefore
+//! structured so that **no admission path — syntactic seed, forward
+//! propagation, clamp-call admission, or flat-const admission — can escape
+//! transitive disqualification**:
+//!
+//! 1. Admission runs optimistically to a fixed point
+//!    (`collect_integer_let_ids` + `collect_extra_integer_let_ids`).
+//! 2. Every candidate is then re-judged through ALL of its defining
+//!    expressions — its `Let` init (the lone exemption is the optimistic
+//!    `let x = undefined`-with-later-writes scaffolding seed, whose real
+//!    values are its writes) and every `LocalSet` rhs targeting it. The
+//!    judgment (`int32_producing_deps`) records *provenance*: the exact set
+//!    of other locals whose candidate-ness the verdict relied on.
+//! 3. Any failed judgment disqualifies the local, and disqualification
+//!    propagates transitively through the recorded reverse-dependency edges
+//!    with a worklist — any number of hops, regardless of how the dependent
+//!    was admitted. Locals written inside closures are disqualified
+//!    unconditionally.
+//!
+//! `int32_producing_deps` is deliberately stricter than the admission-side
+//! `is_int32_producing_expr` in two places where the latter is optimistic:
+//! `Expr::Update` requires the updated local to itself be a candidate, and a
+//! call to an *argument-dependent* clamp function (`clamp3`-shaped functions
+//! return one of their arguments verbatim) requires every argument to be
+//! int-producing. Anything admission accepted that judgment rejects is simply
+//! pruned.
+//!
+//! Scoping notes: `clamp_fn_ids` are *function* ids (module-global, no
+//! per-function contamination). `flat_const_ids` are module-init local ids of
+//! never-mutated `const` int matrices; those facts cannot change during this
+//! per-function analysis, so flat-const admissions carry no local deps. (HIR
+//! local ids are scope-local, so a function-local id can in principle collide
+//! with a module-init flat-const id — that exposure is shared with codegen's
+//! `flat_const_arrays` fast-path lowering and is out of scope here.)
+
+use perry_hir::{BinaryOp, Expr, Stmt};
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 
@@ -7,6 +51,7 @@ pub fn collect_integer_locals(
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
 ) -> HashSet<u32> {
     let mut candidates: HashSet<u32> = HashSet::new();
 
@@ -55,228 +100,317 @@ pub fn collect_integer_locals(
         }
     }
 
-    // Iterate to a fixed point (issue #49): `is_int32_producing_expr` now
-    // recognizes `LocalGet(id)` as int-producing when `id` is itself
-    // int-stable, and `Add/Sub/Mul` as int-producing when both operands
-    // are. That makes the analysis mutually recursive across locals —
-    // disqualifying one candidate may cascade to other candidates whose
-    // rhs referenced the first via LocalGet. Iterate until the set
-    // stabilizes.
-    // Locals that are ever the target of a `LocalSet` are governed by the
-    // write-based disqualifier above; locals that are NOT (their `Let` init is
-    // their sole definition — every `const`, plus never-reassigned `let`s such
-    // as the mutable bindings the *parameter* destructuring path emits) must be
-    // re-validated through that init when their source leaves the set.
+    // Provenance-based disqualification (see module comment). One walk
+    // judges every candidate's defining expressions against the optimistic
+    // set, recording which other candidates each verdict relied on; a
+    // worklist then propagates removals through those reverse-dependency
+    // edges to a fixed point. The judgment is monotone in the candidate set
+    // (it only relies *positively* on membership), so judging once against
+    // the optimistic set and pruning transitively is exact — no repeated
+    // full rescans of the function body per disqualification.
     let mut localset_written: HashSet<u32> = HashSet::new();
     collect_localset_ids_in_stmts(stmts, &mut localset_written);
-    loop {
-        let mut disqualified: HashSet<u32> = HashSet::new();
-        collect_non_int_localset_ids_in_stmts(
-            stmts,
-            &mut disqualified,
-            &candidates,
-            flat_const_ids,
-            &flat_row_alias_ids,
-            clamp_fn_ids,
-        );
-        // Re-validate init-only candidates against the *current*
-        // (shrinking) set. The forward pass above adds a `y = x` (an init-only
-        // Let whose init is `LocalGet(x)` / an int-producing expr) the moment
-        // `x` is a candidate — but the LocalSet-based disqualifier never
-        // revisits it, because the binding's defining init is not a `LocalSet`.
-        // So when `x` later leaves the set (e.g. a mutable `undefined` seed
-        // disqualified by a non-int write), `y` was left stranded as a stale
-        // integer local, and any further `z = y` copy then qualified for an i32
-        // shadow slot — fptosi'ing a NaN-boxed value to i32::MIN. This is the
-        // destructuring-scaffolding regression: the iterator-protocol
-        // array-binding lowering emits `let __destruct = undefined`
-        // (mutable+Undefined seed), whose binding copies (`cb = cbBase`, where
-        // the *parameter* path even makes those bindings `mutable` with no
-        // reassignment) were mis-typed as integers. Pruning any init-only
-        // candidate whose init is no longer int-producing closes that hop.
-        // Locals with real `LocalSet` writes (clampIdx's `xx`) stay governed by
-        // those writes above.
-        collect_non_int_init_only_let_ids(
-            stmts,
-            &mut disqualified,
-            &candidates,
-            &localset_written,
-            flat_const_ids,
-            &flat_row_alias_ids,
-            clamp_fn_ids,
-        );
-        let before = candidates.len();
-        candidates.retain(|id| !disqualified.contains(id));
-        if candidates.len() == before {
-            break;
+
+    let mut judge = ProvenanceJudge {
+        candidates: &candidates,
+        localset_written: &localset_written,
+        flat_const_ids,
+        flat_row_alias_ids: &flat_row_alias_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+        dependents: HashMap::new(),
+        disqualified: HashSet::new(),
+        closure_written: HashSet::new(),
+    };
+    judge.walk_stmts(stmts);
+
+    let ProvenanceJudge {
+        dependents,
+        mut disqualified,
+        closure_written,
+        ..
+    } = judge;
+    // Locals written inside a closure body lose integer-ness in the
+    // enclosing scope unconditionally (the closure body gets its own
+    // analysis pass; this matches the historical unfiltered closure-body
+    // collection in `collect_localset_ids_in_expr_filtered`).
+    for id in closure_written {
+        if candidates.contains(&id) {
+            disqualified.insert(id);
         }
     }
+    let mut worklist: Vec<u32> = disqualified.iter().copied().collect();
+    while let Some(gone) = worklist.pop() {
+        if let Some(dependent_ids) = dependents.get(&gone) {
+            for &dep in dependent_ids {
+                if disqualified.insert(dep) {
+                    worklist.push(dep);
+                }
+            }
+        }
+    }
+    candidates.retain(|id| !disqualified.contains(id));
     candidates
 }
 
-/// Walk all `Stmt::Let { id, init: Some(e), .. }` whose `id` is a current
-/// candidate, has NO `LocalSet` write (`!localset_written.contains(id)` — its
-/// init is its sole definition), and whose init `e` is NOT
-/// `is_int32_producing_expr` against the current candidate set, recording `id`
-/// in `out`. Used inside `collect_integer_locals`'s disqualify fixed point to
-/// prune init-only members (every `const`, plus never-reassigned `let`s like
-/// the parameter-destructuring bindings) that the forward propagation added
-/// from a source local which has since been disqualified — those carry no
-/// `LocalSet` write for `collect_non_int_localset_ids_in_stmts` to catch, so
-/// they must be re-validated through their defining init here.
+/// Single-pass obligation collector + judge for the disqualification phase.
+/// A candidate's "obligations" are its `Let` init (unless it's the optimistic
+/// `mutable`-`undefined`-with-writes scaffolding seed, whose real values are
+/// the writes) and every `LocalSet` rhs targeting it. Each obligation is
+/// judged with `int32_producing_deps`; a failure lands the id in
+/// `disqualified`, a success records reverse-dependency edges in `dependents`.
+struct ProvenanceJudge<'a> {
+    candidates: &'a HashSet<u32>,
+    localset_written: &'a HashSet<u32>,
+    flat_const_ids: &'a HashSet<u32>,
+    flat_row_alias_ids: &'a HashSet<u32>,
+    clamp_fn_ids: &'a HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &'a HashSet<u32>,
+    /// dep local id → candidate ids whose integer verdict relied on it.
+    dependents: HashMap<u32, Vec<u32>>,
+    /// Candidates with at least one failed obligation.
+    disqualified: HashSet<u32>,
+    /// Ids `LocalSet` anywhere inside a closure body in these stmts.
+    closure_written: HashSet<u32>,
+}
+
+impl ProvenanceJudge<'_> {
+    fn judge_obligation(&mut self, id: u32, rhs: &Expr) {
+        let mut deps: HashSet<u32> = HashSet::new();
+        if int32_producing_deps(
+            rhs,
+            self.candidates,
+            self.flat_const_ids,
+            self.flat_row_alias_ids,
+            self.clamp_fn_ids,
+            self.arg_dependent_clamp_fn_ids,
+            &mut deps,
+        ) {
+            for dep in deps {
+                self.dependents.entry(dep).or_default().push(id);
+            }
+        } else {
+            self.disqualified.insert(id);
+        }
+    }
+
+    fn walk_stmts(&mut self, stmts: &[Stmt]) {
+        for s in stmts {
+            match s {
+                Stmt::Let {
+                    id,
+                    init: Some(init),
+                    mutable,
+                    ..
+                } => {
+                    // The `let x = undefined; …writes…` scaffolding seed is
+                    // admitted optimistically — its init is exempt and its
+                    // writes are the obligations. A *write-free* undefined
+                    // init has no writes to vouch for it and must fail.
+                    let optimistic_undefined_seed = *mutable
+                        && matches!(init, Expr::Undefined)
+                        && self.localset_written.contains(id);
+                    if self.candidates.contains(id) && !optimistic_undefined_seed {
+                        self.judge_obligation(*id, init);
+                    }
+                    self.walk_expr(init);
+                }
+                Stmt::Let { init: None, .. } => {}
+                Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
+                Stmt::Return(opt) => {
+                    if let Some(e) = opt {
+                        self.walk_expr(e);
+                    }
+                }
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    self.walk_expr(condition);
+                    self.walk_stmts(then_branch);
+                    if let Some(eb) = else_branch {
+                        self.walk_stmts(eb);
+                    }
+                }
+                Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                    self.walk_expr(condition);
+                    self.walk_stmts(body);
+                }
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
+                    if let Some(init_stmt) = init {
+                        self.walk_stmts(std::slice::from_ref(init_stmt));
+                    }
+                    if let Some(cond) = condition {
+                        self.walk_expr(cond);
+                    }
+                    if let Some(upd) = update {
+                        self.walk_expr(upd);
+                    }
+                    self.walk_stmts(body);
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    self.walk_stmts(body);
+                    if let Some(c) = catch {
+                        self.walk_stmts(&c.body);
+                    }
+                    if let Some(f) = finally {
+                        self.walk_stmts(f);
+                    }
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                } => {
+                    self.walk_expr(discriminant);
+                    for c in cases {
+                        if let Some(t) = &c.test {
+                            self.walk_expr(t);
+                        }
+                        self.walk_stmts(&c.body);
+                    }
+                }
+                Stmt::Labeled { body, .. } => {
+                    self.walk_stmts(std::slice::from_ref(body.as_ref()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_expr(&mut self, e: &Expr) {
+        match e {
+            Expr::LocalSet(id, value) => {
+                if self.candidates.contains(id) {
+                    self.judge_obligation(*id, value);
+                }
+                self.walk_expr(value);
+            }
+            Expr::Closure { body, .. } => {
+                collect_localset_ids_in_stmts(body, &mut self.closure_written);
+                // The centralized walker visits param-default exprs (but
+                // not the body — handled above).
+                perry_hir::walker::walk_expr_children(e, &mut |child| self.walk_expr(child));
+            }
+            _ => {
+                perry_hir::walker::walk_expr_children(e, &mut |child| self.walk_expr(child));
+            }
+        }
+    }
+}
+
+/// Disqualification-side judgment: returns `true` if `e` is int-producing
+/// given the current candidate set, accumulating into `deps` every local id
+/// whose candidate-ness the verdict relied on. `collect_integer_locals`
+/// prunes the judged local transitively when any of those deps is later
+/// disqualified.
+///
+/// Mirrors `is_int32_producing_expr` (the admission-side judgment), except
+/// it is strict where admission is optimistic:
+///   - `Expr::Update`: int-producing only when the updated local is itself
+///     a candidate (admission says unconditionally yes; `++` on a
+///     non-integer local yields whatever `ToNumber` gives — possibly a
+///     fractional or NaN value).
+///   - Calls to *argument-dependent* clamp functions (`clamp3`-shaped: they
+///     return one of their arguments verbatim): every argument must be
+///     int-producing, and the argument deps are recorded. `clampU8`-shaped
+///     and `returns_integer` functions coerce internally (`| 0` / bitwise on
+///     every value-returning path) and stay argument-independent.
 #[allow(clippy::too_many_arguments)]
-pub fn collect_non_int_init_only_let_ids(
-    stmts: &[perry_hir::Stmt],
-    out: &mut HashSet<u32>,
+fn int32_producing_deps(
+    e: &perry_hir::Expr,
     candidates: &HashSet<u32>,
-    localset_written: &HashSet<u32>,
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
-) {
-    use perry_hir::Stmt;
-    for s in stmts {
-        match s {
-            Stmt::Let {
-                id,
-                init: Some(init),
-                ..
-            } => {
-                if candidates.contains(id)
-                    && !localset_written.contains(id)
-                    && !is_int32_producing_expr(
-                        init,
-                        candidates,
-                        flat_const_ids,
-                        flat_row_alias_ids,
-                        clamp_fn_ids,
-                    )
-                {
-                    out.insert(*id);
-                }
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    deps: &mut HashSet<u32>,
+) -> bool {
+    let recurse = |sub: &Expr, deps: &mut HashSet<u32>| {
+        int32_producing_deps(
+            sub,
+            candidates,
+            flat_const_ids,
+            flat_row_alias_ids,
+            clamp_fn_ids,
+            arg_dependent_clamp_fn_ids,
+            deps,
+        )
+    };
+    match e {
+        Expr::Integer(_) => true,
+        Expr::Update { id, .. } => {
+            if candidates.contains(id) {
+                deps.insert(*id);
+                true
+            } else {
+                false
             }
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                collect_non_int_init_only_let_ids(
-                    then_branch,
-                    out,
-                    candidates,
-                    localset_written,
-                    flat_const_ids,
-                    flat_row_alias_ids,
-                    clamp_fn_ids,
-                );
-                if let Some(eb) = else_branch {
-                    collect_non_int_init_only_let_ids(
-                        eb,
-                        out,
-                        candidates,
-                        localset_written,
-                        flat_const_ids,
-                        flat_row_alias_ids,
-                        clamp_fn_ids,
-                    );
-                }
-            }
-            Stmt::For { init, body, .. } => {
-                if let Some(init_stmt) = init {
-                    collect_non_int_init_only_let_ids(
-                        std::slice::from_ref(init_stmt),
-                        out,
-                        candidates,
-                        localset_written,
-                        flat_const_ids,
-                        flat_row_alias_ids,
-                        clamp_fn_ids,
-                    );
-                }
-                collect_non_int_init_only_let_ids(
-                    body,
-                    out,
-                    candidates,
-                    localset_written,
-                    flat_const_ids,
-                    flat_row_alias_ids,
-                    clamp_fn_ids,
-                );
-            }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_non_int_init_only_let_ids(
-                    body,
-                    out,
-                    candidates,
-                    localset_written,
-                    flat_const_ids,
-                    flat_row_alias_ids,
-                    clamp_fn_ids,
-                );
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                collect_non_int_init_only_let_ids(
-                    body,
-                    out,
-                    candidates,
-                    localset_written,
-                    flat_const_ids,
-                    flat_row_alias_ids,
-                    clamp_fn_ids,
-                );
-                if let Some(c) = catch {
-                    collect_non_int_init_only_let_ids(
-                        &c.body,
-                        out,
-                        candidates,
-                        localset_written,
-                        flat_const_ids,
-                        flat_row_alias_ids,
-                        clamp_fn_ids,
-                    );
-                }
-                if let Some(f) = finally {
-                    collect_non_int_init_only_let_ids(
-                        f,
-                        out,
-                        candidates,
-                        localset_written,
-                        flat_const_ids,
-                        flat_row_alias_ids,
-                        clamp_fn_ids,
-                    );
-                }
-            }
-            Stmt::Switch { cases, .. } => {
-                for c in cases {
-                    collect_non_int_init_only_let_ids(
-                        &c.body,
-                        out,
-                        candidates,
-                        localset_written,
-                        flat_const_ids,
-                        flat_row_alias_ids,
-                        clamp_fn_ids,
-                    );
-                }
-            }
-            Stmt::Labeled { body, .. } => {
-                collect_non_int_init_only_let_ids(
-                    std::slice::from_ref(body.as_ref()),
-                    out,
-                    candidates,
-                    localset_written,
-                    flat_const_ids,
-                    flat_row_alias_ids,
-                    clamp_fn_ids,
-                );
-            }
-            _ => {}
         }
+        Expr::Binary { op, right, .. }
+            if matches!(op, BinaryOp::BitOr | BinaryOp::UShr)
+                && matches!(right.as_ref(), Expr::Integer(0)) =>
+        {
+            true
+        }
+        Expr::Binary { op, left, right }
+            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
+        {
+            recurse(left, deps) && recurse(right, deps)
+        }
+        Expr::Call { callee, args, .. } => {
+            if let Expr::FuncRef(fid) = callee.as_ref() {
+                if !clamp_fn_ids.contains(fid) {
+                    return false;
+                }
+                if arg_dependent_clamp_fn_ids.contains(fid) {
+                    args.iter().all(|a| recurse(a, deps))
+                } else {
+                    true
+                }
+            } else {
+                false
+            }
+        }
+        Expr::Binary { op, .. } => matches!(
+            op,
+            BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+                | BinaryOp::UShr
+        ),
+        Expr::LocalGet(id) => {
+            if candidates.contains(id) {
+                deps.insert(*id);
+                true
+            } else {
+                false
+            }
+        }
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        Expr::MathImul(_, _) => true,
+        // Issue #50 bridge: element access on a flat-const 2D int array
+        // produces i32. The flat-const facts are immutable within this
+        // analysis (never-mutated module consts), so no local deps.
+        Expr::IndexGet { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } => {
+                matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
+            }
+            Expr::LocalGet(id) => flat_row_alias_ids.contains(id),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -492,15 +626,19 @@ pub fn collect_flat_row_aliases(
 /// Returns `true` if evaluating `e` yields a value that will already be
 /// integer-valued — so writing it into a local's i32 slot is lossless.
 ///
+/// This is the *admission-side* judgment: it may be optimistic (e.g.
+/// `Expr::Update` and clamp calls are accepted unconditionally) because every
+/// admitted candidate is re-judged with the strict, provenance-recording
+/// `int32_producing_deps` during disqualification — see the module comment.
+///
 /// Accepted shapes:
 ///   - `Expr::Integer(_)`: trivially integer.
 ///   - `(expr) | 0` and `(expr) >>> 0`: the JS ToInt32 / ToUint32 idiom —
 ///     always yields a 32-bit integer regardless of the inner expression.
 ///   - Pure bitwise ops (`&`, `|`, `^`, `<<`, `>>`, `>>>`): per JS spec
 ///     these coerce both operands to int32 and return int32.
-///   - `Expr::Update`: `++` / `--` on an integer-stable local (we don't
-///     verify transitively; if the target isn't qualified, the whole chain
-///     collapses anyway).
+///   - `Expr::Update`: `++` / `--` on an integer-stable local (admission
+///     doesn't verify the target; the disqualification judgment does).
 ///   - (issue #49) `LocalGet(id)` when `id` is itself in `known_int_locals` —
 ///     enables the accumulator pattern `acc = acc + int_expr` without
 ///     requiring a `| 0` wrapper on every write.

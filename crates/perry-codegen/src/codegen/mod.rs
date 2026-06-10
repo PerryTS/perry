@@ -2153,7 +2153,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             walks(s, &module_globals)
         });
-        if crate::collectors::is_integer_specializable(f) && !uses_module_globals {
+        // Skip clamp-shaped functions: their FuncRef call sites with provably
+        // i32 arguments are intrinsified to smax/smin and never call this
+        // symbol, so the only remaining callers are exactly the ones whose
+        // arguments are NOT integers (fractional doubles, NaN-boxed pointers)
+        // — and clamp3 returns an argument verbatim, so the wrapper's
+        // unconditional `fptosi` miscompiles every one of them (#4785 bug
+        // class: `(number).method is not a function`). Those callers need
+        // the real f64 body.
+        let is_clamp_shape =
+            crate::collectors::detect_clamp3(f).is_some() || crate::collectors::detect_clamp_u8(f);
+        if crate::collectors::is_integer_specializable(f) && !uses_module_globals && !is_clamp_shape
+        {
             if let Some(llvm_name) = func_names.get(&f.id) {
                 let i64_name = format!("{}_i64", llvm_name);
                 crate::collectors::emit_i64_function(&mut llmod, f, &i64_name);
