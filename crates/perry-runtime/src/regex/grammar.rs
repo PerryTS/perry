@@ -424,6 +424,56 @@ fn is_surrogate_property(value: &str) -> bool {
     value == "surrogate" || value == "cs"
 }
 
+/// ES2024 Unicode *properties of strings* (`/v` / unicodeSets mode, UTS #51
+/// emoji sequence sets). Unlike ordinary `\p{…}` character properties these
+/// can match a multi-code-point cluster (ZWJ sequences, flag pairs, keycaps,
+/// skin-tone modifier sequences). The Rust `regex` crate has no notion of
+/// properties of strings, so it rejects them as `invalid pattern`. Expand each
+/// set into an alternation over the single-code-point emoji properties the
+/// crate does support (`Emoji`, `Emoji_Presentation`, `Emoji_Modifier`,
+/// `Emoji_Modifier_Base`).
+///
+/// The expansion follows the UTS #51 sequence *grammar*, not the enumerated
+/// RGI sequence data files, so it over-matches at rare edges (unlisted flag
+/// pairs / ZWJ combinations) but classifies real emoji clusters the way Node
+/// does — which is what `string-width@7+` (→ ink, #348) needs for its
+/// module-top-level `/^\p{RGI_Emoji}$/v` "is this cluster one emoji → width 2"
+/// predicate (#4889). Takes the already-normalized (lowercased, `_`/space
+/// stripped) property value; returns `None` for everything else.
+fn emoji_string_property_expansion(value: &str) -> Option<String> {
+    // One emoji-sequence element: a skin-tone modifier sequence, an emoji
+    // presentation sequence (text-default emoji + VS16), or a character with
+    // default emoji presentation. Regional indicators are excluded — they
+    // only count in pairs, as a flag sequence.
+    const ELEMENT: &str = "(?:\\p{Emoji_Modifier_Base}\\p{Emoji_Modifier}\
+         |\\p{Emoji}\\x{FE0F}\
+         |[\\p{Emoji_Presentation}&&[^\\x{1F1E6}-\\x{1F1FF}]])";
+    const FLAG_SEQ: &str = "[\\x{1F1E6}-\\x{1F1FF}]{2}";
+    const KEYCAP_SEQ: &str = "[0-9#*]\\x{FE0F}\\x{20E3}";
+    const TAG_SEQ: &str = "\\x{1F3F4}[\\x{E0020}-\\x{E007E}]+\\x{E007F}";
+    Some(match value {
+        // RGI_Emoji = Basic_Emoji | Emoji_Keycap_Sequence |
+        // RGI_Emoji_Flag_Sequence | RGI_Emoji_Tag_Sequence |
+        // RGI_Emoji_Modifier_Sequence | RGI_Emoji_ZWJ_Sequence. The trailing
+        // ELEMENT(ZWJ ELEMENT)* branch covers Basic_Emoji, modifier sequences,
+        // and ZWJ sequences in one.
+        "rgiemoji" => {
+            format!("(?:{FLAG_SEQ}|{KEYCAP_SEQ}|{TAG_SEQ}|{ELEMENT}(?:\\x{{200D}}{ELEMENT})*)")
+        }
+        // ELEMENT minus the modifier-sequence branch: a default-presentation
+        // emoji (incl. standalone skin tones) or text-default emoji + VS16.
+        "basicemoji" => "(?:\\p{Emoji}\\x{FE0F}\
+             |[\\p{Emoji_Presentation}&&[^\\x{1F1E6}-\\x{1F1FF}]])"
+            .to_string(),
+        "emojikeycapsequence" => format!("(?:{KEYCAP_SEQ})"),
+        "rgiemojiflagsequence" => format!("(?:{FLAG_SEQ})"),
+        "rgiemojitagsequence" => format!("(?:{TAG_SEQ})"),
+        "rgiemojimodifiersequence" => "(?:\\p{Emoji_Modifier_Base}\\p{Emoji_Modifier})".to_string(),
+        "rgiemojizwjsequence" => format!("(?:{ELEMENT}(?:\\x{{200D}}{ELEMENT})+)"),
+        _ => return None,
+    })
+}
+
 /// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
 /// Handles JS-specific escape sequences not supported by the Rust regex crate.
 /// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
@@ -480,6 +530,13 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     // form as "any scalar value". `string-width@7+` builds two
                     // module-top-level regexes that include `\p{Surrogate}`, so
                     // without this rewrite importing it (→ ink) throws at init.
+                    //
+                    // Properties of strings (`\p{RGI_Emoji}` and friends, #4889)
+                    // are likewise unrepresentable in the crate and expand to an
+                    // alternation over supported emoji properties. Negated or
+                    // in-class uses stay unsupported and pass through, so RegExp
+                    // construction throws a clear SyntaxError instead of
+                    // mis-compiling (Node also rejects `\P{RGI_Emoji}`).
                     // All other properties pass through to the crate unchanged.
                     match parse_unicode_property(&chars, i) {
                         Some((value, negated, end)) if is_surrogate_property(&value) => {
@@ -494,6 +551,12 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                             } else {
                                 result.push_str("[^\\s\\S]");
                             }
+                            i = end;
+                        }
+                        Some((value, false, end))
+                            if !in_class && emoji_string_property_expansion(&value).is_some() =>
+                        {
+                            result.push_str(&emoji_string_property_expansion(&value).unwrap());
                             i = end;
                         }
                         _ => {
@@ -625,5 +688,71 @@ mod tests {
                 "string-width pattern failed to compile: {pat} -> {translated}"
             );
         }
+    }
+
+    #[test]
+    fn rgi_emoji_string_property_expands_and_matches_like_node() {
+        // #4889: `string-width@7+` builds `/^\p{RGI_Emoji}$/v` at module top
+        // level (→ ink, #348). The expected values below were verified against
+        // Node's /v implementation.
+        let translated = js_regex_to_rust(r"^\p{RGI_Emoji}$");
+        let re = regex::Regex::new(&translated)
+            .unwrap_or_else(|e| panic!("RGI_Emoji expansion failed to compile: {translated}: {e}"));
+        for s in [
+            "\u{1F44D}",                                   // 👍 default presentation
+            "\u{1F600}",                                   // 😀
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", // 👨‍👩‍👧 ZWJ family
+            "\u{1F1EC}\u{1F1E7}",                          // 🇬🇧 flag pair
+            "1\u{FE0F}\u{20E3}",                           // 1️⃣ keycap
+            "#\u{FE0F}\u{20E3}",                           // #️⃣ keycap
+            "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}", // 🏴󠁧󠁢󠁥󠁮󠁧󠁿 tag seq
+            "\u{1F44D}\u{1F3FB}",                          // 👍🏻 skin tone
+            "\u{2764}\u{FE0F}",                            // ❤️ text-default + VS16
+            "\u{2764}\u{FE0F}\u{200D}\u{1F525}",           // ❤️‍🔥 VS16 inside ZWJ seq
+            "\u{1F3F4}\u{200D}\u{2620}\u{FE0F}",           // 🏴‍☠️ pirate flag
+            "\u{1F9D4}\u{200D}\u{2640}\u{FE0F}",           // 🧔‍♀️ modifier-base, unmodified
+            "\u{1F3FB}",                                   // 🏻 lone skin tone IS Basic_Emoji
+        ] {
+            assert!(re.is_match(s), "expected RGI_Emoji match for {s:?}");
+        }
+        for s in [
+            "ab",
+            "a",
+            "0", // keycap base alone is not an emoji
+            "#",
+            "\u{1F1EC}",  // 🇬 lone regional indicator
+            "\u{1F44D}x", // anchored: emoji + trailing char
+            "",
+            "\u{2601}", // ☁ text-default without VS16
+            "\u{A9}",   // © text-default without VS16
+        ] {
+            assert!(!re.is_match(s), "expected no RGI_Emoji match for {s:?}");
+        }
+
+        // The sibling properties of strings expand too.
+        let zwj = regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_ZWJ_Sequence}$")).unwrap();
+        assert!(zwj.is_match("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"));
+        assert!(!zwj.is_match("\u{1F44D}")); // a ZWJ sequence needs ≥2 elements
+        let keycap = regex::Regex::new(&js_regex_to_rust(r"^\p{Emoji_Keycap_Sequence}$")).unwrap();
+        assert!(keycap.is_match("1\u{FE0F}\u{20E3}"));
+        assert!(!keycap.is_match("1"));
+        let basic = regex::Regex::new(&js_regex_to_rust(r"^\p{Basic_Emoji}$")).unwrap();
+        assert!(basic.is_match("\u{2601}\u{FE0F}"));
+        assert!(!basic.is_match("\u{2601}"));
+        let flag = regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_Flag_Sequence}$")).unwrap();
+        assert!(flag.is_match("\u{1F1EC}\u{1F1E7}"));
+        let tag = regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_Tag_Sequence}$")).unwrap();
+        assert!(tag.is_match("\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}"));
+        let modseq =
+            regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_Modifier_Sequence}$")).unwrap();
+        assert!(modseq.is_match("\u{1F44D}\u{1F3FB}"));
+
+        // Negated / in-class forms stay unsupported: they pass through
+        // unchanged so RegExp construction throws a clear SyntaxError instead
+        // of mis-compiling. (Node rejects `\P{RGI_Emoji}` too.)
+        assert_eq!(js_regex_to_rust(r"\P{RGI_Emoji}"), r"\P{RGI_Emoji}");
+        assert_eq!(js_regex_to_rust(r"[\p{RGI_Emoji}]"), r"[\p{RGI_Emoji}]");
+        assert!(regex::Regex::new(r"\P{RGI_Emoji}").is_err());
+        assert!(fancy_regex::Regex::new(r"\P{RGI_Emoji}").is_err());
     }
 }
