@@ -147,9 +147,14 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         scan_listener_roots(&mut im.listeners, visitor);
         visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
         visitor.visit_nanbox_f64_slot(&mut im.signal);
+        visitor.visit_nanbox_f64_slot(&mut im.socket_value);
     });
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
         scan_listener_roots(&mut sr.listeners, visitor);
+        visitor.visit_nanbox_f64_slot(&mut sr.standalone_socket);
+        for cb in sr.pending_write_callbacks.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
     });
     iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
         scan_listener_roots(&mut session.listeners, visitor);

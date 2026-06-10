@@ -1930,6 +1930,14 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // dispatcher takes the module name so one callback serves all three.
         ("http", "createServer")
         | ("http", "Server")
+        // #4904: captured / aliased client entry points (`const { get } =
+        // require('http'); get(opts, cb)`) — same bound-value mechanism as
+        // the server factories; the stdlib dispatcher routes them to
+        // `js_http_get` / `js_http_request` (and https twins).
+        | ("http", "request")
+        | ("http", "get")
+        | ("https", "request")
+        | ("https", "get")
         | ("https", "createServer")
         | ("https", "Server")
         | ("http2", "createServer")

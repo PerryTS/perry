@@ -469,8 +469,68 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "reuseSocket" => bind_agent_method_value(handle, b"reuseSocket"),
         "getName" => bind_agent_method_value(handle, b"getName"),
         "destroy" => bind_agent_method_value(handle, b"destroy"),
+        // #4904: data properties — Agents constructed through the dynamic
+        // value path (`const { Agent } = require('http'); new Agent(...)`)
+        // read these through handle property dispatch rather than the
+        // class-filtered native rows.
+        "maxSockets" => js_http_agent_max_sockets(handle),
+        "maxFreeSockets" => js_http_agent_max_free_sockets(handle),
+        "maxTotalSockets" => js_http_agent_max_total_sockets(handle),
+        "keepAliveMsecs" => js_http_agent_keep_alive_msecs(handle),
+        "keepAlive" => js_http_agent_keep_alive(handle),
+        "destroyed" => js_http_agent_destroyed(handle),
+        "defaultPort" => js_http_agent_default_port(handle),
+        "protocol" => {
+            let ptr = js_http_agent_protocol(handle);
+            if ptr.is_null() {
+                f64::from_bits(TAG_UNDEFINED)
+            } else {
+                f64::from_bits(JsValue::from_string_ptr(ptr).bits())
+            }
+        }
+        "sockets" => js_http_agent_sockets(handle),
+        "freeSockets" => js_http_agent_free_sockets(handle),
+        "requests" => js_http_agent_requests(handle),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
+}
+
+/// #4904: property writes on a dynamically-dispatched Agent —
+/// `agent.maxSockets = 4` and the `agent.createConnection = fn`
+/// monkeypatch pattern Node's own tests use. Returns 1 when claimed.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_agent_dispatch_property_set(
+    handle: Handle,
+    property_ptr: *const u8,
+    property_len: usize,
+    value: f64,
+) -> i32 {
+    if property_ptr.is_null() || property_len == 0 || get_handle::<AgentHandle>(handle).is_none() {
+        return 0;
+    }
+    let property = String::from_utf8_lossy(std::slice::from_raw_parts(property_ptr, property_len));
+    match property.as_ref() {
+        "maxSockets" => js_http_agent_set_max_sockets(handle, value),
+        "maxFreeSockets" => js_http_agent_set_max_free_sockets(handle, value),
+        "maxTotalSockets" => js_http_agent_set_max_total_sockets(handle, value),
+        "keepAliveMsecs" => js_http_agent_set_keep_alive_msecs(handle, value),
+        "keepAlive" => js_http_agent_set_keep_alive(handle, value),
+        "createConnection" | "createSocket" => {
+            let bits = value.to_bits();
+            let ptr = if JsValue::from_bits(bits).is_pointer() {
+                (bits & PTR_MASK) as i64
+            } else {
+                0
+            };
+            if property.as_ref() == "createConnection" {
+                js_http_agent_set_create_connection(handle, ptr);
+            } else {
+                js_http_agent_set_create_socket(handle, ptr);
+            }
+        }
+        _ => return 0,
+    }
+    1
 }
 
 #[no_mangle]
