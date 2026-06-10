@@ -21,9 +21,15 @@ use tokio::sync::oneshot;
 
 use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
 use crate::types::{
-    js_json_stringify, jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header,
-    PTR_MASK, STRING_TAG, TAG_NULL, TAG_UNDEFINED,
+    js_json_stringify, js_value_is_closure, jsvalue_to_body_bytes, jsvalue_to_owned_string,
+    read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
+
+/// Node's default `highWaterMark` for an HTTP `OutgoingMessage` (16 KiB).
+/// `res.write()` returns `false` once the buffered body grows past this,
+/// signalling backpressure so producer loops (`while (res.write(buf))`)
+/// terminate instead of spinning forever (#4909).
+const DEFAULT_HIGH_WATER_MARK: usize = 16 * 1024;
 
 pub type ResponseBody = BoxBody<Bytes, Infallible>;
 
@@ -770,6 +776,114 @@ pub extern "C" fn js_node_http_res_write(handle: i64, chunk: f64) -> i32 {
     1
 }
 
+/// Return the closure pointer carried by `value_bits` if it is a real callable
+/// (POINTER_TAG + CLOSURE_MAGIC), else 0. Uses `js_value_is_closure` so a
+/// `Buffer`/object chunk — also POINTER_TAG — is never mistaken for a callback.
+fn callback_from_bits(value_bits: i64) -> i64 {
+    if unsafe { js_value_is_closure(value_bits) } != 0 {
+        (value_bits as u64 & PTR_MASK) as i64
+    } else {
+        0
+    }
+}
+
+/// Pick the callback from a `(encoding?, callback?)` trailing arg pair, the
+/// later slot first — mirroring Node's `(chunk, encoding, callback)` rule. A
+/// string encoding is not callable, so it is skipped.
+fn pick_trailing_callback(arg2: i64, arg3: i64) -> i64 {
+    let c3 = callback_from_bits(arg3);
+    if c3 != 0 {
+        c3
+    } else {
+        callback_from_bits(arg2)
+    }
+}
+
+/// `res.write(chunk[, encoding][, callback])` — the full Node surface routed
+/// from the static native dispatch table. The trailing `(encoding?,
+/// callback?)` args arrive as raw NaN-boxed JSValues (`NA_JSV`); the callback
+/// is queued (it fires in order at `.end()`, #4904) and the encoding string is
+/// ignored for the buffered body. Returns a NaN-boxed boolean: `false` once
+/// the buffered body passes the 16 KiB high-water mark (Node's backpressure
+/// signal, which terminates `while (res.write(buf))` producer loops), else
+/// `true` (#4909).
+#[no_mangle]
+pub extern "C" fn js_node_http_res_write_full(
+    handle: i64,
+    chunk: f64,
+    arg2: i64,
+    arg3: i64,
+) -> f64 {
+    let callback = pick_trailing_callback(arg2, arg3);
+    let bytes = jsvalue_to_body_bytes(chunk);
+    let mut below_hwm = true;
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        if !sr.writable_ended {
+            sr.headers_sent = true;
+            if let Some(b) = &bytes {
+                sr.buffered_body.extend_from_slice(b);
+            }
+            if callback != 0 {
+                sr.pending_write_callbacks.push(callback);
+            }
+            below_hwm = sr.buffered_body.len() <= DEFAULT_HIGH_WATER_MARK;
+        }
+    }
+    f64::from_bits(if below_hwm { TAG_TRUE } else { TAG_FALSE })
+}
+
+/// `res.end([chunk][, encoding][, callback])` — the full Node surface routed
+/// from the static native dispatch table. Handles the `end(cb)` form (callback
+/// in the first slot) as well as `end(chunk[, encoding][, callback])`. Queued
+/// write callbacks fire first (in order), then the end callback, then the
+/// `'finish'`/`'close'` listeners — Node's ordering where `'finish'` never
+/// precedes the end callback (#4909).
+///
+/// # Safety
+/// FFI entry; `handle` must be a live `ServerResponse` handle (or absent).
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_res_end_full(
+    handle: i64,
+    chunk: f64,
+    arg2: i64,
+    arg3: i64,
+) {
+    // `end(cb)` passes the callback as the first arg; otherwise it trails.
+    let first_cb = callback_from_bits(chunk.to_bits() as i64);
+    let (real_chunk, callback) = if first_cb != 0 {
+        (f64::from_bits(TAG_UNDEFINED), first_cb)
+    } else {
+        (chunk, pick_trailing_callback(arg2, arg3))
+    };
+
+    let is_standalone = get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.standalone)
+        .unwrap_or(false);
+    if is_standalone {
+        // standalone_end already runs write cbs → end cb → listeners in order.
+        standalone_end(handle, real_chunk, callback);
+        return;
+    }
+
+    let listeners = finalize_buffered_end(handle, real_chunk);
+    let write_cbs = get_handle_mut::<ServerResponse>(handle)
+        .map(|sr| std::mem::take(&mut sr.pending_write_callbacks))
+        .unwrap_or_default();
+    for cb in write_cbs {
+        call_closure0(cb);
+    }
+    // Node order: queued write callbacks flush, then `'finish'` listeners, then
+    // the end callback, then `'close'`. The end cb fires *after* `'finish'` so
+    // a `res.on('finish')` handler that inspects end-callback state sees the
+    // same interleaving as Node.
+    let (finish_listeners, close_listeners) = listeners.unwrap_or_default();
+    emit_no_arg_to_listeners(&finish_listeners);
+    if callback != 0 {
+        call_closure0(callback);
+    }
+    emit_no_arg_to_listeners(&close_listeners);
+}
+
 /// `res.addTrailers(headers)` — store HTTP trailers emitted after the
 /// response body, per Node's `ServerResponse.addTrailers`. Trailers carry
 /// metadata that isn't known until the body has been produced.
@@ -806,11 +920,13 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
     }
 }
 
-/// `res.end(chunk?)` — append final chunk + flush the response back
-/// to hyper through the oneshot channel + fire `'finish'` and
-/// `'close'` listeners.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
+/// Finalize a buffered response: append the final chunk, flush it back to
+/// hyper through the oneshot channel, and return the `(finish, close)`
+/// listener lists **without** firing them — the caller controls ordering so
+/// that `res.end(cb)` can run write/end callbacks before `'finish'` (Node's
+/// contract, where `'finish'` never precedes the end callback). Returns
+/// `None` if the response was already ended or the handle is gone.
+fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)> {
     let v = JsValue::from_bits(chunk.to_bits());
     let final_chunk = if v.is_undefined() || v.is_null() {
         None
@@ -818,40 +934,44 @@ pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
         jsvalue_to_body_bytes(chunk)
     };
 
-    let (shape, finish_listeners, close_listeners);
-    {
-        let sr = match get_handle_mut::<ServerResponse>(handle) {
-            Some(s) => s,
-            None => return,
-        };
-        if sr.writable_ended {
-            return;
-        }
-        if let Some(c) = final_chunk {
-            sr.buffered_body.extend_from_slice(&c);
-        }
-        sr.headers_sent = true;
-        sr.writable_ended = true;
-        sr.ensure_content_length();
-        let body = std::mem::take(&mut sr.buffered_body);
-        let headers = sr.snapshot_headers();
-        let trailers = sr.snapshot_trailers();
-        shape = HyperResponseShape {
-            status: sr.status_code,
-            status_message: sr.status_message.clone(),
-            headers,
-            trailers,
-            body,
-        };
-        finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
-        close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
-        if let Some(tx) = sr.response_tx.take() {
-            let _ = tx.send(shape);
-        }
-        sr.writable_finished = true;
+    let sr = get_handle_mut::<ServerResponse>(handle)?;
+    if sr.writable_ended {
+        return None;
     }
-    emit_no_arg_to_listeners(&finish_listeners);
-    emit_no_arg_to_listeners(&close_listeners);
+    if let Some(c) = final_chunk {
+        sr.buffered_body.extend_from_slice(&c);
+    }
+    sr.headers_sent = true;
+    sr.writable_ended = true;
+    sr.ensure_content_length();
+    let body = std::mem::take(&mut sr.buffered_body);
+    let headers = sr.snapshot_headers();
+    let trailers = sr.snapshot_trailers();
+    let shape = HyperResponseShape {
+        status: sr.status_code,
+        status_message: sr.status_message.clone(),
+        headers,
+        trailers,
+        body,
+    };
+    let finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
+    let close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
+    if let Some(tx) = sr.response_tx.take() {
+        let _ = tx.send(shape);
+    }
+    sr.writable_finished = true;
+    Some((finish_listeners, close_listeners))
+}
+
+/// `res.end(chunk?)` — append final chunk + flush the response back
+/// to hyper through the oneshot channel + fire `'finish'` and
+/// `'close'` listeners.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
+    if let Some((finish_listeners, close_listeners)) = finalize_buffered_end(handle, chunk) {
+        emit_no_arg_to_listeners(&finish_listeners);
+        emit_no_arg_to_listeners(&close_listeners);
+    }
 }
 
 /// `res.flushHeaders()` — Node sends headers immediately even before

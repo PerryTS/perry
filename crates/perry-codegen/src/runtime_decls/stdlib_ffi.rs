@@ -236,8 +236,20 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, I64, I64],
     );
     module.declare_function("js_node_http_res_write", I32, &[I64, DOUBLE]);
+    // #4909: callback-aware write/end. chunk + raw (encoding?, callback?) tail;
+    // write returns a NaN-boxed bool (DOUBLE) for backpressure.
+    module.declare_function(
+        "js_node_http_res_write_full",
+        DOUBLE,
+        &[I64, DOUBLE, I64, I64],
+    );
     module.declare_function("js_node_http_res_add_trailers", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_end", VOID, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_node_http_res_end_full",
+        VOID,
+        &[I64, DOUBLE, I64, I64],
+    );
     module.declare_function("js_node_http_res_flush_headers", VOID, &[I64]);
     module.declare_function("js_node_http_res_cork", VOID, &[I64]);
     module.declare_function("js_node_http_res_uncork", VOID, &[I64]);
