@@ -41,8 +41,10 @@ pub mod collection_iter_object;
 pub mod color_parse;
 pub mod date;
 pub mod dgram;
+pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
+pub mod dns_resolver;
 pub mod error;
 pub mod event_pump;
 pub mod event_target;
@@ -380,6 +382,10 @@ mod stdlib_pump {
         // so it runs even when perry-stdlib isn't linked. Zero-cost (one relaxed
         // atomic load) when there are no live children.
         crate::child_process::reactor::cp_reactor_pump();
+        // #4911: deliver queued UDP datagrams as `'message'` events. Lives in
+        // perry-runtime so node:dgram works without perry-stdlib linked.
+        // Zero-cost (one relaxed load) when no sockets are bound.
+        crate::dgram_reactor::pump();
         crate::process::js_process_ipc_drain();
         let f = STDLIB_PUMP_FN.load(Ordering::Acquire);
         if !f.is_null() {
@@ -414,6 +420,10 @@ mod stdlib_pump {
         // #1934: a live spawn-reactor child keeps the event loop alive even when
         // perry-stdlib isn't linked (or reports no handles).
         if crate::child_process::reactor::cp_reactor_has_live() {
+            return 1;
+        }
+        // #4911: a bound + `ref`'d node:dgram socket keeps the loop alive.
+        if crate::dgram_reactor::has_active() {
             return 1;
         }
         if crate::process::js_process_ipc_has_active() != 0 {

@@ -1,12 +1,17 @@
 //! Runtime-only `node:dns` / `node:dns/promises` support.
 //!
-//! These helpers intentionally avoid external name resolution. They provide the
-//! Node-compatible surface Perry's fixtures need using deterministic loopback
-//! answers plus empty record sets for names we do not control.
+//! `lookup`/`lookupService` use the system resolver via `getaddrinfo`
+//! (`std::net::ToSocketAddrs`) and reverse DNS; `resolve*`/`reverse` issue
+//! real DNS queries through [`crate::dns_resolver`]. Setting
+//! `PERRY_DETERMINISTIC_NET=1` reverts every path to the old in-process
+//! loopback answers (no external name resolution) so byte-for-byte parity
+//! fixtures stay reproducible on machines without network access (#4911).
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{LazyLock, Mutex};
+
+use crate::dns_resolver::{self, Answer, DnsError, QueryType, ResolvedRecord};
 
 use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
@@ -655,65 +660,184 @@ fn mx_record(exchange: &str, priority: f64) -> f64 {
     object_value(&[("exchange", str_value(exchange)), ("priority", priority)])
 }
 
-fn any_address_record(address: &str, record_type: &str) -> f64 {
+fn any_address_record(address: &str, ttl: f64, record_type: &str) -> f64 {
     object_value(&[
         ("address", str_value(address)),
-        ("ttl", 0.0),
+        ("ttl", ttl),
         ("type", str_value(record_type)),
     ])
 }
 
-fn naptr_record() -> f64 {
+fn naptr_record(
+    flags: &str,
+    service: &str,
+    regexp: &str,
+    replacement: &str,
+    order: f64,
+    preference: f64,
+) -> f64 {
     object_value(&[
-        ("flags", str_value("")),
-        ("service", str_value("")),
-        ("regexp", str_value("")),
-        ("replacement", str_value("localhost")),
-        ("order", 0.0),
-        ("preference", 0.0),
+        ("flags", str_value(flags)),
+        ("service", str_value(service)),
+        ("regexp", str_value(regexp)),
+        ("replacement", str_value(replacement)),
+        ("order", order),
+        ("preference", preference),
     ])
 }
 
-fn soa_record() -> f64 {
+#[allow(clippy::too_many_arguments)]
+fn soa_record(
+    nsname: &str,
+    hostmaster: &str,
+    serial: f64,
+    refresh: f64,
+    retry: f64,
+    expire: f64,
+    minttl: f64,
+) -> f64 {
     object_value(&[
-        ("nsname", str_value("localhost")),
-        ("hostmaster", str_value("root.localhost")),
-        ("serial", 1.0),
-        ("refresh", 0.0),
-        ("retry", 0.0),
-        ("expire", 0.0),
-        ("minttl", 0.0),
+        ("nsname", str_value(nsname)),
+        ("hostmaster", str_value(hostmaster)),
+        ("serial", serial),
+        ("refresh", refresh),
+        ("retry", retry),
+        ("expire", expire),
+        ("minttl", minttl),
     ])
 }
 
-fn srv_record() -> f64 {
+fn srv_record(name: &str, port: f64, priority: f64, weight: f64) -> f64 {
     object_value(&[
-        ("name", str_value("localhost")),
-        ("port", 0.0),
-        ("priority", 0.0),
-        ("weight", 0.0),
+        ("name", str_value(name)),
+        ("port", port),
+        ("priority", priority),
+        ("weight", weight),
     ])
 }
 
-fn tlsa_record() -> f64 {
+fn tlsa_record(usage: f64, selector: f64, matching_type: f64, certificate: &str) -> f64 {
     object_value(&[
-        ("usage", 0.0),
-        ("selector", 0.0),
-        ("matchingType", 0.0),
-        ("certificate", str_value("")),
+        ("usage", usage),
+        ("selector", selector),
+        ("matchingType", matching_type),
+        ("certificate", str_value(certificate)),
     ])
+}
+
+fn caa_record(critical: f64, field: &str, value: &str) -> f64 {
+    object_value(&[("critical", critical), (field, str_value(value))])
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 fn localhost_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("localhost") || name.eq_ignore_ascii_case("localhost.")
 }
 
-fn resolve_records(kind: RecordKind, name: &str) -> f64 {
-    crate::error::stub_warn_or_throw(
-        "dns",
-        "loopback-only deterministic answers; no real DNS resolution",
-        Some("#4911"),
-    );
+/// Whether `PERRY_DETERMINISTIC_NET=1` is set — fall back to the in-process
+/// loopback answers instead of doing real DNS (#4911).
+fn deterministic() -> bool {
+    crate::stub_diag::deterministic_net_enabled()
+}
+
+/// Parse a stored nameserver string (already normalized by
+/// [`normalize_dns_server`] to `"ip"`, `"ip:port"`, or `"[v6]:port"`) into a
+/// `SocketAddr`, defaulting to port 53 for the bare-IP form.
+fn parse_server_socketaddr(server: &str) -> Option<SocketAddr> {
+    if let Ok(ip) = server.parse::<IpAddr>() {
+        return Some(SocketAddr::new(ip, 53));
+    }
+    server.parse::<SocketAddr>().ok()
+}
+
+fn socketaddrs_from(servers: &[String]) -> Vec<SocketAddr> {
+    servers
+        .iter()
+        .filter_map(|s| parse_server_socketaddr(s))
+        .collect()
+}
+
+/// Nameservers for the callback API — the user-set `dns.setServers` list, or
+/// empty (which makes [`dns_resolver`] fall back to the system resolvers).
+fn configured_servers() -> Vec<SocketAddr> {
+    socketaddrs_from(&stored_servers())
+}
+
+/// Nameservers for the `dns/promises` API (`dnsPromises.setServers`).
+fn configured_promise_servers() -> Vec<SocketAddr> {
+    socketaddrs_from(&stored_promise_servers())
+}
+
+fn query_type_for(kind: RecordKind) -> QueryType {
+    match kind {
+        RecordKind::A => QueryType::A,
+        RecordKind::Aaaa => QueryType::Aaaa,
+        RecordKind::Any => QueryType::Any,
+        RecordKind::Caa => QueryType::Caa,
+        RecordKind::Cname => QueryType::Cname,
+        RecordKind::Mx => QueryType::Mx,
+        RecordKind::Naptr => QueryType::Naptr,
+        RecordKind::Ns => QueryType::Ns,
+        RecordKind::Ptr => QueryType::Ptr,
+        RecordKind::Soa => QueryType::Soa,
+        RecordKind::Srv => QueryType::Srv,
+        RecordKind::Tlsa => QueryType::Tlsa,
+        RecordKind::Txt => QueryType::Txt,
+    }
+}
+
+/// The c-ares `syscall` label Node reports on a failed `resolve*`, used in
+/// the `${syscall} ${code} ${hostname}` error message.
+fn resolve_syscall(kind: RecordKind) -> &'static str {
+    match kind {
+        RecordKind::A => "queryA",
+        RecordKind::Aaaa => "queryAaaa",
+        RecordKind::Any => "queryAny",
+        RecordKind::Caa => "queryCaa",
+        RecordKind::Cname => "queryCname",
+        RecordKind::Mx => "queryMx",
+        RecordKind::Naptr => "queryNaptr",
+        RecordKind::Ns => "queryNs",
+        RecordKind::Ptr => "queryPtr",
+        RecordKind::Soa => "querySoa",
+        RecordKind::Srv => "querySrv",
+        RecordKind::Tlsa => "queryTlsa",
+        RecordKind::Txt => "queryTxt",
+    }
+}
+
+fn dns_error_code(err: DnsError) -> &'static str {
+    match err {
+        DnsError::NotFound => "ENOTFOUND",
+        DnsError::NoData => "ENODATA",
+        DnsError::ServFail => "ESERVFAIL",
+        DnsError::Refused => "EREFUSED",
+        DnsError::Timeout => "ETIMEOUT",
+        DnsError::BadResp => "EBADRESP",
+        DnsError::BadName => "EBADNAME",
+    }
+}
+
+fn resolve_error_value(kind: RecordKind, host: &str, err: DnsError) -> f64 {
+    let code = dns_error_code(err);
+    plain_error_value(&format!("{} {code} {host}", resolve_syscall(kind)), code)
+}
+
+fn reverse_error_value(host: &str, err: DnsError) -> f64 {
+    let code = dns_error_code(err);
+    plain_error_value(&format!("getHostByAddr {code} {host}"), code)
+}
+
+/// Deterministic-mode (`PERRY_DETERMINISTIC_NET=1`) loopback answers — the
+/// pre-#4911 behavior, kept for reproducible parity fixtures.
+fn deterministic_resolve_records(kind: RecordKind, name: &str) -> f64 {
     if !localhost_name(name) {
         return empty_array_value();
     }
@@ -722,32 +846,247 @@ fn resolve_records(kind: RecordKind, name: &str) -> f64 {
         RecordKind::A => string_array_value(&["127.0.0.1"]),
         RecordKind::Aaaa => string_array_value(&["::1"]),
         RecordKind::Any => array_value_from_values(&[
-            any_address_record("127.0.0.1", "A"),
-            any_address_record("::1", "AAAA"),
+            any_address_record("127.0.0.1", 0.0, "A"),
+            any_address_record("::1", 0.0, "AAAA"),
         ]),
         RecordKind::Caa => empty_array_value(),
         RecordKind::Cname => string_array_value(&["localhost"]),
         RecordKind::Mx => array_value_from_values(&[mx_record("localhost", 0.0)]),
-        RecordKind::Naptr => array_value_from_values(&[naptr_record()]),
+        RecordKind::Naptr => {
+            array_value_from_values(&[naptr_record("", "", "", "localhost", 0.0, 0.0)])
+        }
         RecordKind::Ns => string_array_value(&["localhost"]),
         RecordKind::Ptr => string_array_value(&["localhost"]),
-        RecordKind::Soa => soa_record(),
-        RecordKind::Srv => array_value_from_values(&[srv_record()]),
-        RecordKind::Tlsa => array_value_from_values(&[tlsa_record()]),
+        RecordKind::Soa => soa_record("localhost", "root.localhost", 1.0, 0.0, 0.0, 0.0, 0.0),
+        RecordKind::Srv => array_value_from_values(&[srv_record("localhost", 0.0, 0.0, 0.0)]),
+        RecordKind::Tlsa => array_value_from_values(&[tlsa_record(0.0, 0.0, 0.0, "")]),
         RecordKind::Txt => array_value_from_values(&[string_array_value(&["localhost"])]),
     }
 }
 
-fn reverse_records(name: &str) -> f64 {
-    crate::error::stub_warn_or_throw(
-        "dns",
-        "loopback-only deterministic answers; no real DNS resolution",
-        Some("#4911"),
-    );
-    match name.parse::<IpAddr>() {
-        Ok(IpAddr::V4(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
-        Ok(IpAddr::V6(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
-        _ => empty_array_value(),
+/// Build the Node-shaped JS value for `kind` from real resolved records.
+/// `resolveSoa` yields a single object; every other family yields an array.
+fn build_resolve_value(kind: RecordKind, records: &[ResolvedRecord]) -> f64 {
+    match kind {
+        RecordKind::A | RecordKind::Aaaa => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Addr(ip) => Some(str_value(&ip.to_string())),
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Cname | RecordKind::Ns | RecordKind::Ptr => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Name(name) => Some(str_value(name)),
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Mx => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Mx(mx) => Some(mx_record(&mx.exchange, mx.priority as f64)),
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Txt => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Txt(chunks) => {
+                        let strs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+                        Some(string_array_value(&strs))
+                    }
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Soa => records
+            .iter()
+            .find_map(|r| match &r.data {
+                Answer::Soa(soa) => Some(soa_record(
+                    &soa.nsname,
+                    &soa.hostmaster,
+                    soa.serial as f64,
+                    soa.refresh as f64,
+                    soa.retry as f64,
+                    soa.expire as f64,
+                    soa.minttl as f64,
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(empty_array_value),
+        RecordKind::Srv => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Srv(srv) => Some(srv_record(
+                        &srv.name,
+                        srv.port as f64,
+                        srv.priority as f64,
+                        srv.weight as f64,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Naptr => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Naptr(n) => Some(naptr_record(
+                        &n.flags,
+                        &n.service,
+                        &n.regexp,
+                        &n.replacement,
+                        n.order as f64,
+                        n.preference as f64,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Tlsa => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Tlsa(t) => Some(tlsa_record(
+                        t.usage as f64,
+                        t.selector as f64,
+                        t.matching_type as f64,
+                        &hex_encode(&t.certificate),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Caa => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| match &r.data {
+                    Answer::Caa(caa) => {
+                        Some(caa_record(caa.critical as f64, &caa.field, &caa.value))
+                    }
+                    _ => None,
+                })
+                .collect();
+            array_value_from_values(&values)
+        }
+        RecordKind::Any => {
+            let values: Vec<f64> = records.iter().map(build_any_record).collect();
+            array_value_from_values(&values)
+        }
+    }
+}
+
+/// One `resolveAny` element — Node tags each record with its `type`.
+fn build_any_record(record: &ResolvedRecord) -> f64 {
+    match &record.data {
+        Answer::Addr(ip) => any_address_record(&ip.to_string(), record.ttl as f64, record.rtype),
+        Answer::Name(name) => object_value(&[
+            ("type", str_value(record.rtype)),
+            ("value", str_value(name)),
+        ]),
+        Answer::Mx(mx) => object_value(&[
+            ("type", str_value("MX")),
+            ("exchange", str_value(&mx.exchange)),
+            ("priority", mx.priority as f64),
+        ]),
+        Answer::Txt(chunks) => {
+            let strs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+            object_value(&[
+                ("type", str_value("TXT")),
+                ("entries", string_array_value(&strs)),
+            ])
+        }
+        Answer::Soa(soa) => object_value(&[
+            ("type", str_value("SOA")),
+            ("nsname", str_value(&soa.nsname)),
+            ("hostmaster", str_value(&soa.hostmaster)),
+            ("serial", soa.serial as f64),
+            ("refresh", soa.refresh as f64),
+            ("retry", soa.retry as f64),
+            ("expire", soa.expire as f64),
+            ("minttl", soa.minttl as f64),
+        ]),
+        Answer::Srv(srv) => object_value(&[
+            ("type", str_value("SRV")),
+            ("name", str_value(&srv.name)),
+            ("port", srv.port as f64),
+            ("priority", srv.priority as f64),
+            ("weight", srv.weight as f64),
+        ]),
+        Answer::Naptr(n) => object_value(&[
+            ("type", str_value("NAPTR")),
+            ("flags", str_value(&n.flags)),
+            ("service", str_value(&n.service)),
+            ("regexp", str_value(&n.regexp)),
+            ("replacement", str_value(&n.replacement)),
+            ("order", n.order as f64),
+            ("preference", n.preference as f64),
+        ]),
+        Answer::Tlsa(t) => object_value(&[
+            ("type", str_value("TLSA")),
+            ("usage", t.usage as f64),
+            ("selector", t.selector as f64),
+            ("matchingType", t.matching_type as f64),
+            ("certificate", str_value(&hex_encode(&t.certificate))),
+        ]),
+        Answer::Caa(caa) => object_value(&[
+            ("type", str_value("CAA")),
+            ("critical", caa.critical as f64),
+            (caa.field.as_str(), str_value(&caa.value)),
+        ]),
+    }
+}
+
+/// Resolve `name`/`kind`, returning `Ok(js_value)` or `Err(js_error)`.
+/// Real DNS unless `PERRY_DETERMINISTIC_NET=1`.
+fn resolve_records_result(
+    kind: RecordKind,
+    name: &str,
+    servers: &[SocketAddr],
+) -> Result<f64, f64> {
+    if deterministic() {
+        return Ok(deterministic_resolve_records(kind, name));
+    }
+    match dns_resolver::resolve(name, query_type_for(kind), servers) {
+        Ok(records) => Ok(build_resolve_value(kind, &records)),
+        Err(err) => Err(resolve_error_value(kind, name, err)),
+    }
+}
+
+fn reverse_records_result(name: &str, servers: &[SocketAddr]) -> Result<f64, f64> {
+    if deterministic() {
+        return Ok(match name.parse::<IpAddr>() {
+            Ok(IpAddr::V4(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
+            Ok(IpAddr::V6(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
+            _ => empty_array_value(),
+        });
+    }
+    let ip = match name.parse::<IpAddr>() {
+        Ok(ip) => ip,
+        Err(_) => return Err(invalid_address_error(str_value(name))),
+    };
+    match dns_resolver::reverse(ip, servers) {
+        Ok(names) => {
+            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+            Ok(string_array_value(&refs))
+        }
+        Err(err) => Err(reverse_error_value(name, err)),
     }
 }
 
@@ -823,7 +1162,10 @@ fn parse_lookup_options(value: f64) -> Result<LookupOptions, f64> {
     ))
 }
 
-fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>, f64> {
+fn deterministic_lookup_addresses(
+    hostname: &str,
+    family: i32,
+) -> Result<Vec<ResolvedAddress>, f64> {
     if localhost_name(hostname) {
         return Ok(match family {
             4 => vec![ipv4_loopback_address()],
@@ -841,6 +1183,59 @@ fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>,
         }
     }
     Err(dns_not_found_error(hostname))
+}
+
+/// Reorder loopback/getaddrinfo results to honor `dns.setDefaultResultOrder`.
+/// `sort_by_key` is stable, so within a family the resolver's order is kept
+/// (verbatim leaves the list untouched).
+fn apply_result_order(addresses: &mut [ResolvedAddress]) {
+    match DEFAULT_RESULT_ORDER.load(Ordering::Relaxed) {
+        RESULT_ORDER_IPV4_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 4)),
+        RESULT_ORDER_IPV6_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 6)),
+        _ => {}
+    }
+}
+
+fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>, f64> {
+    if deterministic() {
+        return deterministic_lookup_addresses(hostname, family);
+    }
+    // Node returns IP literals verbatim without consulting the resolver.
+    if let Ok(addr) = hostname.parse::<IpAddr>() {
+        let resolved_family = if addr.is_ipv4() { 4 } else { 6 };
+        if family == 0 || family == resolved_family {
+            return Ok(vec![ResolvedAddress {
+                address: hostname.to_string(),
+                family: resolved_family,
+            }]);
+        }
+        return Err(dns_not_found_error(hostname));
+    }
+    // Real getaddrinfo: the port is irrelevant, so use 0.
+    let Ok(iter) = (hostname, 0u16).to_socket_addrs() else {
+        return Err(dns_not_found_error(hostname));
+    };
+    let mut addresses: Vec<ResolvedAddress> = Vec::new();
+    for socket_addr in iter {
+        let ip = socket_addr.ip();
+        let resolved_family = if ip.is_ipv4() { 4 } else { 6 };
+        if family != 0 && family != resolved_family {
+            continue;
+        }
+        let address = ip.to_string();
+        // getaddrinfo can repeat an address once per socktype; dedup.
+        if !addresses.iter().any(|a| a.address == address) {
+            addresses.push(ResolvedAddress {
+                address,
+                family: resolved_family,
+            });
+        }
+    }
+    if addresses.is_empty() {
+        return Err(dns_not_found_error(hostname));
+    }
+    apply_result_order(&mut addresses);
+    Ok(addresses)
 }
 
 fn lookup_result(address: &ResolvedAddress) -> f64 {
@@ -873,11 +1268,6 @@ fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, f64> {
 }
 
 fn lookup_callback_values(hostname: &str, options: LookupOptions) -> Result<Vec<f64>, f64> {
-    crate::error::stub_warn_or_throw(
-        "dns",
-        "loopback-only deterministic answers; no real DNS resolution",
-        Some("#4911"),
-    );
     let addresses = lookup_addresses(hostname, options.family)?;
     if options.all {
         Ok(vec![null_value(), lookup_all_result(&addresses)])
@@ -919,16 +1309,29 @@ fn service_for_port(port: u16) -> String {
 }
 
 fn lookup_service_result(address: &str, port: u16) -> Result<(String, String), f64> {
-    crate::error::stub_warn_or_throw(
-        "dns",
-        "loopback-only deterministic answers; no real DNS resolution",
-        Some("#4911"),
-    );
-    match address.parse::<IpAddr>() {
-        Ok(addr) if addr.is_loopback() => Ok(("localhost".to_string(), service_for_port(port))),
-        Ok(_) => Ok((address.to_string(), service_for_port(port))),
-        Err(_) => Err(invalid_address_error(str_value(address))),
+    if deterministic() {
+        return match address.parse::<IpAddr>() {
+            Ok(addr) if addr.is_loopback() => Ok(("localhost".to_string(), service_for_port(port))),
+            Ok(_) => Ok((address.to_string(), service_for_port(port))),
+            Err(_) => Err(invalid_address_error(str_value(address))),
+        };
     }
+    let Ok(ip) = address.parse::<IpAddr>() else {
+        return Err(invalid_address_error(str_value(address)));
+    };
+    // getnameinfo-style: reverse-resolve the host (numeric address when there
+    // is no PTR record), and map the port to a service name. Loopback resolves
+    // to "localhost" like getnameinfo does via /etc/hosts (a PTR query to the
+    // upstream resolver would not know the loopback zone).
+    let hostname = if ip.is_loopback() {
+        "localhost".to_string()
+    } else {
+        dns_resolver::reverse(ip, &configured_servers())
+            .ok()
+            .and_then(|names| names.into_iter().next())
+            .unwrap_or_else(|| address.to_string())
+    };
+    Ok((hostname, service_for_port(port)))
 }
 
 fn lookup_service_object(hostname: &str, service: &str) -> f64 {
@@ -1016,17 +1419,28 @@ fn call_success_callback(callback: f64, value: f64) {
     }
 }
 
+fn call_error_callback(callback: f64, error: f64) {
+    let args = [error];
+    unsafe {
+        crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+    }
+}
+
 fn dns_callback_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
     let (name, kind, callback) = callback_record_args(args, default_kind);
-    let result = resolve_records(kind, &name);
-    call_success_callback(callback, result);
+    match resolve_records_result(kind, &name, &configured_servers()) {
+        Ok(value) => call_success_callback(callback, value),
+        Err(error) => call_error_callback(callback, error),
+    }
     undefined_value()
 }
 
 fn dns_callback_reverse(args: i64) -> f64 {
     let (name, callback) = callback_reverse_args(args);
-    let result = reverse_records(&name);
-    call_success_callback(callback, result);
+    match reverse_records_result(&name, &configured_servers()) {
+        Ok(value) => call_success_callback(callback, value),
+        Err(error) => call_error_callback(callback, error),
+    }
     undefined_value()
 }
 
@@ -1043,12 +1457,18 @@ fn promise_rejected_value(reason: f64) -> f64 {
 fn dns_promise_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
     let (name, kind) =
         promise_record_args(args, default_kind).unwrap_or_else(|error| throw_error_value(error));
-    promise_value(resolve_records(kind, &name))
+    match resolve_records_result(kind, &name, &configured_promise_servers()) {
+        Ok(value) => promise_value(value),
+        Err(error) => promise_rejected_value(error),
+    }
 }
 
 fn dns_promise_reverse(args: i64) -> f64 {
     let name = promise_reverse_args(args);
-    promise_value(reverse_records(&name))
+    match reverse_records_result(&name, &configured_promise_servers()) {
+        Ok(value) => promise_value(value),
+        Err(error) => promise_rejected_value(error),
+    }
 }
 
 extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader) -> f64 {
