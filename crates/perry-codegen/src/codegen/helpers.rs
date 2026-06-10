@@ -861,45 +861,28 @@ pub(super) fn emit_namespace_populator(
                 source_local,
                 param_count,
             } => {
-                // Mirror the consumer-side `__perry_wrap_extern_*` pattern
-                // that the top of compile_module emits when this module
-                // imports the function the regular way. We can re-emit
-                // it inline here (DCE removes duplicates if the same
-                // import is also referenced by `import { x } from`).
-                let target_name = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
-                let param_types: Vec<crate::types::LlvmType> =
-                    std::iter::repeat_n(DOUBLE, *param_count).collect();
-                ctx.pending_declares
-                    .push((target_name.clone(), DOUBLE, param_types));
-                // Singleton-allocate against the closure global for this
-                // foreign function. The global is emitted by the
-                // `import_function_prefixes` block if this module also
-                // statically imports the function; otherwise we declare
-                // it as external and rely on the source module's
-                // export-side closure ptr (if any). For correctness in
-                // the dynamic-import-only case, fall back to the safer
-                // path: alloc a fresh per-callsite ClosureHeader via a
-                // dedicated wrapper. Simplest implementation: emit our
-                // own internal wrapper here under a unique name.
+                // Function-shaped re-exports must materialize a function
+                // value, not call the function while building the namespace.
+                // Source modules emit `__perry_wrap_perry_fn_<src>__<name>`
+                // for every user function; hand that wrapper to the same
+                // singleton allocator used by local function exports.
                 let wrapper_name = format!(
-                    "__perry_wrap_ns_extern_{}__{}__{}",
-                    module_prefix,
+                    "__perry_wrap_perry_fn_{}__{}",
                     source_prefix,
                     sanitize(source_local)
                 );
-                // Lazy-add the wrapper to pending_declares so we don't
-                // try to define it twice if the namespace populates
-                // multiple times in the same module (it shouldn't, but
-                // defensive). The wrapper actually needs to be DEFINED
-                // not declared — but pending_declares only declares.
-                // To keep this PR focused, fall back to calling the
-                // getter even for functions: returns the f64 value
-                // (closure pointer if the source side emitted a
-                // wrapper-returning getter; undefined otherwise). For
-                // proper function-value re-export, the static-import
-                // path already covers it.
-                ctx.pending_declares.push((wrapper_name, DOUBLE, vec![]));
-                ctx.block().call(DOUBLE, &target_name, &[])
+                let arity = (*param_count).min(16);
+                let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
+                wrapper_params.extend(std::iter::repeat_n(DOUBLE, arity));
+                ctx.pending_declares
+                    .push((wrapper_name.clone(), DOUBLE, wrapper_params));
+                let blk = ctx.block();
+                let handle = blk.call(
+                    I64,
+                    "js_closure_alloc_singleton",
+                    &[(PTR, &format!("@{}", wrapper_name))],
+                );
+                crate::expr::nanbox_pointer_inline(blk, &handle)
             }
             NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
                 .block()

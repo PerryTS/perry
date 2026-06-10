@@ -1440,12 +1440,16 @@ where
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             f(url);
             f(method);
             f(body);
             for (_, v) in headers {
                 f(v);
+            }
+            if let Some(hd) = headers_dynamic {
+                f(hd);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {

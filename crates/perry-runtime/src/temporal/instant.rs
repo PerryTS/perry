@@ -41,17 +41,52 @@ fn require_ns(v: f64) -> i128 {
         if t.is_empty() {
             return 0;
         }
-        return t.parse::<i128>().unwrap_or_else(|_| {
-            crate::fs::validate::throw_range_error_with_code("Cannot convert string to a BigInt")
-        });
+        // `StringToBigInt` failure is a **SyntaxError** (`new Temporal.Instant("abc123")`),
+        // not a RangeError — invalid BigInt *syntax* is a parse error. A
+        // syntactically-valid but out-of-i128-range string still rejects below
+        // (and `Instant::try_new` then range-checks the value itself).
+        return t.parse::<i128>().unwrap_or_else(|_| throw_bigint_syntax());
     }
     crate::object::throw_object_type_error(
         b"Cannot convert value to a BigInt for Temporal.Instant epoch-nanoseconds",
     )
 }
 
+/// Throw a JS `SyntaxError` for a string that is not valid BigInt syntax
+/// (`StringToBigInt` failure), matching Node's `new Temporal.Instant("abc123")`.
+fn throw_bigint_syntax() -> ! {
+    let msg = b"Cannot convert string to a BigInt";
+    let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_syntaxerror_new(msg_str);
+    crate::exception::js_throw(f64::from_bits(
+        JSValue::pointer(err_ptr as *const u8).bits(),
+    ))
+}
+
+/// `ToNumber(epochMilliseconds)` then `NumberToBigInt`: a BigInt or Symbol is a
+/// `TypeError` (abstract `ToNumber` rejects them), and a non-integral Number
+/// (`Infinity`/`NaN`/`1.3`/`undefined`→NaN) is a `RangeError` (`NumberToBigInt`
+/// requires an integral Number). `valueOf` is observed for objects.
+fn epoch_number_to_integer(raw: f64) -> i64 {
+    let jv = JSValue::from_bits(raw.to_bits());
+    if jv.is_bigint() {
+        crate::object::throw_object_type_error(b"Cannot convert a BigInt value to a number");
+    }
+    if unsafe { crate::symbol::js_is_symbol(raw) } != 0 {
+        crate::object::throw_object_type_error(b"Cannot convert a Symbol value to a number");
+    }
+    let n = crate::builtins::js_number_coerce(raw);
+    if !n.is_finite() || n.fract() != 0.0 {
+        crate::fs::validate::throw_range_error_with_code(
+            "epochMilliseconds must be an integral Number",
+        );
+    }
+    n as i64
+}
+
 /// `new Temporal.Instant(epochNanoseconds: bigint)`.
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
     wrap(ok_or_throw(Instant::try_new(require_ns(raw_arg(args, 0)))))
 }
 
@@ -91,8 +126,8 @@ pub fn from_static(args: &[f64]) -> f64 {
 }
 
 pub fn from_epoch_milliseconds_static(args: &[f64]) -> f64 {
-    let ms = JSValue::from_bits(raw_arg(args, 0).to_bits()).to_number();
-    wrap(ok_or_throw(Instant::from_epoch_milliseconds(ms as i64)))
+    let ms = epoch_number_to_integer(raw_arg(args, 0));
+    wrap(ok_or_throw(Instant::from_epoch_milliseconds(ms)))
 }
 
 pub fn from_epoch_nanoseconds_static(args: &[f64]) -> f64 {

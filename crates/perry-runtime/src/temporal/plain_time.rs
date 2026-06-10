@@ -3,7 +3,7 @@
 //! Wall-clock time with no date or timezone. No calendar, so the plainest of
 //! the plain types.
 
-use super::dispatch::{self, field_u16, field_u8, int_arg, ok_or_throw, raw_arg, string};
+use super::dispatch::{self, field_u16, field_u8, ok_or_throw, raw_arg, string};
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
 use temporal_rs::options::ToStringRoundingOptions;
@@ -15,17 +15,25 @@ fn wrap(t: PlainTime) -> f64 {
     alloc_temporal_cell(TemporalValue::PlainTime(t))
 }
 
+/// `ToIntegerWithTruncation` for an optional `PlainTime` constructor field
+/// (absent / `undefined` → 0), as an `i64`. Real `ToNumber` observes `valueOf`
+/// and rejects `Infinity`/`NaN` with a `RangeError` at the field's read position.
+fn time_field(args: &[f64], i: usize) -> i64 {
+    dispatch::optional_integer_with_truncation(raw_arg(args, i))
+}
+
 /// `new Temporal.PlainTime(hour?, minute?, second?, ms?, µs?, ns?)`. Out-of-range
 /// fields saturate via `field_u8`/`field_u16` so `try_new` rejects them (an `as
 /// u8` cast on the raw i64 would *wrap* `256` back to `0` and accept it).
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
     wrap(ok_or_throw(PlainTime::try_new(
-        field_u8(int_arg(args, 0)),
-        field_u8(int_arg(args, 1)),
-        field_u8(int_arg(args, 2)),
-        field_u16(int_arg(args, 3)),
-        field_u16(int_arg(args, 4)),
-        field_u16(int_arg(args, 5)),
+        field_u8(time_field(args, 0)),
+        field_u8(time_field(args, 1)),
+        field_u8(time_field(args, 2)),
+        field_u16(time_field(args, 3)),
+        field_u16(time_field(args, 4)),
+        field_u16(time_field(args, 5)),
     )))
 }
 
@@ -40,8 +48,15 @@ fn coerce_time(v: f64) -> PlainTime {
 /// no recognized time field, or any non-string primitive (number / bigint /
 /// boolean / null / symbol), throws TypeError; a malformed string → RangeError.
 fn coerce_time_overflow(v: f64, overflow: temporal_rs::options::Overflow) -> PlainTime {
-    if let Some(TemporalValue::PlainTime(t)) = temporal_value_ref(v) {
-        return *t;
+    // A `PlainTime` / `PlainDateTime` / `ZonedDateTime` supplies its time via
+    // its internal slot — NO observable property getter calls
+    // (`argument-plaindatetime`'s fast-path assertion). Reading `hour`…`second`
+    // off such a value as a bag (the old fallthrough) called the getters.
+    match temporal_value_ref(v) {
+        Some(TemporalValue::PlainTime(t)) => return *t,
+        Some(TemporalValue::PlainDateTime(dt)) => return dt.to_plain_time(),
+        Some(TemporalValue::ZonedDateTime(z)) => return z.to_plain_time(),
+        _ => {}
     }
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
@@ -79,30 +94,56 @@ fn coerce_time_overflow(v: f64, overflow: temporal_rs::options::Overflow) -> Pla
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
-    // `from(item, options)` — `GetTemporalOverflowOption` is consulted only on
-    // the property-bag path; a string item is parsed first (so an invalid string
-    // throws RangeError before the `overflow` getter is observed). The options
-    // bag is still type-checked for every item kind.
+    // `ToTemporalTime(item, options)`. A string is parsed FIRST (invalid →
+    // `RangeError`) and only then is `overflow` read (so a bad string throws
+    // before a wrong-typed `options` would); a `PlainTime` / `PlainDateTime` /
+    // `ZonedDateTime` takes its time slot directly (after reading `overflow`,
+    // which validates `options`); a property bag reads its time fields, then
+    // `overflow` LAST.
     let item = raw_arg(args, 0);
     let opts = raw_arg(args, 1);
-    let overflow = if is_time_property_bag(item) {
-        super::options::overflow(opts).unwrap_or_default()
-    } else {
-        let _ = super::options::require_options_object(opts);
-        temporal_rs::options::Overflow::Constrain
-    };
-    wrap(coerce_time_overflow(item, overflow))
-}
-
-/// True if `v` is a plain object (not a Temporal value, not a Symbol) — i.e. a
-/// property bag that ToTemporalTime would read fields from (and thus read the
-/// `overflow` option for).
-fn is_time_property_bag(v: f64) -> bool {
-    let jv = JSValue::from_bits(v.to_bits());
-    if !jv.is_pointer() || temporal_value_ref(v).is_some() {
-        return false;
+    if JSValue::from_bits(item.to_bits()).is_string() {
+        let t = ok_or_throw(dispatch::read_string(item).parse::<PlainTime>());
+        let _ = super::options::overflow(opts);
+        return wrap(t);
     }
-    !crate::symbol::is_registered_symbol(jv.as_pointer::<u8>() as usize)
+    match temporal_value_ref(item) {
+        Some(TemporalValue::PlainTime(t)) => {
+            let _ = super::options::overflow(opts);
+            return wrap(*t);
+        }
+        Some(TemporalValue::PlainDateTime(dt)) => {
+            let _ = super::options::overflow(opts);
+            return wrap(dt.to_plain_time());
+        }
+        Some(TemporalValue::ZonedDateTime(z)) => {
+            let _ = super::options::overflow(opts);
+            return wrap(z.to_plain_time());
+        }
+        Some(_) => crate::object::throw_object_type_error(
+            b"Cannot convert this Temporal value to a Temporal.PlainTime",
+        ),
+        None => {}
+    }
+    let jv = JSValue::from_bits(item.to_bits());
+    if jv.is_pointer() && !crate::symbol::is_registered_symbol(jv.as_pointer::<u8>() as usize) {
+        let obj = jv.as_pointer::<crate::object::ObjectHeader>();
+        if !obj.is_null() {
+            let partial = super::options::partial_time(obj);
+            // `ToTemporalTime` of a bag with NO recognized time field → TypeError
+            // (`PrepareTemporalFields` requires ≥1 field), BEFORE `overflow`.
+            if partial.is_empty() {
+                crate::object::throw_object_type_error(
+                    b"object is not a valid Temporal.PlainTime property bag (no time fields)",
+                );
+            }
+            let overflow =
+                super::options::overflow(opts).unwrap_or(temporal_rs::options::Overflow::Constrain);
+            let base = ok_or_throw(PlainTime::try_new(0, 0, 0, 0, 0, 0));
+            return wrap(ok_or_throw(base.with(partial, Some(overflow))));
+        }
+    }
+    crate::object::throw_object_type_error(b"Cannot convert value to a Temporal.PlainTime")
 }
 
 pub fn compare_static(args: &[f64]) -> f64 {
@@ -156,7 +197,7 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let partial = super::options::partial_time(obj);
+            let partial = super::options::with_partial_time(obj);
             let overflow = super::options::overflow(raw_arg(args, 1));
             wrap(ok_or_throw(t.with(partial, overflow)))
         }

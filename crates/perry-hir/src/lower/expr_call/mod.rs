@@ -366,6 +366,20 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                 args,
                             });
                         }
+                        // `super['getThis']()` in a CLASS method with a string-
+                        // literal key is a super METHOD CALL — route it through
+                        // SuperMethodCall (the ident-form path) so it binds the
+                        // current `this` as receiver. Without this it fell through
+                        // to a generic property-get-then-call that lost the
+                        // receiver binding (test262 super/prop-expr-cls-ref-this).
+                        if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
+                            if let Some(method) = s.value.as_str() {
+                                return Ok(Expr::SuperMethodCall {
+                                    method: method.to_string(),
+                                    args,
+                                });
+                            }
+                        }
                     }
                 }
             }

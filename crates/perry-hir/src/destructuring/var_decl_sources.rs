@@ -68,23 +68,43 @@ pub(super) fn destructure_builtin_module_source(
     None
 }
 
-/// #3663: register destructured stream constructors as native-module aliases.
+/// #3663 / #4905: register destructured builtin-module members as
+/// native-module aliases, mirroring what ESM named imports get
+/// generically in `module_decl.rs` (`import { connect } from 'net'`).
+/// Without the alias, the binding only holds the runtime property read
+/// off the reified module object — which is `undefined` for exports
+/// whose value-read path isn't reified (`net.connect`), so the
+/// canonical CJS corpus idiom `const { connect } = require('net')`
+/// threw `value is not a function` at the call site.
+///
+/// Returns the binding names that must NOT also bind a runtime local:
+/// a local would shadow the alias at call sites (the call lowers as a
+/// closure call of the undefined local instead of the native-table
+/// row). ESM named imports never create a local, so skipping the
+/// binding is exact parity. Stream ctors keep their local (their
+/// runtime member read works, and #3663 shipped with it).
 pub(super) fn register_destructured_stream_ctors(
     ctx: &mut LoweringContext,
     decl: &ast::VarDeclarator,
-) {
+) -> Vec<String> {
     let ast::Pat::Object(obj_pat) = &decl.name else {
-        return;
+        return Vec::new();
     };
     let Some(init) = decl.init.as_deref() else {
-        return;
+        return Vec::new();
     };
     let Some(module) = destructure_builtin_module_source(ctx, init) else {
-        return;
+        return Vec::new();
     };
-    if module != "stream" {
-        return;
-    }
+    let allowed: &[&str] = match module.as_str() {
+        "stream" => &STREAM_CTOR_NAMES,
+        // #4905: net's factory exports — call sites lower through the
+        // static native table rows, so the alias works even though the
+        // runtime member read is undefined.
+        "net" => &["connect", "createConnection"],
+        _ => return Vec::new(),
+    };
+    let mut skip_local_bindings = Vec::new();
     for prop in &obj_pat.props {
         let (key, binding) = match prop {
             ast::ObjectPatProp::Assign(assign) => {
@@ -104,8 +124,12 @@ pub(super) fn register_destructured_stream_ctors(
             }
             _ => continue,
         };
-        if STREAM_CTOR_NAMES.contains(&key.as_str()) {
-            ctx.register_native_module(binding, "stream".to_string(), Some(key));
+        if allowed.contains(&key.as_str()) {
+            ctx.register_native_module(binding.clone(), module.clone(), Some(key));
+            if module == "net" {
+                skip_local_bindings.push(binding);
+            }
         }
     }
+    skip_local_bindings
 }

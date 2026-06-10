@@ -126,6 +126,14 @@ fn throw_module_not_found(specifier: &str) -> ! {
     crate::fs::validate::throw_error_with_code(&message, "MODULE_NOT_FOUND")
 }
 
+fn throw_unsupported_package_require(specifier: &str) -> ! {
+    let message = format!(
+        "Perry createRequire() currently supports built-in modules only; package/file require('{}') is not supported under perry compile. Use ESM import syntax and perry.compilePackages instead.",
+        specifier
+    );
+    crate::fs::validate::throw_error_with_code(&message, "ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE")
+}
+
 extern "C" fn require_thunk(_closure: *const ClosureHeader, id: f64) -> f64 {
     let specifier = value_to_string(id, "id");
     if specifier.is_empty() {
@@ -133,7 +141,7 @@ extern "C" fn require_thunk(_closure: *const ClosureHeader, id: f64) -> f64 {
         crate::fs::validate::throw_type_error_with_code(message, "ERR_INVALID_ARG_VALUE");
     }
     let Some(module_name) = supported_require_builtin(&specifier) else {
-        throw_module_not_found(&specifier);
+        throw_unsupported_package_require(&specifier);
     };
     require_builtin_value(module_name)
 }

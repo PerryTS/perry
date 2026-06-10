@@ -1308,6 +1308,30 @@ pub unsafe extern "C" fn js_get_function_prototype_method(
         Ok(s) => s,
         Err(_) => return undef,
     };
+    // `f.prototype.constructor` — a *data* property (the prototype's back-pointer
+    // to its constructor), not a registered method, so `lookup_prototype_method`
+    // never finds it and the method allowlist below excludes it. When the inline
+    // `<funcref>.prototype.constructor` read folds to this entry (no separate
+    // `.prototype` access ran to allocate the synthetic class id), `cid` is 0 and
+    // the function returned `undefined`. Route through the real prototype value —
+    // `js_function_prototype_value_for_read` materializes the auto-created
+    // prototype (whose `constructor` is `func_value`) or returns a replaced
+    // `f.prototype = X` — then read its `constructor` field. (Spec
+    // language/statements/function/S13.2_A4_*, S13.2.2_A1_*.)
+    if name == "constructor" {
+        let proto_val = js_function_prototype_value_for_read(func_value);
+        let jv = crate::value::JSValue::from_bits(proto_val.to_bits());
+        if !jv.is_pointer() {
+            return undef;
+        }
+        let pptr = jv.as_pointer::<ObjectHeader>();
+        if pptr.is_null() {
+            return undef;
+        }
+        let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+        let v = js_object_get_field_by_name(pptr, key as *const crate::StringHeader);
+        return f64::from_bits(v.bits());
+    }
     // Look up the (already-allocated) synthetic class id for this
     // function value. Don't allocate one here — reads on a function
     // that never had any `.prototype.x = fn` assignment should
@@ -1618,7 +1642,24 @@ pub unsafe extern "C" fn js_new_function_construct(
                 _ => unreachable!(),
             };
         }
-        if module == "http" && method == "OutgoingMessage" {
+        // #4904: `new http.Agent(opts)` / `new http.ClientRequest(opts)` /
+        // `new http.IncomingMessage(socket)` / `new http.ServerResponse(req)`
+        // (and `new https.Agent(opts)`) through any value-aliasing path —
+        // `const { Agent } = require('http')`, `const CR =
+        // http.ClientRequest`, etc. The bound export value carries
+        // (module, method); forward construction to the stdlib http
+        // dispatcher exactly like `OutgoingMessage` below.
+        if (module == "http"
+            && matches!(
+                method.as_str(),
+                "OutgoingMessage"
+                    | "Agent"
+                    | "ClientRequest"
+                    | "IncomingMessage"
+                    | "ServerResponse"
+            ))
+            || (module == "https" && method == "Agent")
+        {
             let ptr =
                 crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
             if !ptr.is_null() {
@@ -1631,8 +1672,8 @@ pub unsafe extern "C" fn js_new_function_construct(
                     usize,
                 ) -> f64 = std::mem::transmute(ptr);
                 return dispatch(
-                    b"http".as_ptr(),
-                    "http".len(),
+                    module.as_ptr(),
+                    module.len(),
                     method.as_ptr(),
                     method.len(),
                     args_ptr,

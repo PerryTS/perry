@@ -372,9 +372,9 @@ Total: 2781 entries across 114 modules.
 ### Methods
 
 - `disconnect` — module
-- `fork` — module
-- `setupMaster` — module
-- `setupPrimary` — module
+- `fork` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
+- `setupMaster` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
+- `setupPrimary` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
 
 ### Properties
 
@@ -1200,7 +1200,7 @@ Total: 2781 entries across 114 modules.
 
 ### Methods
 
-- `backOff` — module
+- `backOff` — module ⚠ **stub** — retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917)
 
 ## `fastify`
 
@@ -1521,7 +1521,7 @@ Total: 2781 entries across 114 modules.
 - `createServer` — module
 - `createServer` — module
 - `defaultPort` — instance *(class: `Agent`)*
-- `destroy` — instance *(class: `Agent`)*
+- `destroy` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `destroy` — instance *(class: `ClientRequest`)*
 - `destroyed` — instance *(class: `Agent`)*
@@ -1548,7 +1548,7 @@ Total: 2781 entries across 114 modules.
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
-- `keepSocketAlive` — instance *(class: `Agent`)*
+- `keepSocketAlive` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
 - `listen` — instance *(class: `HttpServer`)*
 - `listenerCount` — instance *(class: `ClientRequest`)*
 - `listening` — instance *(class: `HttpServer`)*
@@ -1570,7 +1570,7 @@ Total: 2781 entries across 114 modules.
 - `requestTimeout` — instance *(class: `HttpServer`)*
 - `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
-- `reuseSocket` — instance *(class: `Agent`)*
+- `reuseSocket` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
 - `setEncoding` — instance *(class: `IncomingMessage`)*
 - `setGlobalProxyFromEnv` — module
 - `setHeader` — instance *(class: `ClientRequest`)*
@@ -1882,7 +1882,7 @@ Total: 2781 entries across 114 modules.
 - `deleteMany` — instance
 - `deleteOne` — instance
 - `find` — instance
-- `findOne` — instance
+- `findOne` — instance ⚠ **stub** — resolves a JSON string, not a document object (#4917)
 - `insertMany` — instance
 - `insertOne` — instance
 - `updateMany` — instance
@@ -3105,14 +3105,14 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy`
+- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
 - `CompressionStream`
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableByteStreamController`
 - `ReadableStream`
-- `ReadableStreamBYOBReader`
-- `ReadableStreamBYOBRequest`
+- `ReadableStreamBYOBReader` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ReadableStreamBYOBRequest` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
 - `ReadableStreamDefaultController`
 - `ReadableStreamDefaultReader`
 - `TextDecoderStream`
@@ -3131,7 +3131,7 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy`
+- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableStream`
@@ -3515,7 +3515,7 @@ Total: 2781 entries across 114 modules.
 - `deserialize` — module
 - `getCppHeapStatistics` — module
 - `getHeapCodeStatistics` — module
-- `getHeapSnapshot` — module
+- `getHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
@@ -3543,7 +3543,7 @@ Total: 2781 entries across 114 modules.
 - `takeCoverage` — module
 - `writeDouble` — instance *(class: `Serializer`)*
 - `writeHeader` — instance *(class: `Serializer`)*
-- `writeHeapSnapshot` — module
+- `writeHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
 - `writeRawBytes` — instance *(class: `Serializer`)*
 - `writeUint32` — instance *(class: `Serializer`)*
 - `writeUint64` — instance *(class: `Serializer`)*
@@ -3644,12 +3644,12 @@ Total: 2781 entries across 114 modules.
 - `once` — instance *(class: `Worker`)*
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
-- `ref` — instance *(class: `Worker`)*
+- `ref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
 - `setEnvironmentData` — module
 - `startCpuProfile` — instance *(class: `Worker`)*
 - `startHeapProfile` — instance *(class: `Worker`)*
 - `terminate` — instance *(class: `Worker`)*
-- `unref` — instance *(class: `Worker`)*
+- `unref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
 
 ### Properties
 
@@ -3725,17 +3725,17 @@ Total: 2781 entries across 114 modules.
 - `brotliDecompress` — module
 - `brotliDecompressSync` — module
 - `crc32` — module
-- `createBrotliCompress` — module
-- `createBrotliDecompress` — module
-- `createDeflate` — module
-- `createDeflateRaw` — module
-- `createGunzip` — module
-- `createGzip` — module
-- `createInflate` — module
-- `createInflateRaw` — module
-- `createUnzip` — module
-- `createZstdCompress` — module
-- `createZstdDecompress` — module
+- `createBrotliCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createBrotliDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createDeflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createDeflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createGunzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createGzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createInflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createInflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createUnzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createZstdCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createZstdDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
 - `deflate` — module
 - `deflateRaw` — module
 - `deflateRawSync` — module

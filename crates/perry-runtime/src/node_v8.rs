@@ -340,6 +340,11 @@ pub extern "C" fn js_v8_cached_data_version_tag() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_v8_get_heap_snapshot(options: f64) -> f64 {
     validate_heap_snapshot_options(options);
+    crate::error::stub_warn_or_throw(
+        "v8.getHeapSnapshot",
+        "emits an empty-but-valid V8 heap graph, not a real snapshot of live objects (see PERRY_GC_DIAG=1)",
+        Some("#4916"),
+    );
     snapshot_readable_stream()
 }
 
@@ -357,6 +362,11 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
         }
     };
     validate_heap_snapshot_options(options);
+    crate::error::stub_warn_or_throw(
+        "v8.writeHeapSnapshot",
+        "writes an empty-but-valid V8 heap graph, not a real snapshot of live objects (see PERRY_GC_DIAG=1)",
+        Some("#4916"),
+    );
     match std::fs::write(&path, V8_HEAP_SNAPSHOT_JSON.as_bytes()) {
         Ok(()) => string_value(&path),
         Err(err) => unsafe {

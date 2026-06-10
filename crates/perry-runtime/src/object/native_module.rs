@@ -3657,10 +3657,17 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("http2", "connect") => Some(3),
         ("http2", "createServer" | "createSecureServer") => Some(2),
         ("http", "OutgoingMessage") => Some(1),
+        // #4904: Node `.length` — Agent(options)=1, ClientRequest(input,
+        // options, cb)=3, IncomingMessage(socket)=1, ServerResponse(req)=1.
+        ("http", "Agent" | "IncomingMessage" | "ServerResponse") => Some(1),
+        ("http", "ClientRequest") => Some(3),
         // #3697: node:https module-level exports (Node `.length`).
         ("https", "request") => Some(0),
         ("https", "get") => Some(3),
         ("https", "Agent") => Some(1),
+        // #4904: http twins of the https entries above.
+        ("http", "request") => Some(0),
+        ("http", "get") => Some(3),
         (
             "stream",
             "isDestroyed"
@@ -5608,6 +5615,21 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http", "createServer")
             | ("http", "Server")
             | ("http", "OutgoingMessage")
+            // #4904: Node exposes these as constructable classes on the
+            // `http` module (`new http.Agent(opts)`, `new ClientRequest(...)`,
+            // `new IncomingMessage(socket)`, `new ServerResponse(req)`), and
+            // tests/userland grab them as values first (`const { Agent } =
+            // require('http')`). Construction routes through
+            // `js_new_function_construct` → the http arm in
+            // class_registry.rs → JS_NATIVE_HTTP_DISPATCH.
+            | ("http", "Agent")
+            | ("http", "ClientRequest")
+            | ("http", "IncomingMessage")
+            | ("http", "ServerResponse")
+            // #4904: `const { get, request } = require('http')` — the https
+            // twins below were already exported; the http side was missed.
+            | ("http", "request")
+            | ("http", "get")
             | ("https", "createServer")
             | ("https", "Server")
             // #3697: `https.request` / `https.get` / `https.Agent` value reads

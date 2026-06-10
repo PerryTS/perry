@@ -60,22 +60,238 @@ pub fn require_options_object(arg: f64) -> Option<*const crate::object::ObjectHe
     }
 }
 
+/// Read the `era` / `eraYear` calendar fields, but ONLY for a non-ISO calendar.
+/// The ISO-8601 calendar has no eras, so `ToTemporalDate` / `ToTemporalYearMonth`
+/// never read `era`/`eraYear` for it — and the order-of-operations tests assert
+/// exactly that (an ISO bag observes no `era`/`eraYear` gets). Reading them
+/// unconditionally would record extra observable property accesses.
+fn read_era_fields(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> (Option<TinyAsciiStr<19>>, Option<i32>) {
+    if calendar.is_iso() {
+        return (None, None);
+    }
+    let era =
+        str_field(obj, "era").and_then(|s| TinyAsciiStr::<19>::try_from_utf8(s.as_bytes()).ok());
+    let era_year = num_field(obj, "eraYear").map(|n| n.trunc() as i32);
+    (era, era_year)
+}
+
+/// Read a date property bag's calendar fields in `ToTemporalDate` /
+/// `ToTemporalMonthDay` spec order — the calendar's date field keys read
+/// **alphabetically**: `day`, [`era`, `eraYear` for non-ISO calendars], `month`,
+/// `monthCode`, `year`. Numeric fields go through the real `ToNumber`
+/// (`valueOf`) coercion; `monthCode` is `ToPrimitiveAndRequireString` (so a
+/// `toString`-bearing wrapper is observed); `month`/`day` are
+/// `ToPositiveIntegerWithTruncation` (a value `< 1` is a `RangeError`, even
+/// under `constrain`). The caller resolves the `calendar` slot FIRST and reads
+/// `overflow` LAST. Replaces the old non-alphabetical [`calendar_fields`] read
+/// (which used `str_field` for `monthCode` — dropping a wrapped value — and
+/// `field_u8` for `month`/`day` — silently saturating a negative to 255).
+fn read_date_fields_alpha(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> CalendarFields {
+    let day = num_field(obj, "day");
+    let (era, era_year) = read_era_fields(obj, calendar);
+    let month = num_field(obj, "month");
+    let month_code = require_string_field(obj, "monthCode").map(|s| parse_month_code(&s));
+    let year = num_field(obj, "year");
+
+    let mut f = CalendarFields::new();
+    if let Some(n) = year {
+        f.year = Some(n.trunc() as i32);
+    }
+    if let Some(n) = month {
+        f.month = Some(positive_field_u8(n, "month"));
+    }
+    f.month_code = month_code;
+    if let Some(n) = day {
+        f.day = Some(positive_field_u8(n, "day"));
+    }
+    f.era = era;
+    if let Some(y) = era_year {
+        f.era_year = Some(y);
+    }
+    f
+}
+
+/// `ToTemporalYearMonth` field read in spec (alphabetical) order — [`era`,
+/// `eraYear` for non-ISO], `month`, `monthCode`, `year` (no `day`). Same coercion
+/// rules as [`read_date_fields_alpha`].
+fn read_year_month_fields_alpha(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> YearMonthCalendarFields {
+    let (era, era_year) = read_era_fields(obj, calendar);
+    let month = num_field(obj, "month");
+    let month_code = require_string_field(obj, "monthCode").map(|s| parse_month_code(&s));
+    let year = num_field(obj, "year");
+
+    let mut f = YearMonthCalendarFields::new();
+    if let Some(n) = year {
+        f.year = Some(n.trunc() as i32);
+    }
+    if let Some(n) = month {
+        f.month = Some(positive_field_u8(n, "month"));
+    }
+    f.month_code = month_code;
+    f.era = era;
+    if let Some(y) = era_year {
+        f.era_year = Some(y);
+    }
+    f
+}
+
 /// Build a [`temporal_rs::PlainDate`] from a property-bag object
 /// (`ToTemporalDate` step for an Object that isn't already a Temporal value):
-/// read its calendar fields + `calendar` slot into a `PartialDate` and let
-/// `temporal_rs` validate/construct under the given `overflow`. A non-object
+/// resolve the `calendar` slot FIRST, then read the date fields in alphabetical
+/// order, and construct under the given `overflow`. A non-object
 /// (number/boolean/null/symbol) is a `TypeError`, matching the spec's
-/// "Numbers cannot be used in place of an ISO string" wrong-type cases.
+/// "Numbers cannot be used in place of an ISO string" wrong-type cases. Used by
+/// the `compare`/`until`/`since`/`equals` coercion paths (which take no options,
+/// so `overflow` is precomputed / `None`); `from` uses [`plain_date_from_bag_opts`].
 pub fn plain_date_from_bag(v: f64, overflow: Option<Overflow>) -> temporal_rs::PlainDate {
     let obj = match as_obj(v) {
         Some(o) => o,
         None => type_error("Cannot convert value to a Temporal.PlainDate".to_string()),
     };
+    let calendar = calendar_slot(field(obj, "calendar"));
+    let calendar_fields = read_date_fields_alpha(obj, &calendar);
     let partial = temporal_rs::partial::PartialDate {
-        calendar_fields: calendar_fields(obj),
-        calendar: calendar_slot(field(obj, "calendar")),
+        calendar_fields,
+        calendar,
     };
     ok_or_throw(temporal_rs::PlainDate::from_partial(partial, overflow))
+}
+
+/// `ToTemporalDate` for `Temporal.PlainDate.from(bag, options)`: read the bag's
+/// calendar + fields in spec order, then `GetTemporalOverflowOption(options)`
+/// **last** (so a failing field read happens before `overflow` is observed, and
+/// a primitive `options` argument throws `TypeError` only after the fields are
+/// read — the `observable-get-overflow` / `options-wrong-type` order tests).
+pub fn plain_date_from_bag_opts(v: f64, opts: f64) -> temporal_rs::PlainDate {
+    let obj = match as_obj(v) {
+        Some(o) => o,
+        None => type_error("Cannot convert value to a Temporal.PlainDate".to_string()),
+    };
+    let calendar = calendar_slot(field(obj, "calendar"));
+    let calendar_fields = read_date_fields_alpha(obj, &calendar);
+    let overflow = overflow(opts);
+    let partial = temporal_rs::partial::PartialDate {
+        calendar_fields,
+        calendar,
+    };
+    ok_or_throw(temporal_rs::PlainDate::from_partial(partial, overflow))
+}
+
+/// `ToTemporalYearMonth` for `Temporal.PlainYearMonth.from(bag, options)`:
+/// resolve calendar, read year-month fields alphabetically, then read `overflow`
+/// from `options` last.
+pub fn plain_year_month_from_bag_opts(v: f64, opts: f64) -> temporal_rs::PlainYearMonth {
+    let obj = match as_obj(v) {
+        Some(o) => o,
+        None => type_error("Cannot convert value to a Temporal.PlainYearMonth".to_string()),
+    };
+    let calendar = calendar_slot(field(obj, "calendar"));
+    let calendar_fields = read_year_month_fields_alpha(obj, &calendar);
+    require_year_month_field(&calendar_fields);
+    let overflow = overflow(opts);
+    let partial = temporal_rs::partial::PartialYearMonth {
+        calendar_fields,
+        calendar,
+    };
+    ok_or_throw(temporal_rs::PlainYearMonth::from_partial(partial, overflow))
+}
+
+/// `ToTemporalYearMonth` for the no-options coercion paths
+/// (`compare`/`until`/`since`/`equals`): calendar + fields, `constrain` overflow.
+pub fn plain_year_month_from_bag(v: f64) -> temporal_rs::PlainYearMonth {
+    let obj = match as_obj(v) {
+        Some(o) => o,
+        None => type_error("Cannot convert value to a Temporal.PlainYearMonth".to_string()),
+    };
+    let calendar = calendar_slot(field(obj, "calendar"));
+    let calendar_fields = read_year_month_fields_alpha(obj, &calendar);
+    require_year_month_field(&calendar_fields);
+    let partial = temporal_rs::partial::PartialYearMonth {
+        calendar_fields,
+        calendar,
+    };
+    ok_or_throw(temporal_rs::PlainYearMonth::from_partial(
+        partial,
+        Some(Overflow::Constrain),
+    ))
+}
+
+/// `ToTemporalMonthDay` for `Temporal.PlainMonthDay.from(bag, options)`: resolve
+/// calendar, read the date fields alphabetically (a `PlainMonthDay` bag reads the
+/// same `day`/`month`/`monthCode`/`year` set as a date), then `overflow` last.
+pub fn plain_month_day_from_bag_opts(v: f64, opts: f64) -> temporal_rs::PlainMonthDay {
+    let obj = match as_obj(v) {
+        Some(o) => o,
+        None => type_error("Cannot convert value to a Temporal.PlainMonthDay".to_string()),
+    };
+    let calendar = calendar_slot(field(obj, "calendar"));
+    let calendar_fields = read_date_fields_alpha(obj, &calendar);
+    require_month_day_field(&calendar_fields);
+    let overflow = overflow(opts);
+    let partial = temporal_rs::partial::PartialDate {
+        calendar_fields,
+        calendar,
+    };
+    ok_or_throw(temporal_rs::PlainMonthDay::from_partial(partial, overflow))
+}
+
+/// `ToTemporalMonthDay` for the no-options `equals` coercion path.
+pub fn plain_month_day_from_bag(v: f64) -> temporal_rs::PlainMonthDay {
+    let obj = match as_obj(v) {
+        Some(o) => o,
+        None => type_error("Cannot convert value to a Temporal.PlainMonthDay".to_string()),
+    };
+    let calendar = calendar_slot(field(obj, "calendar"));
+    let calendar_fields = read_date_fields_alpha(obj, &calendar);
+    require_month_day_field(&calendar_fields);
+    let partial = temporal_rs::partial::PartialDate {
+        calendar_fields,
+        calendar,
+    };
+    ok_or_throw(temporal_rs::PlainMonthDay::from_partial(
+        partial,
+        Some(Overflow::Constrain),
+    ))
+}
+
+/// A `PlainYearMonth` property bag must carry at least one recognized year-month
+/// field (`year`/`month`/`monthCode`/`era`/`eraYear`); otherwise
+/// `ToTemporalYearMonth` / `PrepareTemporalFields` throws a `TypeError`. Checked
+/// on the ALREADY-READ fields (not by pre-scanning the object) so `calendar` is
+/// still observed first — the order-of-operations tests assert that exact order.
+fn require_year_month_field(f: &YearMonthCalendarFields) {
+    if f.year.is_none()
+        && f.month.is_none()
+        && f.month_code.is_none()
+        && f.era.is_none()
+        && f.era_year.is_none()
+    {
+        type_error("object is not a valid Temporal.PlainYearMonth property bag".to_string());
+    }
+}
+
+/// A `PlainMonthDay` property bag must carry at least one recognized field
+/// (`month`/`monthCode`/`day`/`year`/`era`/`eraYear`). Checked on the already-read
+/// fields so `calendar` is observed first.
+fn require_month_day_field(f: &CalendarFields) {
+    if f.year.is_none()
+        && f.month.is_none()
+        && f.month_code.is_none()
+        && f.day.is_none()
+        && f.era.is_none()
+        && f.era_year.is_none()
+    {
+        type_error("object is not a valid Temporal.PlainMonthDay property bag".to_string());
+    }
 }
 
 /// Build a [`temporal_rs::PlainDateTime`] from a property-bag object
@@ -700,23 +916,25 @@ pub fn calendar_fields(obj: *const crate::object::ObjectHeader) -> CalendarField
     f
 }
 
-/// Populate a [`YearMonthCalendarFields`] from an object's year/month fields.
-pub fn year_month_fields(obj: *const crate::object::ObjectHeader) -> YearMonthCalendarFields {
-    let mut f = YearMonthCalendarFields::new();
+/// `Temporal.PlainYearMonth.prototype.toPlainDate(item)` reads ONLY `day` from
+/// `item` — the year/month come from the receiver — so the observable order is
+/// just `get day` / `valueOf`. (The old `calendar_fields` read year/month/
+/// monthCode/day/era/eraYear, recording extra gets.) `day` is
+/// `ToPositiveIntegerWithTruncation`.
+pub fn to_plain_date_day_field(obj: *const crate::object::ObjectHeader) -> CalendarFields {
+    let mut f = CalendarFields::new();
+    if let Some(n) = num_field(obj, "day") {
+        f.day = Some(positive_field_u8(n, "day"));
+    }
+    f
+}
+
+/// `Temporal.PlainMonthDay.prototype.toPlainDate(item)` reads ONLY `year` from
+/// `item` (the month/day come from the receiver).
+pub fn to_plain_date_year_field(obj: *const crate::object::ObjectHeader) -> CalendarFields {
+    let mut f = CalendarFields::new();
     if let Some(n) = num_field(obj, "year") {
         f.year = Some(n.trunc() as i32);
-    }
-    if let Some(n) = num_field(obj, "month") {
-        f.month = Some(field_u8(n.trunc() as i64));
-    }
-    if let Some(s) = str_field(obj, "monthCode") {
-        f.month_code = Some(parse_month_code(&s));
-    }
-    if let Some(s) = str_field(obj, "era") {
-        f.era = TinyAsciiStr::<19>::try_from_utf8(s.as_bytes()).ok();
-    }
-    if let Some(n) = num_field(obj, "eraYear") {
-        f.era_year = Some(n.trunc() as i32);
     }
     f
 }
@@ -861,6 +1079,39 @@ pub fn datetime_fields(obj: *const crate::object::ObjectHeader) -> DateTimeField
 pub fn with_datetime_fields(obj: *const crate::object::ObjectHeader) -> DateTimeFields {
     reject_calendar_and_timezone(obj);
     datetime_fields(obj)
+}
+
+/// `Temporal.PlainDate.prototype.with` / `PlainMonthDay.prototype.with`
+/// partial-fields read: `RejectObjectWithCalendarOrTimeZone` (reads `calendar`
+/// then `timeZone`, throwing `TypeError` if present), then the calendar's date
+/// fields alphabetically — exactly mirroring `PlainDateTime.with`. The receiver
+/// supplies `calendar` (so era fields are read only for a non-ISO calendar) and
+/// the caller reads `overflow` LAST. Replaces the old `calendar_fields` read
+/// (non-alphabetical, `str_field` monthCode, `field_u8` negatives, no reject).
+pub fn with_calendar_fields(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> CalendarFields {
+    reject_calendar_and_timezone(obj);
+    read_date_fields_alpha(obj, calendar)
+}
+
+/// `Temporal.PlainYearMonth.prototype.with` partial-fields read:
+/// `RejectObjectWithCalendarOrTimeZone` then the year-month fields alphabetically.
+pub fn with_year_month_fields(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> YearMonthCalendarFields {
+    reject_calendar_and_timezone(obj);
+    read_year_month_fields_alpha(obj, calendar)
+}
+
+/// `Temporal.PlainTime.prototype.with` partial-fields read:
+/// `RejectObjectWithCalendarOrTimeZone` (a `PlainTime` bag still rejects a
+/// `calendar`/`timeZone` property per spec), then the time fields alphabetically.
+pub fn with_partial_time(obj: *const crate::object::ObjectHeader) -> PartialTime {
+    reject_calendar_and_timezone(obj);
+    partial_time(obj)
 }
 
 /// Populate a [`ZonedDateTimeFields`] (calendar fields + time + offset) for

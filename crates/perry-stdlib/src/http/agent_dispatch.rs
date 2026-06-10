@@ -33,8 +33,61 @@ pub(crate) fn dispatch_agent_property(handle: Handle, property: &str) -> Option<
         "destroy" => bind_agent_method_value(handle, b"destroy"),
         "keepSocketAlive" => bind_agent_method_value(handle, b"keepSocketAlive"),
         "reuseSocket" => bind_agent_method_value(handle, b"reuseSocket"),
+        // #4904: data properties — Agents constructed through the dynamic
+        // value path (`const { Agent } = require('http'); new Agent(...)`)
+        // read these through handle property dispatch rather than the
+        // class-filtered native rows.
+        "maxSockets" => super::js_http_agent_max_sockets(handle),
+        "maxFreeSockets" => super::js_http_agent_max_free_sockets(handle),
+        "maxTotalSockets" => super::js_http_agent_max_total_sockets(handle),
+        "keepAliveMsecs" => super::js_http_agent_keep_alive_msecs(handle),
+        "keepAlive" => super::js_http_agent_keep_alive(handle),
+        "destroyed" => super::js_http_agent_destroyed(handle),
+        "defaultPort" => super::js_http_agent_default_port(handle),
+        "protocol" => {
+            let ptr = super::js_http_agent_protocol(handle);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                f64::from_bits(JSValue::string_ptr(ptr).bits())
+            }
+        }
+        "sockets" => js_http_agent_sockets(handle),
+        "freeSockets" => js_http_agent_free_sockets(handle),
+        "requests" => js_http_agent_requests(handle),
         _ => return None,
     })
+}
+
+/// #4904: property writes on a dynamically-dispatched Agent —
+/// `agent.maxSockets = 4` and the `agent.createConnection = fn`
+/// monkeypatch pattern Node's own tests use. Returns `true` when claimed.
+pub(crate) fn dispatch_agent_property_set(handle: Handle, property: &str, value: f64) -> bool {
+    if get_handle_mut::<AgentHandle>(handle).is_none() {
+        return false;
+    }
+    match property {
+        "maxSockets" => super::js_http_agent_set_max_sockets(handle, value),
+        "maxFreeSockets" => super::js_http_agent_set_max_free_sockets(handle, value),
+        "maxTotalSockets" => super::js_http_agent_set_max_total_sockets(handle, value),
+        "keepAliveMsecs" => super::js_http_agent_set_keep_alive_msecs(handle, value),
+        "keepAlive" => super::js_http_agent_set_keep_alive(handle, value),
+        "createConnection" | "createSocket" => {
+            let bits = value.to_bits();
+            let ptr = if JSValue::from_bits(bits).is_pointer() {
+                (bits & PTR_MASK) as i64
+            } else {
+                0
+            };
+            if property == "createConnection" {
+                super::js_http_agent_set_create_connection(handle, ptr);
+            } else {
+                super::js_http_agent_set_create_socket(handle, ptr);
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 pub(crate) unsafe fn dispatch_agent_method(

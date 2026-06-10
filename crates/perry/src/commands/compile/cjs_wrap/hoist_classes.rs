@@ -565,6 +565,150 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
     names
 }
 
+/// Issue #4933 — collect the names of every **top-level** `class <Name>`
+/// declaration anchored at column 0, regardless of whether it would hoist.
+/// `extract_top_level_class_decls` only returns the classes it actually
+/// hoists (it refuses any whose body references an IIFE-local binding,
+/// #2310), so a `module.exports = StackUtils` whose `StackUtils` reads a
+/// top-level `const natives = …` is invisible to the hoisted-name list.
+/// The flat-emit path (wrap.rs) needs to know the assignment target is a
+/// real top-level class before it drops the IIFE, hence this companion
+/// scan. Uses the same column-0 anchor + identifier rule as the hoist scan.
+pub fn top_level_class_names(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let mut names: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let at_line_start = i == 0 || bytes[i - 1] == b'\n';
+        if !at_line_start {
+            i += 1;
+            continue;
+        }
+        let mut p = i;
+        while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+            p += 1;
+        }
+        if p + 6 <= bytes.len() && &bytes[p..p + 6] == b"class " {
+            let name_start = p + 6;
+            let mut name_end = name_start;
+            while name_end < bytes.len() {
+                let c = bytes[name_end];
+                if !(c.is_ascii_alphanumeric() || c == b'_' || c == b'$') {
+                    break;
+                }
+                name_end += 1;
+            }
+            if name_end > name_start {
+                if let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end]) {
+                    if !name.is_empty() && !names.contains(&name.to_string()) {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Issue #4933 — true if the CJS body has a `return` statement at the very
+/// top level (brace depth 0). The IIFE wrap turns the module body into a
+/// function, so a top-level `return` (legal in a CommonJS module, where
+/// Node wraps the body in a function) is valid there. The flat-emit path
+/// drops the IIFE and runs the body at ESM module scope, where such a
+/// `return` would change meaning — so we keep the IIFE for those modules.
+/// Detection is brace-depth-aware with string/template/comment skipping,
+/// mirroring `collect_top_level_let_const_var_names`. A braced top-level
+/// return (`if (x) { return; }`) sits at depth ≥ 1 and is not caught here;
+/// Perry already treats a module-scope `return` as a no-op rather than an
+/// error, so the residual risk is a rare semantic nuance, not a miscompile.
+pub fn source_has_top_level_return(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            // Track only `{`/`}` — block / function / class bodies — like the
+            // sibling `collect_top_level_let_const_var_names`. Counting `(`/`[`
+            // too would let an un-skipped regex literal's brackets corrupt the
+            // depth and mis-flag a function-body `return` as top-level (the
+            // stack-utils `const methodRe = /…\[as…\]…/` false positive).
+            b'{' => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                continue;
+            }
+            b'"' | b'\'' => {
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            b'`' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                if i + 1 < bytes.len() {
+                    i += 2;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if depth == 0 && bytes[i] == b'r' && source[i..].starts_with("return") {
+            let before_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric()
+                    || bytes[i - 1] == b'_'
+                    || bytes[i - 1] == b'$'
+                    || bytes[i - 1] == b'.');
+            let after = i + "return".len();
+            let after_ok = after >= bytes.len()
+                || !(bytes[after].is_ascii_alphanumeric()
+                    || bytes[after] == b'_'
+                    || bytes[after] == b'$');
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Issue #2310 — true if `class_body` contains any of the given names as a
 /// bare identifier (word-boundary match). Used to gate the hoist in
 /// `extract_top_level_class_decls`. We don't try to be precise about

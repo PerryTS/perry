@@ -235,6 +235,13 @@ unsafe fn rel_to_primitive(value: f64) -> f64 {
         // which is itself a Number (a plain `f64` is its own NaN-box).
         return crate::date::js_date_coerce_number(value);
     }
+    // ToPrimitive(temporal, NUMBER) → the type's `valueOf`, which is a hard
+    // `TypeError` for every `Temporal.*` value (the spec bans relational ordering
+    // of Temporal values: `plainDate < plainDate` throws). Without this the cell
+    // fell through to the `DefaultString` arm and compared ISO strings silently.
+    if crate::temporal::is_temporal_value(value) {
+        return crate::temporal::dispatch::call_method(value, "valueOf", &[]);
+    }
     match crate::value::to_primitive_number(value) {
         crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => p,
         crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {

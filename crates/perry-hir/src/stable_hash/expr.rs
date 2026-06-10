@@ -358,7 +358,7 @@ impl SH for Expr {
             Expr::ChildProcessSpawnBackground { command, args, log_file, env_json, } => { tag(h, 240); command.as_ref().hash(h); args.hash(h); log_file.as_ref().hash(h); env_json.hash(h); }
             Expr::ChildProcessGetProcessStatus(e) => { tag(h, 241); e.as_ref().hash(h); }
             Expr::ChildProcessKillProcess(e) => { tag(h, 242); e.as_ref().hash(h); }
-            Expr::FetchWithOptions { url, method, body, headers, } => { tag(h, 243); url.as_ref().hash(h); method.as_ref().hash(h); body.as_ref().hash(h); headers.hash(h); }
+            Expr::FetchWithOptions { url, method, body, headers, headers_dynamic, } => { tag(h, 243); url.as_ref().hash(h); method.as_ref().hash(h); body.as_ref().hash(h); headers.hash(h); if let Some(hd) = headers_dynamic { tag(h, 1); hd.as_ref().hash(h); } else { tag(h, 0); } }
             Expr::FetchGetWithAuth { url, auth_header } => { tag(h, 244); url.as_ref().hash(h); auth_header.as_ref().hash(h); }
             Expr::FetchPostWithAuth { url, auth_header, body, } => { tag(h, 245); url.as_ref().hash(h); auth_header.as_ref().hash(h); body.as_ref().hash(h); }
             Expr::NetCreateServer { options, connection_listener, } => { tag(h, 246); options.hash(h); connection_listener.hash(h); }
