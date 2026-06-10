@@ -1628,12 +1628,33 @@ jobs:
         # `./` prefix is required — `npm publish npm/foo` parses `npm/foo` as
         # a GitHub shorthand (user/repo) and tries ssh://git@github.com/npm/foo.git.
         # See run 24632227482 npm-publish job for the symptom.
+        #
+        # Skip versions already on the registry so the job is idempotent: at
+        # v0.5.1151 a transient artifact digest-mismatch killed the first run
+        # after the two darwin packages had published, and every re-run then
+        # died on the first package with "You cannot publish over the
+        # previously published versions" — the remaining six packages could
+        # never go out (run 27239815088).
         run: |
           set -e
           for pkg in ./npm/perry-*; do
+            name=$(node -p "require('$pkg/package.json').name")
+            ver=$(node -p "require('$pkg/package.json').version")
+            if npm view "$name@$ver" version >/dev/null 2>&1; then
+              echo "=== $name@$ver already published — skipping ==="
+              continue
+            fi
             echo "=== publishing $pkg ==="
             npm publish "$pkg" --access public --provenance
           done
 
       - name: Publish wrapper (@perryts/perry) last
-        run: npm publish ./npm/perry --access public --provenance
+        run: |
+          set -e
+          name=$(node -p "require('./npm/perry/package.json').name")
+          ver=$(node -p "require('./npm/perry/package.json').version")
+          if npm view "$name@$ver" version >/dev/null 2>&1; then
+            echo "$name@$ver already published — skipping"
+          else
+            npm publish ./npm/perry --access public --provenance
+          fi
