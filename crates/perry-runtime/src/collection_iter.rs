@@ -115,6 +115,24 @@ pub(crate) fn is_iterable(value: f64) -> bool {
     if crate::map::is_registered_map(addr) || crate::set::is_registered_set(addr) {
         return true;
     }
+    // A built-in iterator object — an array/map/set/string/buffer/iterator-
+    // helper iterator — IS already an iterator and is therefore iterable
+    // (`[Symbol.iterator]()` returns itself). Mirrors the equivalent
+    // `is_builtin_iterator_class_id` arm in `js_get_iterator`.
+    if crate::array::is_builtin_iterator_class_id(addr) {
+        return true;
+    }
+    // A generator object (`g()` from `function* g(){}`) is lowered by Perry to a
+    // plain object with own closure-valued `next`/`return`/`throw` methods and
+    // NO `[Symbol.iterator]` symbol property, so the generic check below misses
+    // it. Generators ARE iterable (`[Symbol.iterator]()` returns themselves), so
+    // without this `js_array_like_to_array` — call / `new` / super spread of a
+    // generator (`f(...g())`, `new C(...g())`) and `new Map/Set(g())` — fell
+    // through to the array-reinterpret garbage path. `js_get_iterator` returns
+    // the generator unchanged (its own `.next()` drives the state machine).
+    if crate::object::js_util_types_is_generator_object(value).to_bits() == crate::value::TAG_TRUE {
+        return true;
+    }
     // Generic object: iterable iff it exposes a callable `[Symbol.iterator]`.
     if !crate::object::is_valid_obj_ptr(raw as *const u8) {
         return false;

@@ -82,14 +82,27 @@ pub(super) fn lower_super_prop(
             }
         }
         ast::SuperProp::Computed(computed) => {
-            let index = Box::new(lower_expr(ctx, &computed.expr)?);
             if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::ObjectSuperPropertyGet {
                     home: Box::new(Expr::LocalGet(home_id)),
                     key: index,
                     receiver: Box::new(Expr::This),
                 })
+            } else if let Some(key) = match computed.expr.as_ref() {
+                ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(|s| s.to_string()),
+                _ => None,
+            } {
+                // `super['fromA']` in a CLASS method with a string-literal key:
+                // route through the same parent-prototype-chain lookup as the
+                // ident form `super.fromA` (Expr::SuperPropertyGet). The previous
+                // `this[index]` fallback read the property off the CHILD instance,
+                // shadowing the parent value (test262
+                // super/prop-expr-cls-val{,-from-arrow}). A truly dynamic computed
+                // key (not a literal) still falls back below.
+                Ok(Expr::SuperPropertyGet { property: key })
             } else {
+                let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
                     object: Box::new(Expr::This),
                     index,

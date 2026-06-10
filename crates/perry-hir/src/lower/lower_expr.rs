@@ -672,6 +672,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 let ty_expr = match bin.right.as_ref() {
                     ast::Expr::Ident(ident) => {
                         let name = ident.sym.as_ref();
+                        // `x instanceof undefined`: `undefined` is the primitive
+                        // value, never a class name. Codegen would resolve `ty =
+                        // "undefined"` to class_id 0 and silently return `false`;
+                        // ECMAScript requires evaluating the RHS and throwing a
+                        // TypeError because it is not an object (test262
+                        // instanceof/S11.8.6_A3 #4). Lower it to the undefined
+                        // value so it routes through `js_instanceof_dynamic`.
+                        if name == "undefined" {
+                            Some(Box::new(Expr::Undefined))
+                        } else
                         // A local holding a class ref (drizzle's `is(value, type)`),
                         // OR a top-level ES5 function constructor (`function Foo(){…}`
                         // used as `x instanceof Foo`). The latter has no class entry,
