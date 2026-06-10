@@ -534,6 +534,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 let blk = ctx.block();
                 let box_ptr = blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]);
                 let slot = ctx.func.alloca_entry(DOUBLE);
+                // perry#4926: PreallocateBoxes can sit nested inside an
+                // If/Try/Labeled body (e.g. the async state-machine
+                // wrapper), so this block's box-pointer store doesn't
+                // necessarily dominate every load of the slot. Entry-init
+                // the slot to TAG_UNDEFINED so paths that bypass this
+                // statement read a defined sentinel instead of `undef`
+                // (see the boxed `Stmt::Let` arm in let_stmt.rs).
+                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
                 let box_as_double = ctx.block().bitcast_i64_to_double(&box_ptr);
                 ctx.block().store(DOUBLE, &box_as_double, &slot);
                 ctx.locals.insert(*id, slot);
