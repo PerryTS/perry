@@ -402,8 +402,22 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some(class_name) =
                 global_member_constructor_name(ctx, obj_name, prop_ident.sym.as_ref())
             {
+                // #4873: the *global* `new globalThis.MessageChannel()` /
+                // `BroadcastChannel` forms must lower as `Expr::New` so codegen
+                // emits the always-linked runtime constructors
+                // (`js_message_channel_new` / `js_broadcast_channel_new`,
+                // perry-runtime). Routing them to the worker_threads
+                // NativeMethodCall left an undefined
+                // `js_worker_threads_message_channel_new` symbol in binaries
+                // that never import `node:worker_threads`. The runtime global
+                // delegates to the full worker_threads factory whenever the
+                // stdlib has registered it, so no behavior is lost.
                 if is_worker_messaging_constructor_name(class_name) {
-                    return lower_worker_messaging_new(ctx, class_name, new_expr.args.as_deref());
+                    return Ok(Expr::New {
+                        class_name: class_name.to_string(),
+                        args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                        type_args: Vec::new(),
+                    });
                 }
                 if let Some(expr) =
                     lower_url_encoding_constructor(ctx, class_name, new_expr.args.as_deref())?
@@ -900,10 +914,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 return lower_worker_messaging_new(ctx, &class_name, new_expr.args.as_deref());
             }
 
+            // #4873: bare `new MessageChannel()` / `new BroadcastChannel()`
+            // with NO worker_threads import is the *global* constructor form
+            // (React's scheduler feature-detects exactly this way). Lower as
+            // `Expr::New` so codegen's `lower_builtin_new` emits the
+            // always-linked `js_message_channel_new` /
+            // `js_broadcast_channel_new` (perry-runtime). The previous
+            // worker_threads NativeMethodCall routing referenced the
+            // stdlib-only `js_worker_threads_*_new` symbols, which fail to
+            // link unless something else pulls in `node:worker_threads`. The
+            // runtime globals delegate to the registered worker_threads
+            // factories when the stdlib is present, so ports stay fully
+            // functional in graphs that have it.
             if is_worker_messaging_constructor_name(&class_name)
                 && ctx.lookup_local(&class_name).is_none()
             {
-                return lower_worker_messaging_new(ctx, &class_name, new_expr.args.as_deref());
+                return Ok(Expr::New {
+                    class_name: class_name.to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                });
             }
 
             let inspector_session_module = ctx.lookup_native_module(&class_name).and_then(

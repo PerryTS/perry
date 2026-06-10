@@ -221,7 +221,13 @@ fn worker_threads_post_message_call_keeps_property_call_shape() {
 }
 
 #[test]
-fn global_worker_messaging_constructors_lower_to_worker_threads() {
+fn global_worker_messaging_constructors_lower_to_builtin_new() {
+    // #4873: the *global* constructor forms (no worker_threads import) must
+    // lower as `Expr::New` so codegen emits the always-linked runtime
+    // constructors (`js_message_channel_new` / `js_broadcast_channel_new`).
+    // Routing them to the worker_threads NativeMethodCall left an undefined
+    // `js_worker_threads_message_channel_new` symbol in binaries that never
+    // import `node:worker_threads` (React's scheduler hit this at init).
     let module = lower_result(
         r#"
         const a = new BroadcastChannel("a");
@@ -234,12 +240,37 @@ fn global_worker_messaging_constructors_lower_to_worker_threads() {
     .expect("global messaging constructors should lower");
 
     let debug = format!("{module:#?}");
-    let broadcast_count = debug.matches("method: \"BroadcastChannel\"").count();
-    let message_channel_count = debug.matches("method: \"MessageChannel\"").count();
+    assert!(
+        !debug.contains("module: \"worker_threads\""),
+        "global messaging constructors must not route to worker_threads-only symbols: {debug}"
+    );
+    let broadcast_count = debug.matches("class_name: \"BroadcastChannel\"").count();
+    let message_channel_count = debug.matches("class_name: \"MessageChannel\"").count();
+    assert!(
+        broadcast_count >= 2 && message_channel_count >= 2,
+        "global messaging constructors should lower as Expr::New on the builtin class: {debug}"
+    );
+}
+
+#[test]
+fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
+    // The genuinely-imported forms keep the stdlib NativeMethodCall routing —
+    // the import anchors `js_worker_threads_*_new` in the link.
+    let module = lower_result(
+        r#"
+        import { MessageChannel, BroadcastChannel } from "node:worker_threads";
+        const a = new MessageChannel();
+        const b = new BroadcastChannel("b");
+        console.log(a, b);
+    "#,
+    )
+    .expect("imported messaging constructors should lower");
+
+    let debug = format!("{module:#?}");
     assert!(
         debug.contains("module: \"worker_threads\"")
-            && broadcast_count >= 2
-            && message_channel_count >= 2,
-        "global messaging constructors should route through worker_threads native constructors: {debug}"
+            && debug.contains("method: \"MessageChannel\"")
+            && debug.contains("method: \"BroadcastChannel\""),
+        "imported messaging constructors should route through worker_threads native constructors: {debug}"
     );
 }
