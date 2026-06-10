@@ -526,8 +526,16 @@ pub extern "C" fn js_child_process_spawn(
     _args_ptr: *const crate::array::ArrayHeader,
     _options_ptr: *const ObjectHeader,
 ) -> *mut ObjectHeader {
-    // TODO: Implement async spawn with proper ChildProcess handle
-    // For now, return null - async child processes need event loop integration
+    // DEAD/LEGACY path: user-level `child_process.spawn(...)` no longer
+    // routes here. It lowers to `Expr::ChildProcessSpawn`
+    // (crates/perry-codegen/src/expr/child_proc.rs), which builds a real
+    // streaming ChildProcess (stdin/stdout/stderr Readable streams, pid,
+    // kill(), spawn/exit/close/error events) — issue #1780. This FFI
+    // symbol predates that and is retained only so the dispatch table
+    // stays link-complete; it is not reachable from emitted code. (The
+    // stub-elimination audit's #4912 "spawn returns null" premise was
+    // stale against current main — spawn is real; only `exec` timing
+    // remains, tracked in #4912.)
     std::ptr::null_mut()
 }
 

@@ -673,8 +673,13 @@ for test_file in "${TEST_FILES[@]}"; do
     fi
 
     # Run Perry binary — same cap-via-tempfile protocol as Node above (#796).
+    # Silence the stub-elimination first-call diagnostics (#4919): parity
+    # measures *behavioral* byte-parity against Node, and Node never emits
+    # Perry's `[perry] warning: ... is a stub` lines. They'd otherwise show
+    # up on the 2>&1-captured stream for any test that exercises a flagged
+    # API (dns/dgram loopback, v8 heap snapshot, …) and diff against Node.
     perry_tmp=$(mktemp)
-    run_with_timeout 10 env "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
+    run_with_timeout 10 env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"

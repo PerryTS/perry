@@ -1,0 +1,127 @@
+//! Drift guard for the stub-elimination epic (#4919 / keystone #4918).
+//!
+//! The manifest's `ApiEntry.stub` flag is the single source of truth for
+//! "this API is registered and callable, but no-op / fake / silently
+//! wrong / partial". Before #4918 the flag existed but was never set, so
+//! every doc surface (`.d.ts`, `reference.md`, `--print-api-manifest`)
+//! presented stubs as fully supported.
+//!
+//! These tests pin the exact stub inventory so a new lie cannot ship
+//! silently: adding or removing a `.stub()`/`.stub_note()` annotation
+//! moves a number here, forcing a reviewed, deliberate change — the same
+//! discipline `manifest_consistency.rs` applies to dispatch-table arity.
+
+use perry_api_manifest::iter_entries;
+
+/// Parse the trailing `(#1234)` issue tag from a stub note.
+fn issue_tag(note: &str) -> Option<String> {
+    let start = note.rfind("(#")?;
+    let end = note[start..].find(')')? + start;
+    Some(note[start + 1..end].to_string())
+}
+
+#[test]
+fn every_stub_has_a_documented_reason() {
+    // Policy: a stub may exist, but it must be *visible* — a human note
+    // explaining how it lies, tagged with the tracking issue. No bare
+    // `.stub()` without a reason is allowed in the table.
+    for e in iter_entries().filter(|e| e.stub) {
+        let note = e.stub_note.unwrap_or_else(|| {
+            panic!(
+                "stub entry {}::{} has no stub_note — use .stub_note(\"reason (#issue)\")",
+                e.module, e.name
+            )
+        });
+        assert!(
+            issue_tag(note).is_some(),
+            "stub note for {}::{} must carry a tracking issue tag like (#4911): {:?}",
+            e.module,
+            e.name,
+            note
+        );
+    }
+}
+
+#[test]
+fn stub_inventory_matches_known_clusters() {
+    use std::collections::BTreeMap;
+    let mut by_issue: BTreeMap<String, usize> = BTreeMap::new();
+    for e in iter_entries().filter(|e| e.stub) {
+        if let Some(note) = e.stub_note {
+            if let Some(tag) = issue_tag(note) {
+                *by_issue.entry(tag).or_default() += 1;
+            }
+        }
+    }
+
+    // Expected per-issue stub counts. Update these (and the changelog)
+    // when a stub is implemented for real (count goes down) or a newly
+    // discovered lie is annotated (count goes up). A surprise diff here
+    // means an API silently changed honesty state.
+    let expected: &[(&str, usize)] = &[
+        ("#4911", 73), // dns + dns/promises loopback fakes, dgram send + multicast
+        // #4912 (child_process.spawn) intentionally absent: spawn is real
+        // since #1780 (Expr::ChildProcessSpawn codegen). The audit's
+        // "returns null" premise was stale; only exec() timing remains.
+        ("#4914", 3),  // cluster fork/setupPrimary/setupMaster (no handle distribution)
+        ("#4915", 4),  // BYOB readers + ByteLengthQueuingStrategy (throw)
+        ("#4916", 2),  // v8 get/writeHeapSnapshot (empty graph)
+        ("#4917", 18), // stdlib adapters: zlib(11) + http.Agent(3) + worker ref/unref(2) + mongodb(1) + backoff(1)
+    ];
+    let expected_map: BTreeMap<String, usize> =
+        expected.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+
+    assert_eq!(
+        by_issue, expected_map,
+        "stub inventory drifted — a stub was added/removed without updating tests/stub_inventory.rs"
+    );
+}
+
+#[test]
+fn stubs_only_appear_in_allowlisted_modules() {
+    // A stub flag showing up on a module not in this list is almost
+    // certainly an accident — fail loud so it gets triaged.
+    let allowed = [
+        "dns",
+        "dns/promises",
+        "dgram",
+        "cluster",
+        "stream/web",
+        "streams",
+        "v8",
+        "zlib",
+        "http",
+        "https",
+        "worker_threads",
+        "mongodb",
+        "exponential-backoff",
+    ];
+    for e in iter_entries().filter(|e| e.stub) {
+        assert!(
+            allowed.contains(&e.module),
+            "unexpected stub on module {:?} ({}). If intentional, add it to the allowlist.",
+            e.module,
+            e.name
+        );
+    }
+}
+
+#[test]
+fn keystone_apis_are_flagged() {
+    // Spot-check the headline lies from the epic so a refactor can't
+    // quietly drop the flag on the worst offenders.
+    let must_be_stub: &[(&str, &str)] = &[
+        ("dns", "resolve4"),
+        ("dns", "lookup"),
+        ("dns/promises", "resolve"),
+        ("cluster", "fork"),
+        ("v8", "getHeapSnapshot"),
+        ("v8", "writeHeapSnapshot"),
+        ("zlib", "createGzip"),
+        ("mongodb", "findOne"),
+    ];
+    for (module, name) in must_be_stub {
+        let found = iter_entries().any(|e| e.module == *module && e.name == *name && e.stub);
+        assert!(found, "expected {}::{} to be flagged stub", module, name);
+    }
+}

@@ -18,7 +18,7 @@ Tracked via the gap test suite (`test-files/test_gap_*.ts`, 28 tests). Compared 
 **Last full sweep:** run `./run_parity_tests.sh` for the current snapshot. The umbrella tracker is #793 (Node.js + TypeScript compatibility roadmap); the previously-cited #447–#452 batch closed on 2026-05-04. Currently-open trackers worth knowing about:
 
 - **Effect framework end-to-end (#321)** — `#684` (Schema.ts ~310th-init `(number).slice` regression) and `#809` (object-literal computed-keys + cross-module spread) are the live HashRing/Schema blockers.
-- **Async context** — `#788` (real `AsyncLocalStorage` tracking across `await`/microtasks/timers) and `#789` (real `async_hooks.createHook` lifecycle + asyncId). Today these are name-only stubs.
+- **Async context** — `AsyncLocalStorage` (real tracking across `await`/microtasks/timers, `#788`) and `async_hooks.createHook` (real lifecycle + asyncId, `#789`) both landed (closed 2026-05-16); these are no longer stubs.
 - **Compile-as-package** — `#348` (ink TUI end-to-end), `#488/#489` (Drizzle + MySQL), `#678` (linker emits native callsites for V8-fallback modules).
 - **Test/CI mechanics** — `#794` (per-category parity thresholds), `#796` (gap-suite output truncation + O(n²) `normalize_output`), `#812` (42-module behavioral matrix), `#806/#807/#808` (test harnesses for mixins / async context / ≥300-init scale).
 - **Skip-list audit** — `#797` covers `test-parity/known_failures.json` provenance (issue # + date per entry).

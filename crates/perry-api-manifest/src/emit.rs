@@ -173,16 +173,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
             .iter()
             .filter(|e| matches!(e.kind, ApiKind::Class) && entry_is_public_named_export(e))
         {
-            let _ = writeln!(
-                out,
-                "  /** {}{} */",
-                source_dts_tag(e),
-                if e.stub {
-                    " — stub (no-op at runtime)"
-                } else {
-                    ""
-                }
-            );
+            let _ = writeln!(out, "  /** {}{} */", source_dts_tag(e), stub_dts_suffix(e));
             let _ = writeln!(
                 out,
                 "  export class {} {{ [key: string]: any; }}",
@@ -195,12 +186,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
             .iter()
             .filter(|e| matches!(e.kind, ApiKind::Property) && entry_is_public_named_export(e))
         {
-            let _ = writeln!(
-                out,
-                "  /** {}{} */",
-                source_dts_tag(e),
-                if e.stub { " — stub" } else { "" }
-            );
+            let _ = writeln!(out, "  /** {}{} */", source_dts_tag(e), stub_dts_suffix(e));
             if e.name == "default" {
                 let _ = writeln!(out, "  const _default: any;");
                 let _ = writeln!(out, "  export default _default;");
@@ -232,12 +218,7 @@ pub fn emit_dts(_perry_version: &str) -> String {
             if !emitted_fn_names.insert(e.name) {
                 continue;
             }
-            let _ = writeln!(
-                out,
-                "  /** {}{} */",
-                source_dts_tag(e),
-                if e.stub { " — stub" } else { "" }
-            );
+            let _ = writeln!(out, "  /** {}{} */", source_dts_tag(e), stub_dts_suffix(e));
             // `default` is the npm convention for "the module is
             // callable" (e.g. `import sharp from 'sharp'`). TypeScript
             // expresses that as `export default function (...)`, with
@@ -448,9 +429,27 @@ fn source_marker(entry: &ApiEntry) -> String {
         ApiSource::Intrinsic => " *(intrinsic)*".to_string(),
     };
     if entry.stub {
-        tag.push_str(" ⚠ stub");
+        match entry.stub_note {
+            Some(note) => {
+                let _ = write!(tag, " ⚠ **stub** — {}", note);
+            }
+            None => tag.push_str(" ⚠ **stub** (no-op at runtime)"),
+        }
     }
     tag
+}
+
+/// `.d.ts` doc-comment suffix for a stub entry: an `@perryStub` JSDoc
+/// tag (editors surface it on hover, mirroring `@deprecated`) plus the
+/// per-entry note when present. Empty string for real APIs. (#4918)
+fn stub_dts_suffix(entry: &ApiEntry) -> String {
+    if !entry.stub {
+        return String::new();
+    }
+    match entry.stub_note {
+        Some(note) => format!(" @perryStub {}", note),
+        None => " @perryStub stub — no-op at runtime".to_string(),
+    }
 }
 
 fn source_dts_tag(entry: &ApiEntry) -> &'static str {

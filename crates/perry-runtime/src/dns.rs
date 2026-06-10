@@ -709,6 +709,11 @@ fn localhost_name(name: &str) -> bool {
 }
 
 fn resolve_records(kind: RecordKind, name: &str) -> f64 {
+    crate::error::stub_warn_or_throw(
+        "dns",
+        "loopback-only deterministic answers; no real DNS resolution",
+        Some("#4911"),
+    );
     if !localhost_name(name) {
         return empty_array_value();
     }
@@ -734,6 +739,11 @@ fn resolve_records(kind: RecordKind, name: &str) -> f64 {
 }
 
 fn reverse_records(name: &str) -> f64 {
+    crate::error::stub_warn_or_throw(
+        "dns",
+        "loopback-only deterministic answers; no real DNS resolution",
+        Some("#4911"),
+    );
     match name.parse::<IpAddr>() {
         Ok(IpAddr::V4(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
         Ok(IpAddr::V6(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
@@ -863,6 +873,11 @@ fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, f64> {
 }
 
 fn lookup_callback_values(hostname: &str, options: LookupOptions) -> Result<Vec<f64>, f64> {
+    crate::error::stub_warn_or_throw(
+        "dns",
+        "loopback-only deterministic answers; no real DNS resolution",
+        Some("#4911"),
+    );
     let addresses = lookup_addresses(hostname, options.family)?;
     if options.all {
         Ok(vec![null_value(), lookup_all_result(&addresses)])
@@ -904,6 +919,11 @@ fn service_for_port(port: u16) -> String {
 }
 
 fn lookup_service_result(address: &str, port: u16) -> Result<(String, String), f64> {
+    crate::error::stub_warn_or_throw(
+        "dns",
+        "loopback-only deterministic answers; no real DNS resolution",
+        Some("#4911"),
+    );
     match address.parse::<IpAddr>() {
         Ok(addr) if addr.is_loopback() => Ok(("localhost".to_string(), service_for_port(port))),
         Ok(_) => Ok((address.to_string(), service_for_port(port))),

@@ -316,11 +316,11 @@ declare module "cluster" {
   export const workers: any;
   /** stdlib */
   export function disconnect(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
   export function fork(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
   export function setupMaster(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
   export function setupPrimary(...args: any[]): any;
 }
 
@@ -1193,39 +1193,39 @@ declare module "dns" {
   export function getDefaultResultOrder(...args: any[]): any;
   /** stdlib */
   export function getServers(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function lookup(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function lookupService(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolve(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolve4(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolve6(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveAny(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveCaa(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveCname(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveMx(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveNaptr(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveNs(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolvePtr(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveSoa(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveSrv(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveTlsa(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveTxt(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function reverse(...args: any[]): any;
   /** stdlib */
   export function setDefaultResultOrder(...args: any[]): any;
@@ -1293,39 +1293,39 @@ declare module "dns/promises" {
   export function getDefaultResultOrder(...args: any[]): any;
   /** stdlib */
   export function getServers(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function lookup(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function lookupService(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolve(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolve4(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolve6(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveAny(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveCaa(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveCname(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveMx(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveNaptr(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveNs(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolvePtr(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveSoa(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveSrv(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveTlsa(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function resolveTxt(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
   export function reverse(...args: any[]): any;
   /** stdlib */
   export function setDefaultResultOrder(...args: any[]): any;
@@ -1409,7 +1409,7 @@ declare module "events" {
 }
 
 declare module "exponential-backoff" {
-  /** stdlib */
+  /** stdlib @perryStub retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917) */
   export function backOff(p0: any, p1: any): any;
 }
 
@@ -3461,7 +3461,7 @@ declare module "stream/promises" {
 }
 
 declare module "stream/web" {
-  /** stdlib */
+  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
   export class ByteLengthQueuingStrategy { [key: string]: any; }
   /** stdlib */
   export class CompressionStream { [key: string]: any; }
@@ -3473,9 +3473,9 @@ declare module "stream/web" {
   export class ReadableByteStreamController { [key: string]: any; }
   /** stdlib */
   export class ReadableStream { [key: string]: any; }
-  /** stdlib */
+  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
   export class ReadableStreamBYOBReader { [key: string]: any; }
-  /** stdlib */
+  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
   export class ReadableStreamBYOBRequest { [key: string]: any; }
   /** stdlib */
   export class ReadableStreamDefaultController { [key: string]: any; }
@@ -3501,7 +3501,7 @@ declare module "stream/web" {
 }
 
 declare module "streams" {
-  /** stdlib */
+  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
   export class ByteLengthQueuingStrategy { [key: string]: any; }
   /** stdlib */
   export class CountQueuingStrategy { [key: string]: any; }
@@ -3977,7 +3977,7 @@ declare module "v8" {
   export function getCppHeapStatistics(...args: any[]): any;
   /** stdlib */
   export function getHeapCodeStatistics(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub empty-but-valid V8 heap graph, not a real snapshot (#4916) */
   export function getHeapSnapshot(...args: any[]): any;
   /** stdlib */
   export function getHeapSpaceStatistics(...args: any[]): any;
@@ -3999,7 +3999,7 @@ declare module "v8" {
   export function stopCoverage(...args: any[]): any;
   /** stdlib */
   export function takeCoverage(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub empty-but-valid V8 heap graph, not a real snapshot (#4916) */
   export function writeHeapSnapshot(...args: any[]): any;
 }
 
@@ -4180,27 +4180,27 @@ declare module "zlib" {
   export function brotliDecompressSync(p0: string): Buffer;
   /** stdlib */
   export function crc32(p0: string, seed?: number): number;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createBrotliCompress(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createBrotliDecompress(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createDeflate(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createDeflateRaw(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createGunzip(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createGzip(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createInflate(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createInflateRaw(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createUnzip(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createZstdCompress(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
   export function createZstdDecompress(options?: any): any;
   /** stdlib */
   export function deflate(buffer: any, callback: any): void;

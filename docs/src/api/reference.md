@@ -372,9 +372,9 @@ Total: 2781 entries across 114 modules.
 ### Methods
 
 - `disconnect` — module
-- `fork` — module
-- `setupMaster` — module
-- `setupPrimary` — module
+- `fork` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
+- `setupMaster` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
+- `setupPrimary` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
 
 ### Properties
 
@@ -858,16 +858,16 @@ Total: 2781 entries across 114 modules.
 
 - `Socket` — module
 - `addListener` — instance *(class: `Socket`)*
-- `addMembership` — instance *(class: `Socket`)*
-- `addSourceSpecificMembership` — instance *(class: `Socket`)*
+- `addMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `addSourceSpecificMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
 - `address` — instance *(class: `Socket`)*
 - `bind` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Socket`)*
 - `connect` — instance *(class: `Socket`)*
 - `createSocket` — module
 - `disconnect` — instance *(class: `Socket`)*
-- `dropMembership` — instance *(class: `Socket`)*
-- `dropSourceSpecificMembership` — instance *(class: `Socket`)*
+- `dropMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `dropSourceSpecificMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
 - `emit` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `getRecvBufferSize` — instance *(class: `Socket`)*
@@ -881,11 +881,11 @@ Total: 2781 entries across 114 modules.
 - `ref` — instance *(class: `Socket`)*
 - `remoteAddress` — instance *(class: `Socket`)*
 - `removeListener` — instance *(class: `Socket`)*
-- `send` — instance *(class: `Socket`)*
-- `setBroadcast` — instance *(class: `Socket`)*
-- `setMulticastInterface` — instance *(class: `Socket`)*
-- `setMulticastLoopback` — instance *(class: `Socket`)*
-- `setMulticastTTL` — instance *(class: `Socket`)*
+- `send` — instance *(class: `Socket`)* ⚠ **stub** — in-process loopback only; no real UDP socket I/O (#4911)
+- `setBroadcast` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `setMulticastInterface` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `setMulticastLoopback` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `setMulticastTTL` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
 - `setRecvBufferSize` — instance *(class: `Socket`)*
 - `setSendBufferSize` — instance *(class: `Socket`)*
 - `setTTL` — instance *(class: `Socket`)*
@@ -928,38 +928,38 @@ Total: 2781 entries across 114 modules.
 - `getDefaultResultOrder` — module
 - `getServers` — module
 - `getServers` — instance *(class: `Resolver`)*
-- `lookup` — module
-- `lookupService` — module
-- `resolve` — module
-- `resolve` — instance *(class: `Resolver`)*
-- `resolve4` — module
-- `resolve4` — instance *(class: `Resolver`)*
-- `resolve6` — module
-- `resolve6` — instance *(class: `Resolver`)*
-- `resolveAny` — module
-- `resolveAny` — instance *(class: `Resolver`)*
-- `resolveCaa` — module
-- `resolveCaa` — instance *(class: `Resolver`)*
-- `resolveCname` — module
-- `resolveCname` — instance *(class: `Resolver`)*
-- `resolveMx` — module
-- `resolveMx` — instance *(class: `Resolver`)*
-- `resolveNaptr` — module
-- `resolveNaptr` — instance *(class: `Resolver`)*
-- `resolveNs` — module
-- `resolveNs` — instance *(class: `Resolver`)*
-- `resolvePtr` — module
-- `resolvePtr` — instance *(class: `Resolver`)*
-- `resolveSoa` — module
-- `resolveSoa` — instance *(class: `Resolver`)*
-- `resolveSrv` — module
-- `resolveSrv` — instance *(class: `Resolver`)*
-- `resolveTlsa` — module
-- `resolveTlsa` — instance *(class: `Resolver`)*
-- `resolveTxt` — module
-- `resolveTxt` — instance *(class: `Resolver`)*
-- `reverse` — module
-- `reverse` — instance *(class: `Resolver`)*
+- `lookup` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `lookupService` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve4` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve4` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve6` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve6` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveAny` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveAny` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCaa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCaa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCname` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCname` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveMx` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveMx` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNaptr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNaptr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNs` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNs` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolvePtr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolvePtr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSoa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSoa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSrv` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSrv` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTlsa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTlsa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTxt` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTxt` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `reverse` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `reverse` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
 - `setDefaultResultOrder` — module
 - `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module
@@ -1037,38 +1037,38 @@ Total: 2781 entries across 114 modules.
 - `getDefaultResultOrder` — module
 - `getServers` — module
 - `getServers` — instance *(class: `Resolver`)*
-- `lookup` — module
-- `lookupService` — module
-- `resolve` — module
-- `resolve` — instance *(class: `Resolver`)*
-- `resolve4` — module
-- `resolve4` — instance *(class: `Resolver`)*
-- `resolve6` — module
-- `resolve6` — instance *(class: `Resolver`)*
-- `resolveAny` — module
-- `resolveAny` — instance *(class: `Resolver`)*
-- `resolveCaa` — module
-- `resolveCaa` — instance *(class: `Resolver`)*
-- `resolveCname` — module
-- `resolveCname` — instance *(class: `Resolver`)*
-- `resolveMx` — module
-- `resolveMx` — instance *(class: `Resolver`)*
-- `resolveNaptr` — module
-- `resolveNaptr` — instance *(class: `Resolver`)*
-- `resolveNs` — module
-- `resolveNs` — instance *(class: `Resolver`)*
-- `resolvePtr` — module
-- `resolvePtr` — instance *(class: `Resolver`)*
-- `resolveSoa` — module
-- `resolveSoa` — instance *(class: `Resolver`)*
-- `resolveSrv` — module
-- `resolveSrv` — instance *(class: `Resolver`)*
-- `resolveTlsa` — module
-- `resolveTlsa` — instance *(class: `Resolver`)*
-- `resolveTxt` — module
-- `resolveTxt` — instance *(class: `Resolver`)*
-- `reverse` — module
-- `reverse` — instance *(class: `Resolver`)*
+- `lookup` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `lookupService` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve4` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve4` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve6` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolve6` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveAny` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveAny` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCaa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCaa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCname` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveCname` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveMx` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveMx` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNaptr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNaptr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNs` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveNs` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolvePtr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolvePtr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSoa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSoa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSrv` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveSrv` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTlsa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTlsa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTxt` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `resolveTxt` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `reverse` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `reverse` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
 - `setDefaultResultOrder` — module
 - `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module
@@ -1200,7 +1200,7 @@ Total: 2781 entries across 114 modules.
 
 ### Methods
 
-- `backOff` — module
+- `backOff` — module ⚠ **stub** — retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917)
 
 ## `fastify`
 
@@ -1521,7 +1521,7 @@ Total: 2781 entries across 114 modules.
 - `createServer` — module
 - `createServer` — module
 - `defaultPort` — instance *(class: `Agent`)*
-- `destroy` — instance *(class: `Agent`)*
+- `destroy` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `destroy` — instance *(class: `ClientRequest`)*
 - `destroyed` — instance *(class: `Agent`)*
@@ -1548,7 +1548,7 @@ Total: 2781 entries across 114 modules.
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
-- `keepSocketAlive` — instance *(class: `Agent`)*
+- `keepSocketAlive` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
 - `listen` — instance *(class: `HttpServer`)*
 - `listenerCount` — instance *(class: `ClientRequest`)*
 - `listening` — instance *(class: `HttpServer`)*
@@ -1570,7 +1570,7 @@ Total: 2781 entries across 114 modules.
 - `requestTimeout` — instance *(class: `HttpServer`)*
 - `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
-- `reuseSocket` — instance *(class: `Agent`)*
+- `reuseSocket` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
 - `setEncoding` — instance *(class: `IncomingMessage`)*
 - `setGlobalProxyFromEnv` — module
 - `setHeader` — instance *(class: `ClientRequest`)*
@@ -1882,7 +1882,7 @@ Total: 2781 entries across 114 modules.
 - `deleteMany` — instance
 - `deleteOne` — instance
 - `find` — instance
-- `findOne` — instance
+- `findOne` — instance ⚠ **stub** — resolves a JSON string, not a document object (#4917)
 - `insertMany` — instance
 - `insertOne` — instance
 - `updateMany` — instance
@@ -3105,14 +3105,14 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy`
+- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
 - `CompressionStream`
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableByteStreamController`
 - `ReadableStream`
-- `ReadableStreamBYOBReader`
-- `ReadableStreamBYOBRequest`
+- `ReadableStreamBYOBReader` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ReadableStreamBYOBRequest` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
 - `ReadableStreamDefaultController`
 - `ReadableStreamDefaultReader`
 - `TextDecoderStream`
@@ -3131,7 +3131,7 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy`
+- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableStream`
@@ -3515,7 +3515,7 @@ Total: 2781 entries across 114 modules.
 - `deserialize` — module
 - `getCppHeapStatistics` — module
 - `getHeapCodeStatistics` — module
-- `getHeapSnapshot` — module
+- `getHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
 - `getHeapSpaceStatistics` — module
 - `getHeapStatistics` — module
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
@@ -3543,7 +3543,7 @@ Total: 2781 entries across 114 modules.
 - `takeCoverage` — module
 - `writeDouble` — instance *(class: `Serializer`)*
 - `writeHeader` — instance *(class: `Serializer`)*
-- `writeHeapSnapshot` — module
+- `writeHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
 - `writeRawBytes` — instance *(class: `Serializer`)*
 - `writeUint32` — instance *(class: `Serializer`)*
 - `writeUint64` — instance *(class: `Serializer`)*
@@ -3644,12 +3644,12 @@ Total: 2781 entries across 114 modules.
 - `once` — instance *(class: `Worker`)*
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
-- `ref` — instance *(class: `Worker`)*
+- `ref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
 - `setEnvironmentData` — module
 - `startCpuProfile` — instance *(class: `Worker`)*
 - `startHeapProfile` — instance *(class: `Worker`)*
 - `terminate` — instance *(class: `Worker`)*
-- `unref` — instance *(class: `Worker`)*
+- `unref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
 
 ### Properties
 
@@ -3725,17 +3725,17 @@ Total: 2781 entries across 114 modules.
 - `brotliDecompress` — module
 - `brotliDecompressSync` — module
 - `crc32` — module
-- `createBrotliCompress` — module
-- `createBrotliDecompress` — module
-- `createDeflate` — module
-- `createDeflateRaw` — module
-- `createGunzip` — module
-- `createGzip` — module
-- `createInflate` — module
-- `createInflateRaw` — module
-- `createUnzip` — module
-- `createZstdCompress` — module
-- `createZstdDecompress` — module
+- `createBrotliCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createBrotliDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createDeflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createDeflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createGunzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createGzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createInflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createInflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createUnzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createZstdCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createZstdDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
 - `deflate` — module
 - `deflateRaw` — module
 - `deflateRawSync` — module

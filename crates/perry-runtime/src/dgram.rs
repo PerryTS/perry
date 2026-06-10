@@ -1186,6 +1186,11 @@ fn send_impl(socket: f64, args: &[f64]) -> f64 {
 }
 
 fn membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    crate::error::stub_warn_or_throw(
+        "dgram multicast membership",
+        "accepted but no OS multicast side effect",
+        Some("#4911"),
+    );
     let multicast_address = args.first().copied().unwrap_or_else(undefined_value);
     if is_missing_membership_arg(multicast_address) {
         throw_missing_arg("multicastAddress");
@@ -1200,6 +1205,11 @@ fn membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> f64 {
 }
 
 fn source_membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> f64 {
+    crate::error::stub_warn_or_throw(
+        "dgram multicast membership",
+        "accepted but no OS multicast side effect",
+        Some("#4911"),
+    );
     let source_address = validate_string_arg(
         args.first().copied().unwrap_or_else(undefined_value),
         "sourceAddress",

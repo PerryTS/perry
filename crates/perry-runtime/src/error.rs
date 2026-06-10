@@ -340,6 +340,41 @@ static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
     i32,
 ) -> ! = js_throw_error_with_code;
 
+/// Throw `ERR_PERRY_UNIMPLEMENTED` for a registered-but-stub API. Used
+/// by the stub-elimination epic's strict mode (#4918/#4919): a runtime
+/// stub calls [`crate::stub_diag::perry_runtime_stub`] to warn, then —
+/// if `PERRY_STRICT_STUBS=1` — diverges here instead of returning a
+/// fake value. `api` is the JS-facing name; `issue` an optional tag.
+pub fn throw_unimplemented_stub(api: &str, issue: Option<&str>) -> ! {
+    let msg = match issue {
+        Some(tag) => format!(
+            "{} is not implemented in Perry (stub); set PERRY_STRICT_STUBS=0 to allow the fake result — tracking {}",
+            api, tag
+        ),
+        None => format!(
+            "{} is not implemented in Perry (stub); set PERRY_STRICT_STUBS=0 to allow the fake result",
+            api
+        ),
+    };
+    let code = b"ERR_PERRY_UNIMPLEMENTED";
+    // SAFETY: both slices are valid UTF-8 byte ranges living for the
+    // duration of the call; kind 0 = generic Error.
+    unsafe {
+        js_throw_error_with_code(msg.as_ptr(), msg.len(), code.as_ptr(), code.len(), 0);
+    }
+}
+
+/// Convenience for runtime stub sites: warn (first-call) and, under
+/// `PERRY_STRICT_STUBS`, throw `ERR_PERRY_UNIMPLEMENTED`. Returns
+/// normally in non-strict mode so the caller proceeds with its
+/// deterministic/fake fallback. (#4918/#4919)
+pub fn stub_warn_or_throw(api: &'static str, reason: &'static str, issue: Option<&'static str>) {
+    crate::stub_diag::perry_runtime_stub(api, reason, issue);
+    if crate::stub_diag::strict_stubs_enabled() {
+        throw_unimplemented_stub(api, issue);
+    }
+}
+
 /// Create a new SyntaxError with a message
 #[no_mangle]
 pub extern "C" fn js_syntaxerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
