@@ -185,6 +185,14 @@ lazy_static! {
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Server handles whose accept loop saw a new connection since the last
+/// pump tick. Drained by `js_node_http_server_process_pending` to fire
+/// `'connection'` listeners on the main thread (#4905). Node passes the
+/// socket as the listener argument; we don't model a net.Socket for
+/// hyper connections yet, so listeners fire with no args — enough for
+/// the canonical connection-counting idiom.
+static PENDING_CONNECTION_EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+
 /// Signal tracked connections of `server_handle` to close. With
 /// `only_idle`, connections currently processing a request are left
 /// alone (Node's `closeIdleConnections` semantics; `server.close()`
@@ -514,6 +522,9 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                                         busy: busy.clone(),
                                     },
                                 );
+                                if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
+                                    q.push(server_handle);
+                                }
                                 tokio::spawn(async move {
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
@@ -1043,15 +1054,24 @@ fn reap_in_flight_requests() {
         let now = Instant::now();
         guard.retain(|e| {
             let ended = response_writable_ended(e.response_handle);
+            // #4905: the per-request oneshot receiver died with its
+            // connection task (client disconnected / closeAllConnections)
+            // — the response can never be flushed, so don't pin the event
+            // loop for the rest of the grace window.
+            let peer_gone = get_handle::<ServerResponse>(e.response_handle)
+                .and_then(|sr| sr.response_tx.as_ref())
+                .map(|tx| tx.is_closed())
+                .unwrap_or(false);
             let expired = now >= e.deadline;
-            if ended || expired {
+            if ended || expired || peer_gone {
                 to_finalize.push((
                     e.request_handle,
                     e.response_handle,
                     // Only synthesize when we're giving up on a handler
                     // that never ended the response — not when it ended
-                    // it itself, and never for skip-default paths.
-                    !ended && !e.skip_default_response,
+                    // it itself, never for skip-default paths, and never
+                    // when the peer is gone (nothing to deliver to).
+                    !ended && !e.skip_default_response && !peer_gone,
                 ));
                 false
             } else {
@@ -1208,6 +1228,25 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // #4728 — finalize any async-handler requests that have flushed their
     // response since the last tick (or timed out) before draining new ones.
     reap_in_flight_requests();
+
+    // #4905 — fire `'connection'` listeners for connections accepted since
+    // the last tick, before their requests are dispatched (Node fires
+    // `'connection'` ahead of `'request'`).
+    let connection_events: Vec<i64> = PENDING_CONNECTION_EVENTS
+        .lock()
+        .map(|mut q| q.drain(..).collect())
+        .unwrap_or_default();
+    for server_handle in connection_events {
+        let listeners = get_handle::<HttpServer>(server_handle)
+            .and_then(|s| s.listeners.get("connection").cloned())
+            .unwrap_or_default();
+        if listeners.is_empty() {
+            continue;
+        }
+        let this_val = handle_to_pointer_f64(server_handle);
+        with_implicit_this(this_val, || emit_no_arg_to_listeners(&listeners));
+        count += 1;
+    }
 
     // Snapshot handle ids first so we can mutate handle state
     // (drain channels, free per-request handles) without the
