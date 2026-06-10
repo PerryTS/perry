@@ -38,6 +38,7 @@ impl JsEmitter {
                 method,
                 body,
                 headers,
+                headers_dynamic,
             } => {
                 self.output.push_str("fetch(");
                 self.emit_expr(url);
@@ -45,16 +46,24 @@ impl JsEmitter {
                 self.emit_expr(method);
                 self.output.push_str(", body: ");
                 self.emit_expr(body);
-                self.output.push_str(", headers: {");
-                for (i, (key, val)) in headers.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push_str(", ");
+                self.output.push_str(", headers: ");
+                if let Some(hexpr) = headers_dynamic {
+                    // Dynamically-built headers (variable / spread / call): emit
+                    // the expression verbatim so the JS engine enumerates it.
+                    self.emit_expr(hexpr);
+                } else {
+                    self.output.push('{');
+                    for (i, (key, val)) in headers.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.output.push_str(&self.quote_string(key));
+                        self.output.push_str(": ");
+                        self.emit_expr(val);
                     }
-                    self.output.push_str(&self.quote_string(key));
-                    self.output.push_str(": ");
-                    self.emit_expr(val);
+                    self.output.push('}');
                 }
-                self.output.push_str("}})");
+                self.output.push_str("})");
             }
             Expr::FetchGetWithAuth { url, auth_header } => {
                 self.output.push_str("fetch(");

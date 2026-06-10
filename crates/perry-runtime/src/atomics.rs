@@ -592,7 +592,19 @@ pub extern "C" fn js_atomics_wait(
         }
     }
 
-    let _ = number_arg(timeout);
+    // Value matched: a spec-compliant agent blocks here until a matching
+    // `Atomics.notify` or the timeout elapses. Perry has no cross-agent
+    // blocking yet (`perry/thread` deep-copies, so SABs don't alias), so a
+    // non-zero timeout silently degrades to an immediate "timed-out" — the
+    // #4913 lie. A `timeout === 0` poll legitimately returns "timed-out".
+    let timeout = number_arg(timeout);
+    if timeout != 0.0 {
+        crate::error::stub_warn_or_throw(
+            "Atomics.wait",
+            "does not block; returns \"timed-out\" immediately (no cross-agent wakeups)",
+            Some("#4913"),
+        );
+    }
     string_value(b"timed-out")
 }
 
@@ -633,6 +645,15 @@ pub extern "C" fn js_atomics_wait_async(
         return wait_async_result(false, string_value(b"timed-out"));
     }
 
+    // Non-zero timeout + matching value: Node returns a promise that
+    // resolves on a matching `notify` or when the timeout elapses. Perry
+    // resolves "timed-out" immediately — the #4913 lie. Warn/throw before
+    // fabricating the already-resolved promise.
+    crate::error::stub_warn_or_throw(
+        "Atomics.waitAsync",
+        "resolves \"timed-out\" immediately; no real timer/notify wakeups",
+        Some("#4913"),
+    );
     let scope = crate::gc::RuntimeHandleScope::new();
     let timed_out = scope.root_nanbox_f64(string_value(b"timed-out"));
     let promise = crate::promise::js_promise_resolved(timed_out.get_nanbox_f64());

@@ -1373,7 +1373,14 @@ pub enum Expr {
         url: Box<Expr>,
         method: Box<Expr>,
         body: Box<Expr>,
+        // Statically-extracted headers from an object *literal* whose keys are
+        // all plain (non-computed) string/ident keys: `{ "k": v, ... }`.
         headers: Vec<(String, Expr)>,
+        // A dynamically-built headers value (a variable, a spread literal, a
+        // call like `Object.assign`/`new Headers`, etc.) that can only be
+        // serialized at runtime. When `Some`, it takes precedence over the
+        // static `headers` pairs above. See #4932.
+        headers_dynamic: Option<Box<Expr>>,
     },
     FetchGetWithAuth {
         // fetchWithAuth(url, authHeader) -> Promise<Response>

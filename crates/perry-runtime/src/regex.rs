@@ -17,12 +17,17 @@ use crate::object::ObjectHeader;
 
 mod compile;
 mod escape;
+mod exec_array;
 mod grammar;
 mod match_all;
 mod replace_expand;
 mod replace_fn;
 pub use compile::js_regexp_compile_value;
 pub use escape::js_regexp_escape;
+use exec_array::{
+    byte_index_to_char_index, char_index_to_byte, set_exec_array_groups, set_exec_array_indices,
+    set_exec_array_indices_fancy, set_exec_array_metadata,
+};
 use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
@@ -228,7 +233,7 @@ fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
 }
 
 /// Internal helper: Create a StringHeader from a Rust &str
-fn js_string_from_str(s: &str) -> *mut StringHeader {
+pub(super) fn js_string_from_str(s: &str) -> *mut StringHeader {
     crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
@@ -244,57 +249,6 @@ fn throw_match_all_non_global_regex() -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
-fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index: f64) {
-    if arr.is_null() {
-        return;
-    }
-    let index_key = js_string_from_str("index");
-    crate::array::js_array_set_string_key(arr, index_key, index);
-
-    let input_key = js_string_from_str("input");
-    let input_str = js_string_from_str(input);
-    let input_value = js_nanbox_string(input_str as i64);
-    crate::array::js_array_set_string_key(arr, input_key, input_value);
-}
-
-/// Attach the `groups` own property to a regex match-result array.
-///
-/// Mirrors `set_exec_array_metadata` for `index`/`input`: the result of
-/// `regex.exec(s)` / `s.match(regex)` carries `groups` as a real own property
-/// so reads stay correct under aliasing and interleaved matches — a stored
-/// `m.groups` survives a later `re2.exec(...)`, instead of resolving through a
-/// single most-recent-match thread-local (`LAST_EXEC_GROUPS`). Per ECMA-262
-/// RegExpBuiltinExec, `groups` is the named-capture object when the pattern
-/// has named groups, else `undefined`.
-fn set_exec_array_groups(arr: *mut ArrayHeader, groups_obj: *mut ObjectHeader) {
-    if arr.is_null() {
-        return;
-    }
-    let groups_key = js_string_from_str("groups");
-    let value = if groups_obj.is_null() {
-        f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
-    } else {
-        crate::value::js_nanbox_pointer(groups_obj as i64)
-    };
-    crate::array::js_array_set_string_key(arr, groups_key, value);
-}
-
-fn char_index_to_byte(s: &str, char_index: usize) -> usize {
-    if char_index == 0 {
-        return 0;
-    }
-    for (idx, (byte, _)) in s.char_indices().enumerate() {
-        if idx == char_index {
-            return byte;
-        }
-    }
-    s.len()
-}
-
-fn byte_index_to_char_index(s: &str, byte_index: usize) -> f64 {
-    s[..byte_index.min(s.len())].chars().count() as f64
 }
 
 #[inline]
@@ -722,6 +676,18 @@ pub extern "C" fn js_string_match(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                             groups_obj,
                         );
+                        // Build `indices` if the `d` flag (hasIndices) is set —
+                        // non-global `String.prototype.match` delegates to
+                        // RegExpExec, so it carries the same `indices` as exec().
+                        if (*re).has_indices {
+                            set_exec_array_indices_fancy(
+                                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                                str_data,
+                                0,
+                                &fre,
+                                &caps,
+                            );
+                        }
                         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
                     }
                     _ => {
@@ -850,6 +816,19 @@ pub extern "C" fn js_string_match(
                         set_exec_array_groups(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                             ptr::null_mut(),
+                        );
+                    }
+
+                    // Build `indices` if the `d` flag (hasIndices) is set —
+                    // non-global `String.prototype.match` delegates to
+                    // RegExpExec, so it carries the same `indices` as exec().
+                    if (*re).has_indices {
+                        set_exec_array_indices(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            str_data,
+                            0,
+                            &caps,
+                            regex,
                         );
                     }
 
@@ -1357,6 +1336,16 @@ pub extern "C" fn js_regexp_exec(
                     let groups_obj = build_fancy_groups(fre, &caps, &scope);
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
                     set_exec_array_groups(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), groups_obj);
+                    // Build indices array if `d` flag (hasIndices) is set
+                    if (*re).has_indices {
+                        set_exec_array_indices_fancy(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                            str_data,
+                            search_start_byte,
+                            fre,
+                            &caps,
+                        );
+                    }
                     return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
                 }
                 return Some(ptr::null_mut()); // fancy-regex tried but no match
@@ -1463,6 +1452,17 @@ pub extern "C" fn js_regexp_exec(
                     set_exec_array_groups(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                         ptr::null_mut(),
+                    );
+                }
+
+                // Build indices array if `d` flag (hasIndices) is set
+                if (*re).has_indices {
+                    set_exec_array_indices(
+                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                        str_data,
+                        search_start_byte,
+                        &caps,
+                        regex,
                     );
                 }
 

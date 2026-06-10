@@ -82,14 +82,27 @@ pub(super) fn lower_super_prop(
             }
         }
         ast::SuperProp::Computed(computed) => {
-            let index = Box::new(lower_expr(ctx, &computed.expr)?);
             if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::ObjectSuperPropertyGet {
                     home: Box::new(Expr::LocalGet(home_id)),
                     key: index,
                     receiver: Box::new(Expr::This),
                 })
+            } else if let Some(key) = match computed.expr.as_ref() {
+                ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(|s| s.to_string()),
+                _ => None,
+            } {
+                // `super['fromA']` in a CLASS method with a string-literal key:
+                // route through the same parent-prototype-chain lookup as the
+                // ident form `super.fromA` (Expr::SuperPropertyGet). The previous
+                // `this[index]` fallback read the property off the CHILD instance,
+                // shadowing the parent value (test262
+                // super/prop-expr-cls-val{,-from-arrow}). A truly dynamic computed
+                // key (not a literal) still falls back below.
+                Ok(Expr::SuperPropertyGet { property: key })
             } else {
+                let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
                     object: Box::new(Expr::This),
                     index,
@@ -121,9 +134,24 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
         // Simple identifier: x++ or ++x
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
-            let id = ctx
-                .lookup_local(&name)
-                .ok_or_else(|| anyhow!("Undefined variable in update expression: {}", name))?;
+            let Some(id) = ctx.lookup_local(&name) else {
+                // `++x` / `x--` on a name that resolves to no binding is an
+                // unresolvable reference: GetValue throws a ReferenceError
+                // before any write happens (test262 prefix/postfix
+                // S11.4.4_A2.1_T2; `if (false) { ++arguments }` must still
+                // *compile* — flagging this at compile time rejected the whole
+                // program). Emit a runtime ReferenceError throw instead of
+                // failing the build. #4918 non-class language remnant.
+                return Ok(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_throw_reference_error_unresolvable_assignment".to_string(),
+                        param_types: vec![perry_types::Type::String],
+                        return_type: perry_types::Type::Any,
+                    }),
+                    args: vec![Expr::String(name)],
+                    type_args: vec![],
+                });
+            };
             let op = match update.op {
                 ast::UpdateOp::PlusPlus => UpdateOp::Increment,
                 ast::UpdateOp::MinusMinus => UpdateOp::Decrement,

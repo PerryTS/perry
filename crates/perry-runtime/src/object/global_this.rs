@@ -3896,12 +3896,11 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     populate_prototype(
         instant,
         "Temporal.Instant",
-        &[
-            "epochMilliseconds",
-            "epochNanoseconds",
-            "epochSeconds",
-            "epochMicroseconds",
-        ],
+        // Per the current Temporal spec, `Temporal.Instant.prototype` exposes
+        // only `epochMilliseconds` and `epochNanoseconds`; the older
+        // `epochSeconds` / `epochMicroseconds` accessors were removed (Node v26
+        // ships neither, and `get()` never implemented them).
+        &["epochMilliseconds", "epochNanoseconds"],
         &[
             ("add", 1),
             ("subtract", 1),

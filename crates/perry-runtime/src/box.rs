@@ -98,7 +98,7 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 
 /// Get the value from a box
 ///
-/// Same robustness as `js_box_set`: invalid pointers return NaN
+/// Same robustness as `js_box_set`: invalid pointers return `undefined`
 /// rather than dereferencing. See perry#393 for the failure mode.
 #[no_mangle]
 pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
@@ -107,8 +107,9 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
             // perry#924: production services see these in tight bursts of
             // 3 synced with normal request handling and the operator can't
             // tell whether anything is wrong. The path is correctness-safe
-            // (we already return NaN to the caller); gate the diagnostic
-            // behind `PERRY_DEBUG=1` so it only surfaces during bisection.
+            // (we already return a defined value to the caller); gate the
+            // diagnostic behind `PERRY_DEBUG=1` so it only surfaces during
+            // bisection.
             if std::env::var_os("PERRY_DEBUG").is_some() {
                 let count = BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
                 if count < 3 {
@@ -118,7 +119,14 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
                     );
                 }
             }
-            return f64::NAN;
+            // perry#4926: with codegen entry-initializing boxed slots to
+            // TAG_UNDEFINED, this arm is the read-before-initialization
+            // path for a boxed variable — in JS that reads as `undefined`
+            // (Perry has no TDZ), not as the number NaN. TAG_UNDEFINED is
+            // itself a quiet-NaN bit pattern, so numeric consumers behave
+            // exactly as before; JS-level checks (`typeof`, `== null`)
+            // now see `undefined`.
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
         (*ptr).value
     }
@@ -241,8 +249,15 @@ mod tests {
         // Must be a silent no-op, not a write/crash.
         js_box_set(fake, 1.0);
         assert_eq!(RODATA[0], 0xDEAD_BEEF, "rodata must be untouched");
-        // Reads from an unregistered pointer return NaN, never deref.
-        assert!(js_box_get(fake).is_nan());
+        // Reads from an unregistered pointer return `undefined` (perry#4926:
+        // the read-before-initialization value of a boxed variable), never
+        // deref. TAG_UNDEFINED is a NaN bit pattern, so this also preserves
+        // the older "returns NaN" numeric behavior.
+        assert_eq!(
+            js_box_get(fake).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "unregistered box read must yield undefined"
+        );
     }
 
     /// A real `js_box_alloc` box still round-trips through set/get after the

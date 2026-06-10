@@ -247,22 +247,13 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         });
     });
 
-    // Bind `this` to the server for the `'listening'` listeners + the
-    // optional `cb`, mirroring Node so `this.address().port` resolves
-    // inside the listen callback (#2132).
-    let this_val = handle_to_pointer_f64(server_handle);
-    let listening_listeners = get_handle::<HttpsServer>(server_handle)
-        .and_then(|s| s.base.listeners.get("listening").cloned())
-        .unwrap_or_default();
-    with_implicit_this(this_val, || emit_no_arg_to_listeners(&listening_listeners));
-    if callback != 0 {
-        let raw = callback as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            with_implicit_this(this_val, || {
-                let _ = closure.call0();
-            });
-        }
+    // #4903 — queue the `'listening'` emit + the optional `cb` for the
+    // main-thread pump instead of firing synchronously; Node emits
+    // `'listening'` on a later tick, after `const server = ...` has been
+    // assigned. The pump binds `this` to the server when it fires them
+    // (#2132). See `server::drain_deferred_listen_for`.
+    if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+        crate::server::queue_deferred_listening_emit(&mut s.base, callback);
     }
 
     // Closes #604 — `listen()` is now non-blocking. Pending requests
@@ -371,6 +362,9 @@ pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<H
 pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
     let res_f64 = handle_to_pointer_f64(pending.response_handle);
+    // #4903 — Node invokes `'request'` listeners (and the `createServer`
+    // handler, which is one) with `this` bound to the server.
+    let server_this = handle_to_pointer_f64(pending.server_handle);
     for cb in &pending.request_listeners {
         if *cb == 0 {
             continue;
@@ -379,7 +373,9 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = *cb as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(req_f64, res_f64);
+                with_implicit_this(server_this, || {
+                    let _ = closure.call2(req_f64, res_f64);
+                });
             }
             js_promise_run_microtasks();
         }
@@ -389,7 +385,9 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = pending.handler as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(req_f64, res_f64);
+                with_implicit_this(server_this, || {
+                    let _ = closure.call2(req_f64, res_f64);
+                });
             }
             js_promise_run_microtasks();
         }

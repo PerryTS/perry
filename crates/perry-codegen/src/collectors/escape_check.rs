@@ -668,12 +668,16 @@ pub fn check_escapes_in_expr(
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             check_escapes_in_expr(url, candidates, classes, escaped);
             check_escapes_in_expr(method, candidates, classes, escaped);
             check_escapes_in_expr(body, candidates, classes, escaped);
             for (_, v) in headers {
                 check_escapes_in_expr(v, candidates, classes, escaped);
+            }
+            if let Some(hd) = headers_dynamic {
+                check_escapes_in_expr(hd, candidates, classes, escaped);
             }
         }
         Expr::SuperCall(args)

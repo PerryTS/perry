@@ -774,6 +774,19 @@ pub(crate) fn lower_let(
         // branches may capture this id later, and an alloca placed
         // here would not dominate those branches' loads.
         let slot = ctx.func.alloca_entry(DOUBLE);
+        // perry#4926 (source bug behind the #4898 SIGBUS): the alloca
+        // dominates every use, but the store of the box pointer below
+        // only runs when this `Let` executes. A boxed read/write on a
+        // path that skips the Let (sibling-branch closure capture,
+        // switch fallthrough, hoisted-`var` use in a minified function)
+        // loads an uninitialized slot — LLVM folds that load to `undef`
+        // and regalloc substitutes whatever register happens to be live,
+        // handing `js_box_set`/`js_box_get` an arbitrary "plausible"
+        // pointer. Initialize the slot to TAG_UNDEFINED in the entry
+        // block (mirroring the non-boxed path) so skipped-init paths
+        // read a defined non-pointer sentinel that the runtime rejects
+        // deterministically.
+        ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
         let box_as_double = ctx.block().bitcast_i64_to_double(&box_ptr);
         ctx.block().store(DOUBLE, &box_as_double, &slot);
         // Step 2: register BEFORE lowering init.

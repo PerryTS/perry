@@ -1408,12 +1408,16 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             collect_assigned_locals_expr(url, assigned);
             collect_assigned_locals_expr(method, assigned);
             collect_assigned_locals_expr(body, assigned);
             for (_, v) in headers {
                 collect_assigned_locals_expr(v, assigned);
+            }
+            if let Some(hd) = headers_dynamic {
+                collect_assigned_locals_expr(hd, assigned);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {

@@ -28,12 +28,17 @@ impl<'a> FuncEmitCtx<'a> {
                 method,
                 body,
                 headers,
+                headers_dynamic,
             } => {
                 self.emit_expr(func, url);
                 self.emit_expr(func, method);
                 self.emit_expr(func, body);
                 // Build headers object
-                if headers.is_empty() {
+                if let Some(hexpr) = headers_dynamic {
+                    // Dynamically-built headers: leave the object value on the
+                    // stack so the runtime enumerates its own properties (#4932).
+                    self.emit_expr(func, hexpr);
+                } else if headers.is_empty() {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 } else {
                     self.emit_frame_begin(func, 0);

@@ -1,3 +1,4 @@
+// parity-env: PERRY_DETERMINISTIC_NET=1
 import dns from "node:dns";
 import dnsPromises from "node:dns/promises";
 

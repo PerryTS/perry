@@ -672,6 +672,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 let ty_expr = match bin.right.as_ref() {
                     ast::Expr::Ident(ident) => {
                         let name = ident.sym.as_ref();
+                        // `x instanceof undefined`: `undefined` is the primitive
+                        // value, never a class name. Codegen would resolve `ty =
+                        // "undefined"` to class_id 0 and silently return `false`;
+                        // ECMAScript requires evaluating the RHS and throwing a
+                        // TypeError because it is not an object (test262
+                        // instanceof/S11.8.6_A3 #4). Lower it to the undefined
+                        // value so it routes through `js_instanceof_dynamic`.
+                        if name == "undefined" {
+                            Some(Box::new(Expr::Undefined))
+                        } else
                         // A local holding a class ref (drizzle's `is(value, type)`),
                         // OR a top-level ES5 function constructor (`function Foo(){…}`
                         // used as `x instanceof Foo`). The latter has no class entry,
@@ -896,11 +906,25 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             // checks fail). The static methods are real functions in
             // Node, so fold to the literal "function" string here.
             if matches!(unary.op, ast::UnaryOp::TypeOf) {
+                // `typeof(x)` parenthesizes the operand, so the AST-level folds
+                // below — which match a bare `Ident` / `Member` — would miss it
+                // and fall through to a normal operand lowering. For an
+                // unresolved identifier that means `typeof(zzz)` emitted a
+                // ReferenceError-throwing get instead of folding to "undefined"
+                // (the spec's GetValue-skips-on-typeof rule). Peel transparent
+                // `Paren` wrappers so the operand-shape folds see through them.
+                let typeof_arg = {
+                    let mut e = unary.arg.as_ref();
+                    while let ast::Expr::Paren(p) = e {
+                        e = p.expr.as_ref();
+                    }
+                    e
+                };
                 // #677: bare `typeof Function` — Function is a JS built-in
                 // constructor, so typeof is "function". Without this fold,
                 // the bare ident lowers to `GlobalGet(0)` and typeof reads
                 // "object" via the global-this short-circuit.
-                if let ast::Expr::Ident(id) = unary.arg.as_ref() {
+                if let ast::Expr::Ident(id) = typeof_arg {
                     if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
                         return Ok(Expr::String("function".to_string()));
                     }
@@ -980,7 +1004,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // (`(process.memoryUsage).rss`) so it bypasses the
                 // ident-receiver fold below. Node exposes `rss` as a fast-path
                 // function hung off `process.memoryUsage`; fold to "function".
-                if let ast::Expr::Member(outer) = unary.arg.as_ref() {
+                if let ast::Expr::Member(outer) = typeof_arg {
                     if let ast::MemberProp::Ident(outer_prop) = &outer.prop {
                         if outer_prop.sym.as_ref() == "rss" {
                             if let ast::Expr::Member(inner) = outer.obj.as_ref() {
@@ -998,7 +1022,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }
                     }
                 }
-                if let ast::Expr::Member(member) = unary.arg.as_ref() {
+                if let ast::Expr::Member(member) = typeof_arg {
                     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                             let obj_name = obj_ident.sym.as_ref();

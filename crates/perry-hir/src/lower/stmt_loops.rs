@@ -410,6 +410,70 @@ pub(crate) fn iterator_close_guarded_stmt(iter_id: LocalId) -> Stmt {
     }
 }
 
+/// Wrap a lazy `for...of` body (binding + user statements) in a `try/catch`
+/// that runs IteratorClose when the body completes abruptly with a *throw* —
+/// either an explicit `throw` statement or a runtime exception (a throwing
+/// setter in the LHS `PutValue`, a destructuring error, an assertion failure,
+/// a generator `.throw()` propagation). The `break`/`return`/labeled cases are
+/// handled separately by `insert_iterator_close_on_abrupt` (they are control
+/// flow, not exceptions, so this `catch` never sees them — no double-close).
+///
+/// Per spec, for a throw completion IteratorClose invokes `return` but does
+/// NOT validate its result and SWALLOWS any exception it raises — the original
+/// throw is the one that propagates. So the close here is unvalidated and
+/// itself wrapped in a result-swallowing `try/catch`, then the caught error is
+/// re-thrown.
+pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
+    ctx: &mut LoweringContext,
+    iter_id: LocalId,
+    body: Vec<Stmt>,
+) -> Stmt {
+    let err_id = ctx.fresh_local();
+    let err_name = format!("__forof_err_{}", err_id);
+    ctx.locals.push((err_name.clone(), err_id, Type::Any));
+    let ret_err_id = ctx.fresh_local();
+    let ret_err_name = format!("__forof_ret_err_{}", ret_err_id);
+    ctx.locals
+        .push((ret_err_name.clone(), ret_err_id, Type::Any));
+
+    // try { if (__iter.return != null) __iter.return(); } catch (_) {}
+    //
+    // The whole close — including the `__iter.return` *read* (which may be an
+    // accessor that throws) and the call's result — is inside the swallowing
+    // `try`: for a throw completion the close's own abrupt completion is
+    // discarded and the ORIGINAL throw propagates (spec IteratorClose, throw
+    // case). Keeping the `.return` read outside would let a throwing getter
+    // (`iterator-close-throw-get-method-abrupt`) replace the original error.
+    let guarded_close = Stmt::Try {
+        body: vec![Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::LooseNe,
+                left: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(iter_id)),
+                    property: "return".to_string(),
+                }),
+                right: Box::new(Expr::Null),
+            },
+            then_branch: vec![Stmt::Expr(iterator_return_call(iter_id, false))],
+            else_branch: None,
+        }],
+        catch: Some(CatchClause {
+            param: Some((ret_err_id, ret_err_name)),
+            body: Vec::new(),
+        }),
+        finally: None,
+    };
+
+    Stmt::Try {
+        body,
+        catch: Some(CatchClause {
+            param: Some((err_id, err_name)),
+            body: vec![guarded_close, Stmt::Throw(Expr::LocalGet(err_id))],
+        }),
+        finally: None,
+    }
+}
+
 /// Rewrite a synchronous `for...of` body so every abrupt completion that
 /// escapes the loop runs IteratorClose first. Per spec ForIn/OfBodyEvaluation:
 /// an unlabeled `break` that targets this loop, a labeled `break`/`continue`
@@ -1703,19 +1767,26 @@ pub(crate) fn lower_stmt_for_of(
     // escaping the loop runs IteratorClose (`__iter.return()`) first.
     if use_lazy_iter {
         insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
+        // Wrap ONLY the user body so a throw escaping it runs IteratorClose.
+        // break/return/labeled abrupts were already handled above; this covers
+        // the throw-completion case those intentionally leave alone. The
+        // element-`.value` read and binding statements stay OUTSIDE the wrapper:
+        // per spec, IteratorValue throwing sets the iterator done and does NOT
+        // close it (`iterator-next-result-value-attr-error`) — only an abrupt
+        // body completion does.
+        let guarded_body = wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, loop_body);
+        let mut full_body = binding_stmts;
+        full_body.push(guarded_body);
+        module
+            .init
+            .push(lazy_iter_for_stmt(arr_id, result_id, full_body));
+        ctx.pop_block_scope(for_scope_mark);
+        return Ok(());
     }
 
     // Prepend the binding statements to the loop body
     for (i, stmt) in binding_stmts.into_iter().enumerate() {
         loop_body.insert(i, stmt);
-    }
-
-    if use_lazy_iter {
-        module
-            .init
-            .push(lazy_iter_for_stmt(arr_id, result_id, loop_body));
-        ctx.pop_block_scope(for_scope_mark);
-        return Ok(());
     }
 
     // Loop bound. Map/Set fast paths read `.size` (lowered by

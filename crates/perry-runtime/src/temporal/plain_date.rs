@@ -24,16 +24,24 @@ fn calendar_arg(v: f64) -> Calendar {
 
 /// `new Temporal.PlainDate(year, month, day, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
-    let year = dispatch::num_arg(args, 0);
-    let month = dispatch::num_arg(args, 1);
-    let day = dispatch::num_arg(args, 2);
-    let cal = calendar_arg(raw_arg(args, 3));
+    dispatch::require_construct(TYPE_NAME);
+    // Each field is `ToIntegerWithTruncation` (real `ToNumber`, observing
+    // `valueOf`; `Infinity`/`NaN` → `RangeError`), read in order — so the
+    // order-of-operations / `infinity-throws-rangeerror` tests see exactly one
+    // `valueOf` per field and a non-finite field rejects at its read position.
+    let year = dispatch::integer_with_truncation(raw_arg(args, 0));
+    let month = dispatch::integer_with_truncation(raw_arg(args, 1));
+    let day = dispatch::integer_with_truncation(raw_arg(args, 2));
+    // The constructor's `calendar` is `ToTemporalCalendarIdentifier` — a bare
+    // identifier string, NOT a parseable ISO/annotation string (so
+    // `"1997-12-04[u-ca=iso8601]"` is a `RangeError`, not silently accepted).
+    let cal = super::options::calendar_identifier(raw_arg(args, 3));
     // `try_new` = overflow "reject": the constructor throws on out-of-range
     // fields (e.g. month 13) rather than silently constraining to 2021-12-01.
     wrap(ok_or_throw(PlainDate::try_new(
-        year as i32,
-        month as u8,
-        day as u8,
+        year.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        dispatch::field_u8(month),
+        dispatch::field_u8(day),
         cal,
     )))
 }
@@ -66,11 +74,43 @@ fn coerce_date_with_overflow(
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
-    // `from(item, options)`: a wrong-typed options arg is a TypeError, thrown
-    // before the item is converted (GetOptionsObject). `overflow` also drives
-    // constrain/reject for a property-bag / string item.
-    let overflow = super::options::overflow(raw_arg(args, 1));
-    wrap(coerce_date_with_overflow(raw_arg(args, 0), overflow))
+    // `ToTemporalDate(item, options)`. The point at which `options` is processed
+    // is observable and differs by item kind:
+    //   * A **string** is parsed FIRST (an invalid ISO string → `RangeError`)
+    //     and only then is `overflow` read from `options` — so a bad string
+    //     throws before a wrong-typed `options` would (`options-wrong-type`'s
+    //     `"1976-11-18Z"` case expects `RangeError`, not `TypeError`).
+    //   * A `PlainDate` / `PlainDateTime` / `ZonedDateTime` reads `overflow`
+    //     (validating `options` → `TypeError` on a primitive) then takes/derives
+    //     its date.
+    //   * A **property bag** reads its calendar + fields first, then `overflow`
+    //     LAST (`observable-get-overflow` / `order-of-operations`).
+    let item = raw_arg(args, 0);
+    let opts = raw_arg(args, 1);
+    if JSValue::from_bits(item.to_bits()).is_string() {
+        let d = ok_or_throw(dispatch::read_string(item).parse::<PlainDate>());
+        let _ = super::options::overflow(opts);
+        return wrap(d);
+    }
+    match temporal_value_ref(item) {
+        Some(TemporalValue::PlainDate(d)) => {
+            let _ = super::options::overflow(opts);
+            return wrap(d.clone());
+        }
+        Some(TemporalValue::PlainDateTime(dt)) => {
+            let _ = super::options::overflow(opts);
+            return wrap(dt.to_plain_date());
+        }
+        Some(TemporalValue::ZonedDateTime(z)) => {
+            let _ = super::options::overflow(opts);
+            return wrap(z.to_plain_date());
+        }
+        Some(_) => crate::object::throw_object_type_error(
+            b"Cannot convert this Temporal value to a Temporal.PlainDate",
+        ),
+        None => {}
+    }
+    wrap(super::options::plain_date_from_bag_opts(item, opts))
 }
 
 pub fn compare_static(args: &[f64]) -> f64 {
@@ -124,7 +164,13 @@ fn to_zoned_args(v: f64) -> (TimeZone, Option<PlainTime>) {
         return (super::options::timezone(v), None);
     }
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_pointer() {
+    // A `Temporal.ZonedDateTime` tz-like reuses its own zone.
+    if let Some(TemporalValue::ZonedDateTime(_)) = temporal_value_ref(v) {
+        return (super::options::timezone(v), None);
+    }
+    // A plain object is the `{ timeZone, plainTime }` options form (a Symbol is
+    // POINTER-tagged but is a primitive, never an options object).
+    if jv.is_pointer() && unsafe { crate::symbol::js_is_symbol(v) } == 0 {
         let obj = jv.as_pointer::<crate::object::ObjectHeader>();
         if !obj.is_null() {
             let tz_key = crate::string::js_string_from_bytes(b"timeZone".as_ptr(), 8);
@@ -135,8 +181,11 @@ fn to_zoned_args(v: f64) -> (TimeZone, Option<PlainTime>) {
             return (tz, super::options::optional_plain_time(pt_raw));
         }
     }
-    crate::fs::validate::throw_range_error_with_code(
-        "Temporal.PlainDate.prototype.toZonedDateTime requires a time zone",
+    // A non-string, non-object primitive (null / boolean / number / bigint /
+    // symbol) is never a valid time-zone — `ToTemporalTimeZoneIdentifier` throws
+    // a `TypeError` (not a RangeError, which is reserved for bad *strings*).
+    crate::object::throw_object_type_error(
+        b"Temporal.PlainDate.prototype.toZonedDateTime requires a time-zone string or object",
     )
 }
 
@@ -178,11 +227,20 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let fields = super::options::calendar_fields(obj);
+            let fields = super::options::with_calendar_fields(obj, d.calendar());
             let overflow = super::options::overflow(raw_arg(args, 1));
             wrap(ok_or_throw(d.with(fields, overflow)))
         }
-        "withCalendar" => wrap(d.with_calendar(calendar_arg(raw_arg(args, 0)))),
+        "withCalendar" => {
+            // `withCalendar` requires a calendar argument — a missing / `undefined`
+            // one is a `TypeError` (not the ISO default that `calendar_slot` returns).
+            if dispatch::is_undefined(raw_arg(args, 0)) {
+                crate::object::throw_object_type_error(
+                    b"Temporal.PlainDate.prototype.withCalendar requires a calendar argument",
+                );
+            }
+            wrap(d.with_calendar(calendar_arg(raw_arg(args, 0))))
+        }
         "toPlainDateTime" => {
             let time = super::options::optional_plain_time(raw_arg(args, 0));
             alloc_temporal_cell(TemporalValue::PlainDateTime(ok_or_throw(

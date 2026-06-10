@@ -189,7 +189,17 @@ pub unsafe extern "C" fn js_super_accessor_get(
             }
         }
     }
-    let proto = crate::object::class_prototype_object(parent_class_id);
+    // Prefer the *declared* prototype object (stable heap identity). A dynamic
+    // write `Parent.prototype.foo = v` lands on that object, whereas the older
+    // overloaded `CLASS_PROTOTYPE_OBJECTS` table may hold a distinct synthetic
+    // prototype that never sees such writes — so reading through it returned
+    // `undefined` for data properties added to a parent prototype after the
+    // class declaration (test262 super/prop-{dot,expr}-cls-val). Falls back to
+    // the older table for synthetic-prototype sources that lack a decl entry.
+    let mut proto = crate::object::class_decl_prototype_object(parent_class_id);
+    if proto.is_null() {
+        proto = crate::object::class_prototype_object(parent_class_id);
+    }
     if !proto.is_null() {
         let target = crate::value::js_nanbox_pointer(proto as i64);
         return js_object_get_property_key(target, key);

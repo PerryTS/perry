@@ -2,11 +2,11 @@
 //!
 //! A calendar month + day with no year (e.g. a recurring birthday/holiday).
 
-use super::dispatch::{self, num_arg, ok_or_throw, raw_arg, string};
+use super::dispatch::{self, ok_or_throw, raw_arg, string};
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
 use temporal_rs::options::Overflow;
-use temporal_rs::{Calendar, PlainMonthDay};
+use temporal_rs::PlainMonthDay;
 
 const TYPE_NAME: &str = "Temporal.PlainMonthDay";
 
@@ -14,39 +14,42 @@ fn wrap(md: PlainMonthDay) -> f64 {
     alloc_temporal_cell(TemporalValue::PlainMonthDay(md))
 }
 
-fn calendar_arg(v: f64) -> Calendar {
-    if dispatch::is_undefined(v) {
-        return Calendar::default();
-    }
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
-        return ok_or_throw(dispatch::read_string(v).parse::<Calendar>());
-    }
-    crate::object::throw_object_type_error(b"calendar must be a calendar identifier string")
-}
-
 /// `new Temporal.PlainMonthDay(month, day, calendar?, referenceYear?)`.
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
+    // Spec order: `ToIntegerWithTruncation(month)`, `…(day)`,
+    // `ToTemporalCalendarIdentifier(calendar)`, then the reference ISO year
+    // (defaults to 1972). Real `ToNumber` observes `valueOf` and rejects
+    // `Infinity`/`NaN` at the field's read position.
+    let month = dispatch::integer_with_truncation(raw_arg(args, 0));
+    let day = dispatch::integer_with_truncation(raw_arg(args, 1));
+    let cal = super::options::calendar_identifier(raw_arg(args, 2));
     let ref_year = {
-        let y = num_arg(args, 3);
-        if y.is_finite() {
-            Some(y as i32)
-        } else {
+        let raw = raw_arg(args, 3);
+        if dispatch::is_undefined(raw) {
             None
+        } else {
+            Some(
+                dispatch::integer_with_truncation(raw).clamp(i32::MIN as i64, i32::MAX as i64)
+                    as i32,
+            )
         }
     };
     // Overflow "reject": the constructor throws on an invalid month/day (e.g.
     // Feb 30) instead of constraining it to Feb 29. The `.from()` fields path
     // (`coerce_md`) keeps the spec's "constrain" default.
     wrap(ok_or_throw(PlainMonthDay::new_with_overflow(
-        num_arg(args, 0) as u8,
-        num_arg(args, 1) as u8,
-        calendar_arg(raw_arg(args, 2)),
+        dispatch::field_u8(month),
+        dispatch::field_u8(day),
+        cal,
         Overflow::Reject,
         ref_year,
     )))
 }
 
+/// `ToTemporalMonthDay(item)` for the no-options `equals` coercion path: a
+/// `Temporal.PlainMonthDay` (clone), an ISO string, or a property bag (read in
+/// spec order with `constrain` overflow).
 fn coerce_md(v: f64) -> PlainMonthDay {
     if let Some(TemporalValue::PlainMonthDay(md)) = temporal_value_ref(v) {
         return md.clone();
@@ -61,34 +64,8 @@ fn coerce_md(v: f64) -> PlainMonthDay {
                 b"Cannot convert a Symbol to a Temporal.PlainMonthDay",
             );
         }
-        let obj = jv.as_pointer::<crate::object::ObjectHeader>();
-        if !obj.is_null() {
-            let has_field = |name: &str| -> bool {
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                crate::object::js_object_get_field_by_name_f64(obj, key).to_bits()
-                    != crate::value::TAG_UNDEFINED
-            };
-            if !["month", "monthCode", "day", "year", "era", "eraYear"]
-                .iter()
-                .any(|n| has_field(n))
-            {
-                crate::object::throw_object_type_error(
-                    b"object is not a valid Temporal.PlainMonthDay property bag",
-                );
-            }
-            // Build via the calendar's `month_day_from_fields` so `monthCode`,
-            // `year`/`era` disambiguation, and overflow handling all work
-            // (the old `month`/`day`-only path dropped monthCode entirely).
-            let cal_key = crate::string::js_string_from_bytes(b"calendar".as_ptr(), 8);
-            let cal_raw = crate::object::js_object_get_field_by_name_f64(obj, cal_key);
-            let partial = temporal_rs::partial::PartialDate {
-                calendar_fields: super::options::calendar_fields(obj),
-                calendar: calendar_arg(cal_raw),
-            };
-            return ok_or_throw(PlainMonthDay::from_partial(
-                partial,
-                Some(Overflow::Constrain),
-            ));
+        if !jv.as_pointer::<crate::object::ObjectHeader>().is_null() {
+            return super::options::plain_month_day_from_bag(v);
         }
     }
     // Non-string, non-object primitive → TypeError per ToTemporalMonthDay.
@@ -96,7 +73,31 @@ fn coerce_md(v: f64) -> PlainMonthDay {
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
-    wrap(coerce_md(raw_arg(args, 0)))
+    // `ToTemporalMonthDay(item, options)`: a string is parsed FIRST (invalid →
+    // `RangeError`), a `PlainMonthDay` is cloned after `overflow` is read
+    // (validating `options`), and a property bag reads its calendar + fields,
+    // then `overflow` LAST. (Previously this dropped `options` entirely, so a
+    // wrong-typed `options`, `overflow: "reject"`, or a bad overflow string
+    // never threw.)
+    let item = raw_arg(args, 0);
+    let opts = raw_arg(args, 1);
+    if JSValue::from_bits(item.to_bits()).is_string() {
+        let md = ok_or_throw(dispatch::read_string(item).parse::<PlainMonthDay>());
+        let _ = super::options::overflow(opts);
+        return wrap(md);
+    }
+    if let Some(TemporalValue::PlainMonthDay(md)) = temporal_value_ref(item) {
+        let _ = super::options::overflow(opts);
+        return wrap(md.clone());
+    }
+    // Any other object — including a non-PlainMonthDay Temporal value such as a
+    // `PlainDate` — is read as a property bag (`ToTemporalMonthDay` reads its
+    // `month`/`monthCode`/`day` getters), NOT a TypeError.
+    let jv = JSValue::from_bits(item.to_bits());
+    if jv.is_pointer() && !crate::symbol::is_registered_symbol(jv.as_pointer::<u8>() as usize) {
+        return wrap(super::options::plain_month_day_from_bag_opts(item, opts));
+    }
+    crate::object::throw_object_type_error(b"Cannot convert value to a Temporal.PlainMonthDay")
 }
 
 pub fn get(md: &PlainMonthDay, name: &str) -> Option<f64> {
@@ -112,9 +113,14 @@ pub fn call(recv: f64, md: &PlainMonthDay, name: &str, args: &[f64]) -> f64 {
     match name {
         "equals" => {
             let other = coerce_md(raw_arg(args, 0));
+            // Two `PlainMonthDay`s are equal iff their full ISO date —
+            // `[[ISOYear]]` (the reference year), `[[ISOMonth]]`/`[[ISODay]]`, and
+            // calendar — all match. The reference year IS observable here: two
+            // month-days that differ only in reference year are NOT equal.
             dispatch::boolean(
                 md.day() == other.day()
                     && md.month_code() == other.month_code()
+                    && md.reference_year() == other.reference_year()
                     && md.calendar_id() == other.calendar_id(),
             )
         }
@@ -127,14 +133,14 @@ pub fn call(recv: f64, md: &PlainMonthDay, name: &str, args: &[f64]) -> f64 {
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let fields = super::options::calendar_fields(obj);
+            let fields = super::options::with_calendar_fields(obj, md.calendar());
             let overflow = super::options::overflow(raw_arg(args, 1));
             wrap(ok_or_throw(md.with(fields, overflow)))
         }
         "toPlainDate" => {
             let obj =
                 super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "toPlainDate");
-            let year = super::options::calendar_fields(obj);
+            let year = super::options::to_plain_date_year_field(obj);
             alloc_temporal_cell(TemporalValue::PlainDate(ok_or_throw(
                 md.to_plain_date(Some(year)),
             )))

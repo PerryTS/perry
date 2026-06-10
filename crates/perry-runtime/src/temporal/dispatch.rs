@@ -234,6 +234,19 @@ pub(crate) fn ok_or_throw<T>(r: temporal_rs::TemporalResult<T>) -> T {
     }
 }
 
+/// Every `Temporal.*` constructor is `[[Construct]]`-only: calling it without
+/// `new` is a `TypeError` (`Temporal.PlainDate(…)` vs `new Temporal.PlainDate(…)`).
+/// `new` routes through `js_new_function_construct`, which sets `new.target` to
+/// the constructor before invoking the thunk; a plain `[[Call]]` leaves it
+/// `undefined`, so an undefined `new.target` is the bare-call signal.
+pub(crate) fn require_construct(type_name: &str) {
+    if crate::object::js_new_target_get().to_bits() == crate::value::TAG_UNDEFINED {
+        crate::object::throw_object_type_error(
+            format!("Constructor {type_name} requires 'new'").as_bytes(),
+        );
+    }
+}
+
 /// `valueOf` throws on every Temporal type (the spec bans implicit ordering /
 /// arithmetic coercion). Used by every type's method router.
 pub(crate) fn throw_value_of(type_name: &str) -> ! {

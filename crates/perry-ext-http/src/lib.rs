@@ -55,6 +55,21 @@ use client_overload::{merge_url_and_options, method_for_overload, parse_client_a
 
 mod client_request_surface;
 
+// Client-side TLS options (rejectUnauthorized / ca / checkServerIdentity)
+// for `https.request` / `https.get` (#4906) — kept out of this file to
+// stay under the 2000-line lint cap.
+mod tls_client;
+
+// Async reqwest dispatch (`dispatch_request` + TLS-client selection),
+// extracted to keep `lib.rs` under the 2000-line lint cap.
+mod client_dispatch;
+use client_dispatch::dispatch_request;
+
+// Client-request event drain helpers (#4905) — extracted from this file
+// to stay under the 2000-line lint cap.
+mod client_events;
+use client_events::{error_event_arg, fire_request_error_listeners, fire_request_event_listeners};
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -77,7 +92,7 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 // ------------------------------------------------------------------
 
 /// Events queued by the tokio blocking-pool worker for the main thread.
-enum PendingHttpEvent {
+pub(crate) enum PendingHttpEvent {
     Response {
         request_handle: Handle,
         status: u16,
@@ -90,6 +105,11 @@ enum PendingHttpEvent {
         request_handle: Handle,
         error_message: String,
     },
+    /// #4905 — the transport deadline from `req.setTimeout(ms)` /
+    /// `options.timeout` fired. Drains to the request's `'timeout'`
+    /// listeners when any exist; falls back to the Error surface
+    /// otherwise.
+    Timeout { request_handle: Handle },
 }
 
 lazy_static! {
@@ -97,7 +117,7 @@ lazy_static! {
     /// Shared HTTP client — reuses connection pool, DNS cache, TLS
     /// session cache. Without this each request allocs a fresh
     /// reqwest::Client (~250 KB) and the memory never gets reused.
-    static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
+    pub(crate) static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
         .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(16)
@@ -160,7 +180,7 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     client_request_surface::scan_roots(visitor);
 }
 
-fn push_event(ev: PendingHttpEvent) {
+pub(crate) fn push_event(ev: PendingHttpEvent) {
     if let Ok(mut q) = HTTP_PENDING_EVENTS.lock() {
         q.push(ev);
     }
@@ -200,7 +220,7 @@ fn expects_response_trailers(headers: &HashMap<String, String>) -> bool {
     })
 }
 
-async fn dispatch_plain_http_request(
+pub(crate) async fn dispatch_plain_http_request(
     request_handle: Handle,
     method: &str,
     url: &str,
@@ -419,6 +439,9 @@ pub struct ClientRequestHandle {
     /// connection pool whose `keepAlive` / `maxFreeSockets` /
     /// `keepAliveMsecs` come from the Agent's stored options.
     agent_handle: Handle,
+    /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
+    /// `checkServerIdentity`. Default = no customization (pooled client).
+    tls: tls_client::TlsOptions,
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -576,128 +599,18 @@ fn make_request_handle(
         timeout_ms,
         ended: false,
         agent_handle,
+        tls: tls_client::TlsOptions::default(),
     })
 }
 
-/// Spawn the actual reqwest send. The `spawn_blocking_with_reactor`
-/// shim runs the closure inside `runtime().spawn(async { ... })`, so
-/// we're already in an async context — `Handle::current().block_on`
-/// from here would panic with "Cannot start a runtime from within a
-/// runtime" (issue #769). Instead, spawn the request future as a
-/// fresh detached task on the same multi-thread runtime; it drives
-/// itself via `await` chains while we return immediately. Mirrors
-/// the `spawn_socket_runner` pattern in `perry-ext-net`.
-fn dispatch_request(
-    request_handle: Handle,
-    method: String,
-    url: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
-    timeout_ms: Option<u64>,
-    agent_handle: Handle,
-) {
-    // #2154: pick the per-Agent reqwest client when one was supplied, so
-    // the request honors the Agent's keepAlive/maxFreeSockets/keepAliveMsecs
-    // pool config rather than always using the global HTTP_CLIENT. The
-    // global is still the fallback for `http.request(opts)` without an
-    // `agent` field.
-    let client: reqwest::Client = if agent_handle != 0 {
-        agent::client_for_agent(agent_handle)
-    } else {
-        HTTP_CLIENT.clone()
-    };
-    spawn_blocking(move || {
-        // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
-        // workaround perry-ext-net needs (see spawn_socket_runner).
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            push_event(PendingHttpEvent::Error {
-                request_handle,
-                error_message: "http client runtime unavailable".to_string(),
-            });
-            return;
-        }
-        let handle = tokio::runtime::Handle::current();
-        let jh = handle.spawn(async move {
-            if let Some(result) = dispatch_plain_http_request(
-                request_handle,
-                method.as_str(),
-                &url,
-                &headers,
-                &body,
-                timeout_ms,
-            )
-            .await
-            {
-                if let Err(error_message) = result {
-                    push_event(PendingHttpEvent::Error {
-                        request_handle,
-                        error_message,
-                    });
-                }
-                return;
-            }
-
-            let mut req = match method.as_str() {
-                "POST" => client.post(&url),
-                "PUT" => client.put(&url),
-                "DELETE" => client.delete(&url),
-                "PATCH" => client.patch(&url),
-                "HEAD" => client.head(&url),
-                "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
-                _ => client.get(&url),
-            };
-            for (k, v) in &headers {
-                req = req.header(k.as_str(), v.as_str());
-            }
-            if let Some(ms) = timeout_ms {
-                req = req.timeout(std::time::Duration::from_millis(ms));
-            } else {
-                req = req.timeout(std::time::Duration::from_secs(30));
-            }
-            if !body.is_empty() {
-                req = req.body(body);
-            }
-            match req.send().await {
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    let status_message = response
-                        .status()
-                        .canonical_reason()
-                        .unwrap_or("")
-                        .to_string();
-                    let mut hdrs = Vec::new();
-                    for (k, v) in response.headers() {
-                        if let Ok(s) = v.to_str() {
-                            hdrs.push((k.to_string(), s.to_string()));
-                        }
-                    }
-                    let body = response
-                        .bytes()
-                        .await
-                        .map(|b| b.to_vec())
-                        .unwrap_or_default();
-                    push_event(PendingHttpEvent::Response {
-                        request_handle,
-                        status,
-                        status_message,
-                        headers: hdrs,
-                        trailers: Vec::new(),
-                        body,
-                    });
-                }
-                Err(e) => {
-                    push_event(PendingHttpEvent::Error {
-                        request_handle,
-                        error_message: e.to_string(),
-                    });
-                }
-            }
-        });
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
-    });
+/// Parse the client-side TLS options (#4906) off a request options value
+/// and store them on the freshly-built request handle. A no-op for
+/// string-URL requests / plain http (parse yields the default).
+unsafe fn attach_tls_options(handle: Handle, opts_f64: f64) {
+    let tls = tls_client::parse_tls_options(opts_f64);
+    if tls.needs_custom_client() {
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.tls = tls);
+    }
 }
 
 /// Serialize an HTTP/1.1 request (request line + headers + body) into the
@@ -828,10 +741,7 @@ fn dispatch_request_over_socket(
                 } else {
                     if start.elapsed() >= deadline {
                         (vtable.close)(socket_id);
-                        push_event(PendingHttpEvent::Error {
-                            request_handle,
-                            error_message: "request timed out".to_string(),
-                        });
+                        push_event(PendingHttpEvent::Timeout { request_handle });
                         return;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -1024,12 +934,30 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
         (method, url, headers, timeout, agent_handle)
     };
-    make_request_handle(method, url, headers, timeout, callback, agent_handle)
+    let handle = make_request_handle(method, url, headers, timeout, callback, agent_handle);
+    attach_tls_options(handle, arg_f64); // #4906
+    handle
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_http_request(opts_f64: f64, callback_i64: i64) -> Handle {
     request_common(opts_f64, callback_i64, "http")
+}
+
+/// `new http.ClientRequest(options)` (#4904). Perry's client model defers
+/// the actual send to `.end()`, so constructing is exactly `http.request`
+/// without a response callback. Node coerces a falsy `options.method` /
+/// `options.path` to the `GET` / `/` defaults — mirror the method side
+/// here (the empty path already reads back as `/` through the surface).
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_standalone_new(opts_f64: f64) -> Handle {
+    let handle = request_common(opts_f64, 0, "http");
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if req.method.is_empty() {
+            req.method = "GET".to_string();
+        }
+    });
+    handle
 }
 
 #[no_mangle]
@@ -1066,7 +994,8 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         callback,
         agent_handle,
     );
-    // GET auto-`end()`s, kicking off the request.
+    attach_tls_options(handle, arg_f64); // #4906
+                                         // GET auto-`end()`s, kicking off the request.
     js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
     handle
 }
@@ -1101,6 +1030,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
     let (url, headers, timeout, agent_handle) =
         merge_url_and_options(parsed.url, parsed.opts, default_protocol);
     let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    attach_tls_options(handle, parsed.opts); // #4906 — TLS options ride on the options bag
     if force_get {
         // `get()` auto-`end()`s, kicking off the request.
         js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
@@ -1176,6 +1106,7 @@ unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
             req.body.clone(),
             req.timeout_ms,
             req.agent_handle,
+            req.tls.clone(),
         ))
     });
 
@@ -1184,7 +1115,7 @@ unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
         None => return handle,
     };
 
-    let (method, url, headers, body, timeout_ms, agent_handle) = snapshot;
+    let (method, url, headers, body, timeout_ms, agent_handle, tls) = snapshot;
 
     // #2154 — if the agent supplied a `createConnection` / `createSocket`
     // override, invoke it here on the main thread (JS closure calls must not
@@ -1219,7 +1150,16 @@ unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
         }
     }
 
-    dispatch_request(handle, method, url, headers, body, timeout_ms, agent_handle);
+    dispatch_request(
+        handle,
+        method,
+        url,
+        headers,
+        body,
+        timeout_ms,
+        agent_handle,
+        tls,
+    );
     handle
 }
 
@@ -1671,24 +1611,21 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                         let _ = closure.call0();
                     }
                 }
+
+                // Node emits `'close'` on the request once the response has
+                // fully ended (#4905).
+                fire_request_event_listeners(request_handle, "close");
             }
             PendingHttpEvent::Error {
                 request_handle,
                 error_message,
             } => {
-                let error_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-                    .and_then(|r| r.listeners.get("error").cloned())
-                    .unwrap_or_default();
-                if !error_listeners.is_empty() {
-                    let s = alloc_string(&error_message);
-                    let arg = f64::from_bits(STRING_TAG | (s.as_raw() as u64 & PTR_MASK));
-                    for cb in error_listeners {
-                        if cb != 0 {
-                            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                            let _ = closure.call1(arg);
-                        }
-                    }
-                }
+                fire_request_error_listeners(request_handle, error_event_arg(&error_message));
+                // Node emits `'close'` on the request after `'error'` (#4905).
+                fire_request_event_listeners(request_handle, "close");
+            }
+            PendingHttpEvent::Timeout { request_handle } => {
+                client_events::handle_timeout_event(request_handle);
             }
         }
     }
