@@ -132,6 +132,28 @@ pub extern "C" fn js_reflect_has(target: f64, key: f64) -> f64 {
     if own.to_bits() == TAG_TRUE {
         return own;
     }
+    // Private names are never reflectable via `Reflect.has` / `in` through the
+    // prototype chain: a `#name`-prefixed string key models a private element
+    // (method/accessor) installed on the prototype's internal slot, invisible to
+    // ordinary [[HasProperty]]. The own-key probe above already hid it on the
+    // instance (`js_object_has_property` gates `#`-hiding on `class_id != 0`),
+    // but the inherited field-read below walks the prototype chain and FINDS the
+    // private method there, leaking `true` for `Reflect.has(c, '#m')`. Suppress
+    // only the inherited probe — a genuine OWN string property literally named
+    // `"#x"` (set via `obj["#x"] = …` on a plain object) was already returned
+    // above. The real brand check (`#name in obj`) routes through
+    // `js_private_brand_check`, not here.
+    {
+        let kv = crate::value::JSValue::from_bits(property_key.to_bits());
+        if kv.is_any_string() {
+            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            if let Some(bytes) = unsafe { crate::string::js_string_key_bytes(kv, &mut sso) } {
+                if bytes.first() == Some(&b'#') {
+                    return nanbox_bool(false);
+                }
+            }
+        }
+    }
     // #2764: `[[HasProperty]]` must also see inherited properties. Perry's
     // `js_object_has_property` only checks own keys, but the ordinary field
     // getter DOES walk the (Object.create / setPrototypeOf-recorded) prototype

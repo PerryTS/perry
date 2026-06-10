@@ -57,6 +57,14 @@ crates/perry-runtime/src/gc/tests.rs
 crates/perry-codegen-arkts/src/tests.rs
 crates/perry-api-manifest/src/entries.rs
 crates/perry/src/commands/compile.rs
+# node:dns + node:dgram. Crossed 2000 LOC when the loopback fakes became real
+# getaddrinfo/DNS/UDP I/O (#4911) — the in-process/deterministic paths are kept
+# behind PERRY_DETERMINISTIC_NET=1, so each module now carries both the real and
+# the deterministic implementation plus the Node-shaped error/validation surface.
+# Splitting the event-emitter helpers (dgram) and resolve-record JS builders
+# (dns) into siblings is a reasonable follow-up.
+crates/perry-runtime/src/dns.rs
+crates/perry-runtime/src/dgram.rs
 # `PERRY_UI_TABLE` — flat `MethodRow` data table for receiver-less perry/ui
 # calls (one row per constructor/setter). Generated-feel manifest like
 # entries.rs: length reflects widget-API breadth, not complexity, and a single

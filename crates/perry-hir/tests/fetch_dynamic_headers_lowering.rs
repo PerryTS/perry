@@ -70,7 +70,10 @@ fn variable_headers_are_captured_as_dynamic() {
     .expect("fetch with variable headers should lower");
 
     let (static_pairs, has_dynamic) = find_fetch(&module);
-    assert_eq!(static_pairs, 0, "a variable headers value has no static pairs");
+    assert_eq!(
+        static_pairs, 0,
+        "a variable headers value has no static pairs"
+    );
     assert!(
         has_dynamic,
         "a property-assigned headers object must be captured in headers_dynamic (#4932)"

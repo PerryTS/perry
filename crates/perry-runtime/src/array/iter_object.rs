@@ -184,6 +184,32 @@ fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
 /// helpers) regardless of the receiver's static type, so the brand check has to
 /// live here rather than in the dynamic dispatch tower.
 #[cold]
+/// `Array.prototype.{entries,keys,values}` begin with `ToObject(this value)`
+/// (ECMA-262 §23.1.3), which throws a TypeError for `undefined` / `null`. The
+/// codegen `Expr::Array{Entries,Keys,Values}` lowering unboxes the receiver via
+/// `& POINTER_MASK`, so a `null`/`undefined` `this` arrives as the sentinel
+/// address `2` / `1` (real heap arrays are always ≥ 0x1000). Throw there instead
+/// of silently materializing an empty iterator. (test262
+/// Array.prototype.{entries,keys,values}/{return-abrupt-from-this,this-val-non-obj-coercible}.)
+#[cold]
+unsafe fn throw_non_coercible_this(method: &str) -> ! {
+    let _ = method;
+    let msg = "Cannot convert undefined or null to object";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(f64::from_bits(
+        crate::value::JSValue::pointer(err as *const u8).bits(),
+    ));
+}
+
+#[inline]
+unsafe fn guard_coercible_this(arr: *const ArrayHeader, method: &str) {
+    let a = arr as usize;
+    if a == 1 || a == 2 {
+        throw_non_coercible_this(method);
+    }
+}
+
 unsafe fn throw_if_typed_array_proto(arr: *const ArrayHeader, method: &str) {
     if crate::object::is_typed_array_prototype(arr as usize) {
         let msg = format!("Method %TypedArray%.prototype.{method} called on incompatible receiver");
@@ -198,6 +224,7 @@ unsafe fn throw_if_typed_array_proto(arr: *const ArrayHeader, method: &str) {
 #[no_mangle]
 pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        guard_coercible_this(arr, "values");
         throw_if_typed_array_proto(arr, "values");
         array_iter_obj_raw(typed_array_iter_arr(arr), KIND_VALUES)
     }
@@ -206,6 +233,7 @@ pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        guard_coercible_this(arr, "keys");
         throw_if_typed_array_proto(arr, "keys");
         array_iter_obj_raw(typed_array_iter_arr(arr), KIND_KEYS)
     }
@@ -214,6 +242,7 @@ pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        guard_coercible_this(arr, "entries");
         throw_if_typed_array_proto(arr, "entries");
         array_iter_obj_raw(typed_array_iter_arr(arr), KIND_ENTRIES)
     }

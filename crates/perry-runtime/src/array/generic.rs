@@ -70,9 +70,19 @@ fn to_object(recv: f64) -> f64 {
         let err = crate::error::js_typeerror_new(s);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
     }
-    // Already a heap object / array / closure, or a string (handled specially).
-    if top16(b) == 0x7FFD || is_string_value(b) {
+    // Already a heap object / array / closure.
+    if top16(b) == 0x7FFD {
         return recv;
+    }
+    // A primitive string boxes to a `String` wrapper object (ECMA-262
+    // `ToObject`). The wrapper carries own indexed (`0`,`1`,…) and `length`
+    // data properties (installed by `js_boxed_string_new`), so the array-like
+    // length/index reads below resolve through the normal object path — and the
+    // wrapper (not the primitive) is what flows to the callback as the `this`
+    // object, so `obj instanceof String` is true. (test262
+    // Array.prototype.{every,some,reduce,reduceRight,...}/15.4.4.*-1-7.)
+    if is_string_value(b) {
+        return crate::builtins::js_boxed_string_new(recv);
     }
     if b == TAG_TRUE || b == crate::value::TAG_FALSE {
         return crate::builtins::js_boxed_boolean_new(recv);

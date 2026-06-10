@@ -1415,6 +1415,36 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
         Expr::String(_) | Expr::ArrayJoin { .. } | Expr::StringCoerce(_) => Some(Type::String),
         Expr::Bool(_) => Some(Type::Boolean),
         Expr::BigInt(_) | Expr::BigIntCoerce(_) => Some(Type::BigInt),
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                perry_hir::BinaryOp::Add
+                    | perry_hir::BinaryOp::Sub
+                    | perry_hir::BinaryOp::Mul
+                    | perry_hir::BinaryOp::Div
+                    | perry_hir::BinaryOp::Mod
+                    | perry_hir::BinaryOp::Pow
+                    | perry_hir::BinaryOp::BitAnd
+                    | perry_hir::BinaryOp::BitOr
+                    | perry_hir::BinaryOp::BitXor
+                    | perry_hir::BinaryOp::Shl
+                    | perry_hir::BinaryOp::Shr
+            ) && matches!(
+                (
+                    refine_type_from_init_simple(left),
+                    refine_type_from_init_simple(right)
+                ),
+                (Some(Type::BigInt), _) | (_, Some(Type::BigInt))
+            ) =>
+        {
+            Some(Type::BigInt)
+        }
+        Expr::Unary { op, operand }
+            if matches!(op, perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot)
+                && matches!(refine_type_from_init_simple(operand), Some(Type::BigInt)) =>
+        {
+            Some(Type::BigInt)
+        }
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
         Expr::NetCreateServer { .. } => Some(Type::Named("Server".to_string())),
         // `const ta = new Int32Array(n)` — refine to Named("Int32Array") so

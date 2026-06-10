@@ -100,11 +100,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // js_object_set_field_by_name for each (interned key, value).
                 let n_str = (headers.len() as u32).to_string();
                 let zero_str = "0".to_string();
-                let headers_handle = ctx.block().call(
-                    I64,
-                    "js_object_alloc",
-                    &[(I32, &zero_str), (I32, &n_str)],
-                );
+                let headers_handle =
+                    ctx.block()
+                        .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
                 for (key, val_expr) in headers {
                     let key_idx = ctx.strings.intern(key);
                     let key_handle_global =

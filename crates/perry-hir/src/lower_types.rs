@@ -28,6 +28,10 @@ fn dir_type() -> Type {
     Type::Named("Dir".to_string())
 }
 
+fn bigint_result_type_from_operand_types(left: &Type, right: &Type) -> bool {
+    matches!(left, Type::BigInt) || matches!(right, Type::BigInt)
+}
+
 fn typed_array_name_for_name(name: &str) -> Option<&'static str> {
     match name {
         "Int8Array" => Some("Int8Array"),
@@ -316,7 +320,9 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                 Sub | Mul | Div | Mod | Exp => {
                     let left = infer_type_from_expr(&bin.left, ctx);
                     let right = infer_type_from_expr(&bin.right, ctx);
-                    if matches!(left, Type::Number | Type::Int32)
+                    if bigint_result_type_from_operand_types(&left, &right) {
+                        Type::BigInt
+                    } else if matches!(left, Type::Number | Type::Int32)
                         && matches!(right, Type::Number | Type::Int32)
                     {
                         Type::Number
@@ -325,8 +331,18 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
                     }
                 }
 
-                // Bitwise operators → Number
-                BitAnd | BitOr | BitXor | LShift | RShift | ZeroFillRShift => Type::Number,
+                // Bitwise operators preserve BigInt when either side is
+                // inferred as BigInt; otherwise they produce Number.
+                BitAnd | BitOr | BitXor | LShift | RShift => {
+                    let left = infer_type_from_expr(&bin.left, ctx);
+                    let right = infer_type_from_expr(&bin.right, ctx);
+                    if bigint_result_type_from_operand_types(&left, &right) {
+                        Type::BigInt
+                    } else {
+                        Type::Number
+                    }
+                }
+                ZeroFillRShift => Type::Number,
 
                 // Logical operators → type of operands (simplified).
                 //
@@ -364,7 +380,15 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
             ast::UnaryOp::TypeOf => Type::String,
             ast::UnaryOp::Void => Type::Void,
             ast::UnaryOp::Bang => Type::Boolean,
-            ast::UnaryOp::Minus | ast::UnaryOp::Plus | ast::UnaryOp::Tilde => Type::Number,
+            ast::UnaryOp::Minus | ast::UnaryOp::Tilde => {
+                let operand_ty = infer_type_from_expr(&unary.arg, ctx);
+                if matches!(operand_ty, Type::BigInt) {
+                    Type::BigInt
+                } else {
+                    Type::Number
+                }
+            }
+            ast::UnaryOp::Plus => Type::Number,
             _ => Type::Any,
         },
 

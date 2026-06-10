@@ -17,6 +17,19 @@ pub(crate) use crate::type_analysis_class_fields::{
     class_field_declared_type, class_field_global_index, declared_field_type,
 };
 
+fn function_type_from_decl(function: &perry_hir::Function) -> HirType {
+    HirType::Function(perry_types::FunctionType {
+        params: function
+            .params
+            .iter()
+            .map(|param| (param.name.clone(), param.ty.clone(), false))
+            .collect(),
+        return_type: Box::new(function.return_type.clone()),
+        is_async: function.is_async || function.was_plain_async,
+        is_generator: function.is_generator,
+    })
+}
+
 pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
     matches!(e, Expr::GlobalGet(_))
         || matches!(
@@ -64,6 +77,24 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => Some(HirType::Number),
         Expr::Binary { op, left, right } => {
+            if is_bigint_expr(ctx, init)
+                && matches!(
+                    op,
+                    BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                        | BinaryOp::BitAnd
+                        | BinaryOp::BitOr
+                        | BinaryOp::BitXor
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                )
+            {
+                return Some(HirType::BigInt);
+            }
             // Numeric arithmetic produces Number when both operands are
             // statically numeric (matches `is_numeric_expr`'s rule).
             // Sub/Mul/Div/etc. always produce Number; Add only does so
@@ -71,6 +102,13 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             if is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right) {
                 let _ = op;
                 Some(HirType::Number)
+            } else {
+                None
+            }
+        }
+        Expr::Unary { op, operand } => {
+            if matches!(op, UnaryOp::Neg | UnaryOp::BitNot) && is_bigint_expr(ctx, operand) {
+                Some(HirType::BigInt)
             } else {
                 None
             }
@@ -209,6 +247,20 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // local type lets `hr2 >= hr1` route through the BigInt compare
         // fast path (`js_bigint_cmp`) instead of fcmp-on-NaN.
         Expr::ProcessHrtimeBigint => Some(HirType::BigInt),
+        Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            ..
+        } => ctx
+            .classes
+            .get(class_name)
+            .and_then(|class| {
+                class
+                    .static_methods
+                    .iter()
+                    .find(|method| method.name == *method_name)
+            })
+            .map(|method| method.return_type.clone()),
         // `BigInt(x)` / `0n` literal via StringCoerce paths.
         // `BigInt('123')` lowers to BigIntCoerce; refine so `const x = BigInt(str)`
         // gets local type BigInt and `x === y` routes through js_bigint_cmp.
@@ -466,6 +518,11 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                     }
                 }
             }
+            if let Some(ret_ty) = static_type_of(ctx, init) {
+                if !matches!(ret_ty, HirType::Any | HirType::Void | HirType::Function(_)) {
+                    return Some(ret_ty);
+                }
+            }
             None
         }
         _ => None,
@@ -617,6 +674,23 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // `BigInt(x)` always returns a bigint.
         Expr::BigIntCoerce(_) => true,
         Expr::LocalGet(id) => matches!(ctx.local_types.get(id), Some(HirType::BigInt)),
+        Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            ..
+        } => ctx
+            .classes
+            .get(class_name)
+            .and_then(|class| {
+                class
+                    .static_methods
+                    .iter()
+                    .find(|method| method.name == *method_name)
+            })
+            .is_some_and(|method| matches!(method.return_type, HirType::BigInt)),
+        Expr::PropertyGet { .. } | Expr::Call { .. } => {
+            matches!(static_type_of(ctx, e), Some(HirType::BigInt))
+        }
         // Nested bigint arithmetic — `(n * 10n) + d` must see the
         // inner `n * 10n` as bigint so the outer `+` routes through
         // the bigint dispatch instead of the float fallback.
@@ -628,6 +702,7 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     | BinaryOp::Mul
                     | BinaryOp::Div
                     | BinaryOp::Mod
+                    | BinaryOp::Pow
                     // Bitwise ops on bigints produce bigints — include
                     // them so `(a * prime) & mask64` where both operands
                     // are bigint stays bigint-typed all the way up the
@@ -639,6 +714,9 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     | BinaryOp::Shl
                     | BinaryOp::Shr
             ) && (is_bigint_expr(ctx, left) || is_bigint_expr(ctx, right))
+        }
+        Expr::Unary { op, operand } => {
+            matches!(op, UnaryOp::Neg | UnaryOp::BitNot) && is_bigint_expr(ctx, operand)
         }
         _ => false,
     }
@@ -1674,6 +1752,20 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
         Expr::Bool(_) => Some(HirType::Boolean),
         Expr::LocalGet(id) => ctx.local_types.get(id).cloned(),
+        Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            ..
+        } => ctx
+            .classes
+            .get(class_name)
+            .and_then(|class| {
+                class
+                    .static_methods
+                    .iter()
+                    .find(|method| method.name == *method_name)
+            })
+            .map(|method| method.return_type.clone()),
         e if net_result_type(e).is_some() => net_result_type(e),
         Expr::PropertyGet { object, property } => {
             if property == "length" && expression_has_numeric_length(ctx, object) {
@@ -1690,11 +1782,23 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             {
                 return Some(HirType::String);
             }
+            if let Some(static_method_ty) = crate::expr::try_static_class_name(object, ctx)
+                .and_then(|class_name| ctx.classes.get(class_name))
+                .and_then(|class| {
+                    class
+                        .static_methods
+                        .iter()
+                        .find(|method| method.name == *property)
+                        .map(function_type_from_decl)
+                })
+            {
+                return Some(static_method_ty);
+            }
             // If the object is a known class instance, look up the field
             // type from the class definition.
             let receiver_class = receiver_class_name(ctx, object)?;
             if let Some(class) = ctx.classes.get(&receiver_class) {
-                return class
+                if let Some(field_ty) = class
                     .fields
                     .iter()
                     .find(|f| f.name == *property)
@@ -1714,7 +1818,18 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                             }
                         }
                         None
-                    });
+                    })
+                {
+                    return Some(field_ty);
+                }
+                if let Some(method_ty) = class
+                    .methods
+                    .iter()
+                    .find(|method| method.name == *property)
+                    .map(function_type_from_decl)
+                {
+                    return Some(method_ty);
+                }
             }
             // Issue #655: receiver may be typed against a TS `interface`
             // rather than a class. The runtime layout is identical to a
@@ -1725,6 +1840,14 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             if let Some(iface) = ctx.interfaces.get(&receiver_class) {
                 if let Some(p) = iface.properties.iter().find(|p| p.name == *property) {
                     return Some(p.ty.clone());
+                }
+                if let Some(method) = iface.methods.iter().find(|method| method.name == *property) {
+                    return Some(HirType::Function(perry_types::FunctionType {
+                        params: method.params.clone(),
+                        return_type: Box::new(method.return_type.clone()),
+                        is_async: false,
+                        is_generator: false,
+                    }));
                 }
                 for ext in &iface.extends {
                     if let HirType::Named(parent_name) = ext {
@@ -1808,6 +1931,12 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             ) =>
         {
             Some(HirType::Array(Box::new(HirType::String)))
+        }
+        Expr::Call { callee, .. } => {
+            if let Some(HirType::Function(ft)) = static_type_of(ctx, callee.as_ref()) {
+                return Some((*ft.return_type).clone());
+            }
+            None
         }
         // `arr[i]` where `arr: Array<T>` has static type `T`. This lets
         // nested access like `grid[i][j]` and `grid[i].length` reach
