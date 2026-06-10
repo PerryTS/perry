@@ -59,7 +59,9 @@ fn stub_inventory_matches_known_clusters() {
     // discovered lie is annotated (count goes up). A surprise diff here
     // means an API silently changed honesty state.
     let expected: &[(&str, usize)] = &[
-        ("#4911", 73), // dns + dns/promises loopback fakes, dgram send + multicast
+        // #4911 (dns/dns/promises resolution + dgram UDP) intentionally absent:
+        // real `getaddrinfo`/DNS/UDP I/O landed; the in-process loopback mode is
+        // now opt-in behind `PERRY_DETERMINISTIC_NET=1`, not a silent stub.
         // #4912 (child_process.spawn) intentionally absent: spawn is real
         // since #1780 (Expr::ChildProcessSpawn codegen). The audit's
         // "returns null" premise was stale; only exec() timing remains.
@@ -82,9 +84,6 @@ fn stubs_only_appear_in_allowlisted_modules() {
     // A stub flag showing up on a module not in this list is almost
     // certainly an accident — fail loud so it gets triaged.
     let allowed = [
-        "dns",
-        "dns/promises",
-        "dgram",
         "cluster",
         "stream/web",
         "streams",
@@ -111,9 +110,6 @@ fn keystone_apis_are_flagged() {
     // Spot-check the headline lies from the epic so a refactor can't
     // quietly drop the flag on the worst offenders.
     let must_be_stub: &[(&str, &str)] = &[
-        ("dns", "resolve4"),
-        ("dns", "lookup"),
-        ("dns/promises", "resolve"),
         ("cluster", "fork"),
         ("v8", "getHeapSnapshot"),
         ("v8", "writeHeapSnapshot"),

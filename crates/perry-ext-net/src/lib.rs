@@ -669,15 +669,20 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
         fn js_get_string_pointer_unified(value: f64) -> i64;
     }
     let host_ptr = js_get_string_pointer_unified(arg2_f64);
-    let host = match string_from_header_i64(host_ptr) {
-        Some(h) => h,
-        None => return 0,
+    let (host, listener_f64) = match string_from_header_i64(host_ptr) {
+        Some(h) => (h, arg3_f64),
+        // #4905: `connect(port)` / `connect(port, connectListener)` —
+        // Node defaults the host to localhost when arg2 isn't a string
+        // (it may carry the connectListener instead). Pre-fix this
+        // returned handle 0, so the socket never connected and no
+        // 'connect'/'error' event ever fired.
+        None => ("127.0.0.1".to_string(), arg2_f64),
     };
     // #2013: positional `port` must be a valid integer in [0, 65536).
     js_net_validate_connect_port(arg1_f64);
     let port = arg1_f64 as u16;
     let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
-    register_connect_cb(handle, arg3_f64);
+    register_connect_cb(handle, listener_f64);
     handle
 }
 

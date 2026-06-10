@@ -58,6 +58,12 @@ fn with_state_mut<T>(handle: Handle, f: impl FnOnce(&mut ClientRequestSurfaceSta
     f(states.entry(handle).or_default())
 }
 
+/// Whether `req.destroy()` has been called on this request (#4905 —
+/// the timeout drain path checks this to emit the coded ECONNRESET).
+pub(crate) fn request_destroyed(handle: Handle) -> bool {
+    with_state_mut(handle, |state| state.destroyed)
+}
+
 fn find_header_key(req: &ClientRequestHandle, name: &str) -> Option<String> {
     req.headers
         .keys()

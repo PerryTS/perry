@@ -65,6 +65,11 @@ mod tls_client;
 mod client_dispatch;
 use client_dispatch::dispatch_request;
 
+// Client-request event drain helpers (#4905) — extracted from this file
+// to stay under the 2000-line lint cap.
+mod client_events;
+use client_events::{error_event_arg, fire_request_error_listeners, fire_request_event_listeners};
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -100,6 +105,11 @@ pub(crate) enum PendingHttpEvent {
         request_handle: Handle,
         error_message: String,
     },
+    /// #4905 — the transport deadline from `req.setTimeout(ms)` /
+    /// `options.timeout` fired. Drains to the request's `'timeout'`
+    /// listeners when any exist; falls back to the Error surface
+    /// otherwise.
+    Timeout { request_handle: Handle },
 }
 
 lazy_static! {
@@ -731,10 +741,7 @@ fn dispatch_request_over_socket(
                 } else {
                     if start.elapsed() >= deadline {
                         (vtable.close)(socket_id);
-                        push_event(PendingHttpEvent::Error {
-                            request_handle,
-                            error_message: "request timed out".to_string(),
-                        });
+                        push_event(PendingHttpEvent::Timeout { request_handle });
                         return;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -1604,24 +1611,21 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                         let _ = closure.call0();
                     }
                 }
+
+                // Node emits `'close'` on the request once the response has
+                // fully ended (#4905).
+                fire_request_event_listeners(request_handle, "close");
             }
             PendingHttpEvent::Error {
                 request_handle,
                 error_message,
             } => {
-                let error_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-                    .and_then(|r| r.listeners.get("error").cloned())
-                    .unwrap_or_default();
-                if !error_listeners.is_empty() {
-                    let s = alloc_string(&error_message);
-                    let arg = f64::from_bits(STRING_TAG | (s.as_raw() as u64 & PTR_MASK));
-                    for cb in error_listeners {
-                        if cb != 0 {
-                            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                            let _ = closure.call1(arg);
-                        }
-                    }
-                }
+                fire_request_error_listeners(request_handle, error_event_arg(&error_message));
+                // Node emits `'close'` on the request after `'error'` (#4905).
+                fire_request_event_listeners(request_handle, "close");
+            }
+            PendingHttpEvent::Timeout { request_handle } => {
+                client_events::handle_timeout_event(request_handle);
             }
         }
     }
