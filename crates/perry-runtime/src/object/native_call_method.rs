@@ -4067,7 +4067,7 @@ pub unsafe extern "C" fn js_native_call_method(
                                         raw as *mut crate::error::ErrorHeader,
                                         key,
                                     ),
-                                    ExoticKind::Date => false,
+                                    ExoticKind::Date | ExoticKind::Temporal => false,
                                 }
                         })
                         .unwrap_or(false);

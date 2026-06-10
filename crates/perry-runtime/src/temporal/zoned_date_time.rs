@@ -59,22 +59,21 @@ fn timezone_arg(v: f64) -> TimeZone {
     )
 }
 
+/// `ToTemporalCalendarSlotValue`: `undefined` → ISO; a calendar string or a
+/// Temporal value → its calendar; null / number / boolean / object / symbol →
+/// `TypeError`. The previous version silently mapped any non-string to ISO, so
+/// a `null` calendar (the `calendar-wrong-type` cases) never threw.
 fn calendar_arg(v: f64) -> Calendar {
-    if dispatch::is_undefined(v) {
-        return Calendar::default();
-    }
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
-        return ok_or_throw(dispatch::read_string(v).parse::<Calendar>());
-    }
-    Calendar::default()
+    super::options::calendar_slot(v)
 }
 
 /// `new Temporal.ZonedDateTime(epochNanoseconds: bigint, timeZone, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
     let ns = require_ns(raw_arg(args, 0));
     let tz = timezone_arg(raw_arg(args, 1));
-    let cal = calendar_arg(raw_arg(args, 2));
+    // Constructor calendar arg is a strict identifier (an ISO date string is a
+    // RangeError, unlike `from`'s lenient calendar slot).
+    let cal = super::options::calendar_identifier(raw_arg(args, 2));
     wrap(ok_or_throw(ZonedDateTime::try_new(ns, tz, cal)))
 }
 
@@ -91,24 +90,36 @@ fn coerce_zdt_with_options(v: f64, opts: f64) -> ZonedDateTime {
         return z.clone();
     }
     if let Some(partial) = super::options::zoned_partial(v) {
+        // Options are read AFTER the property-bag fields, in spec order:
+        // disambiguation, offset, overflow.
+        let disambiguation = super::options::disambiguation(opts);
+        let offset = super::options::offset_option(opts);
+        let overflow = super::options::overflow(opts);
         return ok_or_throw(ZonedDateTime::from_partial(
             partial,
-            super::options::overflow(opts),
-            super::options::disambiguation(opts),
-            super::options::offset_option(opts),
+            overflow,
+            disambiguation,
+            offset,
         ));
     }
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
+        // Parse the string BEFORE reading options (spec order: an invalid string
+        // throws a RangeError before any option is touched).
+        let s = dispatch::read_string(v);
+        let disambiguation =
+            super::options::disambiguation(opts).unwrap_or(Disambiguation::Compatible);
+        let offset = super::options::offset_option(opts).unwrap_or(OffsetDisambiguation::Reject);
         return ok_or_throw(ZonedDateTime::from_utf8(
-            dispatch::read_string(v).as_bytes(),
-            super::options::disambiguation(opts).unwrap_or(Disambiguation::Compatible),
-            super::options::offset_option(opts).unwrap_or(OffsetDisambiguation::Reject),
+            s.as_bytes(),
+            disambiguation,
+            offset,
         ));
     }
-    crate::fs::validate::throw_range_error_with_code(
-        "Cannot convert value to a Temporal.ZonedDateTime",
-    )
+    // `ToTemporalZonedDateTime` accepts only an Object or a String; every other
+    // value (undefined / null / number / boolean / bigint / symbol) is a
+    // `TypeError` — "does not convert to a valid ISO string" — NOT a RangeError.
+    crate::object::throw_object_type_error(b"Cannot convert value to a Temporal.ZonedDateTime")
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
@@ -178,14 +189,17 @@ pub fn get(z: &ZonedDateTime, name: &str) -> Option<f64> {
 
 pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
     match name {
-        "add" => wrap(ok_or_throw(z.add(
-            &super::duration::coerce_duration(raw_arg(args, 0)),
-            super::options::overflow(raw_arg(args, 1)),
-        ))),
-        "subtract" => wrap(ok_or_throw(z.subtract(
-            &super::duration::coerce_duration(raw_arg(args, 0)),
-            super::options::overflow(raw_arg(args, 1)),
-        ))),
+        "add" => {
+            // Spec reads the duration argument's fields BEFORE the options bag.
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(z.add(&dur, overflow)))
+        }
+        "subtract" => {
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
+            let overflow = super::options::overflow(raw_arg(args, 1));
+            wrap(ok_or_throw(z.subtract(&dur, overflow)))
+        }
         "until" => super::duration::wrap(ok_or_throw(z.until(
             &coerce_zdt(raw_arg(args, 0)),
             super::options::difference_settings(raw_arg(args, 1)),
@@ -201,12 +215,13 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
         "toPlainDateTime" => {
             alloc_temporal_cell(TemporalValue::PlainDateTime(z.to_plain_date_time()))
         }
-        "toString" => string(&ok_or_throw(z.to_ixdtf_string(
-            super::options::display_offset(raw_arg(args, 0)),
-            super::options::display_time_zone(raw_arg(args, 0)),
-            super::options::display_calendar(raw_arg(args, 0)),
-            super::options::to_string_rounding_options(raw_arg(args, 0)),
-        ))),
+        "toString" => {
+            let (rounding, offset, time_zone, calendar) =
+                super::options::zdt_to_string_options(raw_arg(args, 0));
+            string(&ok_or_throw(
+                z.to_ixdtf_string(offset, time_zone, calendar, rounding),
+            ))
+        }
         "toJSON" | "toLocaleString" => string(&z.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
@@ -228,7 +243,17 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
             let tz = super::options::timezone(raw_arg(args, 0));
             wrap(ok_or_throw(z.with_timezone(tz)))
         }
-        "withCalendar" => wrap(z.with_calendar(calendar_arg(raw_arg(args, 0)))),
+        "withCalendar" => {
+            // `withCalendar` requires its argument: `ToTemporalCalendarSlotValue`
+            // of `undefined` is a TypeError (the `missing-argument` case), unlike
+            // the constructor's optional trailing calendar.
+            if dispatch::is_undefined(raw_arg(args, 0)) {
+                crate::object::throw_object_type_error(
+                    b"withCalendar requires a calendar argument",
+                );
+            }
+            wrap(z.with_calendar(calendar_arg(raw_arg(args, 0))))
+        }
         "round" => wrap(ok_or_throw(
             z.round(super::options::rounding_options(raw_arg(args, 0))),
         )),

@@ -42,7 +42,7 @@ mod handle;
 mod jsvalue;
 mod nanbox;
 mod tags;
-mod to_string;
+pub(crate) mod to_string;
 mod truthy;
 
 #[cfg(test)]

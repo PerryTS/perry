@@ -15,20 +15,6 @@ use temporal_rs::Duration;
 
 const TYPE_NAME: &str = "Temporal.Duration";
 
-/// Field names in `Temporal.Duration` constructor / `from(object)` order.
-const FIELD_NAMES: [&str; 10] = [
-    "years",
-    "months",
-    "weeks",
-    "days",
-    "hours",
-    "minutes",
-    "seconds",
-    "milliseconds",
-    "microseconds",
-    "nanoseconds",
-];
-
 /// Wrap a `temporal_rs::Duration` in a fresh Temporal cell. `pub(crate)` so the
 /// other types' `add`/`subtract`/`until`/`since` (which all return a Duration)
 /// can box their results.
@@ -220,8 +206,7 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
         )),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "round" => {
-            let opts = super::options::rounding_options(raw_arg(args, 0));
-            let rel = super::options::relative_to(raw_arg(args, 0));
+            let (opts, rel) = super::options::duration_round_options(raw_arg(args, 0));
             wrap(ok_or_throw(d.round(opts, rel)))
         }
         "total" => {
@@ -239,19 +224,22 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
 /// replaced. Reads each provided field from the partial object; unspecified
 /// fields keep the receiver's value.
 fn with(d: &Duration, partial: f64) -> f64 {
+    // `ToTemporalPartialDurationRecord` requires an Object — a primitive
+    // (`undefined`, number, string, …) is a `TypeError`, not a RangeError. A
+    // Symbol is a NaN-boxed pointer but is also rejected.
     let jv = JSValue::from_bits(partial.to_bits());
-    if !jv.is_pointer() {
-        crate::fs::validate::throw_range_error_with_code(
-            "Temporal.Duration.prototype.with requires an object argument",
+    if !jv.is_pointer() || unsafe { crate::symbol::js_is_symbol(partial) } != 0 {
+        crate::object::throw_object_type_error(
+            b"Temporal.Duration.prototype.with requires an object argument",
         );
     }
     let obj = jv.as_pointer::<crate::object::ObjectHeader>();
     if obj.is_null() {
-        crate::fs::validate::throw_range_error_with_code(
-            "Temporal.Duration.prototype.with requires an object argument",
+        crate::object::throw_object_type_error(
+            b"Temporal.Duration.prototype.with requires an object argument",
         );
     }
-    let current: [i128; 10] = [
+    let mut next: [i128; 10] = [
         d.years() as i128,
         d.months() as i128,
         d.weeks() as i128,
@@ -263,16 +251,36 @@ fn with(d: &Duration, partial: f64) -> f64 {
         d.microseconds(),
         d.nanoseconds(),
     ];
-    let mut next = current;
-    for (i, fname) in FIELD_NAMES.iter().enumerate() {
+    // `ToTemporalPartialDurationRecord` reads the fields in *alphabetical* order
+    // (the order-of-operations tests observe this), each coerced via
+    // `ToIntegerIfIntegral` — a fractional / infinite value is a RangeError and a
+    // Symbol / BigInt a TypeError (not a silent drop). At least one recognized
+    // field must be present, else TypeError.
+    const ALPHA_FIELDS: [(&str, usize); 10] = [
+        ("days", 3),
+        ("hours", 4),
+        ("microseconds", 8),
+        ("milliseconds", 7),
+        ("minutes", 5),
+        ("months", 1),
+        ("nanoseconds", 9),
+        ("seconds", 6),
+        ("weeks", 2),
+        ("years", 0),
+    ];
+    let mut any = false;
+    for (fname, slot) in ALPHA_FIELDS {
         let key = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
         let raw = crate::object::js_object_get_field_by_name_f64(obj, key);
         if !is_undefined(raw) {
-            let n = JSValue::from_bits(raw.to_bits()).to_number();
-            if n.is_finite() {
-                next[i] = n.trunc() as i128;
-            }
+            any = true;
+            next[slot] = to_integer_if_integral(raw);
         }
+    }
+    if !any {
+        crate::object::throw_object_type_error(
+            b"Temporal.Duration.prototype.with requires at least one duration field",
+        );
     }
     wrap(ok_or_throw(Duration::new(
         next[0] as i64,

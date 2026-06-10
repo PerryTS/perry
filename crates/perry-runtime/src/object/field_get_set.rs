@@ -2209,7 +2209,9 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         let builtin_own = match kind {
             ExoticKind::RegExp => name == "lastIndex",
             ExoticKind::Error => matches!(name, "message" | "stack"),
-            ExoticKind::Date => false,
+            // Temporal built-in fields (year/month/calendar/…) are prototype
+            // getters, not own data properties (like Date).
+            ExoticKind::Date | ExoticKind::Temporal => false,
         };
         if builtin_own {
             return nanbox_true;
@@ -2965,6 +2967,17 @@ pub extern "C" fn js_object_get_field_by_name(
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                     let name = String::from_utf8_lossy(key_bytes);
                     let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+                    // A user-defined own expando property (`Object.defineProperty`
+                    // / plain assignment) shadows the built-in prototype getters,
+                    // per OrdinaryGet walking own properties before the prototype.
+                    if let Some(v) = super::exotic_expando::exotic_get_own_property(
+                        addr,
+                        super::exotic_expando::ExoticKind::Temporal,
+                        &name,
+                        boxed,
+                    ) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
                     if let Some(v) = crate::temporal::dispatch::get_property(boxed, &name) {
                         return JSValue::from_bits(v.to_bits());
                     }

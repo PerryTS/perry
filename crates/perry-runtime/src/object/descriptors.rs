@@ -926,7 +926,7 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             let mut names = match kind {
                 ExoticKind::RegExp => vec!["lastIndex".to_string()],
                 ExoticKind::Error => vec!["message".to_string(), "stack".to_string()],
-                ExoticKind::Date => Vec::new(),
+                ExoticKind::Date | ExoticKind::Temporal => Vec::new(),
             };
             for key in super::exotic_expando::exotic_own_keys(kind, addr, false) {
                 if !names.contains(&key) {

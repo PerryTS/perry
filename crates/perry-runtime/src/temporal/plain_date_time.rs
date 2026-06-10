@@ -4,7 +4,7 @@
 //! PlainTime field sets.
 
 use super::dispatch::{
-    self, boolean, field_u16, field_u8, int_arg, num_arg, ok_or_throw, raw_arg, string, undefined,
+    self, boolean, field_u16, field_u8, ok_or_throw, raw_arg, string, undefined,
 };
 use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
 use crate::value::JSValue;
@@ -20,55 +20,81 @@ fn calendar_arg(v: f64) -> Calendar {
     super::options::calendar_slot(v)
 }
 
+/// Strict calendar-identifier parse for the constructor's trailing argument
+/// (an ISO string / annotation form is a RangeError, unlike `from`'s lenient
+/// `calendar_slot`).
+fn calendar_id_arg(v: f64) -> Calendar {
+    super::options::calendar_identifier(v)
+}
+
 /// `new Temporal.PlainDateTime(year, month, day, hour?, …, nanosecond?, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
-    // `try_new` = overflow "reject": throw on out-of-range fields instead of
-    // constraining. Time fields saturate via `field_u8`/`field_u16` so a wrapping
-    // `as u8` cast can't slip e.g. `256` (hour) through as `0`.
+    // Each field is `ToIntegerWithTruncation`: a non-finite (`Infinity`/`NaN` /
+    // absent required field) is a RangeError, a Symbol/BigInt a TypeError — not
+    // a silently-mangled `as i32`/`0`. `try_new` = overflow "reject" (out-of-range
+    // fields throw); time fields saturate via `field_u8`/`field_u16` so a wrapping
+    // cast can't slip e.g. `256` (hour) through as `0`.
+    let year = dispatch::integer_with_truncation(raw_arg(args, 0));
+    let month = dispatch::integer_with_truncation(raw_arg(args, 1));
+    let day = dispatch::integer_with_truncation(raw_arg(args, 2));
     wrap(ok_or_throw(PlainDateTime::try_new(
-        num_arg(args, 0) as i32,     // year
-        num_arg(args, 1) as u8,      // month
-        num_arg(args, 2) as u8,      // day
-        field_u8(int_arg(args, 3)),  // hour
-        field_u8(int_arg(args, 4)),  // minute
-        field_u8(int_arg(args, 5)),  // second
-        field_u16(int_arg(args, 6)), // ms
-        field_u16(int_arg(args, 7)), // us
-        field_u16(int_arg(args, 8)), // ns
-        calendar_arg(raw_arg(args, 9)),
+        year as i32,
+        field_u8(month),
+        field_u8(day),
+        field_u8(dispatch::optional_integer_with_truncation(raw_arg(args, 3))), // hour
+        field_u8(dispatch::optional_integer_with_truncation(raw_arg(args, 4))), // minute
+        field_u8(dispatch::optional_integer_with_truncation(raw_arg(args, 5))), // second
+        field_u16(dispatch::optional_integer_with_truncation(raw_arg(args, 6))), // ms
+        field_u16(dispatch::optional_integer_with_truncation(raw_arg(args, 7))), // us
+        field_u16(dispatch::optional_integer_with_truncation(raw_arg(args, 8))), // ns
+        calendar_id_arg(raw_arg(args, 9)),
     )))
 }
 
 fn coerce_dt(v: f64) -> PlainDateTime {
-    coerce_dt_with_overflow(v, None)
+    coerce_dt_with_opts(v, undefined())
 }
 
-/// `ToTemporalDateTime(item, overflow)`. A `PlainDateTime` is cloned; a
+/// `ToTemporalDateTime(item, options)`. A `PlainDateTime` is cloned; a
 /// `PlainDate` is widened to midnight; an ISO string is parsed; a property-bag
-/// object is built via partial fields under `overflow`; anything else
-/// (number/boolean/null/symbol, or a non-date Temporal value) is a `TypeError`.
-fn coerce_dt_with_overflow(
-    v: f64,
-    overflow: Option<temporal_rs::options::Overflow>,
-) -> PlainDateTime {
+/// object is built via partial fields; anything else (number/boolean/null/symbol,
+/// or a non-date Temporal value) is a `TypeError`. The `overflow` option in
+/// `opts` is read *after* the item is processed (the spec / observable-overflow
+/// tests: a primitive throws before options are touched, an invalid string
+/// throws before options are read, and a bag reads its fields first). `opts` is
+/// `undefined` for `compare`/`until`/`since` (no options arg).
+fn coerce_dt_with_opts(v: f64, opts: f64) -> PlainDateTime {
     match temporal_value_ref(v) {
-        Some(TemporalValue::PlainDateTime(dt)) => return dt.clone(),
-        Some(TemporalValue::PlainDate(d)) => return ok_or_throw(d.to_plain_date_time(None)),
-        Some(TemporalValue::ZonedDateTime(z)) => return z.to_plain_date_time(),
+        Some(TemporalValue::PlainDateTime(dt)) => {
+            let dt = dt.clone();
+            let _ = super::options::overflow(opts);
+            return dt;
+        }
+        Some(TemporalValue::PlainDate(d)) => {
+            let dt = ok_or_throw(d.to_plain_date_time(None));
+            let _ = super::options::overflow(opts);
+            return dt;
+        }
+        Some(TemporalValue::ZonedDateTime(z)) => {
+            let dt = z.to_plain_date_time();
+            let _ = super::options::overflow(opts);
+            return dt;
+        }
         Some(_) => crate::object::throw_object_type_error(
             b"Cannot convert this Temporal value to a Temporal.PlainDateTime",
         ),
         None => {}
     }
     if JSValue::from_bits(v.to_bits()).is_string() {
-        return ok_or_throw(dispatch::read_string(v).parse::<PlainDateTime>());
+        let dt = ok_or_throw(dispatch::read_string(v).parse::<PlainDateTime>());
+        let _ = super::options::overflow(opts);
+        return dt;
     }
-    super::options::plain_date_time_from_bag(v, overflow)
+    super::options::plain_date_time_from_bag(v, opts)
 }
 
 pub fn from_static(args: &[f64]) -> f64 {
-    let overflow = super::options::overflow(raw_arg(args, 1));
-    wrap(coerce_dt_with_overflow(raw_arg(args, 0), overflow))
+    wrap(coerce_dt_with_opts(raw_arg(args, 0), raw_arg(args, 1)))
 }
 
 pub fn compare_static(args: &[f64]) -> f64 {
@@ -124,18 +150,15 @@ pub fn get(dt: &PlainDateTime, name: &str) -> Option<f64> {
 pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
     match name {
         "add" => {
+            // Spec reads the duration argument's fields BEFORE the options bag.
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
             let overflow = super::options::overflow(raw_arg(args, 1));
-            wrap(ok_or_throw(dt.add(
-                &super::duration::coerce_duration(raw_arg(args, 0)),
-                overflow,
-            )))
+            wrap(ok_or_throw(dt.add(&dur, overflow)))
         }
         "subtract" => {
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
             let overflow = super::options::overflow(raw_arg(args, 1));
-            wrap(ok_or_throw(dt.subtract(
-                &super::duration::coerce_duration(raw_arg(args, 0)),
-                overflow,
-            )))
+            wrap(ok_or_throw(dt.subtract(&dur, overflow)))
         }
         "until" => super::duration::wrap(ok_or_throw(dt.until(
             &coerce_dt(raw_arg(args, 0)),
@@ -154,15 +177,15 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
         }
         "toPlainDate" => alloc_temporal_cell(TemporalValue::PlainDate(dt.to_plain_date())),
         "toPlainTime" => alloc_temporal_cell(TemporalValue::PlainTime(dt.to_plain_time())),
-        "toString" => string(&ok_or_throw(dt.to_ixdtf_string(
-            super::options::to_string_rounding_options(raw_arg(args, 0)),
-            super::options::display_calendar(raw_arg(args, 0)),
-        ))),
+        "toString" => {
+            let (rounding, calendar) = super::options::pdt_to_string_options(raw_arg(args, 0));
+            string(&ok_or_throw(dt.to_ixdtf_string(rounding, calendar)))
+        }
         "toJSON" | "toLocaleString" => string(&dt.to_string()),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let fields = super::options::datetime_fields(obj);
+            let fields = super::options::with_datetime_fields(obj);
             let overflow = super::options::overflow(raw_arg(args, 1));
             wrap(ok_or_throw(dt.with(fields, overflow)))
         }
@@ -171,7 +194,16 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
             let time = super::options::optional_plain_time(raw_arg(args, 0));
             wrap(ok_or_throw(dt.to_plain_date().to_plain_date_time(time)))
         }
-        "withCalendar" => wrap(dt.with_calendar(calendar_arg(raw_arg(args, 0)))),
+        "withCalendar" => {
+            // `withCalendar` requires its argument: `ToTemporalCalendarSlotValue`
+            // of `undefined` is a TypeError (the `missing-argument` case).
+            if dispatch::is_undefined(raw_arg(args, 0)) {
+                crate::object::throw_object_type_error(
+                    b"withCalendar requires a calendar argument",
+                );
+            }
+            wrap(dt.with_calendar(calendar_arg(raw_arg(args, 0))))
+        }
         "round" => wrap(ok_or_throw(
             dt.round(super::options::rounding_options(raw_arg(args, 0))),
         )),

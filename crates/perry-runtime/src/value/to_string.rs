@@ -32,7 +32,7 @@ thread_local! {
 /// `value` MUST be a NaN-boxed `POINTER_TAG` object whose pointer is a real
 /// heap address (`>= 0x10000`); the caller has already excluded symbols,
 /// buffers, arrays, and JSX nodes (those carry their own coercion rules).
-unsafe fn ordinary_to_primitive_string(value: f64) -> Option<f64> {
+pub(crate) unsafe fn ordinary_to_primitive_string(value: f64) -> Option<f64> {
     // Bound recursion: a `toString` that itself string-coerces `this`.
     let depth = TO_PRIMITIVE_DEPTH.with(|c| c.get());
     if depth >= 200 {

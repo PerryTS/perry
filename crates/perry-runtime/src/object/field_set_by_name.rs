@@ -180,15 +180,29 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
-    // A `Temporal.*` value is an opaque, immutable NaN-boxed cell — writing an
-    // arbitrary property (e.g. test262's `instance.constructor = …` subclassing
-    // probes) must be a no-op, not interpret the cell as an `ObjectHeader` and
-    // corrupt its boxed payload (which segfaults on the next deref). `obj` still
-    // carries its NaN-box tag here (`0x7FFD…` for a real cell, `0x7FFE…` for a
-    // class-ref), so route through `is_temporal_value`, which checks the
-    // POINTER_TAG before masking to the cleaned heap address — passing the raw
-    // tagged bits to `is_temporal_cell_addr` would deref a wild address.
-    if crate::temporal::is_temporal_value(f64::from_bits(obj as u64)) {
+    // A `Temporal.*` value is an opaque, immutable NaN-boxed cell that is NOT
+    // an `ObjectHeader` — writing an arbitrary property (e.g. test262's
+    // `instance.constructor = …` subclassing probes) must NOT interpret the
+    // cell as an `ObjectHeader` and corrupt its boxed payload (which segfaults
+    // on the next deref). The cell's `temporal_rs` slots are immutable, but a
+    // user-defined *expando* property is legal and lives in the exotic side
+    // table (like Date/RegExp). `obj` still carries its NaN-box tag here
+    // (`0x7FFD…` for a real cell), so route through `exotic_expando_kind_of_value`,
+    // which checks the tag before masking to the cleaned heap address.
+    if let Some((addr, kind @ super::exotic_expando::ExoticKind::Temporal)) =
+        super::exotic_expando::exotic_expando_kind_of_value(f64::from_bits(obj as u64))
+    {
+        if !key.is_null() {
+            unsafe {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = String::from_utf8_lossy(std::slice::from_raw_parts(name_ptr, name_len))
+                    .into_owned();
+                let receiver = f64::from_bits(obj as u64);
+                let _ =
+                    super::exotic_expando::exotic_set_property(addr, kind, &name, value, receiver);
+            }
+        }
         return;
     }
     if let Some(addr) =

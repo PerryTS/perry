@@ -29,6 +29,15 @@ pub(crate) enum ExoticKind {
     Date,
     RegExp,
     Error,
+    /// A `Temporal.*` reference value (any of the 8 brand sub-kinds). Like
+    /// `Date`, it is a non-movable, pointer-free cell that is NOT an
+    /// `ObjectHeader`, so user-defined own properties (`Object.defineProperty`,
+    /// plain assignment — e.g. test262's `instance.constructor = …` and the
+    /// `checkToTemporalCalendarFastPath` getter probes) must live in the
+    /// side table rather than being written through a bit-cast that corrupts
+    /// the boxed payload. Built-in getters (`duration.years`, `plainDate.month`)
+    /// stay in the Temporal dispatch path; only true expando keys land here.
+    Temporal,
 }
 
 /// Classify `addr` as a Date cell, RegExp header, or Error header. Returns
@@ -42,6 +51,7 @@ pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
     match unsafe { (*gc).obj_type } {
         crate::gc::GC_TYPE_DATE_CELL => Some(ExoticKind::Date),
         crate::gc::GC_TYPE_ERROR => Some(ExoticKind::Error),
+        crate::gc::GC_TYPE_TEMPORAL => Some(ExoticKind::Temporal),
         crate::gc::GC_TYPE_OBJECT if crate::regex::is_regex_pointer(addr as *const u8) => {
             Some(ExoticKind::RegExp)
         }
@@ -224,12 +234,22 @@ pub(crate) unsafe fn exotic_set_property(
     // write — the setter runs with the instance receiver and NO own expando
     // is created (spec OrdinarySetWithOwnDescriptor walking the chain).
     if super::descriptors_in_use() {
+        // Temporal values have 8 distinct prototypes (resolved via brand
+        // dispatch, not a single named builtin prototype), and their built-in
+        // accessors are served by the Temporal getter path, not the generic
+        // accessor side table — so there is no prototype-accessor setter to
+        // consult here. Skip straight to the own-property store.
         let proto_name = match kind {
             ExoticKind::Date => "Date",
             ExoticKind::RegExp => "RegExp",
             ExoticKind::Error => "Error",
+            ExoticKind::Temporal => "",
         };
-        let proto = super::builtin_prototype_value(proto_name);
+        let proto = if proto_name.is_empty() {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        } else {
+            super::builtin_prototype_value(proto_name)
+        };
         let proto_bits = proto.to_bits();
         if (proto_bits >> 48) == 0x7FFD {
             let proto_addr = (proto_bits & crate::value::POINTER_MASK) as usize;

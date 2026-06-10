@@ -59,6 +59,32 @@ pub(crate) fn field_u16(v: i64) -> u16 {
     }
 }
 
+/// Spec `ToIntegerWithTruncation(value)` for a **required** constructor field:
+/// real `ToNumber` (Symbol / BigInt → TypeError), then a non-finite result
+/// (`undefined`→NaN, `Infinity`) is a `RangeError`; a fractional value is
+/// truncated toward zero (unlike `ToIntegerIfIntegral`, which rejects fractions).
+pub(crate) fn integer_with_truncation(raw: f64) -> i64 {
+    if JSValue::from_bits(raw.to_bits()).is_bigint() {
+        crate::object::throw_object_type_error(b"Cannot convert a BigInt value to a number");
+    }
+    let n = crate::builtins::js_number_coerce(raw);
+    if !n.is_finite() {
+        crate::fs::validate::throw_range_error_with_code("Temporal field must be a finite integer");
+    }
+    n.trunc() as i64
+}
+
+/// `ToIntegerWithTruncation` for an **optional** field: an absent / `undefined`
+/// argument defaults to `0`; anything present goes through
+/// [`integer_with_truncation`] (so `Infinity` still throws).
+pub(crate) fn optional_integer_with_truncation(raw: f64) -> i64 {
+    if is_undefined(raw) {
+        0
+    } else {
+        integer_with_truncation(raw)
+    }
+}
+
 /// Spec `ToIntegerIfIntegral(value)` for Temporal numeric fields: `ToNumber`
 /// the value, then throw a `RangeError` if the result is not an integral
 /// Number (non-finite or fractional). Used by the `Temporal.Duration`
@@ -67,7 +93,12 @@ pub(crate) fn field_u16(v: i64) -> u16 {
 pub(crate) fn to_integer_if_integral(raw: f64) -> i128 {
     // Real `ToNumber`: runs `valueOf`/`Symbol.toPrimitive` for objects (the
     // order-of-operations / infinity property-bag tests observe exactly one
-    // `valueOf` call) and throws `TypeError` for a Symbol.
+    // `valueOf` call) and throws `TypeError` for a Symbol. A BigInt also throws
+    // a `TypeError` here — abstract `ToNumber(BigInt)` is a TypeError (only the
+    // explicit `Number(2n)` constructor converts, which `js_number_coerce` does).
+    if JSValue::from_bits(raw.to_bits()).is_bigint() {
+        crate::object::throw_object_type_error(b"Cannot convert a BigInt value to a number");
+    }
     let n = crate::builtins::js_number_coerce(raw);
     if !n.is_finite() || n.fract() != 0.0 {
         crate::fs::validate::throw_range_error_with_code(
