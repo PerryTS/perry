@@ -534,8 +534,9 @@ pub extern "C" fn js_child_process_spawn(
     // symbol predates that and is retained only so the dispatch table
     // stays link-complete; it is not reachable from emitted code. (The
     // stub-elimination audit's #4912 "spawn returns null" premise was
-    // stale against current main — spawn is real; only `exec` timing
-    // remains, tracked in #4912.)
+    // stale against current main — spawn is real; #4912 closed the
+    // remaining `exec`/`execFile` "secretly synchronous" gap: both now run
+    // off the main thread and call back on a later tick via the reactor.)
     std::ptr::null_mut()
 }
 
@@ -559,12 +560,14 @@ pub extern "C" fn js_child_process_spawn(
 pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64, arg2: f64) -> f64 {
     use crate::fs::extract_closure_ptr;
     // The callback is whichever argument is a closure; prefer the later slot.
-    let cb = {
+    // Keep the NaN-boxed value too — the async path (#4912) GC-roots it while
+    // the call is deferred to the reactor.
+    let (cb, cb_val) = {
         let c2 = extract_closure_ptr(arg2);
         if !c2.is_null() {
-            c2
+            (c2, arg2)
         } else {
-            extract_closure_ptr(arg1)
+            (extract_closure_ptr(arg1), arg1)
         }
     };
 
@@ -579,7 +582,8 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         if cb.is_null() {
             return empty;
         }
-        crate::closure::js_closure_call3(cb, TAG_NULL_F64, empty, cp_box_output(b"", &mode));
+        // Node fires `exec`'s callback on a later tick, never synchronously.
+        reactor::cp_defer_exec_callback(cb_val, TAG_NULL_F64, empty, cp_box_output(b"", &mode));
         return f64::from_bits(TAG_UNDEFINED_BITS);
     }
 
@@ -596,8 +600,8 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
             return stdout_box;
         }
         let stderr_box = cp_box_output(b"", &mode);
-        crate::closure::js_closure_call3(
-            cb,
+        reactor::cp_defer_exec_callback(
+            cb_val,
             cp_abort_error(Some(&cmd_str)),
             stdout_box,
             stderr_box,
@@ -623,24 +627,19 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
     };
     cp_apply_options(&mut command, arg1);
     let run_options = cp_read_async_run_options(arg1);
-    let run = cp_run_to_completion(command, &run_options);
 
-    let (stdout_bytes, stderr_bytes) = cp_exec_callback_output_bytes(&run, &run_options);
-    let stdout_box = cp_box_output(stdout_bytes, &mode);
     if cb.is_null() {
-        // Legacy no-callback shape — return stdout (Buffer or string per
-        // `encoding`).
-        return stdout_box;
+        // Legacy no-callback shape — run synchronously and return stdout
+        // (Buffer or string per `encoding`). Node returns a ChildProcess here;
+        // Perry keeps the historical buffered-stdout return for this form.
+        let run = cp_run_to_completion(command, &run_options);
+        let (stdout_bytes, _) = cp_exec_callback_output_bytes(&run, &run_options);
+        return cp_box_output(stdout_bytes, &mode);
     }
 
-    let stderr_box = cp_box_output(stderr_bytes, &mode);
-    let err_val = if run.success() {
-        TAG_NULL_F64
-    } else {
-        cp_exec_callback_error(&run, &run_options, &cmd_str)
-    };
-    crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
-    f64::from_bits(TAG_UNDEFINED_BITS)
+    // With a callback, run asynchronously: off the main thread, with the
+    // callback fired on a later event-loop tick (#4912).
+    reactor::cp_exec_async(command, cmd_str, cb_val, run_options, mode)
 }
 
 // ============================================================================
@@ -2113,6 +2112,27 @@ fn cp_exec_callback_output_bytes<'a>(
     (&run.stdout, &run.stderr)
 }
 
+/// Build the `(err, stdout, stderr)` triple an exec/execFile callback receives
+/// from a finished (or failed) run, boxed per `mode`. Shared by the synchronous
+/// no-op-callback fast paths and the async reactor (#4912), so a deferred
+/// callback is byte-identical to the former immediate one.
+pub(super) fn cp_exec_callback_args(
+    run: &CpRun,
+    options: &CpRunOptions,
+    cmd: &str,
+    mode: &CpOutput,
+) -> (f64, f64, f64) {
+    let (stdout_bytes, stderr_bytes) = cp_exec_callback_output_bytes(run, options);
+    let stdout_box = cp_box_output(stdout_bytes, mode);
+    let stderr_box = cp_box_output(stderr_bytes, mode);
+    let err_val = if run.success() {
+        TAG_NULL_F64
+    } else {
+        cp_exec_callback_error(run, options, cmd)
+    };
+    (err_val, stdout_box, stderr_box)
+}
+
 /// Throw the error Node raises from a failed execSync/execFileSync — carries
 /// `status`/`signal`/`pid`/`output`/`stdout`/`stderr`/`cmd`. Diverges. #1938.
 fn cp_sync_throw_error(run: &CpRun, cmd: &str, stdout: f64, stderr: f64) -> ! {
@@ -2197,12 +2217,14 @@ pub extern "C" fn js_child_process_exec_file(
     cb_val: f64,
 ) -> f64 {
     use crate::fs::extract_closure_ptr;
-    let cb = {
+    // Locate the callback and keep its NaN-boxed value for GC rooting while the
+    // async run is in flight (#4912).
+    let (cb, cb_nanbox) = {
         let c = extract_closure_ptr(cb_val);
         if !c.is_null() {
-            c
+            (c, cb_val)
         } else {
-            extract_closure_ptr(opts_val)
+            (extract_closure_ptr(opts_val), opts_val)
         }
     };
 
@@ -2218,8 +2240,8 @@ pub extern "C" fn js_child_process_exec_file(
             return stdout_box;
         }
         let stderr_box = cp_box_output(b"", &mode);
-        crate::closure::js_closure_call3(
-            cb,
+        reactor::cp_defer_exec_callback(
+            cb_nanbox,
             cp_abort_error(Some(&cp_file_cmd_display(&file_str, &arg_strs))),
             stdout_box,
             stderr_box,
@@ -2233,25 +2255,23 @@ pub extern "C" fn js_child_process_exec_file(
     command.args(&arg_strs);
     cp_apply_options(&mut command, opts_val);
     let run_options = cp_read_async_run_options(opts_val);
-    let run = cp_run_to_completion(command, &run_options);
 
-    let (stdout_bytes, stderr_bytes) = cp_exec_callback_output_bytes(&run, &run_options);
-    let stdout_box = cp_box_output(stdout_bytes, &mode);
     if cb.is_null() {
-        return stdout_box;
+        // Legacy no-callback shape — run synchronously, return stdout.
+        let run = cp_run_to_completion(command, &run_options);
+        let (stdout_bytes, _) = cp_exec_callback_output_bytes(&run, &run_options);
+        return cp_box_output(stdout_bytes, &mode);
     }
-    let stderr_box = cp_box_output(stderr_bytes, &mode);
-    let err_val = if run.success() {
-        TAG_NULL_F64
-    } else {
-        cp_exec_callback_error(
-            &run,
-            &run_options,
-            &cp_file_cmd_display(&file_str, &arg_strs),
-        )
-    };
-    crate::closure::js_closure_call3(cb, err_val, stdout_box, stderr_box);
-    f64::from_bits(TAG_UNDEFINED_BITS)
+
+    // With a callback, run asynchronously: off the main thread, callback on a
+    // later event-loop tick (#4912).
+    reactor::cp_exec_async(
+        command,
+        cp_file_cmd_display(&file_str, &arg_strs),
+        cb_nanbox,
+        run_options,
+        mode,
+    )
 }
 
 /// `child_process.execFileSync(file[, args][, options])` — runs `file`
@@ -2307,34 +2327,50 @@ fn cp_box_string_bytes(bytes: &[u8]) -> f64 {
     crate::value::js_nanbox_string(p as i64)
 }
 
-#[inline]
-fn cp_error_value(msg: &str) -> f64 {
-    let mp = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_error_new_with_message(mp);
-    crate::value::js_nanbox_pointer(err as i64)
+/// Settle the pending promise captured in slot 0 from an exec/execFile
+/// callback's `(err, stdout, stderr)`. On success → resolve `{ stdout, stderr
+/// }` (Node's custom-promisify shape); on failure → attach `stdout`/`stderr` to
+/// the error and reject with it. Arity 3. #4912/#1857.
+extern "C" fn cp_promise_settle_cb(
+    closure: *const ClosureHeader,
+    err: f64,
+    stdout: f64,
+    stderr: f64,
+) -> f64 {
+    let promise_val = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let promise =
+        (promise_val.to_bits() & crate::value::POINTER_MASK) as *mut crate::promise::Promise;
+    if promise.is_null() {
+        return f64::from_bits(TAG_UNDEFINED_BITS);
+    }
+    if JSValue::from_bits(err.to_bits()).is_null() {
+        let obj = unsafe { make_two_field_object("stdout", stdout, "stderr", stderr) };
+        crate::promise::js_promise_resolve(promise, cp_box_ptr(obj as *const u8));
+    } else {
+        // Node's promisify(exec) rejects with the same Error the callback got,
+        // with `stdout`/`stderr` attached.
+        cp_set_field(err, b"stdout", stdout);
+        cp_set_field(err, b"stderr", stderr);
+        crate::promise::js_promise_reject(promise, err);
+    }
+    f64::from_bits(TAG_UNDEFINED_BITS)
 }
 
-fn cp_exec_result_promise(output: std::io::Result<std::process::Output>) -> f64 {
-    match output {
-        Ok(o) => {
-            let stdout_b = cp_box_string_bytes(&o.stdout);
-            let stderr_b = cp_box_string_bytes(&o.stderr);
-            let obj = unsafe { make_two_field_object("stdout", stdout_b, "stderr", stderr_b) };
-            let obj_val = cp_box_ptr(obj as *const u8);
-            let promise = if o.status.success() {
-                crate::promise::js_promise_resolved(obj_val)
-            } else {
-                // Node rejects with an Error carrying .stdout/.stderr; the
-                // minimal shape (an Error) is enough for the supported cases.
-                crate::promise::js_promise_rejected(cp_error_value("Command failed"))
-            };
-            crate::value::js_nanbox_pointer(promise as i64)
-        }
-        Err(e) => {
-            let promise = crate::promise::js_promise_rejected(cp_error_value(&e.to_string()));
-            crate::value::js_nanbox_pointer(promise as i64)
-        }
-    }
+/// Create the pending promise + a settle closure that fulfils it, then run
+/// `command` through the async exec reactor (#4912). Returns the NaN-boxed
+/// pending promise. The settle closure (and through it the promise) is kept
+/// alive by the reactor's exec-callback GC root.
+fn cp_promisified_run(command: Command, cmd_str: String, opts: f64) -> f64 {
+    let run_options = cp_read_async_run_options(opts);
+    // promisify(exec)/promisify(execFile) yield string stdout/stderr (utf8).
+    let mode = cp_read_output_mode(opts, true);
+    let promise = crate::promise::js_promise_new();
+    js_register_closure_arity(cp_promise_settle_cb as *const u8, 3);
+    let cb = js_closure_alloc(cp_promise_settle_cb as *const u8, 1);
+    js_closure_set_capture_ptr(cb, 0, cp_box_ptr(promise as *const u8).to_bits() as i64);
+    let cb_val = crate::value::js_nanbox_pointer(cb as i64);
+    reactor::cp_exec_async(command, cmd_str, cb_val, run_options, mode);
+    crate::value::js_nanbox_pointer(promise as i64)
 }
 
 extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, opts: f64) -> f64 {
@@ -2352,7 +2388,7 @@ extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, 
         c
     };
     cp_apply_options(&mut command, opts);
-    cp_exec_result_promise(command.output())
+    cp_promisified_run(command, cmd, opts)
 }
 
 extern "C" fn cp_promisified_exec_file(
@@ -2362,7 +2398,14 @@ extern "C" fn cp_promisified_exec_file(
 ) -> f64 {
     let file = cp_value_to_string(file_val).unwrap_or_default();
     let arg_strs = cp_args_from_value(args_val);
-    cp_exec_result_promise(Command::new(&file).args(&arg_strs).output())
+    let mut command = Command::new(&file);
+    command.args(&arg_strs);
+    // The 2-arg promisify(execFile) wrapper has no options slot.
+    cp_promisified_run(
+        command,
+        cp_file_cmd_display(&file, &arg_strs),
+        f64::from_bits(TAG_UNDEFINED_BITS),
+    )
 }
 
 /// Build the wrapper function returned by `util.promisify(child_process.exec)`
