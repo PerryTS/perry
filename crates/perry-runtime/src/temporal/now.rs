@@ -6,21 +6,20 @@
 
 use super::dispatch::{self, ok_or_throw, raw_arg, string};
 use super::{alloc_temporal_cell, TemporalValue};
-use crate::value::JSValue;
 use temporal_rs::{Temporal, TimeZone};
 
-/// Resolve an optional time-zone argument (an IANA id string) to a `TimeZone`,
-/// or `None` to use the host's current zone.
+/// Resolve an optional time-zone argument (an IANA id string or a
+/// `Temporal.ZonedDateTime`) to a `TimeZone`, or `None` (absent / `undefined`)
+/// to use the host's current zone. A present-but-wrong-typed value is rejected
+/// exactly like `ToTemporalTimeZoneIdentifier`: an invalid string → `RangeError`,
+/// any non-string / non-ZonedDateTime primitive or object → `TypeError`. (The
+/// old version silently dropped wrong types to `None`, so the host zone was used
+/// instead of throwing — the `timezone-wrong-type` cases never rejected.)
 fn tz_arg(v: f64) -> Option<TimeZone> {
     if dispatch::is_undefined(v) {
         return None;
     }
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
-        let s = dispatch::read_string(v);
-        return Some(ok_or_throw(TimeZone::try_from_str(&s)));
-    }
-    None
+    Some(super::options::timezone(v))
 }
 
 pub fn instant(_args: &[f64]) -> f64 {

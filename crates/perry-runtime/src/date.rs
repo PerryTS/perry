@@ -1339,6 +1339,15 @@ pub extern "C" fn js_date_get_utc_milliseconds(timestamp: f64) -> f64 {
 /// date.valueOf() — same as getTime(), returns ms timestamp.
 #[no_mangle]
 pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
+    // A static `.valueOf()` call is lowered to `DateValueOf` even when the
+    // receiver is typed `any` and is actually a Temporal value (e.g. from
+    // `Temporal.PlainDate.from(...)`). Every `Temporal.*` type's `valueOf` is a
+    // hard `TypeError` (the spec bans implicit numeric coercion / ordering), so
+    // route a Temporal receiver to its brand dispatch, which throws — rather
+    // than returning the opaque cell as a pseudo-Date timestamp.
+    if crate::temporal::is_temporal_value(timestamp) {
+        return crate::temporal::dispatch::call_method(timestamp, "valueOf", &[]);
+    }
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(timestamp) {
         return payload;
     }
