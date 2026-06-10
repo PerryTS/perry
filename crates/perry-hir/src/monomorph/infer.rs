@@ -70,19 +70,27 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         Expr::Conditional { then_expr, .. } => infer_expr_type(then_expr, module, idx),
 
         // Binary operations
-        Expr::Binary { op, .. } => match op {
+        Expr::Binary { op, left, right } => match op {
             BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul
             | BinaryOp::Div
             | BinaryOp::Mod
-            | BinaryOp::Pow => Some(Type::Number),
-            BinaryOp::BitAnd
+            | BinaryOp::Pow
+            | BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => Some(Type::Number),
+            | BinaryOp::Shr => {
+                let left_ty = infer_expr_type(left, module, idx);
+                let right_ty = infer_expr_type(right, module, idx);
+                if matches!(left_ty, Some(Type::BigInt)) || matches!(right_ty, Some(Type::BigInt)) {
+                    Some(Type::BigInt)
+                } else {
+                    Some(Type::Number)
+                }
+            }
+            BinaryOp::UShr => Some(Type::Number),
         },
 
         // Comparisons return boolean
@@ -107,8 +115,15 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         }
 
         // Unary operations
-        Expr::Unary { op, .. } => match op {
-            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => Some(Type::Number),
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Neg | UnaryOp::BitNot => {
+                if matches!(infer_expr_type(operand, module, idx), Some(Type::BigInt)) {
+                    Some(Type::BigInt)
+                } else {
+                    Some(Type::Number)
+                }
+            }
+            UnaryOp::Pos => Some(Type::Number),
             UnaryOp::Not => Some(Type::Boolean),
         },
 

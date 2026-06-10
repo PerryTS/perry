@@ -565,6 +565,17 @@ pub extern "C" fn js_bigint_neg(a: *const BigIntHeader) -> *mut BigIntHeader {
     bigint_alloc_with_limbs(result)
 }
 
+/// Bitwise NOT of a BigInt (`~a`).
+#[no_mangle]
+pub extern "C" fn js_bigint_not(a: *const BigIntHeader) -> *mut BigIntHeader {
+    let a_limbs = bigint_limbs_or_zero(a);
+    let mut result = ZERO_LIMBS;
+    for i in 0..BIGINT_LIMBS {
+        result[i] = !a_limbs[i];
+    }
+    bigint_alloc_with_limbs(result)
+}
+
 /// Check if a BigInt is zero (all limbs are zero). Returns 1 for zero, 0 for non-zero.
 #[no_mangle]
 pub extern "C" fn js_bigint_is_zero(a: *const BigIntHeader) -> i32 {
@@ -1769,6 +1780,27 @@ mod tests {
         assert_eq!(read_as_i64(js_bigint_shl(one, four)), 16);
         let two = js_bigint_from_i64(2);
         assert_eq!(read_as_i64(js_bigint_shr(eight, two)), 2);
+    }
+
+    #[test]
+    fn permission_bitwise_values_match_node() {
+        let bitfield = js_bigint_from_i64(9216);
+        let zero = js_bigint_from_i64(0);
+        let one = js_bigint_from_i64(1);
+        let eleven = js_bigint_from_i64(11);
+        let thirteen = js_bigint_from_i64(13);
+
+        let manage_messages = js_bigint_shl(one, thirteen);
+        let send_messages = js_bigint_shl(one, eleven);
+        let and_result = js_bigint_and(bitfield, manage_messages);
+        let or_result = js_bigint_or(zero, send_messages);
+        let not_result = js_bigint_not(send_messages);
+
+        assert_eq!(read_as_i64(manage_messages), 8192);
+        assert_eq!(read_as_i64(send_messages), 2048);
+        assert_eq!(read_as_i64(and_result), 8192);
+        assert_eq!(read_as_i64(or_result), 2048);
+        assert_eq!(read_as_i64(not_result), -2049);
     }
 
     #[test]
