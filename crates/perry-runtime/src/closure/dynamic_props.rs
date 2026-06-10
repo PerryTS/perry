@@ -139,12 +139,11 @@ fn forwarded_heap_owner(owner: usize) -> Option<usize> {
         return None;
     }
     unsafe {
-        let header =
-            (owner as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+        let header = crate::value::addr_class::try_read_gc_header(owner)?;
+        if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
             return None;
         }
-        Some(crate::gc::forwarding_address(header) as usize)
+        Some(crate::gc::forwarding_address(header as *const _) as usize)
     }
 }
 
