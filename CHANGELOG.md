@@ -1,3 +1,24 @@
+## v0.5.1155 — chore(runtime): split date.rs under the 2,000-line CI cap
+
+`crates/perry-runtime/src/date.rs` had grown to 2008 lines (pushed over by the
+Temporal tail work in #4923), tripping `scripts/check_file_size.sh` and failing
+the required `lint` gate on **every** open PR (the check runs against each PR's
+merge with current `main`).
+
+Extracted the date-string parsing cluster — `parse_date_string` and its
+per-grammar helpers (`parse_iso8601`, `parse_rfc_or_named`, `parse_tz_offset`,
+`normalize_millis`, `month_from_name`, `FULL_MONTHS`) — into a new
+`crates/perry-runtime/src/date/parse.rs` submodule (Rust 2018 keeps `date.rs`
+alongside `date/parse.rs`, no rename). `date.rs` declares `mod parse;` and
+re-exports the single entry point with `use parse::parse_date_string;`; the
+per-grammar helpers stay private to the submodule. Shared time math
+(`make_utc_ms`, `time_clip`, `timestamp_to_local_components`) stays in the parent
+and is reached via `super::` (a child module can see its ancestor's private
+items, so no visibility was widened beyond `parse_date_string`).
+
+No behavior change — pure code movement. `date.rs` is now 1675 lines,
+`date/parse.rs` 347; the date tests (incl. the `parse_date_string` cases) pass.
+
 ## v0.5.1154 — feat(ui-windows-winui): real Windows App SDK bootstrap probe (#4680 step 2)
 
 **WinUI 3 backend, step 2 of 6.** `--target windows-winui` already builds, links,
