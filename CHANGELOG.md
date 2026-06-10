@@ -1,3 +1,58 @@
+## v0.5.1157 — feat(atomics): real cross-agent `Atomics.wait`/`notify`/`waitAsync` over a shared SAB (#4913)
+
+Stage 2 of #4913 (Stage 1 — the honesty floor — landed in #4929). `Atomics.wait`,
+`Atomics.notify`, and `Atomics.waitAsync` were non-blocking fakes: `wait` always
+returned `"timed-out"`, `notify` always returned `0`, and `waitAsync` resolved
+`"timed-out"` immediately. They now block and wake for real across `perry/thread`
+agents.
+
+**Shared backing that actually aliases across threads.** The prerequisite was a
+`SharedArrayBuffer` whose bytes are visible from every agent. Previously every
+value crossing a `perry/thread` boundary was deep-copied (`SerializedValue`), so a
+SAB lost its sharing. Now:
+
+- `new SharedArrayBuffer(n)` allocates its `BufferHeader + data` block from the
+  global allocator (`crate::shared_sab`) — a stable, process-wide address that is
+  never freed (matching Perry's "buffers live for the life of the process" model)
+  and is therefore valid and writable from any OS thread.
+- A new `SerializedValue::SharedArrayBuffer { addr }` variant carries the SAB
+  **by reference** across the thread boundary instead of copying it; the receiving
+  agent re-registers the same address in its thread-local buffer / SAB tables, so
+  `new Int32Array(sab)` there aliases the exact same physical bytes (via the
+  existing #4103 view-meta backing path). The serializer recognises a SAB before
+  the `GcHeader` dispatch (buffers carry no `GcHeader`).
+
+**Futex park/wake (`crate::atomics_futex`).** A process-global wait table keyed by
+the **absolute physical byte address** of the atomic slot. Because a SAB aliases
+the same bytes on every agent, two agents viewing the same index compute the same
+key.
+
+- `Atomics.wait` re-checks the slot value and enqueues a waiter **atomically under
+  the table lock**, then parks the OS thread on a `Condvar` until a matching
+  `notify` or the timeout deadline — so a `notify` racing the call is never lost
+  (the agent either sees the changed value and returns `"not-equal"`, or parks and
+  is woken). Returns the real `"ok"` / `"not-equal"` / `"timed-out"`. A
+  `timeout === 0` poll still returns immediately; an `undefined`/`Infinity` timeout
+  blocks until notified.
+- `Atomics.notify` wakes up to `count` parked agents (default `undefined` →
+  `+Infinity` → all) and returns the **actual** number woken.
+- `Atomics.waitAsync` enqueues the waiter synchronously (atomic with the value
+  check, so the wake can't be missed), then resolves its promise from a background
+  thread — `"ok"` on notify, `"timed-out"` on the deadline — via the same
+  pending-result → event-loop path `spawn` uses.
+
+The `perry_stub_warn` / `PERRY_STRICT_STUBS` honesty gates added in #4929 are
+removed from these three ops — they are no longer lies.
+
+Caveat: only the `SharedArrayBuffer` itself shares across agents; a typed-array
+*view* captured directly into a thread closure still deep-copies (build the view
+per-agent from the shared SAB). The agent-coordinated test262 cases
+(`$262.agent`) remain out of scope.
+
+New: `crates/perry-runtime/src/shared_sab.rs`, `crates/perry-runtime/src/atomics_futex.rs`,
+`crates/perry/tests/issue_4913_atomics_cross_thread.rs`,
+`test-files/test_issue_4913_atomics_cross_thread.ts`.
+
 ## v0.5.1156 — fix(fetch): send dynamically-built request headers (#4932)
 
 `fetch(url, { headers })` silently dropped **every** request header whenever the

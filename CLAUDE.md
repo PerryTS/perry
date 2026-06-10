@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1156
+**Current Version:** 0.5.1157
 
 
 ## TypeScript Parity Status
@@ -130,7 +130,7 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Known Limitations
 
 - **No runtime type *validation***: declared TS types aren't enforced at runtime (a `string` param accepts a number, no throw). Annotations are mostly erased — the exception is `emitDecoratorMetadata`, which retains `design:type`/`design:paramtypes` from annotations on decorated members (see `docs/src/language/decorators.md`). Runtime type *discrimination* does exist: `typeof` via NaN-boxing tags, `instanceof` via class ID chain.
-- **`SharedArrayBuffer` + `Atomics` are single-realm only** (#4794): construction, typed-array views, and the non-blocking `Atomics` ops (`add`/`and`/`or`/`sub`/`xor`/`load`/`store`/`exchange`/`compareExchange`/`isLockFree`) match the spec on one thread. `perry/thread` deep-copies values across OS threads, so a SAB does **not** alias across threads yet, and `Atomics.wait`/`notify`/`waitAsync` are non-blocking stubs (no cross-agent wakeups). The agent-coordinated test262 cases (`$262.agent`) remain out of scope.
+- **`SharedArrayBuffer` + `Atomics` cross-thread** (#4794 single-realm; #4913 Stage 2 cross-agent): the `Atomics` ops (`add`/`and`/`or`/`sub`/`xor`/`load`/`store`/`exchange`/`compareExchange`/`isLockFree`) match the spec on one thread. A `SharedArrayBuffer` captured into a `spawn`/`parallelMap` closure now **aliases the same physical bytes** across `perry/thread` agents (its backing is a process-global, never-freed allocation — `crate::shared_sab` — passed by reference, not deep-copied), and `Atomics.wait`/`notify`/`waitAsync` are **real**: `wait` parks the OS thread on a futex table keyed by the absolute slot address (`crate::atomics_futex`), `notify` wakes parked agents and returns the count, and `waitAsync` resolves its promise on a background thread when notified or on timeout. Caveat: only the `SharedArrayBuffer` itself shares — a typed-array *view* captured directly still deep-copies (build the view per-agent from the shared SAB). The agent-coordinated test262 cases (`$262.agent`) remain out of scope.
 
 ## Common Pitfalls & Patterns
 
