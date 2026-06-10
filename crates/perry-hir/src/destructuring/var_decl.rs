@@ -1855,9 +1855,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         !skip_local_bindings.contains(&a.key.sym.to_string())
                     }
                     ast::ObjectPatProp::KeyValue(kv) => match kv.value.as_ref() {
-                        ast::Pat::Ident(b) => {
-                            !skip_local_bindings.contains(&b.id.sym.to_string())
-                        }
+                        ast::Pat::Ident(b) => !skip_local_bindings.contains(&b.id.sym.to_string()),
                         _ => true,
                     },
                     _ => true,
