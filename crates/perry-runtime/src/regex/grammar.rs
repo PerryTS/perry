@@ -372,6 +372,58 @@ fn fold_surrogate_pairs(pattern: &str) -> String {
     out
 }
 
+/// Parse a `\p{...}` / `\P{...}` Unicode property escape starting at `chars[i]`
+/// (which must be the backslash, with `chars[i+1]` a `p`/`P` and `chars[i+2]` a
+/// `{`). Returns `(property_value, negated, end)` where `end` is the index just
+/// past the closing `}` and `property_value` is the lowercased value with any
+/// `gc=` / `general_category=` prefix stripped and `_`/spaces removed (loose
+/// matching). Returns `None` if the brace form is malformed.
+fn parse_unicode_property(chars: &[char], i: usize) -> Option<(String, bool, usize)> {
+    let negated = match chars.get(i + 1) {
+        Some('p') => false,
+        Some('P') => true,
+        _ => return None,
+    };
+    if chars.get(i + 2) != Some(&'{') {
+        return None;
+    }
+    let mut k = i + 3;
+    let mut body = String::new();
+    while let Some(&c) = chars.get(k) {
+        if c == '}' {
+            break;
+        }
+        body.push(c);
+        k += 1;
+    }
+    if chars.get(k) != Some(&'}') {
+        return None;
+    }
+    let lower = body.to_ascii_lowercase();
+    // Strip a `gc=` / `general_category=` prefix; leave other `key=value`
+    // properties (e.g. `script=greek`) intact so they pass through unchanged.
+    let value = match lower.split_once('=') {
+        Some((key, val))
+            if matches!(
+                key.trim().replace(['_', ' '], "").as_str(),
+                "gc" | "generalcategory"
+            ) =>
+        {
+            val.to_string()
+        }
+        _ => lower,
+    };
+    Some((value.trim().replace(['_', ' '], ""), negated, k + 1))
+}
+
+/// `\p{Surrogate}` / `\p{gc=Cs}` — the only general category consisting entirely
+/// of UTF-16 surrogate code points (U+D800..=U+DFFF). The Rust `regex` crate
+/// matches over Unicode *scalar values*, which exclude surrogates, so it rejects
+/// this property outright instead of treating it as never-matching.
+fn is_surrogate_property(value: &str) -> bool {
+    value == "surrogate" || value == "cs"
+}
+
 /// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
 /// Handles JS-specific escape sequences not supported by the Rust regex crate.
 /// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
@@ -417,6 +469,38 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                             result.push(*ch);
                         }
                         i += 1 + digits;
+                    }
+                }
+                'p' | 'P' if chars.get(i + 2) == Some(&'{') => {
+                    // `\p{Surrogate}` / `\p{gc=Cs}` (and the `\P{...}` negation)
+                    // name the UTF-16 surrogate code points, which can't occur in
+                    // the Unicode *scalar values* the Rust `regex` crate matches
+                    // over — so the crate rejects them as `invalid pattern`. Treat
+                    // the positive form as a never-matching class and the negated
+                    // form as "any scalar value". `string-width@7+` builds two
+                    // module-top-level regexes that include `\p{Surrogate}`, so
+                    // without this rewrite importing it (→ ink) throws at init.
+                    // All other properties pass through to the crate unchanged.
+                    match parse_unicode_property(&chars, i) {
+                        Some((value, negated, end)) if is_surrogate_property(&value) => {
+                            if in_class {
+                                // A never-matching member contributes nothing to a
+                                // class union; the negation matches every scalar.
+                                if negated {
+                                    result.push_str("\\s\\S");
+                                }
+                            } else if negated {
+                                result.push_str("[\\s\\S]");
+                            } else {
+                                result.push_str("[^\\s\\S]");
+                            }
+                            i = end;
+                        }
+                        _ => {
+                            result.push('\\');
+                            result.push(chars[i + 1]);
+                            i += 2;
+                        }
                     }
                 }
                 ch if is_regex_identity_escape(ch) => {

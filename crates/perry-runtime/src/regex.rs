@@ -1964,4 +1964,44 @@ mod tests {
         let re = js_regexp_new(make_string(pat), flags);
         assert!(!re.is_null(), "ID_Start-shaped pattern failed to construct");
     }
+
+    #[test]
+    fn surrogate_property_rewrites_to_never_match() {
+        // #4884: the Rust `regex` crate matches Unicode scalar values, which
+        // exclude surrogate code points, so it rejects `\p{Surrogate}` outright.
+        // The positive form is rewritten to a never-matching class and the
+        // negation to "any scalar value".
+        assert_eq!(js_regex_to_rust(r"\p{Surrogate}"), r"[^\s\S]");
+        assert_eq!(js_regex_to_rust(r"\P{Surrogate}"), r"[\s\S]");
+        // The `gc=Cs` / `General_Category=Surrogate` spellings normalize the same.
+        assert_eq!(js_regex_to_rust(r"\p{gc=Cs}"), r"[^\s\S]");
+        assert_eq!(
+            js_regex_to_rust(r"\p{General_Category=Surrogate}"),
+            r"[^\s\S]"
+        );
+        // Inside a class the positive form drops (a never-matching member adds
+        // nothing to the union); the negation contributes "any scalar value".
+        assert_eq!(
+            js_regex_to_rust(r"[\p{Control}\p{Surrogate}]"),
+            r"[\p{Control}]"
+        );
+        assert_eq!(js_regex_to_rust(r"[\P{Surrogate}]"), r"[\s\S]");
+        // Every other property passes through to the crate unchanged.
+        assert_eq!(js_regex_to_rust(r"\p{Control}"), r"\p{Control}");
+        assert_eq!(js_regex_to_rust(r"\p{Script=Greek}"), r"\p{Script=Greek}");
+        assert_eq!(js_regex_to_rust(r"\pL"), r"\pL");
+
+        // The two `string-width@7+` module-top-level regexes (→ ink, #348) that
+        // threw `SyntaxError: invalid pattern` at import must now construct.
+        for pat in [
+            r"^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Format}|\p{Mark}|\p{Surrogate})+$",
+            r"^[\p{Default_Ignorable_Code_Point}\p{Control}\p{Format}\p{Mark}\p{Surrogate}]+",
+        ] {
+            let re = js_regexp_new(make_string(pat), make_string("v"));
+            assert!(
+                !re.is_null(),
+                "string-width pattern failed to construct: {pat}"
+            );
+        }
+    }
 }
