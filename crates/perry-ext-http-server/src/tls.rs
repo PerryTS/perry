@@ -154,10 +154,34 @@ pub fn build_server_config(
         return Err("https.createServer: empty certificate chain".to_string());
     }
     ensure_crypto_provider_installed();
+
+    // #4906: don't route through `ServerConfig::with_single_cert` — it
+    // parses the leaf with webpki, which rejects the X.509 **v1** certs in
+    // Node's `test/fixtures/keys` (`agent2`/`agent3`) outright
+    // (`UnsupportedCertVersion`). Node serves whatever cert/key pair the
+    // user supplies without re-validating the leaf, so we mirror that by
+    // loading the signing key directly and installing a fixed-cert
+    // resolver. The client is the party that validates the served cert.
+    let signing_key = rustls::crypto::ring::default_provider()
+        .key_provider
+        .load_private_key(private_key)
+        .map_err(|e| format!("rustls: build server config: {}", e))?;
+    let certified_key = Arc::new(rustls::sign::CertifiedKey::new(cert_chain, signing_key));
+
+    #[derive(Debug)]
+    struct FixedCert(Arc<rustls::sign::CertifiedKey>);
+    impl rustls::server::ResolvesServerCert for FixedCert {
+        fn resolve(
+            &self,
+            _client_hello: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(self.0.clone())
+        }
+    }
+
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(cert_chain, private_key)
-        .map_err(|e| format!("rustls: build server config: {}", e))?;
+        .with_cert_resolver(Arc::new(FixedCert(certified_key)));
     if enable_http2 {
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     } else {

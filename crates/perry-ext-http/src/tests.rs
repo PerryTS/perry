@@ -66,6 +66,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         timeout_ms: None,
         ended: false,
         agent_handle: 0,
+        tls: crate::tls_client::TlsOptions::default(),
     });
 
     let mut incoming_listeners = HashMap::new();

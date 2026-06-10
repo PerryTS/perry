@@ -222,6 +222,16 @@ pub(crate) fn client_for_agent(handle: Handle) -> reqwest::Client {
     cache.entry(handle).or_insert(built).clone()
 }
 
+/// The `(keep_alive, max_free_sockets, keep_alive_msecs)` pool config for
+/// `handle`, or `None` when the handle isn't a live AgentHandle. Used by
+/// the #4906 TLS-customized client path, which builds its own
+/// `reqwest::Client` (bypassing the per-agent cache) but still folds in
+/// the Agent's pool settings.
+pub(crate) fn agent_pool_config(handle: Handle) -> Option<(bool, f64, f64)> {
+    get_handle_mut::<AgentHandle>(handle)
+        .map(|a| (a.keep_alive, a.max_free_sockets, a.keep_alive_msecs))
+}
+
 /// Drop the cached client for `handle` so the next dispatch rebuilds it
 /// with the new pool config. Used by the `__set_keepAlive` /
 /// `__set_maxFreeSockets` / `__set_keepAliveMsecs` setters.

@@ -752,10 +752,31 @@ unsafe fn build_server_config_from_options(
         return Err("tls.createServer: empty certificate chain".to_string());
     }
     ensure_crypto_provider_installed();
+    // #4906: bypass `with_single_cert`'s webpki leaf parse, which rejects
+    // the X.509 v1 certs in Node's test fixtures (`UnsupportedCertVersion`).
+    // Node serves whatever cert/key the user supplies; load the signing
+    // key directly and install a fixed-cert resolver. (Mirrors
+    // `perry-ext-http-server::tls::build_server_config`.)
+    let signing_key = rustls::crypto::ring::default_provider()
+        .key_provider
+        .load_private_key(key)
+        .map_err(|e| format!("rustls: build server config: {e}"))?;
+    let certified_key = Arc::new(rustls::sign::CertifiedKey::new(certs, signing_key));
+
+    #[derive(Debug)]
+    struct FixedCert(Arc<rustls::sign::CertifiedKey>);
+    impl rustls::server::ResolvesServerCert for FixedCert {
+        fn resolve(
+            &self,
+            _client_hello: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(self.0.clone())
+        }
+    }
+
     let mut config = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| format!("rustls: build server config: {e}"))?;
+        .with_cert_resolver(Arc::new(FixedCert(certified_key)));
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(Arc::new(config))
 }
