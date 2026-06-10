@@ -7,7 +7,8 @@ use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
     collect_for_of_pattern_leaves, emit_for_of_pattern_binding, insert_iterator_close_on_abrupt,
-    lazy_iter_for_stmt, lazy_or_index_elem, lower_expr, LoweringContext,
+    lazy_iter_for_stmt, lazy_or_index_elem, lower_expr, wrap_lazy_for_of_body_close_on_throw,
+    LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
@@ -1519,15 +1520,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             // Lazy path: run IteratorClose on abrupt completions.
             if use_lazy_iter {
                 insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
+                // Wrap ONLY the user body so a throw escaping it runs
+                // IteratorClose; the element-`.value` read and binding stay
+                // outside (IteratorValue throwing does not close — spec
+                // `iterator-next-result-value-attr-error`).
+                let guarded_body = wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, loop_body);
+                let mut full_body = binding_stmts;
+                full_body.push(guarded_body);
+                result.push(lazy_iter_for_stmt(arr_id, result_id, full_body));
+                ctx.pop_block_scope(for_scope_mark);
+                return Ok(result);
             }
             // Prepend the binding statements to the loop body
             for (i, stmt) in binding_stmts.into_iter().enumerate() {
                 loop_body.insert(i, stmt);
-            }
-            if use_lazy_iter {
-                result.push(lazy_iter_for_stmt(arr_id, result_id, loop_body));
-                ctx.pop_block_scope(for_scope_mark);
-                return Ok(result);
             }
 
             // Loop bound: Map/Set fast paths use `.size` (codegen-recognized,
