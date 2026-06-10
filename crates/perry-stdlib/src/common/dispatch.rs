@@ -797,6 +797,9 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 | "resume"
                 | "destroy"
                 | "read"
+                | "_addHeaderLine"
+                | "__set_socket"
+                | "__set_connection"
         ) || matches!(
             method_name,
             "method"
@@ -874,6 +877,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 | "writeEarlyHints"
                 | "writeContinue"
                 | "writeProcessing"
+                | "assignSocket"
+                | "detachSocket"
         ) || matches!(
             method_name,
             "on" | "addListener" | "setStatus" | "getStatus"
@@ -1791,6 +1796,17 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "reuseSocket"
                 | "getName"
                 | "destroy"
+                | "maxSockets"
+                | "maxFreeSockets"
+                | "maxTotalSockets"
+                | "keepAliveMsecs"
+                | "keepAlive"
+                | "destroyed"
+                | "defaultPort"
+                | "protocol"
+                | "sockets"
+                | "freeSockets"
+                | "requests"
         ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
         {
             return unsafe {
@@ -2611,6 +2627,71 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
             }
         }
     }
+
+    // #4904: Agent tunables (`agent.maxSockets = 4`) and the
+    // `agent.createConnection = fn` monkeypatch pattern Node's tests use.
+    #[cfg(feature = "http-client")]
+    if crate::http::dispatch_agent_property_set(handle, property_name, value) {
+        return;
+    }
+    #[cfg(feature = "external-http-client-pump")]
+    if matches!(
+        property_name,
+        "maxSockets"
+            | "maxFreeSockets"
+            | "maxTotalSockets"
+            | "keepAliveMsecs"
+            | "keepAlive"
+            | "createConnection"
+            | "createSocket"
+    ) {
+        extern "C" {
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+            fn js_ext_http_agent_dispatch_property_set(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+                value: f64,
+            ) -> i32;
+        }
+        if unsafe { js_ext_http_agent_is_handle(handle) } != 0 {
+            unsafe {
+                js_ext_http_agent_dispatch_property_set(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                    value,
+                );
+            }
+            return;
+        }
+    }
+
+    // #4904: `req.connection = v` / `req.socket = v` on an IncomingMessage —
+    // Node's `connection` accessor writes `this.socket`.
+    #[cfg(feature = "external-http-server-pump")]
+    if matches!(property_name, "socket" | "connection") {
+        extern "C" {
+            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+            fn js_ext_http_incoming_message_dispatch_property_set(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+                value: f64,
+            ) -> i32;
+        }
+
+        if unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0 {
+            unsafe {
+                js_ext_http_incoming_message_dispatch_property_set(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                    value,
+                );
+            }
+        }
+    }
 }
 
 #[no_mangle]
@@ -2688,6 +2769,93 @@ unsafe extern "C" fn js_node_http_native_dispatch(
         } else {
             perry_runtime::js_nanbox_pointer(handle)
         };
+    }
+    // #4904: Node exposes Agent / ClientRequest / IncomingMessage /
+    // ServerResponse as constructable classes. Construction through any
+    // value/aliasing path (`const { Agent } = require('http')`,
+    // `new http.IncomingMessage(socket)`, …) lands here via the
+    // class_registry http construct arm.
+    if module == "http" && method == "IncomingMessage" {
+        extern "C" {
+            fn js_node_http_incoming_message_standalone_new(socket: f64) -> i64;
+        }
+        let handle = js_node_http_incoming_message_standalone_new(arg(0));
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
+    if module == "http" && method == "ServerResponse" {
+        extern "C" {
+            fn js_node_http_server_response_standalone_new(req: f64) -> i64;
+        }
+        let handle = js_node_http_server_response_standalone_new(arg(0));
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_http_agent_new(options_f64: f64) -> i64;
+            fn js_https_agent_new(options_f64: f64) -> i64;
+            fn js_http_client_request_standalone_new(options_f64: f64) -> i64;
+            fn js_http_get(arg_f64: f64, callback_i64: i64) -> i64;
+            fn js_https_get(arg_f64: f64, callback_i64: i64) -> i64;
+            fn js_http_request(opts_f64: f64, callback_i64: i64) -> i64;
+            fn js_https_request(opts_f64: f64, callback_i64: i64) -> i64;
+        }
+        // #4904: captured / aliased `get` / `request` (`const { get } =
+        // require('http')`). The first non-closure arg is the options/url,
+        // the first closure-valued arg is the response callback.
+        if matches!(method, "get" | "request") && matches!(module, "http" | "https") {
+            let mut options = undefined;
+            let mut callback: i64 = 0;
+            for n in 0..args_len.min(3) {
+                let a = arg(n);
+                if callback == 0 && js_value_is_closure(a.to_bits() as i64) != 0 {
+                    callback = perry_runtime::js_nanbox_get_pointer(a);
+                } else if JSValue::from_bits(a.to_bits()).is_undefined() {
+                    continue;
+                } else if options.to_bits() == undefined.to_bits() {
+                    options = a;
+                }
+            }
+            let handle = match (module, method) {
+                ("http", "get") => js_http_get(options, callback),
+                ("http", "request") => js_http_request(options, callback),
+                ("https", "get") => js_https_get(options, callback),
+                _ => js_https_request(options, callback),
+            };
+            return if handle == 0 {
+                undefined
+            } else {
+                perry_runtime::js_nanbox_pointer(handle)
+            };
+        }
+        if method == "Agent" && (module == "http" || module == "https") {
+            let handle = if module == "https" {
+                js_https_agent_new(arg(0))
+            } else {
+                js_http_agent_new(arg(0))
+            };
+            return if handle == 0 {
+                undefined
+            } else {
+                perry_runtime::js_nanbox_pointer(handle)
+            };
+        }
+        if module == "http" && method == "ClientRequest" {
+            let handle = js_http_client_request_standalone_new(arg(0));
+            return if handle == 0 {
+                undefined
+            } else {
+                perry_runtime::js_nanbox_pointer(handle)
+            };
+        }
     }
     // Disambiguate handler (function/closure) from options (object),
     // independent of argument order.

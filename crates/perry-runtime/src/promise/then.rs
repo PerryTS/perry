@@ -238,6 +238,124 @@ pub(super) fn scan_promise_settle_listeners_mut(visitor: &mut crate::gc::Runtime
     });
 }
 
+// ---------------------------------------------------------------------------
+// Multiple reactions per promise (PerformPromiseThen's [[PromiseFulfillReactions]]
+// / [[PromiseRejectReactions]] lists).
+//
+// The `Promise` struct holds ONE `on_fulfilled`/`on_rejected`/`next` triple, so
+// the FIRST `.then`/`.catch`/`.finally` reaction uses those inline slots (the
+// common, hot, zero-overhead case). A SECOND+ reaction on the same promise —
+// `p.then(a); p.then(b)`, or a user `.then` plus a combinator's per-element
+// `.then` when `Promise.resolve(p) === p` — would clobber the slot. Those
+// overflow reactions are parked here, keyed by promise pointer, and replayed in
+// FIFO registration order (after the slot reaction) when the promise settles.
+//
+// Each overflow reaction carries its OWN chained `next` promise and async
+// context, so the chained promise settles and runs in the correct realm —
+// dispatched via `Task::Inline`, which already models "invoke one handler (or
+// pass the value through when null) and resolve `next` with the result".
+// ---------------------------------------------------------------------------
+
+pub(super) struct OverflowReaction {
+    pub(super) on_fulfilled: ClosurePtr,
+    pub(super) on_rejected: ClosurePtr,
+    pub(super) next: *mut Promise,
+    pub(super) context: AsyncContextSnapshot,
+}
+
+thread_local! {
+    pub(super) static PROMISE_OVERFLOW_REACTIONS: RefCell<Vec<(usize, OverflowReaction)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Park a 2nd+ reaction on a still-pending `promise`.
+fn push_overflow_reaction(
+    promise: *mut Promise,
+    on_fulfilled: ClosurePtr,
+    on_rejected: ClosurePtr,
+    next: *mut Promise,
+    context: AsyncContextSnapshot,
+) {
+    crate::gc::runtime_write_barrier_root_raw_ptr(promise);
+    crate::gc::runtime_write_barrier_root_raw_ptr(on_fulfilled);
+    crate::gc::runtime_write_barrier_root_raw_ptr(on_rejected);
+    crate::gc::runtime_write_barrier_root_raw_ptr(next);
+    PROMISE_OVERFLOW_REACTIONS.with(|r| {
+        r.borrow_mut().push((
+            promise as usize,
+            OverflowReaction {
+                on_fulfilled,
+                on_rejected,
+                next,
+                context,
+            },
+        ));
+    });
+}
+
+/// Drain (in registration order) every overflow reaction registered against
+/// `promise`. Returns `Vec::new()` for the overwhelmingly common no-overflow
+/// case without touching the table's allocation.
+fn promise_take_overflow_reactions(promise: *mut Promise) -> Vec<OverflowReaction> {
+    PROMISE_OVERFLOW_REACTIONS.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.is_empty() {
+            return Vec::new();
+        }
+        let key = promise as usize;
+        let mut drained = Vec::new();
+        // Preserve FIFO order (a plain filter keeps relative order; swap_remove
+        // would not — reaction ordering is observable, see resolved-sequence).
+        r.retain(|(k, reaction)| {
+            if *k == key {
+                drained.push(OverflowReaction {
+                    on_fulfilled: reaction.on_fulfilled,
+                    on_rejected: reaction.on_rejected,
+                    next: reaction.next,
+                    context: reaction.context.clone(),
+                });
+                false
+            } else {
+                true
+            }
+        });
+        drained
+    })
+}
+
+/// Push the `Task::Inline` jobs for a settled promise's drained overflow
+/// reactions. `value` is the fulfilled value or rejection reason.
+fn enqueue_overflow_reactions(
+    reactions: Vec<OverflowReaction>,
+    value: f64,
+    is_fulfilled: bool,
+    q: &mut std::collections::VecDeque<Task>,
+) {
+    for r in reactions {
+        let cb = if is_fulfilled {
+            r.on_fulfilled
+        } else {
+            r.on_rejected
+        };
+        // A null `cb` with a non-null `next` is a pass-through (the
+        // `Task::Inline` arm resolves/rejects `next` with `value`) — exactly the
+        // `.then(onFulfilled)` rejected-side / `.catch` fulfilled-side behavior.
+        q.push_back(Task::Inline(cb, value, r.next, is_fulfilled, r.context));
+    }
+}
+
+pub(super) fn scan_promise_overflow_reactions_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
+        for (key, reaction) in reactions.borrow_mut().iter_mut() {
+            visitor.visit_metadata_usize_slot(key);
+            visitor.visit_raw_const_ptr_slot(&mut reaction.on_fulfilled);
+            visitor.visit_raw_const_ptr_slot(&mut reaction.on_rejected);
+            visitor.visit_raw_mut_ptr_slot(&mut reaction.next);
+            scan_snapshot_roots_mut(&mut reaction.context, visitor);
+        }
+    });
+}
+
 /// Allocate a new Promise
 #[no_mangle]
 pub extern "C" fn js_promise_new() -> *mut Promise {
@@ -372,8 +490,14 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         let settle_listeners = promise_take_settle_listeners(promise);
         let has_settle_listeners = !settle_listeners.is_empty();
         let promise_all_states = combinators::promise_all_take_all_handlers(promise);
+        let overflow_reactions = promise_take_overflow_reactions(promise);
+        let has_overflow = !overflow_reactions.is_empty();
         let has_normal_handler = !(*promise).on_fulfilled.is_null() || !(*promise).next.is_null();
-        if has_settle_listeners || !promise_all_states.is_empty() || has_normal_handler {
+        if has_settle_listeners
+            || !promise_all_states.is_empty()
+            || has_normal_handler
+            || has_overflow
+        {
             let task_context = context_for_promise(promise);
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
@@ -401,6 +525,8 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
                 } else {
                     clear_promise_context(promise);
                 }
+                // Replay 2nd+ reactions in registration order, after the slot.
+                enqueue_overflow_reactions(overflow_reactions, value, true, &mut q);
             });
         }
     }
@@ -551,8 +677,14 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         let settle_listeners = promise_take_settle_listeners(promise);
         let has_settle_listeners = !settle_listeners.is_empty();
         let promise_all_states = combinators::promise_all_take_all_handlers(promise);
+        let overflow_reactions = promise_take_overflow_reactions(promise);
+        let has_overflow = !overflow_reactions.is_empty();
         let has_normal_handler = !(*promise).on_rejected.is_null() || !(*promise).next.is_null();
-        if !has_settle_listeners && promise_all_states.is_empty() && !has_normal_handler {
+        if !has_settle_listeners
+            && promise_all_states.is_empty()
+            && !has_normal_handler
+            && !has_overflow
+        {
             // No reaction attached at rejection time → currently unhandled.
             // A later `then`/`catch`/`await`/settle-listener removes it. If
             // a `.then(onFulfilled)` (no reject handler) is attached, `next`
@@ -561,7 +693,11 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
             // this check — the leaf unhandled promise is the one tracked.
             track_unhandled_rejection(promise);
         }
-        if has_settle_listeners || !promise_all_states.is_empty() || has_normal_handler {
+        if has_settle_listeners
+            || !promise_all_states.is_empty()
+            || has_normal_handler
+            || has_overflow
+        {
             let task_context = context_for_promise(promise);
             TASK_QUEUE.with(|q| {
                 let mut q = q.borrow_mut();
@@ -589,6 +725,8 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                 } else {
                     clear_promise_context(promise);
                 }
+                // Replay 2nd+ reactions in registration order, after the slot.
+                enqueue_overflow_reactions(overflow_reactions, reason, false, &mut q);
             });
         }
     }
@@ -627,51 +765,98 @@ pub extern "C" fn js_promise_then(
     let on_rejected = on_rejected_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
 
     unsafe {
-        store_promise_closure_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).on_fulfilled),
-            on_fulfilled,
-        );
-        store_promise_closure_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).on_rejected),
-            on_rejected,
-        );
-        store_promise_next_slot(promise, std::ptr::addr_of_mut!((*promise).next), next);
-        set_promise_callback_context(promise);
+        // A promise may carry MULTIPLE reactions (`p.then(a); p.then(b)`, or a
+        // user `.then` racing a combinator's per-element `.then` when
+        // `Promise.resolve(p) === p`). The inline slot holds the FIRST reaction;
+        // 2nd+ reactions overflow into a side table and replay in registration
+        // order. Detect prior occupancy via the reaction closures (NOT `next`,
+        // which `.finally` deliberately nulls) — a reaction always sets at least
+        // one of `on_fulfilled`/`on_rejected` except a degenerate no-arg
+        // `then()`, where parking it under the slot is still harmless.
+        let slot_occupied = !(*promise).on_fulfilled.is_null() || !(*promise).on_rejected.is_null();
 
-        // If already settled, schedule callback immediately. Same propagation
-        // rule as `js_promise_resolve`/`js_promise_reject` (#236): push to the
-        // queue when there's either a callback to invoke OR a chained `next`
-        // promise to forward to. `next` is always non-null here (we just
-        // created it), so this is effectively unconditional — the explicit
-        // checks document the intent.
-        match (*promise).state {
-            PromiseState::Fulfilled => {
-                if !on_fulfilled.is_null() || !next.is_null() {
+        if !slot_occupied {
+            // Fast path: first reaction uses the inline slot (unchanged behavior).
+            store_promise_closure_slot(
+                promise,
+                std::ptr::addr_of_mut!((*promise).on_fulfilled),
+                on_fulfilled,
+            );
+            store_promise_closure_slot(
+                promise,
+                std::ptr::addr_of_mut!((*promise).on_rejected),
+                on_rejected,
+            );
+            store_promise_next_slot(promise, std::ptr::addr_of_mut!((*promise).next), next);
+            set_promise_callback_context(promise);
+
+            // If already settled, schedule callback immediately. Same
+            // propagation rule as `js_promise_resolve`/`js_promise_reject`
+            // (#236): push to the queue when there's either a callback to invoke
+            // OR a chained `next` promise to forward to. `next` is always
+            // non-null here (we just created it), so this is effectively
+            // unconditional — the explicit checks document the intent.
+            match (*promise).state {
+                PromiseState::Fulfilled => {
+                    if !on_fulfilled.is_null() || !next.is_null() {
+                        TASK_QUEUE.with(|q| {
+                            q.borrow_mut().push_back(Task::Promise(
+                                promise,
+                                (*promise).value,
+                                true,
+                                context_for_promise(promise),
+                            ));
+                        });
+                    }
+                }
+                PromiseState::Rejected => {
+                    if !on_rejected.is_null() || !next.is_null() {
+                        TASK_QUEUE.with(|q| {
+                            q.borrow_mut().push_back(Task::Promise(
+                                promise,
+                                (*promise).reason,
+                                false,
+                                context_for_promise(promise),
+                            ));
+                        });
+                    }
+                }
+                PromiseState::Pending => {}
+            }
+        } else {
+            // Overflow path: 2nd+ reaction. Carries its own `next` + context and
+            // dispatches via `Task::Inline` (which handles the null-callback
+            // pass-through), so the chained promise still settles correctly.
+            let context = capture_context();
+            match (*promise).state {
+                PromiseState::Pending => {
+                    push_overflow_reaction(promise, on_fulfilled, on_rejected, next, context);
+                }
+                PromiseState::Fulfilled => {
+                    let value = (*promise).value;
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Promise(
-                            promise,
-                            (*promise).value,
+                        q.borrow_mut().push_back(Task::Inline(
+                            on_fulfilled,
+                            value,
+                            next,
                             true,
-                            context_for_promise(promise),
+                            context,
                         ));
                     });
                 }
-            }
-            PromiseState::Rejected => {
-                if !on_rejected.is_null() || !next.is_null() {
+                PromiseState::Rejected => {
+                    let reason = (*promise).reason;
                     TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::Promise(
-                            promise,
-                            (*promise).reason,
+                        q.borrow_mut().push_back(Task::Inline(
+                            on_rejected,
+                            reason,
+                            next,
                             false,
-                            context_for_promise(promise),
+                            context,
                         ));
                     });
                 }
             }
-            PromiseState::Pending => {}
         }
     }
 

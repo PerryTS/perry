@@ -1642,7 +1642,24 @@ pub unsafe extern "C" fn js_new_function_construct(
                 _ => unreachable!(),
             };
         }
-        if module == "http" && method == "OutgoingMessage" {
+        // #4904: `new http.Agent(opts)` / `new http.ClientRequest(opts)` /
+        // `new http.IncomingMessage(socket)` / `new http.ServerResponse(req)`
+        // (and `new https.Agent(opts)`) through any value-aliasing path —
+        // `const { Agent } = require('http')`, `const CR =
+        // http.ClientRequest`, etc. The bound export value carries
+        // (module, method); forward construction to the stdlib http
+        // dispatcher exactly like `OutgoingMessage` below.
+        if (module == "http"
+            && matches!(
+                method.as_str(),
+                "OutgoingMessage"
+                    | "Agent"
+                    | "ClientRequest"
+                    | "IncomingMessage"
+                    | "ServerResponse"
+            ))
+            || (module == "https" && method == "Agent")
+        {
             let ptr =
                 crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
             if !ptr.is_null() {
@@ -1655,8 +1672,8 @@ pub unsafe extern "C" fn js_new_function_construct(
                     usize,
                 ) -> f64 = std::mem::transmute(ptr);
                 return dispatch(
-                    b"http".as_ptr(),
-                    "http".len(),
+                    module.as_ptr(),
+                    module.len(),
                     method.as_ptr(),
                     method.len(),
                     args_ptr,

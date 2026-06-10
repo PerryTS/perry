@@ -1,3 +1,39 @@
+## v0.5.1156 — fix(fetch): send dynamically-built request headers (#4932)
+
+`fetch(url, { headers })` silently dropped **every** request header whenever the
+`headers` value was anything other than a plain object *literal* — a variable
+(`const h = {}; h["Authorization"] = ...; fetch(url, { headers: h })`), a spread
+literal (`{ ...h }`), or a call such as `Object.assign({}, h)` / `new Headers(h)`
+/ `JSON.parse(JSON.stringify(h))`. The literal form worked, so any library that
+builds its headers dynamically lost its auth header. Most visibly this broke the
+Stripe Node SDK's fetch HTTP client: it constructs headers via property
+assignment, so the `Authorization` header vanished and every call 401'd.
+
+**Root cause.** HIR lowering of `fetch(url, { ... })`
+(`crates/perry-hir/src/lower/expr_call/globals.rs`) only extracted the `headers`
+field when it was an object literal whose props were all plain (non-computed)
+string/ident keys, walking the AST into a `Vec<(String, Expr)>`. Any other shape
+fell through with an **empty** headers vector — codegen then built an empty
+object, stringified it to `{}`, and sent no headers. Spread props and computed
+keys inside an otherwise-literal `headers` object hit the same hole.
+
+**Fix.** `FetchWithOptions` gains a `headers_dynamic: Option<Box<Expr>>` field.
+Lowering now classifies the `headers` value: a literal with only plain
+string/ident keys keeps the existing static-extraction fast path; anything else
+(variable, spread literal, call, computed/getter prop) is captured whole in
+`headers_dynamic`. Codegen lowers that expression to a JSValue and
+`js_json_stringify`s it at runtime — exactly the path object literals already
+took — so a property-assigned object enumerates its own properties identically
+to a literal. The JS and WASM backends were updated to match.
+
+Verified against a local echo server: dynamic / literal / spread /
+`Object.assign` / copy-loop / `JSON.parse(JSON.stringify(...))` headers all send
+the `Authorization` header now; an empty `{}` and no-options `fetch` are
+unchanged. New regression test
+`crates/perry-hir/tests/fetch_dynamic_headers_lowering.rs`. Note: passing the
+*entire* options object as a variable (`fetch(url, opts)`) is a separate,
+pre-existing gap (it still falls back to a bare GET) and is out of scope here.
+
 ## v0.5.1155 — chore(runtime): split date.rs under the 2,000-line CI cap
 
 `crates/perry-runtime/src/date.rs` had grown to 2008 lines (pushed over by the

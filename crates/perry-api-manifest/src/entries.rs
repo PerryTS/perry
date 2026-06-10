@@ -801,76 +801,44 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // node:dns is currently runtime-only and deterministic: inventory
     // helpers, constants, Resolver method shapes, and lookup/lookupService
     // for localhost/loopback. It does not perform external DNS IO.
-    method("dns", "lookup", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "lookupService", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolve", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolve4", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolve6", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveAny", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveCaa", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveCname", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveMx", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveNaptr", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveNs", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolvePtr", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveSoa", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveSrv", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveTlsa", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveTxt", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "reverse", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
+    method("dns", "lookup", false, None),
+    method("dns", "lookupService", false, None),
+    method("dns", "resolve", false, None),
+    method("dns", "resolve4", false, None),
+    method("dns", "resolve6", false, None),
+    method("dns", "resolveAny", false, None),
+    method("dns", "resolveCaa", false, None),
+    method("dns", "resolveCname", false, None),
+    method("dns", "resolveMx", false, None),
+    method("dns", "resolveNaptr", false, None),
+    method("dns", "resolveNs", false, None),
+    method("dns", "resolvePtr", false, None),
+    method("dns", "resolveSoa", false, None),
+    method("dns", "resolveSrv", false, None),
+    method("dns", "resolveTlsa", false, None),
+    method("dns", "resolveTxt", false, None),
+    method("dns", "reverse", false, None),
     method("dns", "getServers", false, None),
     method("dns", "setServers", false, None),
     method("dns", "setDefaultResultOrder", false, None),
     method("dns", "getDefaultResultOrder", false, None),
     class("dns", "Resolver"),
     method("dns", "Resolver", false, None),
-    method("dns", "resolve", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolve4", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolve6", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveAny", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveCaa", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveCname", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveMx", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveNaptr", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveNs", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolvePtr", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveSoa", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveSrv", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveTlsa", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "resolveTxt", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns", "reverse", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
+    method("dns", "resolve", true, Some("Resolver")),
+    method("dns", "resolve4", true, Some("Resolver")),
+    method("dns", "resolve6", true, Some("Resolver")),
+    method("dns", "resolveAny", true, Some("Resolver")),
+    method("dns", "resolveCaa", true, Some("Resolver")),
+    method("dns", "resolveCname", true, Some("Resolver")),
+    method("dns", "resolveMx", true, Some("Resolver")),
+    method("dns", "resolveNaptr", true, Some("Resolver")),
+    method("dns", "resolveNs", true, Some("Resolver")),
+    method("dns", "resolvePtr", true, Some("Resolver")),
+    method("dns", "resolveSoa", true, Some("Resolver")),
+    method("dns", "resolveSrv", true, Some("Resolver")),
+    method("dns", "resolveTlsa", true, Some("Resolver")),
+    method("dns", "resolveTxt", true, Some("Resolver")),
+    method("dns", "reverse", true, Some("Resolver")),
     method("dns", "cancel", true, Some("Resolver")),
     method("dns", "getServers", true, Some("Resolver")),
     method("dns", "setServers", true, Some("Resolver")),
@@ -902,76 +870,44 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("dns", "LOADIPHLPAPI"),
     property("dns", "ADDRGETNETWORKPARAMS"),
     property("dns", "CANCELLED"),
-    method("dns/promises", "lookup", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "lookupService", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolve", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolve4", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolve6", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveAny", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveCaa", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveCname", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveMx", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveNaptr", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveNs", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolvePtr", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveSoa", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveSrv", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveTlsa", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveTxt", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "reverse", false, None)
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
+    method("dns/promises", "lookup", false, None),
+    method("dns/promises", "lookupService", false, None),
+    method("dns/promises", "resolve", false, None),
+    method("dns/promises", "resolve4", false, None),
+    method("dns/promises", "resolve6", false, None),
+    method("dns/promises", "resolveAny", false, None),
+    method("dns/promises", "resolveCaa", false, None),
+    method("dns/promises", "resolveCname", false, None),
+    method("dns/promises", "resolveMx", false, None),
+    method("dns/promises", "resolveNaptr", false, None),
+    method("dns/promises", "resolveNs", false, None),
+    method("dns/promises", "resolvePtr", false, None),
+    method("dns/promises", "resolveSoa", false, None),
+    method("dns/promises", "resolveSrv", false, None),
+    method("dns/promises", "resolveTlsa", false, None),
+    method("dns/promises", "resolveTxt", false, None),
+    method("dns/promises", "reverse", false, None),
     method("dns/promises", "getServers", false, None),
     method("dns/promises", "setServers", false, None),
     method("dns/promises", "setDefaultResultOrder", false, None),
     method("dns/promises", "getDefaultResultOrder", false, None),
     class("dns/promises", "Resolver"),
     method("dns/promises", "Resolver", false, None),
-    method("dns/promises", "resolve", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolve4", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolve6", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveAny", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveCaa", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveCname", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveMx", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveNaptr", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveNs", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolvePtr", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveSoa", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveSrv", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveTlsa", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "resolveTxt", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
-    method("dns/promises", "reverse", true, Some("Resolver"))
-        .stub_note("loopback-only deterministic fake; no real DNS resolution (#4911)"),
+    method("dns/promises", "resolve", true, Some("Resolver")),
+    method("dns/promises", "resolve4", true, Some("Resolver")),
+    method("dns/promises", "resolve6", true, Some("Resolver")),
+    method("dns/promises", "resolveAny", true, Some("Resolver")),
+    method("dns/promises", "resolveCaa", true, Some("Resolver")),
+    method("dns/promises", "resolveCname", true, Some("Resolver")),
+    method("dns/promises", "resolveMx", true, Some("Resolver")),
+    method("dns/promises", "resolveNaptr", true, Some("Resolver")),
+    method("dns/promises", "resolveNs", true, Some("Resolver")),
+    method("dns/promises", "resolvePtr", true, Some("Resolver")),
+    method("dns/promises", "resolveSoa", true, Some("Resolver")),
+    method("dns/promises", "resolveSrv", true, Some("Resolver")),
+    method("dns/promises", "resolveTlsa", true, Some("Resolver")),
+    method("dns/promises", "resolveTxt", true, Some("Resolver")),
+    method("dns/promises", "reverse", true, Some("Resolver")),
     method("dns/promises", "cancel", true, Some("Resolver")),
     method("dns/promises", "getServers", true, Some("Resolver")),
     method("dns/promises", "setServers", true, Some("Resolver")),
@@ -984,8 +920,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "createSocket", false, None),
     class("dgram", "Socket"),
     method("dgram", "Socket", false, None),
-    method("dgram", "send", true, Some("Socket"))
-        .stub_note("in-process loopback only; no real UDP socket I/O (#4911)"),
+    method("dgram", "send", true, Some("Socket")),
     method("dgram", "bind", true, Some("Socket")),
     method("dgram", "close", true, Some("Socket")),
     method("dgram", "address", true, Some("Socket")),
@@ -1000,27 +935,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("dgram", "emit", true, Some("Socket")),
     method("dgram", "listenerCount", true, Some("Socket")),
     method("dgram", "eventNames", true, Some("Socket")),
-    method("dgram", "addMembership", true, Some("Socket"))
-        .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
-    method("dgram", "dropMembership", true, Some("Socket"))
-        .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
-    method("dgram", "addSourceSpecificMembership", true, Some("Socket"))
-        .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
+    method("dgram", "addMembership", true, Some("Socket")),
+    method("dgram", "dropMembership", true, Some("Socket")),
+    method("dgram", "addSourceSpecificMembership", true, Some("Socket")),
     method(
         "dgram",
         "dropSourceSpecificMembership",
         true,
         Some("Socket"),
-    )
-    .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
-    method("dgram", "setBroadcast", true, Some("Socket"))
-        .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
-    method("dgram", "setMulticastTTL", true, Some("Socket"))
-        .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
-    method("dgram", "setMulticastLoopback", true, Some("Socket"))
-        .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
-    method("dgram", "setMulticastInterface", true, Some("Socket"))
-        .stub_note("accepted but no OS multicast/broadcast side effect (#4911)"),
+    ),
+    method("dgram", "setBroadcast", true, Some("Socket")),
+    method("dgram", "setMulticastTTL", true, Some("Socket")),
+    method("dgram", "setMulticastLoopback", true, Some("Socket")),
+    method("dgram", "setMulticastInterface", true, Some("Socket")),
     method("dgram", "setTTL", true, Some("Socket")),
     method("dgram", "setRecvBufferSize", true, Some("Socket")),
     method("dgram", "setSendBufferSize", true, Some("Socket")),

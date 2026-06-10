@@ -93,6 +93,23 @@ pub fn strict_stubs_enabled() -> bool {
     })
 }
 
+/// Whether `PERRY_DETERMINISTIC_NET=1` (or `on`/`true`/`yes`) is set — the
+/// parity-CI mode for the now-real `node:dns` / `node:dgram` network stack
+/// (#4911). When on, `dns` resolution and `dgram` sockets fall back to the
+/// in-process deterministic loopback answers (no external name resolution,
+/// no host UDP sockets) so byte-for-byte parity fixtures stay reproducible
+/// on machines without network access. Unset (the default), the modules do
+/// real `getaddrinfo`/DNS/UDP I/O. Read once and cached.
+pub fn deterministic_net_enabled() -> bool {
+    static DETERMINISTIC: OnceLock<bool> = OnceLock::new();
+    *DETERMINISTIC.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_DETERMINISTIC_NET").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
 /// First-call diagnostic for a *runtime* API stub (dns/dgram loopback
 /// fakes, `child_process.spawn`, Atomics wait/notify, v8 heap snapshots,
 /// stdlib-adapter no-ops, …) — the manifest-flagged clusters from the
