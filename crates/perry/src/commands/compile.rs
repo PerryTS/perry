@@ -2439,10 +2439,11 @@ pub fn run_with_parse_cache(
                                 // (`export { default as foo }`) needs the
                                 // codegen to call `perry_fn_<origin>__default`
                                 // when the consumer writes `ns.foo()`.
-                                if let Some(origin_name) = all_module_export_origin_names
+                                let resolved_origin_name = all_module_export_origin_names
                                     .get(&resolved_path_str)
                                     .and_then(|m| m.get(export_name))
-                                {
+                                    .cloned();
+                                if let Some(ref origin_name) = resolved_origin_name {
                                     if origin_name != export_name {
                                         import_function_origin_names
                                             .insert(export_name.clone(), origin_name.clone());
@@ -2478,7 +2479,30 @@ pub fn run_with_parse_cache(
                                 // the closure with `args`. Mirrors the
                                 // named-import branch at the var-detection
                                 // arm below.
-                                if exported_var_names.contains(&key) {
+                                //
+                                // Issue #4841: when the namespace member is a
+                                // re-export of a CJS submodule's `default`
+                                // (`import sfy from './sfy'; export { sfy }`,
+                                // where `./sfy` is `module.exports = function`),
+                                // the origin module records the var under its
+                                // "default" suffix — NOT the consumer-visible
+                                // member name. Probe both keys (mirrors the
+                                // named-import arm) so the var-vs-function
+                                // classification fires; otherwise `ns.sfy` takes
+                                // the function path and wraps the default getter
+                                // in a singleton closure, so `ns.sfy(args)`
+                                // RETURNS the function value instead of being it
+                                // (Stripe's `qs.stringify(...)` returned the qs
+                                // function ⇒ `.replace is not a function`).
+                                let origin_key_under_origin_name = resolved_origin_name
+                                    .as_ref()
+                                    .map(|n| (origin_path.clone(), n.clone()));
+                                if exported_var_names.contains(&key)
+                                    || origin_key_under_origin_name
+                                        .as_ref()
+                                        .map(|k| exported_var_names.contains(k))
+                                        .unwrap_or(false)
+                                {
                                     imported_vars.insert(export_name.clone());
                                 }
                                 if let Some(class) = exported_classes.get(&key) {
