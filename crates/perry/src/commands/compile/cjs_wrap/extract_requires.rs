@@ -21,6 +21,31 @@ pub fn extract_require_specifiers(source: &str) -> Vec<String> {
     specs
 }
 
+/// Issue #4872: extract `__exportStar(require('SPEC'), exports)` re-export
+/// calls — the tsc-emitted CJS lowering of `export * from 'SPEC'`. Matches
+/// the bare inline-helper form (`__exportStar(require("./x"), exports)`),
+/// the tslib member form (`tslib_1.__exportStar(require("./x"), exports)`),
+/// and the comma-sequenced form (`(0, tslib_1.__exportStar)(require("./x"),
+/// exports)`). The helper *definition* (`var __exportStar = (this && ...)`)
+/// never matches because the pattern requires a `require('...')` literal as
+/// the first argument. Order preserved, deduped.
+pub fn extract_export_star_specs(source: &str) -> Vec<String> {
+    let re = regex::Regex::new(
+        r#"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?__exportStar\s*\)?\s*\(\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*,\s*exports\s*\)"#,
+    )
+    .unwrap();
+    let mut specs = Vec::new();
+    for cap in re.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            let s = m.as_str().to_string();
+            if !specs.contains(&s) {
+                specs.push(s);
+            }
+        }
+    }
+    specs
+}
+
 /// Refs #488 drizzle-sqlite: extract `var <alias> = require("<spec>");`
 /// declarations from the source as `(alias_name, spec, (start_byte,
 /// end_byte))`. The byte range covers the whole matched statement so

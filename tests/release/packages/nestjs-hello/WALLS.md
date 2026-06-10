@@ -31,33 +31,64 @@ npm install
 - Legacy CommonJS inheritance patterns that call `Stream.call(this)` or
   `EventEmitter.call(this)` now lower to the same receiver initialization shape
   this fixture needs from Express/readable-stream.
+- **Wall 1 (resolved, #4872)** — undefined default-wrapper symbols for
+  re-exported barrel modules (`__perry_wrap_perry_fn_..._rxjs_src_index_ts__default`,
+  the nestjs `*.interface.js` family, `uid_dist_index_mjs__default`,
+  `perry_fn_..._common_index_js__Controller`, …). Four coordinated fixes:
+  a default import of a compiled module with no `default` export now binds
+  the module namespace (Node `require(esm)` semantics) instead of a phantom
+  callable; `__exportStar(require("./x"), exports)` in CJS-wrapped sources
+  now also emits a real `export * from './x'` so multi-level tsc barrels
+  resolve named imports to the defining module; `export *` propagation no
+  longer leaks `default` across hops; and tsc-emitted type-only modules
+  whose only statement is `Object.defineProperty(exports, "__esModule", …)`
+  are now detected as CJS (previously they compiled as zero-export ESM and
+  threw `ReferenceError: exports is not defined` at init). A TS constructor
+  overload-signature miscount (rxjs `Notification` rejected with "may only
+  have one constructor") was fixed alongside. The fixture now **links**:
+  `Wrote executable` (~41 MB).
 
 ## Open
 
-### Wall 1 - default-wrapper symbols for re-exported modules
+### Wall 2 - `.prototype` of a capturing class expression is undefined (tslib `__decorate`)
 
-After the resolved walls above, the fixture reaches native linking and then
-fails with undefined default-wrapper symbols. Current representative symbols:
+The binary now links but the server dies during module init with
+`TypeError: Cannot convert undefined or null to object`. Root cause, bisected
+to `@nestjs/common/services/logger.service.js`: tsc's class-decorator output
 
-```text
-undefined reference to `__perry_wrap_perry_fn_node_modules_rxjs_src_index_ts__default'
-undefined reference to `perry_fn_node_modules_rxjs_src_index_ts__default'
-undefined reference to `perry_fn_node_modules_rxjs_src_operators_index_ts__default'
-undefined reference to `perry_fn_node_modules_uid_dist_index_mjs__default'
-undefined reference to `__perry_wrap_perry_fn_node_modules__nestjs_core_router_interfaces_routes_interface_js__default'
-undefined reference to `__perry_wrap_perry_fn_node_modules__nestjs_platform_express_interfaces_nest_express_application_interface_js__default'
+```js
+let Logger = Logger_1 = class Logger { ... };
+tslib_1.__decorate([Logger.WrapBuffer, ...], Logger.prototype, "error", null);
 ```
 
-These modules are import barrels or type/interface re-export surfaces rather
-than concrete default function definitions. Call sites still emit default-call
-and default-wrapper references for them, but no object file defines the matching
-symbols. The next focused fix should make default-import/default-call lowering
-follow re-exported module surfaces back to a concrete binding, or avoid emitting
-callable default references for type-only/interface barrels.
+calls `Object.getOwnPropertyDescriptor(Logger.prototype, "error")`, and
+`Logger.prototype` reads as `undefined` (while `typeof Logger` is
+`"function"`). Minimal repro — no CJS wrap needed; the trigger is a class
+EXPRESSION inside a closure whose **getter captures an outer variable**,
+which routes the class through the `ClassExprFresh` lowering
+(`captured_args: [LocalGet(..)]` in HIR), and `.prototype` on a
+`ClassExprFresh` value is not wired:
+
+```ts
+const r = (function() {
+  var L_1: any;
+  let L: any = L_1 = class L {
+    get gi() { return L_1.staticRef; }  // getter capture → ClassExprFresh
+    e(m: any) { return m; }
+  };
+  return [typeof L, typeof L.prototype];
+})();
+// Perry: ["function", "undefined"] — node: ["function", "object"]
+```
+
+Without the capturing getter the same shape keeps a real `.prototype`. The
+next focused fix should give `ClassExprFresh` values a live `.prototype`
+object (tslib `__decorate` then mutates it via `defineProperty`, so instances
+must observe the decorated methods).
 
 ## When this fixture flips to PASS
 
-Once the open linker wall is gone and `fixture.sh` succeeds end-to-end, delete
+Once the open runtime wall is gone and `fixture.sh` succeeds end-to-end, delete
 this `WALLS.md`. The fixture driver treats `WALLS.md` as the marker that turns
 compile/startup failures into SKIP; removing it converts those into hard FAILs
 so regressions past this baseline are visible.

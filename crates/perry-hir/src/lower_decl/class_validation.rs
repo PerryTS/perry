@@ -86,8 +86,16 @@ pub fn validate_class_element_early_errors(class: &ast::Class, class_name: &str)
     for member in &class.body {
         match member {
             // `constructor(){}` (the ordinary one) parses as a dedicated
-            // Constructor node; count them to catch duplicates.
-            ast::ClassMember::Constructor(_) => constructor_count += 1,
+            // Constructor node; count them to catch duplicates. TypeScript
+            // overload SIGNATURES (`constructor(kind: 'N');` with no body)
+            // are type-only declarations, not constructors — only the
+            // implementation (the one with a body) counts (#4872, rxjs's
+            // `Notification` has 3 overload signatures + 1 implementation).
+            ast::ClassMember::Constructor(c) => {
+                if c.body.is_some() {
+                    constructor_count += 1;
+                }
+            }
             ast::ClassMember::Method(m) => {
                 let Some(name) = static_prop_name(&m.key) else {
                     continue;

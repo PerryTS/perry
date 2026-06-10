@@ -177,6 +177,18 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
 
     let mut named_exports = extract_exports_from_source(source);
 
+    // Issue #4872: `__exportStar(require('X'), exports)` is tsc's CJS
+    // lowering of `export * from 'X'` — emit exactly that as a real ESM
+    // re-export at module scope. The static `export *` lets compile.rs's
+    // transitive re-export propagation resolve names through multi-level
+    // barrels to their defining module (nestjs's `@nestjs/common/index.js`
+    // → `decorators/index.js` → `core/index.js` → `controller.decorator.js`),
+    // so a consumer's `import { Controller } from '@nestjs/common'` binds
+    // the origin's symbol instead of link-failing on
+    // `perry_fn_<common_index_js>__Controller`. The runtime copy inside the
+    // IIFE still runs, so `_cjs.X` property reads keep working too.
+    let export_star_specs = extract_export_star_specs(source);
+
     // For trivial re-export wrappers (`module.exports = require('./X')`),
     // recursively pull in the target's named exports. Without this,
     // react/index.js — which has zero `exports.X =` patterns of its own —
@@ -184,6 +196,15 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     // "react"` link-fails.
     for spec in &require_specs {
         if !spec.starts_with("./") && !spec.starts_with("../") {
+            continue;
+        }
+        // #4872: specs re-exported via `__exportStar` surface through the
+        // static `export * from` emitted below — resolving to the ORIGIN
+        // module's symbols. Pulling the target's textual exports here would
+        // emit explicit `export const X = _cjs.X;` bindings that shadow the
+        // star re-export (ESM precedence) and degrade those names back to
+        // runtime property reads.
+        if export_star_specs.contains(spec) {
             continue;
         }
         let Some(target) = super::super::resolve::resolve_relative_import_path(spec, source_path)
@@ -368,6 +389,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         None => "export default _cjs;".to_string(),
     };
 
+    // #4872: ESM `export * from` declarations for every `__exportStar`
+    // call detected above.
+    let export_star_decls = export_star_specs
+        .iter()
+        .map(|spec| format!("export * from '{}';", spec))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let wrapped = format!(
         r#"{imports}
 {import_aliases}
@@ -478,6 +507,7 @@ const _cjs = (function() {{
 {direct_class_exports}
 {direct_named_reexports}
 {named_export_decls}
+{export_star_decls}
 "#
     );
     if std::env::var("PERRY_DEBUG_CJS_WRAP").is_ok() {

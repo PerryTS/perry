@@ -1139,6 +1139,17 @@ pub fn run_with_parse_cache(
                             if let Some(source_exports) = all_module_exports.get(&source_path_str) {
                                 let current_exports = all_module_exports.get(&path_str);
                                 for (name, origin) in source_exports {
+                                    // ESM semantics: `export * from "src"`
+                                    // re-exports every named export EXCEPT
+                                    // `default`. Leaking it made barrels
+                                    // claim a default binding they never
+                                    // define, which breaks the #4872
+                                    // has-default probe that decides whether
+                                    // a default import can bind to
+                                    // `perry_fn_<src>__default`.
+                                    if name == "default" {
+                                        continue;
+                                    }
                                     let already_exists = current_exports
                                         .map(|e| e.contains_key(name))
                                         .unwrap_or(false);
@@ -2423,8 +2434,36 @@ pub fn run_with_parse_cache(
                     .find(|nl| nl.module == import.source);
 
                 for spec in &import.specifiers {
-                    // Handle namespace imports (import * as X)
-                    if let perry_hir::ImportSpecifier::Namespace { local } = spec {
+                    // Handle namespace imports (import * as X).
+                    //
+                    // Issue #4872: a DEFAULT import of a compiled module that
+                    // has NO `default` export gets the same treatment. The
+                    // CJS wrap lowers every `require('X')` to `import _req_N
+                    // from 'X'`; when X resolves to an ESM barrel with only
+                    // named exports (rxjs's src/index.ts, uid's index.mjs) or
+                    // to a type-only interface surface with no exports at all
+                    // (nestjs dist `*.interface.js`), there is no
+                    // `perry_fn_<src>__default` symbol for the consumer to
+                    // bind — the old fall-through registered the local as a
+                    // callable function import and the link died on
+                    // `__perry_wrap_perry_fn_<src>__default`. Node's
+                    // `require(esm)` semantics hand back the module namespace
+                    // object, so route the local through the namespace
+                    // machinery: member reads resolve per-export to origin
+                    // symbols, and a whole-value read materializes the
+                    // namespace object (empty for zero-export modules).
+                    let namespace_like_local: Option<&String> = match spec {
+                        perry_hir::ImportSpecifier::Namespace { local } => Some(local),
+                        perry_hir::ImportSpecifier::Default { local }
+                            if !all_module_exports
+                                .get(&resolved_path_str)
+                                .is_some_and(|exports| exports.contains_key("default")) =>
+                        {
+                            Some(local)
+                        }
+                        _ => None,
+                    };
+                    if let Some(local) = namespace_like_local {
                         namespace_imports.push(local.clone());
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {

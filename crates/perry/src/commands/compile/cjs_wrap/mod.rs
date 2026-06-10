@@ -48,7 +48,9 @@ pub(self) use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
 };
-pub(self) use extract_requires::{extract_require_aliases_with_ranges, extract_require_specifiers};
+pub(self) use extract_requires::{
+    extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
+};
 pub(self) use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,
 };

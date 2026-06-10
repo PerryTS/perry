@@ -28,6 +28,13 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
     }
     source.contains("module.exports")
         || source.contains("exports.")
+        // Issue #4872: tsc-compiled type-only modules (nestjs dist
+        // `*.interface.js`) contain ONLY the interop marker
+        // `Object.defineProperty(exports, "__esModule", { value: true });`
+        // — no `exports.X =`, no `require(`. Without this arm they fall
+        // through to the ESM pipeline, where the bare `exports` identifier
+        // throws a ReferenceError at module init.
+        || source.contains("defineProperty(exports,")
         || (source.contains("require(") && !source.contains("import "))
 }
 
