@@ -433,22 +433,40 @@ fn parse_tz_offset(rest: &str) -> Option<i64> {
 /// ISO 8601 / MySQL branch. Returns `Some(ms)` on success.
 fn parse_iso8601(s: &str) -> Option<f64> {
     let b = s.as_bytes();
-    // Year-only "YYYY" or "+YYYYYY" not handled here (rare); require a 4-digit
-    // year prefix.
-    if b.len() < 4 || !b[0..4].iter().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let year: i64 = s[0..4].parse().ok()?;
+    // Year: either a 4-digit "YYYY" or an expanded "±YYYYYY" (mandatory sign,
+    // exactly 6 digits) per the ECMAScript Date Time String Format. "-000000"
+    // is explicitly NOT a valid representation (negative-zero year), so it is
+    // rejected. (test262 Date/{parse,prototype/toString}/...-year, where
+    // `new Date('-000001-07-01T00:00Z')` must parse, not yield Invalid Date.)
+    let (year, year_end): (i64, usize) = if b.first() == Some(&b'+') || b.first() == Some(&b'-') {
+        if b.len() < 7 || !b[1..7].iter().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let mag: i64 = s[1..7].parse().ok()?;
+        if b[0] == b'-' {
+            if mag == 0 {
+                return None;
+            }
+            (-mag, 7)
+        } else {
+            (mag, 7)
+        }
+    } else {
+        if b.len() < 4 || !b[0..4].iter().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        (s[0..4].parse().ok()?, 4)
+    };
     let mut month1: u32 = 1;
     let mut day: i64 = 1;
     let mut hour: i64 = 0;
     let mut minute: i64 = 0;
     let mut second: i64 = 0;
     let mut millis: i64 = 0;
-    let mut idx = 4;
+    let mut idx = year_end;
 
-    // "YYYY" only.
-    if s.len() == 4 {
+    // Year only ("YYYY" / "±YYYYYY").
+    if s.len() == year_end {
         return Some(make_utc_ms(
             year,
             month1 as i64 - 1,
@@ -460,27 +478,27 @@ fn parse_iso8601(s: &str) -> Option<f64> {
         ));
     }
     // Require a '-' for month.
-    if b.get(4) != Some(&b'-') {
+    if b.get(year_end) != Some(&b'-') {
         return None;
     }
-    if b.len() < 7 {
+    if b.len() < year_end + 3 {
         return None;
     }
-    month1 = s[5..7].parse().ok()?;
+    month1 = s[year_end + 1..year_end + 3].parse().ok()?;
     if !(1..=12).contains(&month1) {
         return None;
     }
-    idx = 7;
+    idx = year_end + 3;
     let mut has_day = false;
-    if b.get(7) == Some(&b'-') {
-        if b.len() < 10 {
+    if b.get(idx) == Some(&b'-') {
+        if b.len() < idx + 3 {
             return None;
         }
-        day = s[8..10].parse().ok()?;
+        day = s[idx + 1..idx + 3].parse().ok()?;
         if !(1..=31).contains(&day) {
             return None;
         }
-        idx = 10;
+        idx += 3;
         has_day = true;
     }
 
@@ -1133,45 +1151,34 @@ pub extern "C" fn js_date_apply_setter(
             None,
         );
     }
-    // V8/Node observable order for the date/time setters (fields 0..=6): the
-    // LEADING argument is ToNumber-coerced first, THEN `thisTimeValue` is read
-    // — not before. A `valueOf` on the leading argument that re-enters and
-    // mutates this very Date is therefore visible to the rest of the
-    // algorithm. (test262 `date-value-read-before-tonumber-when-date-is-*`
-    // pin V8's read-AFTER order despite their spec-derived names, and so does
-    // `arg-coercion-order` for the short-circuit below.) The earlier `captured`
-    // read drives only setTime/setYear (fields 7/8), which already returned.
-    let _ = captured;
-    let leading = if argc >= 1 {
-        jsvalue_to_number(args[0])
-    } else {
-        f64::NAN
-    };
-    // Re-read the time value AFTER the leading arg's side effects.
-    let t = date_cell_timestamp(date);
+    // Spec / V8 / node v26 observable order for the date/time setters (fields
+    // 0..=6): `thisTimeValue` is read FIRST (the `captured` read above, before
+    // any ToNumber). THEN every PRESENT argument is ToNumber-coerced
+    // left-to-right — all of them, even when the time value is NaN (test262
+    // `set*/arg-coercion-order`). ONLY after all coercions does a NaN time
+    // value short-circuit to NaN. A `valueOf` on an argument that re-enters
+    // and mutates this very Date is therefore NOT visible to the rebuild — the
+    // `captured` timestamp is the one used (test262
+    // `date-value-read-before-tonumber-when-date-is-{valid,invalid}`).
+    let t = captured;
     let is_full_year = field == 0;
-    // For every setter except setFullYear/setUTCFullYear, a NaN time value at
-    // this point short-circuits to NaN: the remaining arguments are NOT
-    // coerced and the cell is NOT written (so a `valueOf`-installed value
-    // persists). setFullYear substitutes +0 for a NaN time value and coerces
-    // all of its arguments.
+    // Coerce every present argument in source order, capturing all `valueOf`
+    // side effects, BEFORE the NaN short-circuit below. An ABSENT trailing
+    // argument stays `None` ("keep the current field"); a PRESENT argument —
+    // even explicit `undefined` — is coerced (so `setMinutes(0, 0, undefined)`
+    // yields NaN, not the retained millisecond; test262 set*/arg-*-to-number).
+    let coerced: Vec<f64> = args.iter().map(|&a| jsvalue_to_number(a)).collect();
+    // For every setter except setFullYear/setUTCFullYear, a NaN time value
+    // short-circuits to NaN: the cell is NOT written (so a `valueOf`-installed
+    // value persists). setFullYear substitutes +0 for a NaN time value.
     if t.is_nan() && !is_full_year {
         return f64::NAN;
     }
     let base = if t.is_nan() { 0.0 } else { t };
-    // Trailing optional components: an ABSENT trailing argument is `None`
-    // ("keep the current field"); a PRESENT argument — even an explicit
-    // `undefined` — is ToNumber-coerced (so `setMinutes(0, 0, undefined)`
-    // yields NaN, not the retained millisecond; test262 set*/arg-*-to-number).
-    // The leading component is already coerced.
-    let lead = Some(leading);
-    let opt = |i: usize| -> Option<f64> {
-        if i < argc {
-            Some(jsvalue_to_number(args[i]))
-        } else {
-            None
-        }
-    };
+    // The leading component is required: an omitted call (`setHours()`) coerces
+    // `undefined` → NaN, so the leading slot is always `Some`.
+    let lead = Some(coerced.first().copied().unwrap_or(f64::NAN));
+    let opt = |i: usize| -> Option<f64> { coerced.get(i).copied() };
     // Map (field, positional index) → the seven rebuild slots.
     // Slots: year, month0, day, hour, minute, second, ms. The first slot of
     // each setter is the required leading component.
