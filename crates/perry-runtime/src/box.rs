@@ -103,7 +103,7 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 #[no_mangle]
 pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
     unsafe {
-        if !is_plausible_box_ptr(ptr) {
+        if !is_registered_box_ptr(ptr) {
             // perry#924: production services see these in tight bursts of
             // 3 synced with normal request handling and the operator can't
             // tell whether anything is wrong. The path is correctness-safe
@@ -138,7 +138,7 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
     unsafe {
-        if !is_plausible_box_ptr(ptr) {
+        if !is_registered_box_ptr(ptr) {
             // perry#924: silent-skip is correctness-safe (caller's box
             // mutation is dropped, which is the same as no closure
             // capture having existed). Gate diagnostics behind
@@ -170,6 +170,19 @@ pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
 /// `align = 8`) is 8-byte aligned. Pointers below the first user page
 /// or above the user-address ceiling, or unaligned ones, can only come
 /// from stale/uninitialized stack slots reinterpreted as box pointers.
+///
+/// perry#4898: the structural checks are necessary but **not sufficient**.
+/// A miscompiled `js_box_set` can be handed a box-pointer operand that was
+/// effectively `undef`/poison at the IR level (e.g. a mutable-capture box
+/// whose allocation was elided on the taken path). LLVM then fills the
+/// register with whatever was conveniently live — under typed-feedback
+/// (#854) instrumentation that is the read-only `..._guard` string constant
+/// passed to `js_typed_feedback_register_site`. That constant is ≥0x1000,
+/// untagged (top-16 zero), and 8-byte aligned, so it sails through every
+/// structural check — and `(*ptr).value = value` then writes into
+/// `__TEXT.__cstring`, a SIGBUS. The address `read_static`-looks like a box
+/// but isn't one. `is_registered_box_ptr` closes that gap: a pointer that
+/// `js_box_alloc` never minted is rejected before the deref.
 #[inline]
 fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
     let addr = ptr as usize;
@@ -188,7 +201,59 @@ fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
     true
 }
 
+/// Authoritative box-pointer check: the address must have been minted by
+/// `js_box_alloc` (and thus recorded in `BOX_REGISTRY`). Boxes are never
+/// freed — the registry is monotonic per thread — so membership has no
+/// false negatives for a real live box and no stale-reuse hazard: an
+/// address that isn't in the registry is provably not a box, regardless of
+/// how plausible its bit-pattern looks. This is what stops a stray
+/// read-only/garbage pointer (perry#4898) from being dereferenced as a box.
+#[inline]
+fn is_registered_box_ptr(ptr: *mut Box) -> bool {
+    if !is_plausible_box_ptr(ptr) {
+        return false;
+    }
+    BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_box_registry() {
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// perry#4898: a structurally-plausible pointer that `js_box_alloc`
+    /// never minted (here, a `&'static` read-only constant that is ≥0x1000,
+    /// untagged, and 8-byte aligned — exactly the shape of the leaked
+    /// `..._guard` string) must NOT be dereferenced by `js_box_set`. Before
+    /// the registry check this stored into read-only memory → SIGBUS.
+    #[test]
+    fn box_set_skips_unregistered_plausible_pointer() {
+        test_clear_box_registry();
+        // 8-byte aligned static — passes every structural check, is not a box.
+        static RODATA: [u64; 2] = [0xDEAD_BEEF, 0xFEED_FACE];
+        let fake = (&RODATA[0] as *const u64) as *mut Box;
+        assert!(is_plausible_box_ptr(fake), "test needs a plausible ptr");
+        assert!(!is_registered_box_ptr(fake), "fake must not be registered");
+        // Must be a silent no-op, not a write/crash.
+        js_box_set(fake, 1.0);
+        assert_eq!(RODATA[0], 0xDEAD_BEEF, "rodata must be untouched");
+        // Reads from an unregistered pointer return NaN, never deref.
+        assert!(js_box_get(fake).is_nan());
+    }
+
+    /// A real `js_box_alloc` box still round-trips through set/get after the
+    /// registry gate (no false negatives on genuine boxes).
+    #[test]
+    fn box_set_get_roundtrips_for_real_box() {
+        test_clear_box_registry();
+        let b = js_box_alloc(3.5);
+        assert!(is_registered_box_ptr(b));
+        assert_eq!(js_box_get(b), 3.5);
+        js_box_set(b, 42.0);
+        assert_eq!(js_box_get(b), 42.0);
+    }
 }
