@@ -658,6 +658,20 @@ pub extern "C" fn js_throw_strict_eval_arguments_syntax_error() -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// PerformEval early errors (super outside its context / undeclared private
+/// name in eval code) — a SyntaxError thrown when the eval call evaluates.
+#[no_mangle]
+pub extern "C" fn js_throw_eval_syntax_error(message: f64) -> f64 {
+    let message = value_to_lossy_string(message);
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = js_syntaxerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+// #1561-style force-keep: only generated IR calls this.
+#[used]
+static KEEP_JS_THROW_EVAL_SYNTAX_ERROR: extern "C" fn(f64) -> f64 = js_throw_eval_syntax_error;
+
 #[no_mangle]
 pub extern "C" fn js_throw_restricted_function_property_assignment() -> f64 {
     crate::fs::validate::throw_type_error_with_code(

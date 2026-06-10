@@ -431,6 +431,17 @@ pub struct LoweringContext {
     /// Used to resolve `new.target` to a placeholder object whose `.name`
     /// returns the class name. None outside any constructor.
     pub(crate) in_constructor_class: Option<String>,
+    /// True while lowering inside a class declaration/expression whose
+    /// heritage clause is present (`class C extends ... {}`). Combined with
+    /// `in_constructor_class` to decide whether a direct `eval` body may
+    /// contain `super()` (spec: PerformEval early errors). Saved/restored
+    /// alongside `current_class` at both class lowering entry points.
+    pub(crate) current_class_is_derived: bool,
+    /// True while lowering a class field initializer expression. A direct
+    /// `eval` body containing `arguments` in this context is a SyntaxError at
+    /// the eval call (field initializers have no arguments object). Set in
+    /// `lower_class_prop` / `lower_private_prop`.
+    pub(crate) in_class_field_init: bool,
     /// Issue #562 — set to the parent class identifier (e.g. `"WritableStream"`,
     /// `"ReadableStream"`, `"TransformStream"`, or any ident from `class X
     /// extends Y`) when lowering inside a class declaration. Used by the

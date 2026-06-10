@@ -569,6 +569,31 @@ pub fn mapped_argument_parameter_ids(params: &[Param]) -> Vec<(u32, LocalId)> {
     mapped
 }
 
+/// True when any parameter's DEFAULT expression references `arguments`
+/// (`method(x = arguments[2], y) {}`). Parameter defaults evaluate in the
+/// function's own scope, so they see the same arguments object as the body —
+/// the synthetic-arguments check must include them (test262
+/// class/params-dflt-meth-ref-arguments).
+pub fn params_use_arguments(params: &[ast::Param]) -> bool {
+    params.iter().any(|p| param_pat_uses_arguments(&p.pat))
+}
+
+fn param_pat_uses_arguments(pat: &ast::Pat) -> bool {
+    match pat {
+        ast::Pat::Assign(a) => expr_uses_arguments(&a.right) || param_pat_uses_arguments(&a.left),
+        ast::Pat::Array(arr) => arr.elems.iter().flatten().any(param_pat_uses_arguments),
+        ast::Pat::Object(obj) => obj.props.iter().any(|p| match p {
+            ast::ObjectPatProp::Assign(a) => {
+                a.value.as_deref().map(expr_uses_arguments).unwrap_or(false)
+            }
+            ast::ObjectPatProp::KeyValue(kv) => param_pat_uses_arguments(&kv.value),
+            ast::ObjectPatProp::Rest(r) => param_pat_uses_arguments(&r.arg),
+        }),
+        ast::Pat::Rest(r) => param_pat_uses_arguments(&r.arg),
+        _ => false,
+    }
+}
+
 /// Synthesize a hidden raw-arguments parameter. Call after lowering the user's
 /// parameters, before lowering the body, when the body references `arguments`
 /// and the user hasn't already bound it explicitly.

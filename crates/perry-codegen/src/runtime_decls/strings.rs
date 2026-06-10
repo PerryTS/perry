@@ -1180,6 +1180,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_throw_symbol_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_bigint_constructor_type_error", DOUBLE, &[]);
     module.declare_function("js_throw_strict_eval_arguments_syntax_error", DOUBLE, &[]);
+    module.declare_function("js_throw_eval_syntax_error", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_throw_restricted_function_property_assignment",
         DOUBLE,

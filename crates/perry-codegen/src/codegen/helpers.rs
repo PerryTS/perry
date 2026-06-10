@@ -680,7 +680,22 @@ pub(super) fn init_static_fields_late(
                 if init_references_out_of_scope_local(init_expr) {
                     continue;
                 }
-                let v = crate::expr::lower_expr(ctx, init_expr)?;
+                // `this` in a static field initializer is the class
+                // constructor (`static g = this.f + '262'`). Seed the same
+                // class-ref NaN-box a static method binds (see
+                // `compile_static_method`) for the init's duration.
+                let seeded_this = ctx.class_ids.get(&c.name).copied().map(|cid| {
+                    let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
+                    let class_ref_lit = crate::nanbox::double_literal(f64::from_bits(bits));
+                    let this_slot = ctx.func.alloca_entry(DOUBLE);
+                    ctx.block().store(DOUBLE, &class_ref_lit, &this_slot);
+                    ctx.this_stack.push(this_slot);
+                });
+                let v = crate::expr::lower_expr(ctx, init_expr);
+                if seeded_this.is_some() {
+                    ctx.this_stack.pop();
+                }
+                let v = v?;
                 let g_ref = format!("@{}", global_name);
                 crate::expr::emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
             }

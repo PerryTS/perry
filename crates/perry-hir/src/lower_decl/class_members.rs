@@ -519,25 +519,29 @@ pub fn lower_class_method_with_name(
             destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
-    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
-        param.default = get_param_default(ctx, pat)?;
-    }
-
-    // #677: synthesize `arguments` if the method body references it.
+    // #677: synthesize `arguments` if the method body — or any parameter
+    // DEFAULT expression (`method(x = arguments[2]) {}`) — references it.
+    // Appended BEFORE the defaults are lowered below so `arguments` inside a
+    // default resolves to the synthetic local instead of an unknown global.
     let user_has_arguments_param = method
         .function
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
     let needs_arguments_synth = !user_has_arguments_param
-        && method
+        && (method
             .function
             .body
             .as_ref()
             .map(|b| body_uses_arguments(&b.stmts))
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || params_use_arguments(&method.function.params));
     if needs_arguments_synth {
         append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
+    }
+
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // Extract return type (with context). Phase 4: when the method has no
@@ -898,12 +902,14 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             .unwrap_or(Type::Any),
     };
 
-    // Lower initializer expression if present
-    let init = prop
-        .value
-        .as_ref()
-        .map(|e| lower_expr(ctx, e))
-        .transpose()?;
+    // Lower initializer expression if present. Mark the field-initializer
+    // context so a direct `eval` in the initializer rejects `arguments`
+    // (PerformEval early error — field initializers have no arguments object).
+    let saved_field_init = ctx.in_class_field_init;
+    ctx.in_class_field_init = true;
+    let init = prop.value.as_ref().map(|e| lower_expr(ctx, e)).transpose();
+    ctx.in_class_field_init = saved_field_init;
+    let init = init?;
 
     Ok(ClassField {
         name,

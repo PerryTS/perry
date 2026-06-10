@@ -502,10 +502,45 @@ fn resolve_fn_ctor_arg(
 /// the *unshadowed* `eval` builtin, a single non-spread argument, and a
 /// constant body that trims to exactly `this` / `globalThis`. Anything
 /// else returns `None`.
-pub(crate) fn try_indirect_eval_globalthis(
-    ctx: &LoweringContext,
-    call: &ast::CallExpr,
-) -> Option<Expr> {
+/// Re-parse a direct-eval body that failed the plain script parse inside an
+/// object-method wrapper so SuperProperty forms parse, and return the method
+/// body statements. Only used when the eval call site provides a super
+/// capability (class member / object method); returns None otherwise so the
+/// caller keeps the parse-failure SyntaxError.
+fn reparse_eval_body_with_super(ctx: &LoweringContext, body_src: &str) -> Option<Vec<ast::Stmt>> {
+    let super_capable = ctx.current_class.is_some()
+        || ctx.in_constructor_class.is_some()
+        || !ctx.object_super_home_stack.is_empty();
+    if !super_capable || !body_src.contains("super") {
+        return None;
+    }
+    let wrapped = format!("({{ __perry_eval_m() {{\n{body_src}\n}} }});");
+    let module = perry_parser::parse_typescript(&wrapped, "<eval body>.cjs").ok()?;
+    let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) = module.body.into_iter().next()? else {
+        return None;
+    };
+    let mut e = *expr_stmt.expr;
+    loop {
+        match e {
+            ast::Expr::Paren(p) => e = *p.expr,
+            ast::Expr::Object(obj) => {
+                let prop = obj.props.into_iter().next()?;
+                let ast::PropOrSpread::Prop(prop) = prop else {
+                    return None;
+                };
+                let ast::Prop::Method(method) = *prop else {
+                    return None;
+                };
+                return Some(method.function.body?.stmts);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Match the `(0, eval)('<const>')` indirect-eval shape and return the
+/// constant body source.
+fn indirect_eval_const_body(ctx: &LoweringContext, call: &ast::CallExpr) -> Option<String> {
     if call.args.len() != 1 || call.args[0].spread.is_some() {
         return None;
     }
@@ -533,7 +568,42 @@ pub(crate) fn try_indirect_eval_globalthis(
     {
         return None;
     }
-    let body = const_string_of(&call.args[0].expr)?;
+    const_string_of(&call.args[0].expr)
+}
+
+/// Indirect eval evaluates as *global* code: any `super()` / `super.x` in the
+/// body is a SyntaxError at the eval call, and private names are only valid
+/// when a class inside the eval source declares them.
+fn try_indirect_eval_super_private(ctx: &LoweringContext, call: &ast::CallExpr) -> Option<Expr> {
+    let body = indirect_eval_const_body(ctx, call)?;
+    let module = match perry_parser::parse_typescript(&body, "<eval body>.cjs") {
+        Ok(m) => m,
+        // SWC rejects some super / new.target forms at parse time (`super.x`
+        // at script top level). Global code can never contain either, so a
+        // body that mentions one and fails to parse is the same SyntaxError;
+        // other parse failures stay on the existing fallthrough path.
+        Err(_) => {
+            if body.contains("super") || body.contains("new.target") {
+                return Some(super::eval_super_scan::throw_eval_super_unexpected_expr());
+            }
+            return None;
+        }
+    };
+    let mut stmts: Vec<ast::Stmt> = Vec::with_capacity(module.body.len());
+    for item in module.body {
+        match item {
+            ast::ModuleItem::Stmt(s) => stmts.push(s),
+            _ => return None,
+        }
+    }
+    super::eval_super_scan::check_indirect_eval_super_private(&stmts)
+}
+
+pub(crate) fn try_indirect_eval_globalthis(
+    ctx: &LoweringContext,
+    call: &ast::CallExpr,
+) -> Option<Expr> {
+    let body = indirect_eval_const_body(ctx, call)?;
     let trimmed = body.trim().trim_end_matches(';').trim();
     if matches!(trimmed, "this" | "globalThis") {
         if eval_diag_enabled() {
@@ -752,6 +822,9 @@ pub(crate) fn try_eval_function_call_fold(
     if let Some(expr) = try_indirect_eval_globalthis(ctx, call) {
         return Ok(Some(expr));
     }
+    if let Some(expr) = try_indirect_eval_super_private(ctx, call) {
+        return Ok(Some(expr));
+    }
     if let Some(expr) = try_direct_eval_this_fold(ctx, call) {
         return Ok(Some(expr));
     }
@@ -882,6 +955,23 @@ fn extract_fn_expr(module: &ast::Module) -> Option<&ast::FnExpr> {
     match e {
         ast::Expr::Fn(fn_expr) => Some(fn_expr),
         _ => None,
+    }
+}
+
+/// Owning arrow analog of [`extract_fn_expr_owned`] — pull the `ArrowExpr`
+/// out of a synthesized `(() => { ... });` module.
+fn extract_arrow_expr_owned(module: ast::Module) -> Option<ast::ArrowExpr> {
+    let item = module.body.into_iter().next()?;
+    let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) = item else {
+        return None;
+    };
+    let mut e = *expr_stmt.expr;
+    loop {
+        match e {
+            ast::Expr::Paren(p) => e = *p.expr,
+            ast::Expr::Arrow(arrow) => return Some(arrow),
+            _ => return None,
+        }
     }
 }
 
@@ -1042,31 +1132,60 @@ fn try_const_fold_eval(
 
     // Parse the eval body as sloppy-mode statements (`.cjs` → script, not
     // module, so `with` is allowed). A parse failure is a runtime SyntaxError.
-    let body_module = match perry_parser::parse_typescript(&body_src, "<eval body>.cjs") {
-        Ok(m) => m,
-        Err(_) => return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some),
-    };
-    let mut body_stmts: Vec<ast::Stmt> = Vec::with_capacity(body_module.body.len());
-    for item in body_module.body {
-        match item {
-            ast::ModuleItem::Stmt(s) => body_stmts.push(s),
-            // `import` / `export` inside eval is a SyntaxError.
-            _ => return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some),
+    let mut body_stmts: Vec<ast::Stmt>;
+    match perry_parser::parse_typescript(&body_src, "<eval body>.cjs") {
+        Ok(body_module) => {
+            body_stmts = Vec::with_capacity(body_module.body.len());
+            for item in body_module.body {
+                match item {
+                    ast::ModuleItem::Stmt(s) => body_stmts.push(s),
+                    // `import` / `export` inside eval is a SyntaxError.
+                    _ => {
+                        return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some)
+                    }
+                }
+            }
         }
+        Err(_) => {
+            // SWC rejects SuperProperty at script top level, but direct eval
+            // inside a class member may legally contain `super.x` (PerformEval
+            // runs the eval code with the member's home object). Re-parse the
+            // body inside an object-method wrapper — which admits super — and
+            // splice the method body out; the super-scan below still rejects
+            // SuperCall. Contexts with no super capability keep the plain
+            // parse-failure SyntaxError.
+            match reparse_eval_body_with_super(ctx, &body_src) {
+                Some(stmts) => body_stmts = stmts,
+                None => return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some),
+            }
+        }
+    }
+
+    // PerformEval early errors: `super()` / `super.x` outside a context that
+    // provides them, and private names with no declaring class in scope, are
+    // SyntaxErrors thrown when the eval call evaluates.
+    if let Some(throw) = super::eval_super_scan::check_direct_eval_super_private(ctx, &body_stmts) {
+        return Ok(Some(throw));
     }
 
     // Wrapper template: stmts == [var __perry_cv = undefined;
     //                            __perry_cv = undefined;   (reset/assign template)
     //                            return __perry_cv;]
-    let template_src = "(function () {\nvar __perry_cv = undefined;\n__perry_cv = undefined;\nreturn __perry_cv;\n});\n";
+    // An ARROW wrapper, not a plain function: direct eval code runs with the
+    // caller's `this` / `arguments` / `super` / `new.target` bindings, and the
+    // arrow gets all of those lexically. A plain-function wrapper rebound
+    // `this` to undefined, so `eval("this.#x")` inside a method brand-checked
+    // against the wrong receiver and `eval("this.prop")` read undefined.
+    let template_src =
+        "(() => {\nvar __perry_cv = undefined;\n__perry_cv = undefined;\nreturn __perry_cv;\n});\n";
     let template_module = match perry_parser::parse_typescript(template_src, "<eval wrapper>.cjs") {
         Ok(m) => m,
         Err(_) => return Ok(None),
     };
-    let Some(mut fn_expr) = extract_fn_expr_owned(template_module) else {
+    let Some(mut arrow) = extract_arrow_expr_owned(template_module) else {
         return Ok(None);
     };
-    let Some(body) = fn_expr.function.body.as_mut() else {
+    let ast::BlockStmtOrExpr::BlockStmt(body) = arrow.body.as_mut() else {
         return Ok(None);
     };
     if body.stmts.len() != 3 {
@@ -1082,10 +1201,10 @@ fn try_const_fold_eval(
         insert_at += 1;
     }
 
-    // Lower the wrapper (sloppy) and immediately call it: `(function(){…})()`.
+    // Lower the wrapper (sloppy) and immediately call it: `(() => {…})()`.
     let outer_strict = ctx.current_strict;
     ctx.current_strict = false;
-    let lowered = lower_fn_expr(ctx, &fn_expr);
+    let lowered = lower_expr(ctx, &ast::Expr::Arrow(arrow));
     ctx.current_strict = outer_strict;
     let closure = match lowered {
         Ok(l) => l,

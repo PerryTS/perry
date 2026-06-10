@@ -151,6 +151,8 @@ pub fn lower_class_decl(
     // Set current class for arrow function `this` capture tracking
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.clone());
+    let old_is_derived = ctx.current_class_is_derived;
+    ctx.current_class_is_derived = class_decl.class.super_class.is_some();
 
     // Push the private-name scope for this class body so `obj.#name` accesses
     // brand-check against the declaring class and reject illegal read/write
@@ -1014,6 +1016,7 @@ pub fn lower_class_decl(
 
     // Restore previous current_class
     ctx.current_class = old_class;
+    ctx.current_class_is_derived = old_is_derived;
     ctx.pop_private_scope();
     // Issue #562: restore the prior super-ident slot.
     ctx.current_class_super_ident = old_super_ident;
@@ -1103,6 +1106,8 @@ pub fn lower_class_from_ast(
 
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.to_string());
+    let old_is_derived = ctx.current_class_is_derived;
+    ctx.current_class_is_derived = class.super_class.is_some();
 
     // Private-name scope for this class-expression body (see lower_class_decl).
     ctx.push_private_scope(super::build_private_scope(class, name));
@@ -1409,6 +1414,7 @@ pub fn lower_class_from_ast(
         ctx.register_class_native_extends(name.to_string(), module.clone(), class.clone());
     }
     ctx.current_class = old_class;
+    ctx.current_class_is_derived = old_is_derived;
     ctx.pop_private_scope();
     // Issue #562: restore prior super-ident slot.
     ctx.current_class_super_ident = old_super_ident;

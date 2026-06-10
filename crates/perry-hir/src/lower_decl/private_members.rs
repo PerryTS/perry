@@ -366,12 +366,13 @@ pub fn lower_private_prop(
             .unwrap_or(Type::Any),
     };
 
-    // Lower initializer expression if present
-    let init = prop
-        .value
-        .as_ref()
-        .map(|e| lower_expr(ctx, e))
-        .transpose()?;
+    // Lower initializer expression if present — field-initializer context for
+    // the direct-eval `arguments` early error (see `lower_class_prop`).
+    let saved_field_init = ctx.in_class_field_init;
+    ctx.in_class_field_init = true;
+    let init = prop.value.as_ref().map(|e| lower_expr(ctx, e)).transpose();
+    ctx.in_class_field_init = saved_field_init;
+    let init = init?;
 
     Ok(ClassField {
         name,

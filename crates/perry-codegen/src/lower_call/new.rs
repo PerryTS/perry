@@ -13,34 +13,43 @@ use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx}
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
-/// True when any `super(...)` call appears (anywhere) in this constructor
-/// body. A derived constructor that never calls `super()` leaves `this`
-/// uninitialized — ECMAScript then throws ReferenceError at the implicit
-/// `return this`. We detect the static no-super case at compile time so
-/// `new Sub()` throws instead of returning a half-built object.
-fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
-    body.iter().any(stmt_calls_super)
+/// Generic "does any statement in this ctor body satisfy `stmt_pred` or
+/// contain an expression satisfying `expr_pred`" walker, shared by the
+/// no-super static-throw heuristics below.
+fn ctor_body_any(
+    body: &[perry_hir::Stmt],
+    expr_pred: &dyn Fn(&Expr) -> bool,
+    stmt_pred: &dyn Fn(&perry_hir::Stmt) -> bool,
+) -> bool {
+    body.iter().any(|s| stmt_any(s, expr_pred, stmt_pred))
 }
 
-fn stmt_calls_super(stmt: &perry_hir::Stmt) -> bool {
+fn stmt_any(
+    stmt: &perry_hir::Stmt,
+    expr_pred: &dyn Fn(&Expr) -> bool,
+    stmt_pred: &dyn Fn(&perry_hir::Stmt) -> bool,
+) -> bool {
     use perry_hir::Stmt;
+    if stmt_pred(stmt) {
+        return true;
+    }
     match stmt {
-        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_calls_super),
-        Stmt::Expr(e) | Stmt::Throw(e) => expr_calls_super(e),
-        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_calls_super),
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_pred),
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_pred(e),
+        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_pred),
         Stmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            expr_calls_super(condition)
-                || ctor_body_calls_super(then_branch)
+            expr_pred(condition)
+                || ctor_body_any(then_branch, expr_pred, stmt_pred)
                 || else_branch
                     .as_ref()
-                    .is_some_and(|b| ctor_body_calls_super(b))
+                    .is_some_and(|b| ctor_body_any(b, expr_pred, stmt_pred))
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_calls_super(condition) || ctor_body_calls_super(body)
+            expr_pred(condition) || ctor_body_any(body, expr_pred, stmt_pred)
         }
         Stmt::For {
             init,
@@ -48,30 +57,34 @@ fn stmt_calls_super(stmt: &perry_hir::Stmt) -> bool {
             update,
             body,
         } => {
-            init.as_deref().is_some_and(stmt_calls_super)
-                || condition.as_ref().is_some_and(expr_calls_super)
-                || update.as_ref().is_some_and(expr_calls_super)
-                || ctor_body_calls_super(body)
+            init.as_deref()
+                .is_some_and(|s| stmt_any(s, expr_pred, stmt_pred))
+                || condition.as_ref().is_some_and(expr_pred)
+                || update.as_ref().is_some_and(expr_pred)
+                || ctor_body_any(body, expr_pred, stmt_pred)
         }
-        Stmt::Labeled { body, .. } => stmt_calls_super(body),
+        Stmt::Labeled { body, .. } => stmt_any(body, expr_pred, stmt_pred),
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
-            ctor_body_calls_super(body)
+            ctor_body_any(body, expr_pred, stmt_pred)
                 || catch
                     .as_ref()
-                    .is_some_and(|c| ctor_body_calls_super(&c.body))
-                || finally.as_ref().is_some_and(|f| ctor_body_calls_super(f))
+                    .is_some_and(|c| ctor_body_any(&c.body, expr_pred, stmt_pred))
+                || finally
+                    .as_ref()
+                    .is_some_and(|f| ctor_body_any(f, expr_pred, stmt_pred))
         }
         Stmt::Switch {
             discriminant,
             cases,
         } => {
-            expr_calls_super(discriminant)
+            expr_pred(discriminant)
                 || cases.iter().any(|c| {
-                    c.test.as_ref().is_some_and(expr_calls_super) || ctor_body_calls_super(&c.body)
+                    c.test.as_ref().is_some_and(expr_pred)
+                        || ctor_body_any(&c.body, expr_pred, stmt_pred)
                 })
         }
         Stmt::Break
@@ -80,6 +93,18 @@ fn stmt_calls_super(stmt: &perry_hir::Stmt) -> bool {
         | Stmt::LabeledContinue(_)
         | Stmt::PreallocateBoxes(_) => false,
     }
+}
+
+const NO_STMT_PRED: &dyn Fn(&perry_hir::Stmt) -> bool = &|_| false;
+
+/// True when a DIRECT `super(...)` call appears in this constructor body
+/// (`walk_expr_children` does not descend into `Expr::Closure` bodies). A
+/// derived constructor that never calls `super()` leaves `this`
+/// uninitialized — ECMAScript then throws ReferenceError at the implicit
+/// `return this`. We detect the static no-super case at compile time so
+/// `new Sub()` throws instead of returning a half-built object.
+fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(body, &expr_calls_super, NO_STMT_PRED)
 }
 
 fn expr_calls_super(expr: &Expr) -> bool {
@@ -93,6 +118,74 @@ fn expr_calls_super(expr: &Expr) -> bool {
         }
     });
     found
+}
+
+/// True when a closure (arrow) created in the ctor body contains a
+/// `super(...)` call. Such an arrow can run DURING construction (e.g.
+/// stored on an iterator and invoked from its `return()` while the ctor's
+/// for-of is still iterating), so the static no-super throw must not fire —
+/// unless the body also dereferences `this` directly (see the call site).
+/// Refs class/subclass/derived-class-return-override-{for-of,finally-super}-arrow.
+fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(body, &expr_calls_super_incl_closures, NO_STMT_PRED)
+}
+
+fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
+    if matches!(expr, Expr::SuperCall(_)) {
+        return true;
+    }
+    if let Expr::Closure { body, .. } = expr {
+        return ctor_body_any(body, &expr_calls_super_incl_closures, NO_STMT_PRED);
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_calls_super_incl_closures(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// True when the ctor body dereferences `this` OUTSIDE nested closures.
+/// Combined with `ctor_body_closure_calls_super`: a direct `this` access in
+/// a no-direct-super derived ctor throws ReferenceError per spec before any
+/// closure could run `super()`, so the static entry throw stays correct
+/// (test262 class/elements/privatefieldset-evaluation-order-1).
+fn ctor_body_uses_this(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(body, &expr_uses_this_direct, NO_STMT_PRED)
+}
+
+fn expr_uses_this_direct(expr: &Expr) -> bool {
+    if matches!(expr, Expr::This) {
+        return true;
+    }
+    if matches!(expr, Expr::Closure { .. }) {
+        return false;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_uses_this_direct(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// True when the constructor body contains a value-bearing `return` in its
+/// own body (closures excluded; a bare `return undefined` does NOT count —
+/// spec falls back to the uninitialized `this` and still throws). The
+/// return-override path initializes the `new` expression's value without
+/// `super()`, so the static no-super ReferenceError must not fire —
+/// `js_ctor_return_override` still enforces the derived-ctor rules on the
+/// returned value at runtime. Refs
+/// class/subclass/class-definition-null-proto-contains-return-override and
+/// class/subclass/builtin-objects/Object/constructor-return-undefined-throws.
+fn ctor_body_has_value_return(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(
+        body,
+        &|_| false,
+        &|s| matches!(s, perry_hir::Stmt::Return(Some(e)) if !matches!(e, Expr::Undefined)),
+    )
 }
 
 fn node_stream_parent_kind(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<&'static str> {
@@ -920,7 +1013,16 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             || class.extends_name.is_some()
             || class.native_extends.is_some()
             || class.extends_expr.is_some();
-        if is_derived_class && !ctor_body_calls_super(&ctor.body) {
+        // A closure-captured `super()` may run during construction, so it
+        // suppresses the static throw — but only when the body never touches
+        // `this` directly (a direct `this` in a no-direct-super derived ctor
+        // throws before any closure could fire). A value-bearing `return`
+        // takes the return-override path instead of the implicit `return
+        // this`, so it suppresses the throw too.
+        let no_super_throw_statically = !ctor_body_calls_super(&ctor.body)
+            && !(ctor_body_closure_calls_super(&ctor.body) && !ctor_body_uses_this(&ctor.body))
+            && !ctor_body_has_value_return(&ctor.body);
+        if is_derived_class && no_super_throw_statically {
             ctx.block()
                 .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
             ctx.block().unreachable();

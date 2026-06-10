@@ -130,6 +130,8 @@ impl LoweringContext {
             proxy_revoke_locals: HashMap::new(),
             class_expr_aliases: HashMap::new(),
             in_constructor_class: None,
+            current_class_is_derived: false,
+            in_class_field_init: false,
             current_class_super_ident: None,
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),

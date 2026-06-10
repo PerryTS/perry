@@ -462,6 +462,11 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         fn_expr.function.is_async,
     );
     let scope_mark = ctx.enter_scope();
+    // A plain function has its own `arguments` object, so a direct `eval`
+    // inside its body may reference `arguments` even when the function sits
+    // in a class field initializer. Cleared here, restored at the end.
+    let saved_field_init = ctx.in_class_field_init;
+    ctx.in_class_field_init = false;
 
     // Track which locals exist before entering the closure scope
     let outer_locals: Vec<(String, LocalId)> = ctx
@@ -774,6 +779,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_class_field_init = saved_field_init;
 
     let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
 
