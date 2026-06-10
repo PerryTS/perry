@@ -112,6 +112,7 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 
     super::combinators::scan_promise_all_states_mut(visitor);
     super::then::scan_promise_settle_listeners_mut(visitor);
+    super::then::scan_promise_overflow_reactions_mut(visitor);
 
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         for context in stack.borrow_mut().iter_mut() {
