@@ -23,6 +23,24 @@ static REGISTRY: LazyLock<Mutex<TypedFeedbackRegistry>> =
     LazyLock::new(|| Mutex::new(TypedFeedbackRegistry::default()));
 static TRACE_DUMPED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(not(test))]
+static TYPED_FEEDBACK_ENABLED: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var_os("PERRY_TYPED_FEEDBACK_TRACE").is_some()
+        || std::env::var_os("PERRY_TYPED_FEEDBACK").is_some()
+});
+
+#[inline]
+fn typed_feedback_enabled() -> bool {
+    #[cfg(test)]
+    {
+        true
+    }
+    #[cfg(not(test))]
+    {
+        *TYPED_FEEDBACK_ENABLED
+    }
+}
+
 #[cfg(test)]
 pub(crate) static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -360,7 +378,7 @@ pub extern "C" fn js_typed_feedback_register_site(
     fallback_ptr: *const u8,
     fallback_len: usize,
 ) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let metadata = SiteMetadata {
@@ -732,7 +750,7 @@ fn guard_observe(
     observation: Observation,
     contract_valid: bool,
 ) -> bool {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return contract_valid;
     }
     let mut reg = registry();
@@ -754,7 +772,7 @@ fn guard_observe(
 }
 
 fn record_guard_pass(site_id: u64) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let mut reg = registry();
@@ -764,7 +782,7 @@ fn record_guard_pass(site_id: u64) {
 }
 
 fn record_guard_fail(site_id: u64) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let mut reg = registry();
@@ -774,7 +792,7 @@ fn record_guard_fail(site_id: u64) {
 }
 
 fn record_fallback_call(site_id: u64) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let mut reg = registry();
@@ -1168,6 +1186,15 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (is_plain_number_bits(index_value.to_bits())
+            && index >= 0
+            && plain_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1209,6 +1236,15 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (is_plain_number_bits(index_value.to_bits())
+            && index >= 0
+            && numeric_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1414,6 +1450,14 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (index >= 0
+            && plain_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1454,6 +1498,15 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_set_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (index >= 0
+            && is_numeric_value_bits(value.to_bits())
+            && numeric_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
