@@ -93,6 +93,19 @@ pub struct ServerResponse {
     pub response_tx: Option<oneshot::Sender<HyperResponseShape>>,
     /// Event-name → list of registered listener closure pointers.
     pub listeners: HashMap<String, Vec<i64>>,
+    /// #4904: true for `new http.ServerResponse(req)` instances (and any
+    /// response wired through `assignSocket`) — `.end()` flushes through
+    /// `standalone_socket` instead of the hyper oneshot.
+    pub standalone: bool,
+    /// #4904: the JS Writable assigned via `res.assignSocket(socket)`.
+    /// `TAG_UNDEFINED` while unassigned.
+    pub standalone_socket: f64,
+    /// #4904: `req.method` captured from the standalone constructor's
+    /// request argument — `HEAD` suppresses the body on flush.
+    pub standalone_req_method: Option<String>,
+    /// #4904: `res.write(chunk, cb)` callbacks, invoked in order when the
+    /// buffered body flushes on `.end()`.
+    pub pending_write_callbacks: Vec<i64>,
 }
 
 /// Owned shape produced by `.end()` — the per-request oneshot channel
@@ -212,6 +225,10 @@ impl ServerResponse {
             buffered_body: Vec::new(),
             response_tx: Some(response_tx),
             listeners: HashMap::new(),
+            standalone: false,
+            standalone_socket: f64::from_bits(TAG_UNDEFINED),
+            standalone_req_method: None,
+            pending_write_callbacks: Vec::new(),
         }
     }
 
@@ -924,6 +941,211 @@ pub unsafe extern "C" fn js_node_http_res_on(
 #[no_mangle]
 pub extern "C" fn js_node_http_outgoing_message_new() -> i64 {
     register_handle(ServerResponse::outgoing_message())
+}
+
+// ============================================================================
+// #4904: standalone `new http.ServerResponse(req)` + `assignSocket` support
+// ============================================================================
+
+/// `new http.ServerResponse(req)` — a response not bound to a live hyper
+/// exchange. `req` contributes only the method (Node skips the body on
+/// flush when it was a HEAD request); writes buffer until `.end()`, which
+/// flushes through the socket assigned via `res.assignSocket(socket)`.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -> i64 {
+    crate::ensure_gc_scanner_registered();
+    let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
+    let mut sr = ServerResponse::new(tx);
+    sr.standalone = true;
+    sr.send_date = false;
+    if JsValue::from_bits(req.to_bits()).is_pointer() {
+        extern "C" {
+            fn js_object_get_field_by_name(
+                obj: *const perry_ffi::ObjectHeader,
+                key: *const StringHeader,
+            ) -> JsValue;
+        }
+        let key = alloc_string("method");
+        let m = js_object_get_field_by_name(
+            (req.to_bits() & PTR_MASK) as *const perry_ffi::ObjectHeader,
+            key.as_raw(),
+        );
+        if JsValue::from_bits(m.bits()).is_string() {
+            sr.standalone_req_method = read_string_header((m.bits() & PTR_MASK) as *mut _);
+        }
+    }
+    register_handle(sr)
+}
+
+/// `res.assignSocket(socket)` — wire a (possibly userland) Writable as the
+/// flush target. Node throws `ERR_HTTP_SOCKET_ASSIGNED` on a second call.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_assign_socket(handle: i64, socket: f64) {
+    let already = get_handle::<ServerResponse>(handle)
+        .map(|sr| !JsValue::from_bits(sr.standalone_socket.to_bits()).is_undefined())
+        .unwrap_or(false);
+    if already {
+        perry_ffi::throw_with_code(
+            "Socket already assigned",
+            "ERR_HTTP_SOCKET_ASSIGNED",
+            perry_ffi::ErrorKind::Error,
+        );
+    }
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        sr.standalone_socket = socket;
+        sr.standalone = true;
+    }
+}
+
+/// `res.detachSocket(socket)` — counterpart of `assignSocket`.
+#[no_mangle]
+pub extern "C" fn js_node_http_res_detach_socket(handle: i64, _socket: f64) {
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        sr.standalone_socket = f64::from_bits(TAG_UNDEFINED);
+    }
+}
+
+/// `res.write(chunk[, encoding][, callback])` — callback-aware variant of
+/// `js_node_http_res_write`. The callback queues until the buffered body
+/// flushes on `.end()`, preserving call order (#4904).
+#[no_mangle]
+pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callback: i64) -> i32 {
+    let bytes = jsvalue_to_body_bytes(chunk);
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        if !sr.writable_ended {
+            sr.headers_sent = true;
+            if let Some(b) = &bytes {
+                sr.buffered_body.extend_from_slice(b);
+            }
+            if callback != 0 {
+                sr.pending_write_callbacks.push(callback);
+            }
+        }
+    }
+    1
+}
+
+/// `res.end([chunk][, callback])` — callback-aware variant. Standalone
+/// responses flush through the assigned socket; everything else takes the
+/// existing hyper-oneshot path. Queued write callbacks run first, in
+/// order, then the end callback (#4904).
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, callback: i64) {
+    let is_standalone = get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.standalone)
+        .unwrap_or(false);
+    if is_standalone {
+        standalone_end(handle, chunk, callback);
+        return;
+    }
+    js_node_http_res_end(handle, chunk);
+    let write_cbs = get_handle_mut::<ServerResponse>(handle)
+        .map(|sr| std::mem::take(&mut sr.pending_write_callbacks))
+        .unwrap_or_default();
+    for cb in write_cbs {
+        call_closure0(cb);
+    }
+    if callback != 0 {
+        call_closure0(callback);
+    }
+}
+
+/// Flush a standalone response: serialize the head + buffered body and
+/// write them through the assigned socket's JS `write` method — one write
+/// for head+body, then the zero-length finish chunk Node's corked flush
+/// emits. The body is suppressed for HEAD requests.
+unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
+    let v = JsValue::from_bits(chunk.to_bits());
+    let final_chunk = if v.is_undefined() || v.is_null() {
+        None
+    } else {
+        jsvalue_to_body_bytes(chunk)
+    };
+
+    let (socket, payload, write_cbs, finish_listeners, close_listeners);
+    {
+        let sr = match get_handle_mut::<ServerResponse>(handle) {
+            Some(s) => s,
+            None => return,
+        };
+        if sr.writable_ended {
+            return;
+        }
+        if let Some(c) = final_chunk {
+            sr.buffered_body.extend_from_slice(&c);
+        }
+        sr.headers_sent = true;
+        sr.writable_ended = true;
+        sr.ensure_content_length();
+        let body = std::mem::take(&mut sr.buffered_body);
+        let reason = sr.status_message.clone().unwrap_or_else(|| {
+            StatusCode::from_u16(sr.status_code)
+                .ok()
+                .and_then(|s| s.canonical_reason())
+                .unwrap_or("")
+                .to_string()
+        });
+        let mut head = format!("HTTP/1.1 {} {}\r\n", sr.status_code, reason);
+        for (k, v) in sr.snapshot_headers() {
+            head.push_str(&k);
+            head.push_str(": ");
+            head.push_str(&v);
+            head.push_str("\r\n");
+        }
+        head.push_str("\r\n");
+        let mut bytes = head.into_bytes();
+        if sr.standalone_req_method.as_deref() != Some("HEAD") {
+            bytes.extend_from_slice(&body);
+        }
+        payload = bytes;
+        socket = sr.standalone_socket;
+        write_cbs = std::mem::take(&mut sr.pending_write_callbacks);
+        finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
+        close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
+        sr.writable_finished = true;
+    }
+    if !JsValue::from_bits(socket.to_bits()).is_undefined() {
+        socket_write_str(socket, &String::from_utf8_lossy(&payload));
+        socket_write_str(socket, "");
+    }
+    for cb in write_cbs {
+        call_closure0(cb);
+    }
+    if callback != 0 {
+        call_closure0(callback);
+    }
+    emit_no_arg_to_listeners(&finish_listeners);
+    emit_no_arg_to_listeners(&close_listeners);
+}
+
+/// Invoke `socket.write(chunk)` on an arbitrary JS value through the
+/// runtime's dynamic method-call path.
+unsafe fn socket_write_str(socket: f64, chunk: &str) {
+    extern "C" {
+        fn js_native_call_method_str_key(
+            object: f64,
+            name_handle: i64,
+            args_ptr: *const f64,
+            args_len: usize,
+        ) -> f64;
+    }
+    let name = alloc_string("write");
+    let chunk_val = f64::from_bits(JsValue::from_string_ptr(alloc_string(chunk).as_raw()).bits());
+    let args = [chunk_val];
+    let _ = js_native_call_method_str_key(socket, name.as_raw() as i64, args.as_ptr(), 1);
+}
+
+/// Call a closure pointer with no args, ignoring the result.
+fn call_closure0(callback: i64) {
+    if callback == 0 {
+        return;
+    }
+    unsafe {
+        let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+        if !closure.is_null() {
+            let _ = closure.call0();
+        }
+    }
 }
 
 pub(crate) fn alloc_server_response_for_request(

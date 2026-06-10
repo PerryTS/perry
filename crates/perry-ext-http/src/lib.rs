@@ -937,6 +937,22 @@ pub unsafe extern "C" fn js_http_request(opts_f64: f64, callback_i64: i64) -> Ha
     request_common(opts_f64, callback_i64, "http")
 }
 
+/// `new http.ClientRequest(options)` (#4904). Perry's client model defers
+/// the actual send to `.end()`, so constructing is exactly `http.request`
+/// without a response callback. Node coerces a falsy `options.method` /
+/// `options.path` to the `GET` / `/` defaults — mirror the method side
+/// here (the empty path already reads back as `/` through the surface).
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_standalone_new(opts_f64: f64) -> Handle {
+    let handle = request_common(opts_f64, 0, "http");
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if req.method.is_empty() {
+            req.method = "GET".to_string();
+        }
+    });
+    handle
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_https_request(opts_f64: f64, callback_i64: i64) -> Handle {
     request_common(opts_f64, callback_i64, "https")
