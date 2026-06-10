@@ -77,6 +77,18 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1"
 idna = "1"
 url = "2"
+# #4911: real node:dns resolve*/reverse. hickory-proto provides DNS wire-format
+# encode/decode + record types; we drive it synchronously over a blocking
+# std::net::UdpSocket (TCP fallback on truncation), so — unlike hickory-resolver
+# — it pulls NO tokio into the core runtime, matching net.rs's blocking-I/O
+# style. resolv-conf reads the system nameserver list from /etc/resolv.conf.
+hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
+resolv-conf = "0.7"
+# #4911: real node:dgram UDP sockets. std::net::UdpSocket covers bind/send/recv
+# + the common multicast/broadcast/TTL options; socket2 borrows the same fd
+# (SockRef) for the few std lacks — set_multicast_if and source-specific
+# membership — so those are real rather than silent no-ops.
+socket2 = "0.6"
 # Issue #62: mimalloc replaces the system allocator for gc_malloc/arena/etc.
 # macOS `malloc` is ~25-40ns/alloc; mimalloc's per-thread free-list is ~5-10ns.
 # Set as #[global_allocator] in lib.rs, so it covers Rust heap allocations in

@@ -513,7 +513,24 @@ pub extern "C" fn js_promise_new_with_executor(
     // always boxed them). test262 `resolve-function-*` / `reject-function-*`.
     let resolve_f64: f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
     let reject_f64: f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
-    js_closure_call2(executor, resolve_f64, reject_f64);
+    // 27.2.3.1: a non-callable executor throws a TypeError SYNCHRONOUSLY at
+    // step 2 (before/instead of being run) — that throw must propagate out of
+    // `new Promise(...)`, not be converted into a rejection. Only a genuinely
+    // callable executor's abrupt completion (step 10) is caught and rejected.
+    if crate::closure::is_closure_ptr(executor as usize) {
+        // Callable executor: catch a throw from its body and reject the promise
+        // with the thrown value via the resolving `reject` function (so the
+        // shared [[AlreadyResolved]] guard makes a throw AFTER a resolve/reject a
+        // no-op). test262 reject-via-abrupt / exception-after-resolve-in-executor.
+        if let Err(reason) =
+            combinator_catch_js(|| js_closure_call2(executor, resolve_f64, reject_f64))
+        {
+            crate::closure::js_closure_call1(reject_closure, reason);
+        }
+    } else {
+        // Non-callable: preserve the prior synchronous TypeError (uncaught).
+        js_closure_call2(executor, resolve_f64, reject_f64);
+    }
 
     promise
 }
@@ -747,7 +764,7 @@ fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_action: f64) 
     crate::event_pump::js_notify_main_thread();
 }
 
-fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
+pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
     if promise.is_null() {
         return;
     }
@@ -1270,8 +1287,19 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
 /// its eventual state. Returns the wrapper promise, or — when `then` is absent
 /// or not callable — the original `value` unchanged (resolve-plain).
 fn assimilate_via_then_property(value: f64) -> f64 {
-    let then_val = unsafe {
+    // `Get(value, "then")` (27.2.1.3.2 step 8). A throwing getter is an abrupt
+    // completion → resolve-with-thenable rejects the wrapper promise with the
+    // thrown value (step 9), rather than letting the exception unwind out of the
+    // resolve path. Return that rejected wrapper so callers chain it.
+    let then_val = match combinator_catch_js(|| unsafe {
         crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
+    }) {
+        Ok(v) => v,
+        Err(reason) => {
+            let p = js_promise_new();
+            js_promise_reject(p, reason);
+            return crate::value::js_nanbox_pointer(p as i64);
+        }
     };
     if callable_closure_value(then_val).is_none() {
         return value;

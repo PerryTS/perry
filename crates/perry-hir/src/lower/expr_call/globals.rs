@@ -349,11 +349,13 @@ pub(super) fn try_global_builtins(
                                                             &*kv.value
                                                         {
                                                             for hprop in &headers_ast.props {
-                                                                if let ast::PropOrSpread::Prop(hprop) =
-                                                                    hprop
+                                                                if let ast::PropOrSpread::Prop(
+                                                                    hprop,
+                                                                ) = hprop
                                                                 {
-                                                                    if let ast::Prop::KeyValue(hkv) =
-                                                                        hprop.as_ref()
+                                                                    if let ast::Prop::KeyValue(
+                                                                        hkv,
+                                                                    ) = hprop.as_ref()
                                                                     {
                                                                         let hkey = match &hkv.key {
                                                                             ast::PropName::Ident(

@@ -886,6 +886,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let preserve_class_ref_bits = index_object_is_class_or_proto_ref(ctx, object.as_ref());
             let obj_box = lower_expr(ctx, object)?;
             let idx_box = lower_expr(ctx, index)?;
+            // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
+            // a TypeError per spec, NOT silently return undefined. The dotted
+            // PropertyGet path already guards nullish receivers; the computed
+            // form fell through to the by-name runtime helper (masked handle
+            // `2`/`1`) which returned undefined. The check fires here — after
+            // both the base and the property-key *expression* are evaluated but
+            // before ToPropertyKey (key coercion / `toString`) — matching the
+            // ECMAScript evaluation order (test262 compound-assignment S11.13.2_A7.*,
+            // prefix/postfix increment A6). A non-nullish receiver passes through
+            // unchanged. (#4918 non-class language remnant.)
+            let obj_box =
+                ctx.block()
+                    .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
             let blk = ctx.block();
             let obj_bits = blk.bitcast_double_to_i64(&obj_box);
             let obj_handle = classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
