@@ -566,6 +566,7 @@ unsafe fn build_data_descriptor(
     let packed = b"value\0writable\0enumerable\0configurable";
     let desc = js_object_alloc_with_shape(0x0D_A6_50, 4, packed.as_ptr(), packed.len() as u32);
     let fields = (desc as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
+    // GC_STORE_AUDIT(BARRIERED): fresh descriptor fields are replayed by the rebuild below.
     *fields = value;
     *fields.add(1) = bool_value(writable);
     *fields.add(2) = bool_value(enumerable);
@@ -583,6 +584,7 @@ unsafe fn build_accessor_descriptor(
     let packed = b"get\0set\0enumerable\0configurable";
     let desc = js_object_alloc_with_shape(0x0D_A6_51, 4, packed.as_ptr(), packed.len() as u32);
     let fields = (desc as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
+    // GC_STORE_AUDIT(BARRIERED): fresh descriptor fields are replayed by the rebuild below.
     *fields = get;
     *fields.add(1) = set;
     *fields.add(2) = bool_value(enumerable);

@@ -1274,6 +1274,7 @@ pub unsafe fn alloc_lazy_array(
     }
     let hdr = hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>();
     let tape_dst = (hdr as *mut u8).add(std::mem::size_of::<LazyArrayHeader>()) as *mut TapeEntry;
+    // GC_STORE_AUDIT(POINTER_FREE): TapeEntry is offset/kind/link numerics, no heap edges.
     std::ptr::copy_nonoverlapping(tape_entries.as_ptr(), tape_dst, tape_entries.len());
     hdr_handle.get_raw_mut_ptr::<LazyArrayHeader>()
 }
@@ -1557,6 +1558,7 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
                 .add(std::mem::size_of::<crate::array::ArrayHeader>())
                 as *mut u64;
             let value_bits = value_handle.get_nanbox_u64();
+            // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
             *elements_ptr.add(i) = value_bits;
             (*arr_ptr).length = (i + 1) as u32;
             crate::array::note_array_slot(arr_ptr, i, value_bits);

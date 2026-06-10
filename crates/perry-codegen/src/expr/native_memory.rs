@@ -336,6 +336,7 @@ fn emit_u32_fill_loop(ctx: &mut FnCtx<'_>, data_ptr: &str, len_i32: &str, value_
 
     ctx.current_block = body_idx;
     let elem_ptr = ctx.block().gep(I32, data_ptr, &[(I64, &i)]);
+    // GC_STORE_AUDIT(POINTER_FREE): i32 fill of a native-memory buffer, never a heap edge.
     ctx.block().store(I32, value_i32, &elem_ptr);
     let next = ctx.block().add(I64, &i, "1");
     ctx.block().store(I64, &next, &index_slot);

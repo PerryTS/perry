@@ -74,6 +74,16 @@ jobs:
       - name: File size limit
         run: ./scripts/check_file_size.sh
 
+      # GC write-barrier store-site inventory: every raw heap-slot store in
+      # perry-codegen / perry-runtime / perry-stdlib must be barriered or
+      # carry a justified GC_STORE_AUDIT(...) marker (or a justified entry
+      # in scripts/gc_store_site_allowlist.txt). Catches new unbarriered
+      # old->young store paths before they become nondeterministic segfaults.
+      - name: GC store-site inventory
+        run: |
+          python3 scripts/gc_store_site_inventory.py --self-test
+          python3 scripts/gc_store_site_inventory.py
+
   # ---------------------------------------------------------------------------
   # API docs drift gate (#465)
   #

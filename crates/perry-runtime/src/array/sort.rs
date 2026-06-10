@@ -234,6 +234,7 @@ pub extern "C" fn js_array_sort_with_comparator(
                         let mut l = left;
                         let mut r = mid;
                         let mut k = left;
+                        // GC_STORE_AUDIT(STACK): merge writes go to the `defined`/`buf` Vec temporaries.
                         while l < mid && r < right {
                             let cmp = cmp_with(comparator, direct_call, *src.add(l), *src.add(r));
                             if cmp <= 0.0 {
@@ -245,11 +246,13 @@ pub extern "C" fn js_array_sort_with_comparator(
                             }
                             k += 1;
                         }
+                        // GC_STORE_AUDIT(STACK): tail copies also target the Vec temporaries.
                         while l < mid {
                             *dst.add(k) = *src.add(l);
                             l += 1;
                             k += 1;
                         }
+                        // GC_STORE_AUDIT(STACK): right-tail copy targets the Vec temporaries.
                         while r < right {
                             *dst.add(k) = *src.add(r);
                             r += 1;
@@ -262,20 +265,25 @@ pub extern "C" fn js_array_sort_with_comparator(
                 }
                 // Make sure the sorted run lives back in `defined`.
                 if src != defined.as_mut_ptr() {
+                    // GC_STORE_AUDIT(STACK): copy between the two Vec temporaries.
                     ptr::copy_nonoverlapping(src, defined.as_mut_ptr(), n);
                 }
             }
             // Write back: sorted defined values, then `undefined` ×N, then
             // holes ×N — restoring the array's exotic sparseness.
             let mut idx = 0usize;
+            // GC_STORE_AUDIT(BARRIERED): write-back is included in the rebuild below.
             for &v in &defined {
                 *elements_ptr.add(idx) = v;
                 idx += 1;
             }
+            // GC_STORE_AUDIT(POINTER_FREE): undefined/hole suffix has no child pointer;
+            // covered by the rebuild below anyway.
             for _ in 0..undef_count {
                 *elements_ptr.add(idx) = f64::from_bits(crate::value::TAG_UNDEFINED);
                 idx += 1;
             }
+            // GC_STORE_AUDIT(POINTER_FREE): hole suffix has no child pointer.
             for _ in 0..hole_count {
                 *elements_ptr.add(idx) = f64::from_bits(crate::value::TAG_HOLE);
                 idx += 1;

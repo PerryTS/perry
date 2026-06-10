@@ -1,0 +1,12 @@
+# GC store-site inventory allowlist.
+#
+# Format: path-prefix | line-substring-or-* | justification
+# Matched findings are suppressed. Every entry MUST have a justification;
+# malformed lines fail the run (exit 2). Prefer inline GC_STORE_AUDIT(...)
+# markers next to the store — use this file only for whole-module policy
+# decisions where per-line markers would be churn.
+#
+# Audit classes for inline markers: BARRIERED, EXTERNAL_BARRIERED, ROOT,
+# INIT, POINTER_FREE, STACK. See scripts/gc_store_site_inventory.py.
+
+crates/perry-runtime/src/gc/ | * | collector-internal: the barrier implementation and GC unit tests perform raw stores by design (helpers in gc/barrier.rs ARE the barriers; gc/tests/ deliberately writes unbarriered slots to exercise detection)

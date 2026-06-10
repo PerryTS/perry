@@ -721,6 +721,7 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                     for i in 0..len as usize {
                         let elem = *elements.add(i);
                         let cloned = js_structured_clone(elem);
+                        // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
                         *elements.add(i) = cloned;
                         crate::array::note_array_slot(new_arr, i, cloned.to_bits());
                     }
@@ -751,7 +752,11 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                             as *mut f64;
                         for i in 0..field_count as usize {
                             let field = *fields.add(i);
-                            *fields.add(i) = js_structured_clone(field);
+                            let cloned = js_structured_clone(field);
+                            // GC_STORE_AUDIT(BARRIERED): cloned field uses the shared object slot-store helper.
+                            // The recursive clone above can run minor GCs that tenure `cloned_obj`
+                            // mid-loop, so this store must be barriered like the array branch.
+                            crate::object::store_object_field_slot(cloned_obj, i, cloned.to_bits());
                         }
                     }
                     // NaN-box with POINTER_TAG

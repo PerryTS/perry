@@ -201,6 +201,7 @@ mod sso_tests_1781 {
             // (b) aligned real object, but its keys_array points at misaligned
             // garbage — the exact Express crash shape.
             let obj = super::super::alloc::js_object_alloc(0, 4);
+            // GC_STORE_AUDIT(POINTER_FREE): deliberately-misaligned unit-test sentinel, not a heap edge.
             (*obj).keys_array = 0x2800_0203usize as *mut _;
             assert!(
                 !own_key_present(obj, key),

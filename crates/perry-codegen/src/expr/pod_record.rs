@@ -290,6 +290,7 @@ pub(crate) fn store_pod_field_native(
     let ptr = pod_field_ptr(ctx, data_slot, field.offset);
     let llvm_ty =
         llvm_type_for_native_rep(&field.native_rep).expect("pod field reps have scalar LLVM types");
+    // GC_STORE_AUDIT(POINTER_FREE): POD record fields are native scalars, never heap edges.
     ctx.block()
         .store_aligned(llvm_ty, &lowered.value, &ptr, field.alignment);
     ctx.record_lowered_value(

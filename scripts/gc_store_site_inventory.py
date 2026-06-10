@@ -34,7 +34,7 @@ MARKER_RE = re.compile(
 )
 
 CODEGEN_DEST_RE = re.compile(
-    r"\.store\([^,]+,\s*[^,]+,\s*&?(?P<dest>[A-Za-z_][A-Za-z0-9_]*)\)"
+    r"\.store(?:_aligned|_volatile)?\([^,]+,\s*[^,]+,\s*&?(?P<dest>[A-Za-z_][A-Za-z0-9_]*)\s*[,)]"
 )
 CODEGEN_EMIT_RAW_STORE_RE = re.compile(r'emit_raw\(format!\("store\b')
 
@@ -67,23 +67,17 @@ RUST_ATOMIC_COMPARE_EXCHANGE_RE = re.compile(
 )
 
 
+# The whole runtime is mutator code that can store JSValues into GC-managed
+# memory; scan all of it so new modules can't land unaudited. The collector
+# itself (crates/perry-runtime/src/gc/) legitimately performs raw stores —
+# it is excluded via the allowlist file with a justification.
 SCAN_PATHS = [
     Path("crates/perry-codegen/src"),
-    Path("crates/perry-runtime/src/array"),
-    Path("crates/perry-runtime/src/object"),
-    Path("crates/perry-runtime/src/closure"),
-    Path("crates/perry-runtime/src/json"),
-    Path("crates/perry-runtime/src/regex.rs"),
-    Path("crates/perry-runtime/src/plugin.rs"),
-    Path("crates/perry-runtime/src/thread.rs"),
-    Path("crates/perry-runtime/src/promise"),
-    Path("crates/perry-runtime/src/map.rs"),
-    Path("crates/perry-runtime/src/set.rs"),
-    Path("crates/perry-runtime/src/string"),
-    Path("crates/perry-runtime/src/typedarray.rs"),
-    Path("crates/perry-runtime/src/buffer"),
+    Path("crates/perry-runtime/src"),
     Path("crates/perry-stdlib/src"),
 ]
+
+DEFAULT_ALLOWLIST = REPO_ROOT / "scripts" / "gc_store_site_allowlist.txt"
 
 
 CODEGEN_HEAP_DEST_HINTS = (
@@ -209,6 +203,66 @@ class Finding:
         return f"{rel}:{self.line_no}: {self.reason}: {self.text.strip()}"
 
 
+@dataclass
+class AllowlistEntry:
+    path_prefix: str
+    line_substring: str  # "*" matches any line
+    justification: str
+    source_line: int
+    hits: int = 0
+
+    def matches(self, finding: Finding) -> bool:
+        rel = repo_rel(finding.path)
+        if not rel.startswith(self.path_prefix):
+            return False
+        return self.line_substring == "*" or self.line_substring in finding.text
+
+
+def load_allowlist(path: Path) -> list[AllowlistEntry]:
+    """Parse `path-prefix | line-substring-or-* | justification` lines.
+
+    Every entry MUST carry a non-empty justification; a malformed line is a
+    hard error so the allowlist can't silently rot.
+    """
+
+    if not path.is_file():
+        return []
+    entries: list[AllowlistEntry] = []
+    errors: list[str] = []
+    for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split("|", 2)]
+        if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2]:
+            errors.append(
+                f"{path.name}:{line_no}: expected "
+                "'path-prefix | line-substring-or-* | justification', got: " + raw
+            )
+            continue
+        entries.append(AllowlistEntry(parts[0], parts[1], parts[2], line_no))
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        raise SystemExit(2)
+    return entries
+
+
+def apply_allowlist(
+    findings: list[Finding], entries: list[AllowlistEntry]
+) -> tuple[list[Finding], int]:
+    kept: list[Finding] = []
+    suppressed = 0
+    for finding in findings:
+        entry = next((e for e in entries if e.matches(finding)), None)
+        if entry is None:
+            kept.append(finding)
+        else:
+            entry.hits += 1
+            suppressed += 1
+    return kept, suppressed
+
+
 def iter_scan_roots() -> Iterable[Path]:
     for rel in SCAN_PATHS:
         root = REPO_ROOT / rel
@@ -239,6 +293,16 @@ def is_runtime_module(path: Path, module: str) -> bool:
     flat = f"crates/perry-runtime/src/{module}.rs"
     directory = f"crates/perry-runtime/src/{module}/"
     return rel == flat or rel.startswith(directory)
+
+
+def is_pointer_free_module(path: Path) -> bool:
+    """Modules whose element storage is raw bytes/numerics, never JSValues."""
+
+    return (
+        is_runtime_module(path, "buffer")
+        or is_runtime_module(path, "typedarray")
+        or is_runtime_module(path, "typedarray_view")
+    )
 
 
 def is_comment_or_blank(line: str) -> bool:
@@ -302,7 +366,7 @@ def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
 
     deref = RUST_DEREF_ASSIGN_RE.search(line)
     if deref and any(hint in deref.group("target") for hint in RUST_DEREF_RISK_TARGETS):
-        if is_runtime_module(path, "buffer") or path.name == "typedarray.rs":
+        if is_pointer_free_module(path):
             return None
         return "raw direct slot assignment"
 
@@ -317,11 +381,7 @@ def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
     if RUST_COPY_RE.search(line):
         if any(hint in window for hint in STACK_COPY_HINTS):
             return "raw stack/temporary argument copy"
-        if (
-            is_runtime_module(path, "string")
-            or is_runtime_module(path, "buffer")
-            or path.name == "typedarray.rs"
-        ):
+        if is_runtime_module(path, "string") or is_pointer_free_module(path):
             return None
         if any(hint in window for hint in RUST_POINTER_FREE_COPY_HINTS):
             return None
@@ -547,10 +607,44 @@ def run_self_tests() -> int:
         "raw Promise heap pointer field store",
     )
 
+    # typedarray was split from typedarray.rs into typedarray/ — the
+    # pointer-free carve-out must follow both shapes (regression guard).
+    check(
+        "crates/perry-runtime/src/typedarray/mod.rs",
+        ["*dst.add(i) = load_at(ta, i);"],
+        None,
+    )
+    check(
+        "crates/perry-runtime/src/typedarray_view.rs",
+        ["ptr::copy_nonoverlapping(src_data, dst, (count as i64 * bpe) as usize);"],
+        None,
+    )
+
+    # store_aligned/store_volatile are store emitters too.
+    if not is_risky_codegen_store('.store_aligned(I64, &val, &field_ptr, 8);'):
+        failures.append("codegen: store_aligned with heap dest not flagged")
+    if not is_risky_codegen_store('.store(DOUBLE, &val, &elem_ptr)'):
+        failures.append("codegen: plain store with heap dest not flagged")
+
+    entry = AllowlistEntry("crates/perry-runtime/src/gc/", "*", "test", 1)
+    fake = Finding(
+        REPO_ROOT / "crates/perry-runtime/src/gc/tests/barrier.rs", 1, "*fields = x;", "r"
+    )
+    other = Finding(
+        REPO_ROOT / "crates/perry-runtime/src/array/generic.rs", 1, "*fields = x;", "r"
+    )
+    if not entry.matches(fake):
+        failures.append("allowlist: gc/ prefix entry should match gc/tests finding")
+    if entry.matches(other):
+        failures.append("allowlist: gc/ prefix entry must not match array finding")
+
     scanned_paths = {repo_rel(path) for path in iter_scan_roots()}
     for expected_path in (
         "crates/perry-runtime/src/array/alloc.rs",
         "crates/perry-runtime/src/buffer/from.rs",
+        "crates/perry-runtime/src/builtins/globals.rs",
+        "crates/perry-runtime/src/json_tape.rs",
+        "crates/perry-runtime/src/temporal/mod.rs",
         "crates/perry-codegen/src/lower_call/new.rs",
     ):
         if expected_path not in scanned_paths:
@@ -619,13 +713,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--gate", action="store_true")
+    parser.add_argument("--allowlist", type=Path, default=DEFAULT_ALLOWLIST)
     args = parser.parse_args(argv)
     if args.self_test:
         return run_self_tests()
 
+    entries = load_allowlist(args.allowlist)
     findings, files_scanned, marker_count = collect_inventory()
+    findings, suppressed = apply_allowlist(findings, entries)
     if args.json_out:
         write_inventory_json(args.json_out, findings, files_scanned, marker_count)
+
+    for entry in entries:
+        if entry.hits == 0:
+            print(
+                f"warning: unused allowlist entry "
+                f"{args.allowlist.name}:{entry.source_line} ({entry.path_prefix})"
+            )
 
     if findings:
         print("GC store-site inventory failed; add nearby GC_STORE_AUDIT markers:")
@@ -635,10 +739,14 @@ def main(argv: list[str] | None = None) -> int:
             "\nAccepted marker form: "
             "// GC_STORE_AUDIT(BARRIERED): reason, with class one of "
             + ", ".join(sorted(AUDIT_CLASSES))
+            + "\nOr add a justified entry to scripts/gc_store_site_allowlist.txt."
         )
         return 1
 
-    print(f"GC store-site inventory passed ({files_scanned} files scanned).")
+    print(
+        f"GC store-site inventory passed ({files_scanned} files scanned, "
+        f"{marker_count} audited sites, {suppressed} allowlisted)."
+    )
     return 0
 
 

@@ -157,6 +157,7 @@ pub fn alloc_temporal_cell(value: TemporalValue) -> f64 {
         ) as *mut TemporalCell;
         // `arena_alloc_gc` hands back uninitialized memory; `write` moves the
         // box pointer in without dropping the (garbage) prior contents.
+        // GC_STORE_AUDIT(INIT): fresh cell; the Box payload is malloc-owned, not a GC edge.
         std::ptr::write(ptr, TemporalCell { value: boxed });
         f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
     }

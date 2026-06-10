@@ -446,6 +446,7 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
         let v = al_get(recv, k);
         let mapped = js_closure_call3(cb, v, k as f64, recv);
         unsafe {
+            // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
             ptr::write(elems.add(k as usize), mapped);
             note_array_slot(result, k as usize, mapped.to_bits());
         }
@@ -813,6 +814,7 @@ fn materialize(recv: f64) -> *mut ArrayHeader {
         }
         let v = al_get(recv, k);
         unsafe {
+            // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
             ptr::write(elems.add(k as usize), v);
             note_array_slot(arr, k as usize, v.to_bits());
         }
@@ -1127,6 +1129,7 @@ fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
         if al_has(recv, from) {
             let v = al_get(recv, from);
             unsafe {
+                // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
                 ptr::write(removed_elems.add(k as usize), v);
                 note_array_slot(removed, k as usize, v.to_bits());
             }
