@@ -153,7 +153,16 @@ fn proxy_arg_is_object(value: f64) -> bool {
     // POINTER_TAG heap value (object / function / array).
     if top == 0x7FFD {
         let ptr = (bits & POINTER_MASK) as usize;
-        return ptr >= 0x1000;
+        if ptr < 0x1000 {
+            return false;
+        }
+        // A Symbol is a POINTER_TAG value too (registered side-table), but it
+        // is a primitive, not an object — `new Proxy(Symbol(), {})` and
+        // `new Proxy({}, Symbol())` must throw TypeError.
+        if crate::symbol::is_registered_symbol(ptr) {
+            return false;
+        }
+        return true;
     }
     // Module-level raw-I64 object/array pointers (top16 == 0).
     if top == 0 && bits > 0x10000 {

@@ -276,6 +276,26 @@ pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
 
+    // A TypedArray is an exotic object whose header is NOT an ObjectHeader;
+    // the `valueOf`/`toString` field lookups below would bit-cast garbage
+    // (heap-dependent: sometimes a fake "method" → spurious TypeError, e.g.
+    // `"" + new Float64Array([1])`). Its ToPrimitive resolves to
+    // %TypedArray%.prototype.toString (= `join(",")`); detect via the
+    // registry (no deref) and join. `Symbol.toPrimitive` was already
+    // consulted by the caller (`js_to_primitive`).
+    if (value.to_bits() & 0xFFFF_0000_0000_0000) == POINTER_TAG {
+        let addr = (value.to_bits() & POINTER_MASK) as usize;
+        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            let joined = crate::typedarray::js_typed_array_join(
+                addr as *const crate::typedarray::TypedArrayHeader,
+                std::ptr::null(),
+            );
+            return OrdinaryToPrimitiveOutcome::Primitive(crate::value::js_nanbox_string(
+                joined as i64,
+            ));
+        }
+    }
+
     match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
         MethodOutcome::Primitive(p) => return OrdinaryToPrimitiveOutcome::Primitive(p),
         MethodOutcome::NonPrimitive => {}
@@ -614,6 +634,20 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 return crate::buffer::js_buffer_to_string(
                     ptr as *const crate::buffer::BufferHeader,
                     0,
+                );
+            }
+            // A TypedArray stringifies via %TypedArray%.prototype.toString
+            // (= `Array.prototype.join(",")`), not "[object Object]". Detected
+            // via the registry (a by-value lookup, no deref) before any
+            // GC-header probe — a TypedArrayHeader is NOT an ObjectHeader, so
+            // the ordinary toString/valueOf field path below would bit-cast
+            // garbage. Covers `String(ta)`, `` `${ta}` ``, and the `+` add
+            // fallback. (`Symbol.toPrimitive` overrides were already consulted
+            // above via `js_to_primitive`.)
+            if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+                return crate::typedarray::js_typed_array_join(
+                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    std::ptr::null(),
                 );
             }
             // #2089: a Date is a NaN-boxed `DateCell` pointer. `String(date)`,

@@ -156,6 +156,12 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
     // it can't leak across top-level calls.
     if prior_depth == 0 {
         super::SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+        // A circular-ref `TypeError` longjmps past the `STRINGIFY_STACK`
+        // pops (js_throw doesn't unwind Rust), so a caught throw can leave
+        // stale ancestor pointers behind. Clear at the outermost entry so they
+        // can't trigger a spurious "circular structure" on the next top-level
+        // call (or, worse, mask a real cycle by colliding with a reused addr).
+        super::STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())

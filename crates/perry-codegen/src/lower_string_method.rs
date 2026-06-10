@@ -110,17 +110,24 @@ pub(crate) fn lower_string_method(
 
     match property {
         "indexOf" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.indexOf expects 1 or 2 args, got {}",
+                    "perry-codegen: String.indexOf expects 0, 1 or 2 args, got {}",
                     args.len()
                 );
             }
-            let needle_box = lower_expr(ctx, &args[0])?;
+            // No `searchString` → `undefined`, which `js_string_coerce`
+            // stringifies to "undefined" (`"".indexOf()` === -1).
+            let needle_box = if args.is_empty() {
+                ctx.block()
+                    .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             // An object `searchString` must be `ToString`-coerced (running its
             // user `toString`/`valueOf`) BEFORE `ToNumber(position)`, per
             // ECMA-262 §22.1.3.8. A statically string-typed arg skips this.
-            let needle_is_str = is_string_expr(ctx, &args[0]);
+            let needle_is_str = !args.is_empty() && is_string_expr(ctx, &args[0]);
             // Optional fromIndex.
             let from_idx_double = if args.len() == 2 {
                 Some(lower_expr(ctx, &args[1])?)
@@ -213,9 +220,11 @@ pub(crate) fn lower_string_method(
         }
         "split" => {
             // Issue #567: accept the optional 2nd `limit: number` arg.
-            if args.is_empty() || args.len() > 2 {
+            // `str.split()` with no args is valid: an `undefined` separator
+            // yields `[str]` (handled by `js_string_split_value`).
+            if args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.split expects 1 or 2 args (delimiter[, limit]), got {}",
+                    "perry-codegen: String.split expects 0, 1, or 2 args (delimiter[, limit]), got {}",
                     args.len()
                 );
             }
@@ -227,7 +236,11 @@ pub(crate) fn lower_string_method(
             // `unbox_str_handle` of an object/undefined separator would
             // bit-cast garbage; a raw `fptosi` of a boxed limit skips its
             // `valueOf`.
-            let delim_box = lower_expr(ctx, &args[0])?;
+            let delim_box = if args.is_empty() {
+                None
+            } else {
+                Some(lower_expr(ctx, &args[0])?)
+            };
             let limit_box = if args.len() == 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
@@ -235,6 +248,12 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
+            // No separator → pass `undefined`, which `js_string_split_value`
+            // resolves to `[S]`.
+            let delim_box = match delim_box {
+                Some(v) => v,
+                None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
+            };
             let limit_box = match limit_box {
                 Some(v) => v,
                 None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
@@ -564,17 +583,24 @@ pub(crate) fn lower_string_method(
             ))
         }
         "lastIndexOf" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
-                    "perry-codegen: String.lastIndexOf expects 1 or 2 args, got {}",
+                    "perry-codegen: String.lastIndexOf expects 0, 1 or 2 args, got {}",
                     args.len()
                 );
             }
-            let needle_box = lower_expr(ctx, &args[0])?;
+            // No `searchString` → `undefined` → "undefined"
+            // (`"".lastIndexOf()` === -1).
+            let needle_box = if args.is_empty() {
+                ctx.block()
+                    .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             // `ToString(searchString)` runs the arg's user `toString`/`valueOf`
             // (ECMA-262 §22.1.3.9) before `ToNumber(position)`; static strings
             // skip the coercion.
-            let needle_is_str = is_string_expr(ctx, &args[0]);
+            let needle_is_str = !args.is_empty() && is_string_expr(ctx, &args[0]);
             // Optional `position` (2nd arg). Without it, use the plain
             // last-index-of (search to the end); with it, the position-aware
             // variant. Mirrors the `indexOf` arm.
@@ -685,13 +711,23 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_string_inline(blk, &result))
         }
         "localeCompare" => {
-            if args.is_empty() || args.len() > 3 {
+            if args.len() > 3 {
                 bail!(
-                    "perry-codegen: String.localeCompare expects 1-3 args, got {}",
+                    "perry-codegen: String.localeCompare expects 0-3 args, got {}",
                     args.len()
                 );
             }
-            let other_box = lower_expr(ctx, &args[0])?;
+            // A missing/undefined `that` argument coerces to the string
+            // "undefined" (ECMA-262 §22.1.3.10: `ToString(that)`), so
+            // `s.localeCompare()` === `s.localeCompare(undefined)` ===
+            // `s.localeCompare("undefined")`.
+            let other_is_str = !args.is_empty() && is_string_expr(ctx, &args[0]);
+            let other_box = if args.is_empty() {
+                ctx.block()
+                    .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             // `options` is the 3rd arg; `locales` (2nd) is validated for its
             // RangeError side effect (#2781) but collation ordering stays
             // locale-neutral (full ICU deferred). With an options object
@@ -712,7 +748,13 @@ pub(crate) fn lower_string_method(
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let other_handle = unbox_str_handle(blk, &other_box);
+            // A non-string `that` (undefined/number/object) must be
+            // `ToString`-coerced, not bit-cast as a string pointer.
+            let other_handle = if other_is_str {
+                unbox_str_handle(blk, &other_box)
+            } else {
+                blk.call(I64, "js_string_coerce", &[(DOUBLE, &other_box)])
+            };
             // Returns a plain f64 (-1/0/1) — NOT NaN-tagged.
             if let Some(opts) = options_box {
                 Ok(blk.call(

@@ -1587,6 +1587,24 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         buf.push_str("[]");
         return;
     }
+    // Circular-reference detection (ECMA-262 25.5.2 SerializeJSONArray step
+    // 1-2). Unlike objects, the compact array path does NOT bump `depth`, so
+    // an all-array cycle (`a=[]; a.push(a)`) would otherwise recurse until the
+    // native stack overflows (crash, no output). Track the open-array pointers
+    // in `STRINGIFY_STACK` and throw a `TypeError` on revisit. The stack is
+    // cleared at the outermost `js_json_stringify` entry, so a `longjmp` out of
+    // this throw (which skips the pops below) cannot leak across top-level
+    // calls. A sibling array reused in two positions is NOT a cycle: each
+    // position pushes-then-pops, so the second visit sees an empty-of-it stack.
+    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(arr as usize))) {
+        let msg = "Converting circular structure to JSON";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+        crate::exception::js_throw(f64::from_bits(
+            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+        ));
+    }
+    STRINGIFY_STACK.with(|s| s.borrow_mut().push(arr as usize));
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
 
@@ -1639,6 +1657,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             }
         }
         buf.push(']');
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
         return;
     }
 
@@ -1754,6 +1773,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         }
     }
     buf.push(']');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
 #[inline]
