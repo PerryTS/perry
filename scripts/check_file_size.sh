@@ -312,6 +312,13 @@ crates/perry-stdlib/src/events.rs
 crates/perry-codegen/src/type_analysis.rs
 crates/perry-codegen/src/native_value/verify.rs
 crates/perry-codegen/tests/native_proof_regressions.rs
+# auto-optimize libs driver. Crossed the 2000-line gate after the
+# fresh-archive-reuse work (#4928) added the build-stamp + freshness probe
+# (`auto_optimized_archives_are_fresh` / `auto_optimized_build_stamp` /
+# `auto_optimized_cache_key`) and their regression tests next to the existing
+# `build_optimized_libs` driver + well-known resolution. Splitting the
+# freshness/well-known helpers into a sibling module is tracked under #1435.
+crates/perry/src/commands/compile/optimized_libs.rs
 EOF
 )
 
