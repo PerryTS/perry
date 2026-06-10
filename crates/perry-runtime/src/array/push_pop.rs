@@ -12,6 +12,36 @@ fn throw_frozen_array_mutation() -> ! {
     crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
 }
 
+/// `push`/`pop`/`shift`/`unshift` always perform `Set(O, "length", …, true)`
+/// (ECMA-262 §23.1.3.*), so an array whose `length` was made non-writable via
+/// `Object.defineProperty(arr, "length", { writable: false })` makes them throw
+/// a **TypeError** — even when the call would otherwise be a no-op (empty array,
+/// zero-arg). A *frozen* array is caught by `array_is_frozen` first (same throw);
+/// this covers the non-writable-`length`-only case. (test262
+/// Array.prototype.{push,pop,shift,unshift}/set-length-*-non-writable.)
+#[inline]
+fn array_length_is_non_writable(arr: *const ArrayHeader) -> bool {
+    let flags = array_object_flags(arr);
+    flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        && crate::object::get_property_attrs(arr as usize, "length")
+            .map(|a| !a.writable())
+            .unwrap_or(false)
+}
+
+#[cold]
+fn throw_non_writable_length() -> ! {
+    crate::collection_iter::throw_type_error(
+        "Cannot assign to read only property 'length' of object '[object Array]'",
+    );
+}
+
+#[inline]
+fn guard_writable_length(arr: *const ArrayHeader) {
+    if array_length_is_non_writable(arr) {
+        throw_non_writable_length();
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mut ArrayHeader {
     if arr.is_null() || (arr as usize) < 0x1000 {
@@ -117,6 +147,7 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     if array_is_frozen(arr) {
         throw_frozen_array_mutation();
     }
+    guard_writable_length(arr);
     if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
@@ -156,6 +187,7 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
     if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
+    guard_writable_length(arr);
     unsafe {
         if array_numeric_raw_f64_push_inbounds(arr, value) {
             return arr;
@@ -252,6 +284,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     if array_is_frozen(arr) {
         throw_frozen_array_mutation();
     }
+    guard_writable_length(arr);
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -395,6 +428,7 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
     if array_is_frozen(arr) {
         throw_frozen_array_mutation();
     }
+    guard_writable_length(arr);
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -424,6 +458,7 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     if array_is_frozen(arr) {
         throw_frozen_array_mutation();
     }
+    guard_writable_length(arr);
     if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
@@ -476,6 +511,9 @@ pub extern "C" fn js_array_unshift_variadic(
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so a
+    // non-writable `length` throws before the no-op early return.
+    guard_writable_length(arr);
     if count == 0 {
         return arr;
     }

@@ -98,6 +98,7 @@ extern "C" {
     fn js_node_http_im_complete(handle: i64) -> i32;
     fn js_node_http_im_aborted(handle: i64) -> i32;
     fn js_node_http_im_destroyed(handle: i64) -> i32;
+    fn js_node_http_im_add_header_line(handle: i64, field: f64, value: f64, dest: f64);
     fn js_node_http_im_signal(handle: i64) -> f64;
     fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_remote_port(handle: i64) -> f64;
@@ -508,7 +509,17 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
         "__get_trailersDistinct" | "trailersDistinct" => {
             json_string_value_empty_object(js_node_http_im_trailers_distinct_json(handle))
         }
-        "__get_socket" | "socket" | "__get_connection" | "connection" => self_ref,
+        "__get_socket" | "socket" | "__get_connection" | "connection" => {
+            crate::request::incoming_socket_override(handle).unwrap_or(self_ref)
+        }
+        "__set_socket" | "__set_connection" if !args.is_empty() => {
+            crate::request::incoming_socket_assign(handle, args[0]);
+            undef
+        }
+        "_addHeaderLine" if args.len() >= 3 => {
+            js_node_http_im_add_header_line(handle, args[0], args[1], args[2]);
+            undef
+        }
         "__get_signal" | "signal" => js_node_http_im_signal(handle),
         "__get_remoteAddress" | "remoteAddress" => {
             string_ptr_value(js_node_http_im_remote_address(handle))
@@ -595,13 +606,40 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             );
             self_ref
         }
-        "write" if !args.is_empty() => bool_value(js_node_http_res_write(handle, args[0]) != 0),
+        "write" if !args.is_empty() => {
+            // `write(chunk[, encoding][, callback])` — the callback is the
+            // last closure-valued arg (#4904).
+            let cb = args[1..]
+                .iter()
+                .rev()
+                .map(|a| closure_arg(Some(*a)))
+                .find(|c| *c != 0)
+                .unwrap_or(0);
+            bool_value(crate::response::js_node_http_res_write_with_cb(handle, args[0], cb) != 0)
+        }
         "addTrailers" if !args.is_empty() => {
             js_node_http_res_add_trailers(handle, args[0]);
             undef
         }
         "end" => {
-            js_node_http_res_end(handle, args.first().copied().unwrap_or(undef));
+            // `end([chunk][, encoding][, callback])` — `end(cb)` passes the
+            // callback first (#4904).
+            let first = args.first().copied().unwrap_or(undef);
+            let first_cb = closure_arg(Some(first));
+            let (chunk, cb) = if first_cb != 0 {
+                (undef, first_cb)
+            } else {
+                let cb = args
+                    .get(1..)
+                    .unwrap_or(&[])
+                    .iter()
+                    .rev()
+                    .map(|a| closure_arg(Some(*a)))
+                    .find(|c| *c != 0)
+                    .unwrap_or(0);
+                (first, cb)
+            };
+            crate::response::js_node_http_res_end_with_cb(handle, chunk, cb);
             self_ref
         }
         "flushHeaders" => {
@@ -641,6 +679,17 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             undef
         }
         "destroy" => self_ref,
+        "assignSocket" if !args.is_empty() => {
+            crate::response::js_node_http_res_assign_socket(handle, args[0]);
+            undef
+        }
+        "detachSocket" => {
+            crate::response::js_node_http_res_detach_socket(
+                handle,
+                args.first().copied().unwrap_or(undef),
+            );
+            undef
+        }
         "pipe" => undef,
         "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = string_arg(args[0]);
@@ -722,7 +771,8 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "complete" => bool_value(js_node_http_im_complete(handle) != 0),
         "aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
         "destroyed" => bool_value(js_node_http_im_destroyed(handle) != 0),
-        "socket" | "connection" => handle_to_pointer_f64(handle),
+        "socket" | "connection" => crate::request::incoming_socket_override(handle)
+            .unwrap_or_else(|| handle_to_pointer_f64(handle)),
         "signal" => js_node_http_im_signal(handle),
         "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
         "remotePort" => js_node_http_im_remote_port(handle),
@@ -811,6 +861,33 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property_set(
     }
 }
 
+/// Dispatch a property write on a registered server-side `IncomingMessage`
+/// (#4904). Returns 1 when the property was claimed.
+///
+/// # Safety
+/// FFI entry; pointers must be valid for their stated lengths.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property_set(
+    handle: i64,
+    property_ptr: *const u8,
+    property_len: usize,
+    value: f64,
+) -> i32 {
+    let property = method_name(property_ptr, property_len);
+    match property.as_str() {
+        // Node's `connection` accessor writes `this.socket`; both aliases
+        // land on the same slot.
+        "socket" | "connection" => {
+            if crate::request::incoming_socket_assign(handle, value) {
+                1
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
+}
+
 #[inline]
 unsafe fn method_name(ptr: *const u8, len: usize) -> String {
     if ptr.is_null() || len == 0 {
@@ -845,6 +922,18 @@ fn handle_value_or_undefined(handle: i64) -> f64 {
 
 #[inline]
 fn response_socket_value(handle: i64) -> f64 {
+    // #4904: a standalone response's socket is whatever `assignSocket`
+    // installed (undefined reads as Node's pre-assignment `null`).
+    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+        if sr.standalone {
+            let v = sr.standalone_socket;
+            return if JsValue::from_bits(v.to_bits()).is_undefined() {
+                f64::from_bits(TAG_NULL)
+            } else {
+                v
+            };
+        }
+    }
     let req_handle = unsafe { js_node_http_res_req_handle(handle) };
     if req_handle == 0 {
         f64::from_bits(TAG_NULL)
@@ -933,6 +1022,9 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
         "resume" => Some(b"resume"),
         "destroy" => Some(b"destroy"),
         "read" => Some(b"read"),
+        // #4904: internal-by-convention header-merge API, exercised
+        // directly by Node's own tests on standalone IncomingMessages.
+        "_addHeaderLine" => Some(b"_addHeaderLine"),
         _ => None,
     }
 }
@@ -951,6 +1043,9 @@ fn server_response_method_bytes(name: &str) -> Option<&'static [u8]> {
         "write" => Some(b"write"),
         "addTrailers" => Some(b"addTrailers"),
         "end" => Some(b"end"),
+        // #4904: standalone-response wiring.
+        "assignSocket" => Some(b"assignSocket"),
+        "detachSocket" => Some(b"detachSocket"),
         "flushHeaders" => Some(b"flushHeaders"),
         "cork" => Some(b"cork"),
         "uncork" => Some(b"uncork"),

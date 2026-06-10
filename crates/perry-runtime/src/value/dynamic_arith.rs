@@ -344,6 +344,21 @@ pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
     -a
 }
 
+/// Dynamic bitwise NOT: `~BigInt` stays BigInt, otherwise use JS ToInt32.
+#[no_mangle]
+pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
+    let a_val = JSValue::from_bits(a.to_bits());
+    if a_val.is_bigint() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a_handle = scope.root_bigint_ptr(a_val.as_bigint_ptr());
+        let result = crate::bigint::js_bigint_not(
+            a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
+        );
+        return js_nanbox_bigint(result as i64);
+    }
+    (!(a as i64 as i32)) as f64
+}
+
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
@@ -434,6 +449,8 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
 static KEEP_DYNAMIC_POW: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_pow;
 #[used]
 static KEEP_DYNAMIC_USHR: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_ushr;
+#[used]
+static KEEP_DYNAMIC_BITNOT: unsafe extern "C" fn(f64) -> f64 = js_dynamic_bitnot;
 #[used]
 static KEEP_TO_NUMERIC: unsafe extern "C" fn(f64) -> f64 = js_to_numeric;
 #[used]

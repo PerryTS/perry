@@ -714,7 +714,7 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
 
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
 
-        Expr::Binary { op, .. } => match op {
+        Expr::Binary { op, left, right } => match op {
             BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul
@@ -725,8 +725,16 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => Some(Type::Number),
+            | BinaryOp::Shr => {
+                let left_ty = infer_expr_type_from_lookup(left, lookup);
+                let right_ty = infer_expr_type_from_lookup(right, lookup);
+                if matches!(left_ty, Some(Type::BigInt)) || matches!(right_ty, Some(Type::BigInt)) {
+                    Some(Type::BigInt)
+                } else {
+                    Some(Type::Number)
+                }
+            }
+            BinaryOp::UShr => Some(Type::Number),
         },
 
         Expr::Compare { .. } => Some(Type::Boolean),
@@ -734,8 +742,18 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
         Expr::Logical { left, right, .. } => infer_expr_type_from_lookup(left, lookup)
             .or_else(|| infer_expr_type_from_lookup(right, lookup)),
 
-        Expr::Unary { op, .. } => match op {
-            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => Some(Type::Number),
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Neg | UnaryOp::BitNot => {
+                if matches!(
+                    infer_expr_type_from_lookup(operand, lookup),
+                    Some(Type::BigInt)
+                ) {
+                    Some(Type::BigInt)
+                } else {
+                    Some(Type::Number)
+                }
+            }
+            UnaryOp::Pos => Some(Type::Number),
             UnaryOp::Not => Some(Type::Boolean),
         },
 

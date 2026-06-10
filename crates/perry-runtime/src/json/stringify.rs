@@ -428,6 +428,15 @@ pub(crate) fn throw_bigint_serialize() -> ! {
 #[inline]
 pub(crate) unsafe fn is_closure_value(bits: u64) -> bool {
     if let Some(ptr) = extract_pointer(bits) {
+        // #2154 / #4904 — a POINTER_TAG field can be a native *handle id* (a
+        // small integer, e.g. an `http.Agent` stored in an options object),
+        // not a real heap pointer. Reading the CLOSURE_MAGIC tag at offset 12
+        // of such a value segfaults (stringifying `{ agent, lookup: () => {} }`
+        // crashed exactly here). Skip the low-memory guard range, matching
+        // the has-function probe below.
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
+            return false;
+        }
         // Check for ClosureHeader magic at offset 8 (type_tag field)
         let type_tag = *((ptr as *const u8).add(12) as *const u32);
         type_tag == crate::closure::CLOSURE_MAGIC

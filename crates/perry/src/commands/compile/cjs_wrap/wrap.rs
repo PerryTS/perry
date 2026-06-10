@@ -159,7 +159,19 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .map(|(spec, local)| format!("import {} from '{}';", local, spec))
+        .map(|(spec, local)| {
+            // #4904: Node's underscore-prefixed internal http modules are
+            // require-only re-exports of the public `http` surface
+            // (`require('_http_agent').Agent` etc.). Bind the hoisted import
+            // to the public module; the require shim still matches on the
+            // original specifier string.
+            let import_spec = match spec.as_str() {
+                "_http_agent" | "_http_client" | "_http_incoming" | "_http_outgoing"
+                | "_http_server" => "http",
+                other => other,
+            };
+            format!("import {} from '{}';", local, import_spec)
+        })
         .collect::<Vec<_>>()
         .join("\n");
 

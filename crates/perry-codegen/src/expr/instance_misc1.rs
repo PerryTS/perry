@@ -1388,11 +1388,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_get_field_by_name_f64",
                 &[(I64, &obj_handle), (I64, &key_handle)],
             );
-            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-            let new = match op {
-                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                _ => blk.fadd(&old_num, "1.0"),
+            // ToNumeric + Type(old)::add/sub(old, unit): a BigInt field stays a
+            // BigInt (`var x = {y:0n}; ++x.y === 1n`), not the Number `1`. Mirrors
+            // the identifier `Expr::Update` path. #4918 prefix/postfix bigint.
+            let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+            let step_arg = match op {
+                BinaryOp::Sub => "0",
+                _ => "1",
             };
+            let new = blk.call(
+                DOUBLE,
+                "js_numeric_step",
+                &[(DOUBLE, &old_num), (I32, step_arg)],
+            );
             blk.call_void(
                 "js_object_set_field_by_name",
                 &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
@@ -1425,11 +1433,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_dyn_index_get",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
             );
-            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-            let new = match op {
-                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                _ => blk.fadd(&old_num, "1.0"),
+            // ToNumeric + numeric step so a BigInt element stays BigInt
+            // (`var x = [0n]; ++x[0] === 1n`). Mirrors the identifier Update +
+            // PropertyUpdate paths. #4918 prefix/postfix bigint.
+            let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+            let step_arg = match op {
+                BinaryOp::Sub => "0",
+                _ => "1",
             };
+            let new = blk.call(
+                DOUBLE,
+                "js_numeric_step",
+                &[(DOUBLE, &old_num), (I32, step_arg)],
+            );
             blk.call(
                 DOUBLE,
                 "js_dyn_index_set",

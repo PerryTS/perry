@@ -598,6 +598,10 @@ pub(crate) fn lower_module_decl(
                                         | (
                                             "DiffieHellman" | "DiffieHellmanGroup",
                                             Some("crypto" | "node:crypto"),
+                                        )
+                                        | (
+                                            "ClientRequest" | "IncomingMessage" | "ServerResponse",
+                                            Some("http" | "node:http"),
                                         ) => None,
                                         _ => module_name,
                                     };
@@ -661,6 +665,11 @@ pub(crate) fn lower_module_decl(
                                             | (
                                                 "DiffieHellman" | "DiffieHellmanGroup",
                                                 Some("crypto" | "node:crypto"),
+                                            )
+                                            | (
+                                                "ClientRequest" | "IncomingMessage"
+                                                | "ServerResponse",
+                                                Some("http" | "node:http"),
                                             ) => None,
                                             _ => module_name,
                                         };

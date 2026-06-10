@@ -2926,12 +2926,16 @@ pub unsafe extern "C" fn js_native_call_method(
                     "unshift" => {
                         // #2814: zero-arg returns current length (no mutation);
                         // 1+ args insert all items at the front in source order.
+                        // Route the zero-arg case through `js_array_unshift_variadic`
+                        // (count 0) as well, so a non-writable `length` still throws
+                        // the spec TypeError (`Set(O,"length",…)` always runs).
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        if args_len == 0 || args_ptr.is_null() {
-                            return crate::array::js_array_length(arr) as f64;
-                        }
-                        let result =
-                            crate::array::js_array_unshift_variadic(arr, args_ptr, args_len as u32);
+                        let count = if args_ptr.is_null() {
+                            0
+                        } else {
+                            args_len as u32
+                        };
+                        let result = crate::array::js_array_unshift_variadic(arr, args_ptr, count);
                         return crate::array::js_array_length(result) as f64;
                     }
                     // Issue #515 followup: defensive `with` arm for arrays that

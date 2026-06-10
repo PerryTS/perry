@@ -506,12 +506,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
-            if is_http_module && prop_ident.sym.as_ref() == "OutgoingMessage" {
+            // #4904: `new http.ClientRequest(opts)` / `new
+            // http.IncomingMessage(socket)` / `new http.ServerResponse(req)`
+            // join the OutgoingMessage route: NewDynamic over the module
+            // export value, which `js_new_function_construct` forwards to the
+            // stdlib http dispatcher. Instances stay dynamically dispatched
+            // (HANDLE_*_DISPATCH), matching OutgoingMessage.
+            if is_http_module
+                && matches!(
+                    prop_ident.sym.as_ref(),
+                    "OutgoingMessage" | "ClientRequest" | "IncomingMessage" | "ServerResponse"
+                )
+            {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
                     callee: Box::new(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
-                        property: "OutgoingMessage".to_string(),
+                        property: prop_ident.sym.to_string(),
                     }),
                     args,
                 });
@@ -974,16 +985,52 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            if matches!(
-                ctx.lookup_native_module(&class_name),
-                Some(("http", Some("OutgoingMessage")))
-            ) {
+            // #4904: bare-ident construction of the http classes —
+            // `const { ClientRequest } = require('http'); new
+            // ClientRequest(...)` (also IncomingMessage / ServerResponse,
+            // joining the existing OutgoingMessage route).
+            let http_class_export =
+                ctx.lookup_native_module(&class_name)
+                    .and_then(|(module, export)| match (module, export) {
+                        (
+                            "http",
+                            Some(
+                                x @ ("OutgoingMessage" | "ClientRequest" | "IncomingMessage"
+                                | "ServerResponse"),
+                            ),
+                        ) => Some(x.to_string()),
+                        _ => None,
+                    });
+            if let Some(export) = http_class_export {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
                     callee: Box::new(Expr::PropertyGet {
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
-                        property: "OutgoingMessage".to_string(),
+                        property: export,
                     }),
+                    args,
+                });
+            }
+
+            // #4904: bare-ident `new Agent(opts)` where Agent came from
+            // `require('http')` / `require('https')` (named import,
+            // destructure, or member alias). Route to the same
+            // receiver-less NativeMethodCall as the `new http.Agent()`
+            // member form so the dispatch row runs `js_*_agent_new` and the
+            // let-stmt machinery tags the local for Agent method dispatch.
+            let http_agent_module =
+                ctx.lookup_native_module(&class_name)
+                    .and_then(|(module, export)| match (module, export) {
+                        (m @ ("http" | "https"), Some("Agent")) => Some(m.to_string()),
+                        _ => None,
+                    });
+            if let Some(agent_module) = http_agent_module {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NativeMethodCall {
+                    module: agent_module,
+                    class_name: None,
+                    object: None,
+                    method: "Agent".to_string(),
                     args,
                 });
             }

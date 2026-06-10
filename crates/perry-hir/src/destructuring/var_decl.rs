@@ -1837,10 +1837,40 @@ pub(crate) fn lower_var_decl_with_destructuring(
             });
         }
         ast::Pat::Array(_) | ast::Pat::Object(_) => {
-            // #3663: tag destructured `node:stream` constructors as native-module
-            // aliases so subsequent `new Readable(...)` bindings register as
-            // stream instances and their methods route to the real pump.
-            register_destructured_stream_ctors(ctx, decl);
+            // #3663 / #4905: tag destructured builtin-module members
+            // (stream ctors, net factories) as native-module aliases so
+            // call sites route through the static native table. Bindings
+            // returned in `skip_local_bindings` must not also bind a
+            // runtime local — the local (undefined for `net.connect`)
+            // would shadow the alias at call sites; ESM named imports
+            // never create one (exact parity).
+            let skip_local_bindings = register_destructured_stream_ctors(ctx, decl);
+            let filtered_pat;
+            let pattern: &ast::Pat = if skip_local_bindings.is_empty() {
+                &decl.name
+            } else if let ast::Pat::Object(obj) = &decl.name {
+                let mut obj = obj.clone();
+                obj.props.retain(|prop| match prop {
+                    ast::ObjectPatProp::Assign(a) => {
+                        !skip_local_bindings.contains(&a.key.sym.to_string())
+                    }
+                    ast::ObjectPatProp::KeyValue(kv) => match kv.value.as_ref() {
+                        ast::Pat::Ident(b) => !skip_local_bindings.contains(&b.id.sym.to_string()),
+                        _ => true,
+                    },
+                    _ => true,
+                });
+                if obj.props.is_empty() {
+                    // Every binding became a native alias; nothing left to
+                    // bind at runtime (require of a builtin module has no
+                    // observable side effects).
+                    return Ok(result);
+                }
+                filtered_pat = ast::Pat::Object(obj);
+                &filtered_pat
+            } else {
+                &decl.name
+            };
 
             // Delegate to the recursive pattern binding helper so that all
             // destructuring features (nested patterns, defaults, rest, computed
@@ -1865,7 +1895,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         .transpose()?
                         .ok_or_else(|| anyhow!("Destructuring requires an initializer"))?
                 };
-            let stmts = lower_pattern_binding(ctx, &decl.name, init_expr, mutable)?;
+            let stmts = lower_pattern_binding(ctx, pattern, init_expr, mutable)?;
             result.extend(stmts);
         }
         _ => {

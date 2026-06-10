@@ -858,16 +858,16 @@ Total: 2781 entries across 114 modules.
 
 - `Socket` — module
 - `addListener` — instance *(class: `Socket`)*
-- `addMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
-- `addSourceSpecificMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `addMembership` — instance *(class: `Socket`)*
+- `addSourceSpecificMembership` — instance *(class: `Socket`)*
 - `address` — instance *(class: `Socket`)*
 - `bind` — instance *(class: `Socket`)*
 - `close` — instance *(class: `Socket`)*
 - `connect` — instance *(class: `Socket`)*
 - `createSocket` — module
 - `disconnect` — instance *(class: `Socket`)*
-- `dropMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
-- `dropSourceSpecificMembership` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `dropMembership` — instance *(class: `Socket`)*
+- `dropSourceSpecificMembership` — instance *(class: `Socket`)*
 - `emit` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `getRecvBufferSize` — instance *(class: `Socket`)*
@@ -881,11 +881,11 @@ Total: 2781 entries across 114 modules.
 - `ref` — instance *(class: `Socket`)*
 - `remoteAddress` — instance *(class: `Socket`)*
 - `removeListener` — instance *(class: `Socket`)*
-- `send` — instance *(class: `Socket`)* ⚠ **stub** — in-process loopback only; no real UDP socket I/O (#4911)
-- `setBroadcast` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
-- `setMulticastInterface` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
-- `setMulticastLoopback` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
-- `setMulticastTTL` — instance *(class: `Socket`)* ⚠ **stub** — accepted but no OS multicast/broadcast side effect (#4911)
+- `send` — instance *(class: `Socket`)*
+- `setBroadcast` — instance *(class: `Socket`)*
+- `setMulticastInterface` — instance *(class: `Socket`)*
+- `setMulticastLoopback` — instance *(class: `Socket`)*
+- `setMulticastTTL` — instance *(class: `Socket`)*
 - `setRecvBufferSize` — instance *(class: `Socket`)*
 - `setSendBufferSize` — instance *(class: `Socket`)*
 - `setTTL` — instance *(class: `Socket`)*
@@ -928,38 +928,38 @@ Total: 2781 entries across 114 modules.
 - `getDefaultResultOrder` — module
 - `getServers` — module
 - `getServers` — instance *(class: `Resolver`)*
-- `lookup` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `lookupService` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve4` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve4` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve6` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve6` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveAny` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveAny` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCaa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCaa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCname` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCname` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveMx` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveMx` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNaptr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNaptr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNs` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNs` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolvePtr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolvePtr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSoa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSoa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSrv` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSrv` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTlsa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTlsa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTxt` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTxt` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `reverse` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `reverse` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `lookup` — module
+- `lookupService` — module
+- `resolve` — module
+- `resolve` — instance *(class: `Resolver`)*
+- `resolve4` — module
+- `resolve4` — instance *(class: `Resolver`)*
+- `resolve6` — module
+- `resolve6` — instance *(class: `Resolver`)*
+- `resolveAny` — module
+- `resolveAny` — instance *(class: `Resolver`)*
+- `resolveCaa` — module
+- `resolveCaa` — instance *(class: `Resolver`)*
+- `resolveCname` — module
+- `resolveCname` — instance *(class: `Resolver`)*
+- `resolveMx` — module
+- `resolveMx` — instance *(class: `Resolver`)*
+- `resolveNaptr` — module
+- `resolveNaptr` — instance *(class: `Resolver`)*
+- `resolveNs` — module
+- `resolveNs` — instance *(class: `Resolver`)*
+- `resolvePtr` — module
+- `resolvePtr` — instance *(class: `Resolver`)*
+- `resolveSoa` — module
+- `resolveSoa` — instance *(class: `Resolver`)*
+- `resolveSrv` — module
+- `resolveSrv` — instance *(class: `Resolver`)*
+- `resolveTlsa` — module
+- `resolveTlsa` — instance *(class: `Resolver`)*
+- `resolveTxt` — module
+- `resolveTxt` — instance *(class: `Resolver`)*
+- `reverse` — module
+- `reverse` — instance *(class: `Resolver`)*
 - `setDefaultResultOrder` — module
 - `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module
@@ -1037,38 +1037,38 @@ Total: 2781 entries across 114 modules.
 - `getDefaultResultOrder` — module
 - `getServers` — module
 - `getServers` — instance *(class: `Resolver`)*
-- `lookup` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `lookupService` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve4` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve4` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve6` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolve6` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveAny` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveAny` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCaa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCaa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCname` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveCname` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveMx` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveMx` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNaptr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNaptr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNs` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveNs` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolvePtr` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolvePtr` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSoa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSoa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSrv` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveSrv` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTlsa` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTlsa` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTxt` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `resolveTxt` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `reverse` — module ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
-- `reverse` — instance *(class: `Resolver`)* ⚠ **stub** — loopback-only deterministic fake; no real DNS resolution (#4911)
+- `lookup` — module
+- `lookupService` — module
+- `resolve` — module
+- `resolve` — instance *(class: `Resolver`)*
+- `resolve4` — module
+- `resolve4` — instance *(class: `Resolver`)*
+- `resolve6` — module
+- `resolve6` — instance *(class: `Resolver`)*
+- `resolveAny` — module
+- `resolveAny` — instance *(class: `Resolver`)*
+- `resolveCaa` — module
+- `resolveCaa` — instance *(class: `Resolver`)*
+- `resolveCname` — module
+- `resolveCname` — instance *(class: `Resolver`)*
+- `resolveMx` — module
+- `resolveMx` — instance *(class: `Resolver`)*
+- `resolveNaptr` — module
+- `resolveNaptr` — instance *(class: `Resolver`)*
+- `resolveNs` — module
+- `resolveNs` — instance *(class: `Resolver`)*
+- `resolvePtr` — module
+- `resolvePtr` — instance *(class: `Resolver`)*
+- `resolveSoa` — module
+- `resolveSoa` — instance *(class: `Resolver`)*
+- `resolveSrv` — module
+- `resolveSrv` — instance *(class: `Resolver`)*
+- `resolveTlsa` — module
+- `resolveTlsa` — instance *(class: `Resolver`)*
+- `resolveTxt` — module
+- `resolveTxt` — instance *(class: `Resolver`)*
+- `reverse` — module
+- `reverse` — instance *(class: `Resolver`)*
 - `setDefaultResultOrder` — module
 - `setLocalAddress` — instance *(class: `Resolver`)*
 - `setServers` — module

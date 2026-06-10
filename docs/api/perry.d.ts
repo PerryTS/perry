@@ -1193,39 +1193,39 @@ declare module "dns" {
   export function getDefaultResultOrder(...args: any[]): any;
   /** stdlib */
   export function getServers(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function lookup(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function lookupService(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolve(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolve4(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolve6(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveAny(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveCaa(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveCname(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveMx(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveNaptr(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveNs(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolvePtr(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveSoa(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveSrv(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveTlsa(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveTxt(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function reverse(...args: any[]): any;
   /** stdlib */
   export function setDefaultResultOrder(...args: any[]): any;
@@ -1293,39 +1293,39 @@ declare module "dns/promises" {
   export function getDefaultResultOrder(...args: any[]): any;
   /** stdlib */
   export function getServers(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function lookup(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function lookupService(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolve(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolve4(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolve6(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveAny(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveCaa(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveCname(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveMx(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveNaptr(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveNs(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolvePtr(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveSoa(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveSrv(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveTlsa(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function resolveTxt(...args: any[]): any;
-  /** stdlib @perryStub loopback-only deterministic fake; no real DNS resolution (#4911) */
+  /** stdlib */
   export function reverse(...args: any[]): any;
   /** stdlib */
   export function setDefaultResultOrder(...args: any[]): any;
