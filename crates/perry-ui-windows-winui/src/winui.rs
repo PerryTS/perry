@@ -137,7 +137,7 @@ pub mod bootstrap {
     #[cfg(target_os = "windows")]
     mod windows_impl {
         use super::{
-            InitStatus, DETAIL_DLL_MISSING, DETAIL_NO_ENTRYPOINT, DETAIL_NOT_ATTEMPTED,
+            InitStatus, DETAIL_DLL_MISSING, DETAIL_NOT_ATTEMPTED, DETAIL_NO_ENTRYPOINT,
             DETAIL_SUCCESS,
         };
         use std::sync::atomic::{AtomicI32, Ordering};
