@@ -330,6 +330,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    invalidate_class_prototype_fast_guards();
     class_decl_prototype_object_root_store(class_id, proto);
 
     let constructor_key =
@@ -1207,6 +1208,16 @@ pub unsafe extern "C" fn js_class_register_static_field(
 /// `*ClosureHeader` shapes.
 pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
     RwLock::new(None);
+static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn invalidate_class_prototype_fast_guards() {
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
+}
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
     let mut guard = CLASS_PROTOTYPE_METHODS.write().unwrap();
@@ -1219,6 +1230,7 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
         .entry(class_id)
         .or_insert_with(HashMap::new)
         .insert(name, value_bits);
+    invalidate_class_prototype_fast_guards();
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);
 }
 
@@ -1234,6 +1246,7 @@ pub unsafe extern "C" fn js_register_prototype_method(
     name_len: usize,
     value: f64,
 ) {
+    invalidate_class_prototype_fast_guards();
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }
@@ -3165,6 +3178,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
     if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
         *guard = None;
     }
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(false, std::sync::atomic::Ordering::Release);
     if let Ok(mut guard) = FUNCTION_CLASS_IDS.write() {
         *guard = None;
     }
