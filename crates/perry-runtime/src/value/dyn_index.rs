@@ -10,6 +10,13 @@ use super::*;
 #[no_mangle]
 pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     let bits = value.to_bits();
+    // RequireObjectCoercible(base): `null[i]` / `undefined[i]` throw a
+    // TypeError rather than returning undefined (test262
+    // compound-assignment / prefix-increment null-base cases). Mirrors the
+    // codegen-side guard on the by-name fallback in index_get.rs.
+    if bits == TAG_UNDEFINED || bits == TAG_NULL {
+        crate::object::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     let jsval = JSValue::from_bits(bits);
     if jsval.is_string() || jsval.is_short_string() {
         let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
