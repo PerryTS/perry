@@ -30,12 +30,14 @@ use super::{
     parse_package_specifier, CompilationContext, JsModule, ParseCache,
 };
 
+mod create_require_transform;
 mod crypto_ns;
 mod dynamic_glob;
 mod parse_error;
 #[cfg(test)]
 mod tests;
 
+use create_require_transform::transform_create_require_literal_requires;
 use crypto_ns::module_uses_global_crypto_namespace;
 use dynamic_glob::expand_dynamic_import_glob;
 use parse_error::annotate_parse_error;
@@ -459,6 +461,7 @@ fn collect_module_one(
     } else {
         raw_source
     };
+    let source = transform_create_require_literal_requires(&source, &ctx.compile_packages);
 
     // Note (#686): we no longer hash source bytes here. The object cache key
     // is now keyed on a post-transform HIR fingerprint computed inside the
