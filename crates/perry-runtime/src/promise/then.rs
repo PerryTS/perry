@@ -128,6 +128,16 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
     std::process::exit(1);
 }
 
+// #4876: keep the codegen-emitted program-end hook alive through the
+// auto-optimize whole-program-bitcode link. `js_promise_report_unhandled_rejections`
+// is emitted unconditionally into `_main` but is reachable only from generated
+// `.o`; without a `#[used]` anchor the internalize+dead-strip pass drops it and
+// every native link fails with "undefined symbol" (see the error.rs/combinators.rs
+// anchors for the same pattern).
+#[used]
+static KEEP_PROMISE_REPORT_UNHANDLED_REJECTIONS: extern "C" fn() =
+    js_promise_report_unhandled_rejections;
+
 pub(super) struct PromiseSettleListener {
     pub(super) on_fulfilled: ClosurePtr,
     pub(super) on_rejected: ClosurePtr,

@@ -1,3 +1,24 @@
+## v0.5.1153 — fix: keep `js_promise_report_unhandled_rejections` alive through auto-optimize LTO (#4876)
+
+**Regression fix (v0.5.1151 → all native links broken).** Codegen emits an
+unconditional call to `js_promise_report_unhandled_rejections` in the generated
+`_main` (the program-end unhandled-rejection hook from the #4838/#4852 readable
+unhandled-rejection work), but the runtime symbol was being dropped by the
+auto-optimize whole-program-bitcode internalize+dead-strip pass. The function is
+`#[no_mangle] pub extern "C"` and reachable only from generated `.o`, so without a
+`#[used]` anchor LTO internalized and stripped it — every native link
+(`aarch64-apple-{darwin,ios,tvos}`, `x86_64-unknown-linux-gnu`) failed with
+`undefined symbol: js_promise_report_unhandled_rejections`. (Android linked because
+it doesn't go through the same auto-optimize bitcode path.)
+
+- **Fix**: added a `#[used] static KEEP_PROMISE_REPORT_UNHANDLED_REJECTIONS` anchor in
+  `crates/perry-runtime/src/promise/then.rs`, matching the existing keepalive pattern
+  used for codegen-only FFIs in `error.rs` and `promise/combinators.rs`.
+- **Validation**: built perry + runtime/stdlib, cleared `.perry-cache`, compiled a
+  minimal program with an unhandled `Promise.reject` — the auto-optimize path
+  (rebuilds runtime+stdlib with LTO) now links cleanly and prints
+  `Uncaught (in promise) Error: boom` with exit code 1.
+
 ## v0.5.1152 — install.sh download/extraction progress + per-distro Linux toolchain docs (#4869)
 
 External contribution from @nglmercer, with a maintainer fixup at review time:
