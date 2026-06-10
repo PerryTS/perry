@@ -66,6 +66,24 @@ fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
     path
 }
 
+#[cfg(windows)]
+fn cargo_target_dir_env_path(_target_dir: &Path, relative_target_dir: &Path) -> PathBuf {
+    relative_target_dir.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn cargo_target_dir_env_path(target_dir: &Path, _relative_target_dir: &Path) -> PathBuf {
+    target_dir.to_path_buf()
+}
+
+fn auto_target_dir_paths(workspace_root: &Path, hash: u64) -> (PathBuf, PathBuf) {
+    let workspace_root = cargo_target_dir_path(workspace_root.to_path_buf());
+    let relative_target_dir = PathBuf::from("target").join(format!("perry-auto-{:016x}", hash));
+    let target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
+    let cargo_env_dir = cargo_target_dir_env_path(&target_dir, &relative_target_dir);
+    (target_dir, cargo_env_dir)
+}
+
 pub struct OptimizedLibs {
     /// Path to the rebuilt `libperry_runtime.a` (or `perry_runtime.lib`).
     /// `None` means "fall back to the prebuilt one in target/release/".
@@ -599,6 +617,7 @@ pub(super) fn build_optimized_libs(
             };
         }
     };
+    let workspace_root = cargo_target_dir_path(workspace_root);
 
     // Hash the (features, panic_mode, target, wasm-host) tuple into the
     // target dir name so cargo treats each combination as its own
@@ -631,8 +650,7 @@ pub(super) fn build_optimized_libs(
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
     }
-    let target_dir =
-        cargo_target_dir_path(workspace_root.join(format!("target/perry-auto-{:016x}", hash)));
+    let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace_root, hash);
 
     if matches!(format, OutputFormat::Text) {
         let panic_str = if panic_abort_safe { "abort" } else { "unwind" };
@@ -661,7 +679,10 @@ pub(super) fn build_optimized_libs(
     }
     cargo_cmd
         .current_dir(&workspace_root)
-        .env("CARGO_TARGET_DIR", &target_dir)
+        // Keep Windows auto-target paths in the non-verbatim form before
+        // handing them to Cargo or downstream MSVC tools. Other platforms
+        // keep the previous absolute env path behavior.
+        .env("CARGO_TARGET_DIR", &cargo_env_dir)
         .arg("build")
         .arg("--release")
         .arg("-p")
@@ -955,7 +976,7 @@ pub(super) fn build_optimized_libs(
         let emit_bc = |crate_name: &str| -> Option<PathBuf> {
             let mut cmd = Command::new("cargo");
             cmd.current_dir(&workspace_root)
-                .env("CARGO_TARGET_DIR", &target_dir)
+                .env("CARGO_TARGET_DIR", &cargo_env_dir)
                 .env("RUSTFLAGS", &bc_rustflags)
                 .arg("rustc")
                 .arg("--release")
@@ -1515,6 +1536,39 @@ mod tests {
             unc,
             PathBuf::from(r"\\server\share\perry\target\perry-auto-deadbeef")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn auto_target_dir_uses_relative_cargo_env_path_on_windows() {
+        let workspace = PathBuf::from(r"\\?\D:\Projects\perry");
+        let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace, 0xdeadbeef);
+
+        assert!(
+            !cargo_env_dir.is_absolute(),
+            "CARGO_TARGET_DIR should stay relative so Cargo build scripts do not receive verbatim Windows paths"
+        );
+        assert_eq!(
+            cargo_env_dir,
+            PathBuf::from("target").join("perry-auto-00000000deadbeef")
+        );
+        assert_eq!(
+            target_dir,
+            PathBuf::from(r"D:\Projects\perry\target\perry-auto-00000000deadbeef")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn auto_target_dir_keeps_absolute_cargo_env_path_off_windows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (target_dir, cargo_env_dir) = auto_target_dir_paths(dir.path(), 0xdeadbeef);
+
+        assert!(
+            cargo_env_dir.is_absolute(),
+            "non-Windows hosts should keep the previous absolute CARGO_TARGET_DIR behavior"
+        );
+        assert_eq!(target_dir, cargo_env_dir);
     }
 
     #[cfg(unix)]
