@@ -1,4 +1,5 @@
 //! Indexing — length / element get / element set / hybrid string-or-index dispatch.
+use super::header::{array_numeric_layout, NumericArrayLayout};
 use super::*;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -324,7 +325,25 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
 
 #[no_mangle]
 pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index: u32) -> f64 {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return js_array_get_f64(arr, index);
+    }
+
+    // Hot path for guarded raw-f64 arrays. The typed-feedback guard already
+    // proved this receiver is a non-forwarded plain Array with raw numeric
+    // layout, so keep the helper leaf-small: avoid re-running the expensive
+    // rebuild/descriptor path on every indexed read in numeric loops.
     unsafe {
+        if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64)
+            && array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+            && index < (*arr).length
+        {
+            let elements_ptr =
+                (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            return *elements_ptr.add(index as usize);
+        }
+
         if let Some(value) = array_numeric_raw_f64_get(arr, index) {
             return value;
         }
@@ -497,10 +516,32 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
     index: u32,
     value: f64,
 ) -> i32 {
-    if array_is_frozen(arr) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
         return 0;
     }
+
+    let flags = array_object_flags(arr);
+    if flags & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS) != 0 {
+        return 0;
+    }
+
+    // Hot path for the codegen's guarded numeric-array store. Raw-f64 arrays
+    // are pointer-free, so an in-bounds numeric overwrite can update the
+    // payload directly without per-slot layout notes or revalidating/rebuilding
+    // the whole layout on every iteration. Preserve the helper fallback for
+    // direct runtime calls and arrays that have not been converted yet.
     unsafe {
+        if index < (*arr).length && array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64) {
+            let Some(number) = value_bits_to_number(value.to_bits()) else {
+                clear_array_numeric_layout(arr);
+                return 0;
+            };
+            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            ptr::write(elements_ptr.add(index as usize), number);
+            return 1;
+        }
+
         if array_numeric_raw_f64_set_inbounds(arr, index, value) {
             return 1;
         }
