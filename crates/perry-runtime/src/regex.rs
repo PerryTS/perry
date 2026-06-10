@@ -406,7 +406,11 @@ fn set_exec_array_indices(
     let indices_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
     let indices_nanboxed = crate::value::js_nanbox_pointer(indices_ptr as i64);
     let indices_key = js_string_from_str("indices");
-    crate::array::js_array_set_string_key(arr, indices_key, f64::from_bits(indices_nanboxed.to_bits()));
+    crate::array::js_array_set_string_key(
+        arr,
+        indices_key,
+        f64::from_bits(indices_nanboxed.to_bits()),
+    );
 }
 
 fn char_index_to_byte(s: &str, char_index: usize) -> usize {
@@ -1271,7 +1275,11 @@ unsafe fn set_exec_array_indices_fancy(
     let indices_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
     let indices_nanboxed = crate::value::js_nanbox_pointer(indices_ptr as i64);
     let indices_key = js_string_from_str("indices");
-    crate::array::js_array_set_string_key(arr, indices_key, f64::from_bits(indices_nanboxed.to_bits()));
+    crate::array::js_array_set_string_key(
+        arr,
+        indices_key,
+        f64::from_bits(indices_nanboxed.to_bits()),
+    );
 }
 
 /// Fancy-regex fallback for the string-replacement (non-callback) forms of
