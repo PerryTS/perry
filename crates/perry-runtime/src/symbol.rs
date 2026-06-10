@@ -2120,6 +2120,25 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             throw_value_not_iterable();
         }
     }
+    // A string PRIMITIVE (heap STRING_TAG or inline SSO short string) iterates
+    // over its Unicode code points per `String.prototype[Symbol.iterator]`
+    // (ECMA-262 §22.1.3.36). The generic `[Symbol.iterator]` lookup below only
+    // resolves the method off an OBJECT — for a string primitive
+    // `js_object_get_symbol_property` finds nothing, so `js_get_iterator` used
+    // to return the string UNCHANGED, and the lazy `for…of` loop then called
+    // `.next()` on the string itself → `(string).next is not a function`
+    // (#4892). This only bit the dynamic path (`for (c of v)` where `v: any`,
+    // or a segmenter-/destructure-derived value); statically-typed string
+    // for-of never routes through here. Build the real String iterator object
+    // directly, mirroring the array short-circuit at the top.
+    {
+        let jsv = crate::value::JSValue::from_bits(val_f64.to_bits());
+        if jsv.is_any_string() {
+            let sptr =
+                crate::value::js_get_string_pointer_unified(val_f64) as *const crate::StringHeader;
+            return crate::string::string_values_iter(sptr);
+        }
+    }
     let iter_wk = well_known_symbol("iterator");
     if !iter_wk.is_null() {
         let sym_f64 = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
