@@ -51,12 +51,22 @@ pub extern "C" fn js_array_reduce_right(
             throw_reduce_of_empty();
         }
 
+        let exotic = crate::array::array_iteration_is_exotic(arr);
+        let present = |i: usize| -> Option<f64> {
+            if exotic {
+                crate::array::array_spec_has_index(arr, i as u32)
+                    .then(|| crate::array::array_spec_get(arr, i as u32))
+            } else {
+                present_array_element(elements_ptr, i)
+            }
+        };
+
         let (mut accumulator, start_idx) = if has_initial != 0 {
             (initial, length)
         } else {
             let mut seed = None;
             for i in (0..length).rev() {
-                if let Some(element) = present_array_element(elements_ptr, i) {
+                if let Some(element) = present(i) {
                     seed = Some((element, i));
                     break;
                 }
@@ -70,7 +80,7 @@ pub extern "C" fn js_array_reduce_right(
         let arr_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
         if start_idx > 0 {
             for i in (0..start_idx).rev() {
-                let Some(element) = present_array_element(elements_ptr, i) else {
+                let Some(element) = present(i) else {
                     continue;
                 };
                 // Spec callback `(accumulator, currentValue, currentIndex, array)`.

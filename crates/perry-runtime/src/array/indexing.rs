@@ -99,6 +99,101 @@ unsafe fn array_sparse_index_property_set(arr: *mut ArrayHeader, index: u32, val
     }
 }
 
+/// Whether iterating `arr` with the raw dense-store loop would diverge from the
+/// spec `[[HasProperty]]`/`[[Get]]` protocol. True ("exotic") when the array has
+/// index accessors / custom-attr descriptors, lives in (partly) sparse storage,
+/// or the prototype chain carries indexed properties. When false the fast loop
+/// is byte-identical to the spec, so callers keep their hot path.
+#[inline]
+pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return false;
+    }
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+        return true;
+    }
+    if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        return true;
+    }
+    // Live indices beyond the dense backing store are stored in the sparse
+    // named-property map, which the raw element loop never reads.
+    unsafe { (*arr).length > (*arr).capacity }
+}
+
+/// Spec `OrdinaryGetOwnProperty(O, ToString(index)) != undefined` for an Array:
+/// is `index` present as an *own* property (dense non-hole slot, sparse named
+/// data property, or an accessor descriptor)?
+unsafe fn array_has_own_index(arr: *const ArrayHeader, index: u32) -> bool {
+    if crate::object::descriptors_in_use() {
+        let key = index.to_string();
+        if crate::object::get_accessor_descriptor(arr as usize, &key).is_some() {
+            return true;
+        }
+    }
+    let key = index.to_string();
+    if array_named_property_get_by_name(arr, &key).is_some() {
+        return true;
+    }
+    if index < (*arr).length && index < (*arr).capacity {
+        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+        if ptr::read(elements.add(index as usize)) != crate::value::TAG_HOLE {
+            return true;
+        }
+    }
+    false
+}
+
+/// Spec `[[HasProperty]]`(O, ToString(index)) for an ordinary Array receiver:
+/// own property OR inherited indexed property from `Array.prototype`.
+pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return false;
+    }
+    unsafe {
+        if array_has_own_index(arr, index) {
+            return true;
+        }
+        if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+            let proto = array_prototype_addr();
+            if proto != 0 && proto != arr as usize {
+                let proto_arr = proto as *const ArrayHeader;
+                if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Spec `[[Get]]`(O, ToString(index)) for an ordinary Array receiver: own value
+/// (firing index accessors via `js_array_get_f64`) or, for an absent own index,
+/// the inherited `Array.prototype[index]`. Returns `undefined` when absent.
+pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
+    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    unsafe {
+        if array_has_own_index(arr, index) {
+            return js_array_get_f64(arr, index);
+        }
+        if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+            let proto = array_prototype_addr();
+            if proto != 0 && proto != arr as usize {
+                let proto_arr = proto as *const ArrayHeader;
+                if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
+                    return js_array_get_f64(proto_arr, index);
+                }
+            }
+        }
+        TAG_UNDEFINED_F64
+    }
+}
+
 fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringHeader) -> f64 {
     let value =
         crate::object::js_object_get_field_by_name(arr as *const crate::object::ObjectHeader, key);

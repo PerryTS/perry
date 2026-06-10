@@ -63,6 +63,7 @@ pub use self::immutable::{
     js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_to_spliced,
     js_array_with,
 };
+pub(crate) use self::indexing::{array_iteration_is_exotic, array_spec_get, array_spec_has_index};
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
     js_array_get_index_or_string, js_array_get_length, js_array_length,

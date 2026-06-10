@@ -343,15 +343,32 @@ pub(crate) unsafe fn define_array_property(
             // Materialize BEFORE storing the accessor — the extend helper
             // dispatches accessor setters, so installing the accessor first
             // would turn this internal materialization into a setter call.
+            //
+            // Extending `length` past the dense capacity reallocates the array
+            // (header + inline elements are one allocation), leaving a
+            // forwarding pointer at the old address. The side tables
+            // (ACCESSOR_DESCRIPTORS / property attrs / OBJ_FLAG) are keyed by
+            // address, and every later read resolves through `clean_arr_ptr` to
+            // the NEW home — so they must be keyed to that canonical address,
+            // not the stale `obj`. Without this, a length-extending accessor
+            // (`Object.defineProperty(arr, "20", {get})` on a short array) was
+            // silently dropped: `arr[20]` / `indexOf` never fired the getter.
+            let mut side_addr = obj as usize;
             if !exists {
-                crate::array::js_array_set_f64_extend(
+                let new_arr = crate::array::js_array_set_f64_extend(
                     arr,
                     index,
                     f64::from_bits(crate::value::TAG_UNDEFINED),
                 );
+                let canonical = crate::array::clean_arr_ptr(new_arr);
+                if !canonical.is_null() && canonical as usize != side_addr {
+                    let gc = gc_header_for(canonical as *const ObjectHeader);
+                    (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+                    side_addr = canonical as usize;
+                }
             }
             set_accessor_descriptor(
-                obj as usize,
+                side_addr,
                 key_name.to_string(),
                 AccessorDescriptor {
                     get: get_bits,
@@ -364,7 +381,7 @@ pub(crate) unsafe fn define_array_property(
             // all-true attributes (so data→accessor keeps enumerable:true).
             let cur = if exists {
                 Some(
-                    super::get_property_attrs(obj as usize, key_name)
+                    super::get_property_attrs(side_addr, key_name)
                         .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
                 )
             } else {
@@ -375,7 +392,7 @@ pub(crate) unsafe fn define_array_property(
             let configurable = read_bool(b"configurable")
                 .unwrap_or_else(|| cur.map(|a| a.configurable()).unwrap_or(false));
             set_property_attrs(
-                obj as usize,
+                side_addr,
                 key_name.to_string(),
                 PropertyAttrs::new(false, enumerable, configurable),
             );

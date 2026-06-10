@@ -134,14 +134,29 @@ pub extern "C" fn js_array_indexOf_jsvalue(
     }
     unsafe {
         let length = (*arr).length as i64;
+        // ECMA-262 §23.1.3.13 step 3: `len == 0 → -1` is checked BEFORE
+        // ToIntegerOrInfinity(fromIndex), so a throwing/observable `fromIndex`
+        // coercion never runs on an empty array.
+        if length == 0 {
+            return -1;
+        }
         let start = match forward_start_index(length, from_index, has_from) {
             Some(s) => s,
             None => return -1,
         };
         let elements_ptr = array_elements_ptr(arr);
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in start..length {
-            let Some(element) = present_array_element(elements_ptr, i as usize) else {
-                continue;
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                match present_array_element(elements_ptr, i as usize) {
+                    Some(e) => e,
+                    None => continue,
+                }
             };
             if crate::value::js_jsvalue_equals(element, value) == 1 {
                 return i as i32;
@@ -223,11 +238,23 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
             }
         };
 
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         let mut i = start;
         while i >= 0 {
-            let Some(element) = present_array_element(elements_ptr, i as usize) else {
-                i -= 1;
-                continue;
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    i -= 1;
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                match present_array_element(elements_ptr, i as usize) {
+                    Some(e) => e,
+                    None => {
+                        i -= 1;
+                        continue;
+                    }
+                }
             };
             if crate::value::js_jsvalue_equals(element, value) == 1 {
                 return i as i32;
