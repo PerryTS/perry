@@ -21,8 +21,10 @@ pub const INVALID_HANDLE: Handle = 0;
 /// Global handle registry using DashMap for concurrent access
 static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
 
+// Band boundary owned by `perry_runtime::value::addr_class`.
 const COMMON_HANDLE_ID_START: Handle = 1;
-const COMMON_HANDLE_ID_END: Handle = 0x40000;
+const COMMON_HANDLE_ID_END: Handle =
+    perry_runtime::value::addr_class::COMMON_HANDLE_BAND_END as Handle;
 
 /// Next handle ID (0 is reserved for invalid/null). The visible low range stops
 /// before Web Fetch's pointer-tagged handle band so generic dispatch cannot

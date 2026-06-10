@@ -91,11 +91,12 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 /// Tag bits high enough to live inside a 48-bit pointer slot but low enough
 /// that real heap pointers never collide. Keep proxies near the top of the
-/// runtime's `< 0x100000` small-handle band so Web Fetch handles can occupy a
-/// broad disjoint range below this without sharing visible `POINTER_TAG | id`
-/// bits with a proxy. Any operation on a proxy MUST go through the Proxy*
-/// dispatch helpers in this module.
-const PROXY_TAG_BASE: u64 = 0x000F_0000;
+/// runtime's small-handle band so Web Fetch handles can occupy a broad
+/// disjoint range below this without sharing visible `POINTER_TAG | id` bits
+/// with a proxy. Any operation on a proxy MUST go through the Proxy* dispatch
+/// helpers in this module. The band boundary is owned by
+/// `value::addr_class` (`PROXY_ID_BAND_START`).
+const PROXY_TAG_BASE: u64 = crate::value::addr_class::PROXY_ID_BAND_START as u64;
 
 fn encode_proxy_id(id: u64) -> i64 {
     (PROXY_TAG_BASE + id) as i64
@@ -617,7 +618,7 @@ fn small_handle_from_value(value: f64) -> Option<i64> {
         if raw > 0 && (raw as u64) < PROXY_TAG_BASE {
             return Some(raw);
         }
-    } else if top == 0 && bits > 0 && bits < 0x100000 {
+    } else if top == 0 && crate::value::addr_class::is_small_handle(bits as usize) {
         return Some(bits as i64);
     }
     None

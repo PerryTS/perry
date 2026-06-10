@@ -118,7 +118,7 @@ fn is_callable(value: f64) -> bool {
     } else {
         return false;
     };
-    if raw < 0x100000 || (raw as u64) >= HEAP_ADDR_CEILING {
+    if crate::value::addr_class::is_handle_band(raw) || (raw as u64) >= HEAP_ADDR_CEILING {
         return false;
     }
     crate::closure::is_closure_ptr(raw) || crate::proxy::js_proxy_is_proxy(value) == 1
@@ -647,7 +647,7 @@ fn is_object_value(value: f64) -> bool {
         return false;
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
-    if raw < 0x100000 {
+    if crate::value::addr_class::is_handle_band(raw) {
         return false;
     }
     !crate::symbol::is_registered_symbol(raw)

@@ -109,11 +109,11 @@ fn register_set(ptr: *mut SetHeader) {
 }
 
 pub fn is_registered_set(addr: usize) -> bool {
-    // #4004: reject the `< 0x100000` small-handle band (Web Fetch / node:http /
-    // timer ids are NaN-boxed POINTER_TAG values, not heap addresses) before
+    // #4004: reject the small-handle band (Web Fetch / node:http / timer ids
+    // are NaN-boxed POINTER_TAG values, not heap addresses) before
     // dereferencing the GC header. Managed Sets are arena-allocated above the
-    // cutoff. See map::is_registered_map / date::is_date_cell_addr.
-    if addr < 0x100000 {
+    // cutoff. See `value::addr_class` for the band map.
+    if crate::value::addr_class::is_handle_band(addr) {
         return false;
     }
     // Registry FIRST: it is authoritative and dereference-free. Probing the
@@ -126,9 +126,9 @@ pub fn is_registered_set(addr: usize) -> bool {
     }
     // A registered address is a live arena Set; the header read is safe and
     // guards against a stale entry whose memory was reused by another type.
-    unsafe {
-        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*header).obj_type == crate::gc::GC_TYPE_SET
+    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(header) => header.obj_type == crate::gc::GC_TYPE_SET,
+        None => false,
     }
 }
 

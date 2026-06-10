@@ -656,7 +656,7 @@ fn normalize_raw_object_addr(bits: u64) -> usize {
     // Native module registry handles are carried as small raw values in several
     // dispatch paths. They are not GC objects, and probing `addr - header_size`
     // for them can fault before the generic native-handle dispatcher runs.
-    if addr < 0x100000 || (addr as u64) >> 48 != 0 {
+    if crate::value::addr_class::is_handle_band(addr) || (addr as u64) >> 48 != 0 {
         0
     } else {
         addr

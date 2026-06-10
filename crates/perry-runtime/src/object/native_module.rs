@@ -5792,7 +5792,7 @@ pub extern "C" fn js_class_method_bind(
                 let bits = instance.to_bits();
                 if (bits >> 48) == 0x7FFD {
                     let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-                    if id > 0 && id < 0x100000 {
+                    if crate::value::addr_class::is_small_handle(id as usize) {
                         if let Some(dispatch) = handle_property_dispatch() {
                             let value = HANDLE_PROPERTY_BIND_REENTRY.with(|guard| {
                                 if guard.get() {
@@ -5857,7 +5857,7 @@ pub extern "C" fn js_class_method_bind(
                             )
                         {
                             let obj = recv_jsv.as_pointer::<ObjectHeader>();
-                            if !obj.is_null() && (obj as usize) >= 0x100000 {
+                            if crate::value::addr_class::is_above_handle_band(obj as usize) {
                                 let key = crate::string::js_string_from_bytes(
                                     method_name_ptr,
                                     method_name_len as u32,
@@ -5947,7 +5947,7 @@ fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
     let jsv = JSValue::from_bits(instance.to_bits());
     if jsv.is_pointer() {
         let obj = jsv.as_pointer::<ObjectHeader>();
-        if !obj.is_null() && (obj as usize) >= 0x100000 {
+        if crate::value::addr_class::is_above_handle_band(obj as usize) {
             // A callable (closure / function object) is never a class-method
             // receiver for bound-method marker substitution. Its allocation is a
             // `ClosureHeader`, so reading `class_id` off it as an `ObjectHeader`
@@ -6080,7 +6080,7 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'sta
         return "";
     }
     let obj = jsval.as_pointer::<ObjectHeader>();
-    if obj.is_null() || (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         return "";
     }
     let module_field = js_object_get_field(obj as *mut _, 0);

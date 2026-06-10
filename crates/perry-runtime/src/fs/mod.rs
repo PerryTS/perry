@@ -128,7 +128,7 @@ fn object_class_id(value: f64) -> Option<u32> {
         return None;
     }
     let obj = js_value.as_pointer::<crate::object::ObjectHeader>();
-    if obj.is_null() || (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         return None;
     }
     unsafe {

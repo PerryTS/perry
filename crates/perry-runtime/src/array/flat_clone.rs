@@ -276,7 +276,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     // as pointer-shaped ids. `Array.from(handle)` / `[...handle]` reach this
     // helper after codegen strips the tag, so ask the generic iterator resolver
     // before treating the id as a non-array and returning [].
-    if raw_addr > 0 && raw_addr < 0x100000 {
+    if crate::value::addr_class::is_small_handle(raw_addr) {
         if let Some(dispatch) = crate::object::handle_property_dispatch() {
             let method = b"@@iterator";
             let iter_fn = unsafe { dispatch(raw_addr as i64, method.as_ptr(), method.len()) };

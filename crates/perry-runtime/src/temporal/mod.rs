@@ -169,12 +169,9 @@ pub fn alloc_temporal_cell(value: TemporalValue) -> f64 {
 /// then read the `GcHeader.obj_type`.
 #[inline]
 pub fn is_temporal_cell_addr(addr: usize) -> bool {
-    if addr < 0x100000 || !crate::object::is_valid_obj_ptr(addr as *const u8) {
-        return false;
-    }
-    unsafe {
-        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*header).obj_type == crate::gc::GC_TYPE_TEMPORAL
+    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(header) => header.obj_type == crate::gc::GC_TYPE_TEMPORAL,
+        None => false,
     }
 }
 

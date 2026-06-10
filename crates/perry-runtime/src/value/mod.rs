@@ -33,6 +33,7 @@
 //! re-export surface — perry-codegen + perry-runtime consumers
 //! pattern-match against the names below.
 
+pub mod addr_class;
 mod dyn_index;
 mod dynamic_arith;
 mod dynamic_array;

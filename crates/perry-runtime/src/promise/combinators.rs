@@ -114,7 +114,7 @@ fn promise_try_type_error_value(callback: f64) -> f64 {
 
 fn promise_try_closure_ptr(callback: f64) -> Option<*const crate::closure::ClosureHeader> {
     let ptr = crate::value::js_nanbox_get_pointer(callback) as usize;
-    if ptr < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr) {
         return None;
     }
     crate::closure::is_closure_ptr(ptr).then_some(ptr as *const crate::closure::ClosureHeader)
@@ -201,7 +201,7 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     // Pointer-tagged native handles (Fetch/Headers/Timers/etc.) also carry
     // small payloads. They are not GC allocations and must not be probed as
     // Promise headers before the handle dispatch tables see them.
-    if ptr_usize < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr_usize) {
         return 0;
     }
     unsafe {
@@ -323,7 +323,7 @@ pub(crate) fn combinator_iterable_to_array(
     }
 
     let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if raw < 0x100000 {
+    if crate::value::addr_class::is_handle_band(raw) {
         return Err(not_iterable_error_value(value));
     }
 
@@ -671,7 +671,7 @@ fn is_native_array_value(value: f64) -> bool {
         return false;
     }
     let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
-    if ptr < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr) {
         return false;
     }
     unsafe {
@@ -1167,7 +1167,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     }
 
     let raw_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if raw_ptr < 0x100000 {
+    if crate::value::addr_class::is_handle_band(raw_ptr) {
         return value;
     }
 

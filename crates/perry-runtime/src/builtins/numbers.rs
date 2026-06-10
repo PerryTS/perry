@@ -474,7 +474,9 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // identifiers, so test assertions like `typeof x === "number"`
         // hold). Gate on the timer registry so unrelated small handles
         // (UI widgets, drizzle, etc.) still fall through to toPrimitive.
-        if id > 0 && id < 0x100000 && crate::timer::is_known_timer_id(id) {
+        if crate::value::addr_class::is_small_handle(id as usize)
+            && crate::timer::is_known_timer_id(id)
+        {
             return id as f64;
         }
         // Array → ToPrimitive(number) finds no `valueOf` override, so it

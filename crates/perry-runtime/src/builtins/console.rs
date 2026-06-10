@@ -637,7 +637,7 @@ pub(crate) fn is_console_instance_value(value: f64) -> bool {
         return false;
     }
     let obj = jsval.as_pointer::<crate::object::ObjectHeader>();
-    if obj.is_null() || (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         return false;
     }
     unsafe { (*obj).class_id == CONSOLE_INSTANCE_CLASS_ID }

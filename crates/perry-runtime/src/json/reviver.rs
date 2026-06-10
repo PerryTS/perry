@@ -320,7 +320,7 @@ unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
         return value;
     }
     let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-    if ptr.is_null() || (ptr as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
         return value;
     }
     let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -416,7 +416,7 @@ unsafe fn json_is_object(value: f64) -> bool {
         return true;
     }
     if let Some(ptr) = extract_pointer(value.to_bits()) {
-        if ptr.is_null() || (ptr as usize) < 0x100000 {
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
             return false;
         }
         return gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT;

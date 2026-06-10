@@ -892,7 +892,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
 /// method body and crashing on the bogus `this` pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
-    if obj.is_null() || (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         return 0;
     }
     let addr = obj as usize;
@@ -1159,7 +1159,7 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
-        if ptr > 0 && ptr < 0x100000 {
+        if crate::value::addr_class::is_small_handle(ptr) {
             if let Some(dispatch) = super::class_registry::handle_own_property_names_dispatch() {
                 let names = unsafe { dispatch(ptr as i64) };
                 if names.to_bits() != crate::value::TAG_UNDEFINED {
@@ -2165,7 +2165,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         let f = f64::from_bits(obj.to_bits());
         if key_val.is_any_string() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
             let id = f as usize;
-            if (0x100000..0x200000).contains(&id) {
+            if crate::value::addr_class::is_stream_id_band(id) {
                 if let Some(probe) = crate::object::stream_handle_probe() {
                     unsafe {
                         if probe(id) {
@@ -2278,7 +2278,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // `keys_array`. Mirror the property-get IC miss path: ask the registered
     // handle property dispatcher whether the property resolves to a real
     // value.
-    if obj_addr > 0 && obj_addr < 0x100000 {
+    if crate::value::addr_class::is_small_handle(obj_addr as usize) {
         // #1781: accept inline SSO short keys (`"id" in handle`) — is_string()
         // is STRING_TAG-only, so a <=5-char key skipped the handle dispatcher
         // and `in` wrongly returned false. Materialize SSO bytes to a heap
@@ -2627,10 +2627,10 @@ pub extern "C" fn js_object_get_field_by_name(
     // Node. `js_proxy_is_proxy` validates the value is a *registered* proxy so a
     // real heap object whose address happens to be small isn't misrouted.
     {
-        // Proxy ids live in [0xF0000, 0x100000); `js_proxy_is_proxy` confirms
+        // Proxy ids live in the proxy id band; `js_proxy_is_proxy` confirms
         // it is a *registered* proxy before we route to the proxy getter.
         let addr = obj as u64;
-        if (0xF0000..0x100000).contains(&addr) && !key.is_null() {
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
@@ -2841,7 +2841,7 @@ pub extern "C" fn js_object_get_field_by_name(
         } else {
             0
         };
-        if raw > 0 && raw < 0x100000 {
+        if crate::value::addr_class::is_small_handle(raw) {
             if !key.is_null() {
                 unsafe {
                     let key_ptr =
@@ -3194,9 +3194,9 @@ pub extern "C" fn js_object_get_field_by_name(
         } else {
             0
         };
-        // Native-module registry handles live below 0x100000 and can also be
-        // POINTER_TAG-boxed; do not walk back to a GcHeader for those.
-        if raw >= 0x100000 && !key.is_null() && is_valid_obj_ptr(raw as *const u8) {
+        // Native-module registry handles live in the handle band and can also
+        // be POINTER_TAG-boxed; do not walk back to a GcHeader for those.
+        if crate::value::addr_class::is_plausible_heap_addr(raw) && !key.is_null() {
             {
                 unsafe {
                     let gc_header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -3264,7 +3264,7 @@ pub extern "C" fn js_object_get_field_by_name(
         let f = f64::from_bits(obj as u64);
         if !key.is_null() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
             let id = f as usize;
-            if (0x100000..0x200000).contains(&id) {
+            if crate::value::addr_class::is_stream_id_band(id) {
                 if let Some(probe) = crate::object::stream_handle_probe() {
                     unsafe {
                         if probe(id) {
@@ -3340,7 +3340,7 @@ pub extern "C" fn js_object_get_field_by_name(
             // status/data, fastify req query/params/...). Without
             // this, every property access on those handles silently
             // returned undefined.
-            if (raw as usize) > 0 && (raw as usize) < 0x100000 {
+            if crate::value::addr_class::is_small_handle(raw as usize) {
                 if !key.is_null() {
                     unsafe {
                         let key_ptr =
@@ -3407,7 +3407,7 @@ pub extern "C" fn js_object_get_field_by_name(
     }
     // Same handle-receiver path for already-stripped pointers — happens
     // when the codegen passes a raw i64 handle through the slow path.
-    if (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         if !key.is_null() {
             unsafe {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -5258,7 +5258,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // a real heap object whose address happens to be small isn't misrouted.
     {
         let addr = obj as u64;
-        if (0xF0000..0x100000).contains(&addr) {
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
@@ -5277,7 +5277,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // `< 0x100000` proxy / HANDLE_PROPERTY_DISPATCH routing below — matching
     // the ordering in `js_object_get_field_by_name`. The macOS heap floor
     // (0x200_0000_0000 in is_valid_obj_ptr) masked this; Linux's is 0x1000.
-    if (obj as usize) >= 0x100000 {
+    if crate::value::addr_class::is_above_handle_band(obj as usize) {
         unsafe {
             if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
                 return val;
@@ -5303,7 +5303,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // so `r.status` / `r.data` and similar handle-property accesses
     // dispatch to the per-module accessor instead of silently
     // returning undefined.
-    if (obj as usize) > 0 && (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_small_handle(obj as usize) {
         // #2846: a revocable Proxy is encoded as a small fake pointer in the
         // proxy-id range (also `< 0x100000`). A generic `proxy.key` read funnels
         // here via the IC-miss path; route it to the proxy get dispatch (which

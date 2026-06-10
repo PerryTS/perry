@@ -33,17 +33,22 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
 }
 
 fn small_native_handle_id(value: f64) -> Option<i64> {
+    use crate::value::addr_class;
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
         let raw = (bits & crate::value::POINTER_MASK) as i64;
-        if raw > 0 && raw < 0x100000 {
+        if addr_class::is_small_handle(raw as usize) {
             return Some(raw);
         }
     }
-    if bits > 0 && bits < 0x100000 {
+    if addr_class::is_small_handle(bits as usize) {
         return Some(bits as i64);
     }
-    if value.is_finite() && value > 0.0 && value.fract() == 0.0 && value < 0x100000 as f64 {
+    if value.is_finite()
+        && value > 0.0
+        && value.fract() == 0.0
+        && value < addr_class::HANDLE_BAND_MAX as f64
+    {
         return Some(value as i64);
     }
     None
@@ -439,7 +444,9 @@ fn rhs_is_object_value(value: f64) -> bool {
         // Symbols are primitives; small registry handles aren't real objects
         // here either, but they're still object-typed in JS (`typeof` is
         // "object"), so a "not callable" message is the right one for them.
-        if ptr >= 0x100000 && crate::symbol::is_registered_symbol(ptr) {
+        if crate::value::addr_class::is_above_handle_band(ptr)
+            && crate::symbol::is_registered_symbol(ptr)
+        {
             return false;
         }
         return true;
@@ -529,7 +536,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         let jv = crate::JSValue::from_bits(value.to_bits());
         if jv.is_pointer() {
             let obj = jv.as_pointer::<ObjectHeader>();
-            if !obj.is_null() && (obj as usize) >= 0x100000 {
+            if crate::value::addr_class::is_above_handle_band(obj as usize) {
                 let gc_header = unsafe {
                     (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
                 };
@@ -840,7 +847,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         // `blob instanceof Blob` is true for that representation too.
         if class_id == CLASS_ID_BLOB && jsval.is_pointer() {
             let obj = jsval.as_pointer::<ObjectHeader>();
-            if (obj as usize) >= 0x100000 && unsafe { (*obj).class_id } == CLASS_ID_BLOB {
+            if crate::value::addr_class::is_above_handle_band(obj as usize)
+                && unsafe { (*obj).class_id } == CLASS_ID_BLOB
+            {
                 return true_val;
             }
         }
@@ -998,7 +1007,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // are NOT real ObjectHeader pointers — reading the GC header at
     // `obj_ptr - 8` would SIGSEGV on unmapped memory. They aren't instances
     // of any user-defined class either, so return false unconditionally.
-    if (obj_ptr as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj_ptr as usize) {
         return false_val;
     }
 

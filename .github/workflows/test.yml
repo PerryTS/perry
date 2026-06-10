@@ -84,6 +84,18 @@ jobs:
           python3 scripts/gc_store_site_inventory.py --self-test
           python3 scripts/gc_store_site_inventory.py
 
+      # Handle-vs-pointer address classification audit: POINTER_TAG payloads
+      # can be heap pointers OR small registry handles (fetch/zlib/proxy/...),
+      # and code must classify by magnitude through value/addr_class.rs before
+      # dereferencing. Catches new hand-typed band literals (0x100000 etc.)
+      # and new `as *const GcHeader` casts outside addr_class.rs / gc/ before
+      # they become Linux-only segfaults (#1843, #4004, #4665, #4800 class).
+      # Allowlist: scripts/addr_class_allowlist.txt.
+      - name: Address-classification audit
+        run: |
+          python3 scripts/addr_class_inventory.py --self-test
+          python3 scripts/addr_class_inventory.py
+
   # ---------------------------------------------------------------------------
   # API docs drift gate (#465)
   #

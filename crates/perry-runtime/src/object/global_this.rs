@@ -318,7 +318,7 @@ unsafe fn subclass_this_object_ptr(this_box: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if raw < 0x100000 || !crate::object::is_valid_obj_ptr(raw as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
         return None;
     }
     Some(raw as *mut ObjectHeader)

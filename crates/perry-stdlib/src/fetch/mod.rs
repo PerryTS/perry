@@ -42,10 +42,14 @@ use validation::{
     normalize_method, parse_redirect_location, redirect_status_from_value,
 };
 
-// Web Fetch handles must stay below the `0x100000` small-handle cutoff while
-// avoiding the low native-id range exposed by `node:http` (#3973/#3974 via #4004).
-pub(crate) const FETCH_HANDLE_ID_START: usize = 0x40000;
-pub(crate) const FETCH_HANDLE_ID_END: usize = 0xE0000;
+// Web Fetch handles must stay below the small-handle cutoff while avoiding
+// the low native-id range exposed by `node:http` (#3973/#3974 via #4004). The
+// band boundaries are owned by `perry_runtime::value::addr_class` (the
+// runtime's magnitude checks classify against them).
+pub(crate) const FETCH_HANDLE_ID_START: usize =
+    perry_runtime::value::addr_class::FETCH_HANDLE_BAND_START;
+pub(crate) const FETCH_HANDLE_ID_END: usize =
+    perry_runtime::value::addr_class::FETCH_HANDLE_BAND_END;
 
 // Response handle storage
 lazy_static::lazy_static! {
@@ -98,8 +102,9 @@ mod tests {
 
     #[test]
     fn fetch_handle_ids_use_high_small_handle_range() {
-        assert!(FETCH_HANDLE_ID_START >= 0x40000);
-        assert!(FETCH_HANDLE_ID_END <= 0x100000);
+        use perry_runtime::value::addr_class;
+        assert!(FETCH_HANDLE_ID_START >= addr_class::COMMON_HANDLE_BAND_END);
+        assert!(FETCH_HANDLE_ID_END <= addr_class::HANDLE_BAND_MAX);
 
         let native_id = crate::common::register_handle("native-request-marker".to_string());
         let id = alloc_fetch_handle_id();

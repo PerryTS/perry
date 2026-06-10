@@ -44,7 +44,7 @@ unsafe fn util_format_json_value_has_cycle(value: f64, stack: &mut Vec<usize>) -
 
 unsafe fn util_format_json_ptr_has_cycle(ptr: *const u8, stack: &mut Vec<usize>) -> bool {
     let addr = ptr as usize;
-    if addr < 0x100000
+    if crate::value::addr_class::is_handle_band(addr)
         || crate::buffer::is_registered_buffer(addr)
         || crate::symbol::is_registered_symbol(addr)
     {

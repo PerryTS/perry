@@ -149,7 +149,7 @@ pub unsafe extern "C" fn js_json_is_raw_json(value: f64) -> f64 {
         return false_val;
     }
     let ptr = (bits & crate::value::POINTER_MASK) as *const u8;
-    if ptr.is_null() || (ptr as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
         return false_val;
     }
     if ptr_is_raw_json_wrapper(ptr) {

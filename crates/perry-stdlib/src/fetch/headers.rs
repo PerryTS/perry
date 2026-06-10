@@ -61,7 +61,7 @@ fn gc_type_for_raw_ptr(raw: i64) -> Option<u8> {
         return None;
     }
     let addr = raw as usize;
-    if addr < 0x100000 {
+    if perry_runtime::value::addr_class::is_handle_band(addr) {
         return None;
     }
     unsafe { Some(*(raw as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)) }

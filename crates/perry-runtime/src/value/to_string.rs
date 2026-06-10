@@ -812,7 +812,7 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
     }
     if jsval.is_pointer() {
         let handle = jsval.as_pointer::<u8>() as usize;
-        if (1..0x100000).contains(&handle) {
+        if crate::value::addr_class::is_small_handle(handle) {
             if let Some(dispatch) = crate::object::handle_method_dispatch() {
                 let result = unsafe {
                     dispatch(handle as i64, b"toString".as_ptr(), 8, std::ptr::null(), 0)

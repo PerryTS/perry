@@ -9,7 +9,7 @@ fn stream_ids_live_outside_pointer_tag_small_handle_band() {
         "stream id {id:#x} must stay in the raw numeric stream band"
     );
     assert!(
-        id >= 0x100000,
+        id >= perry_runtime::value::addr_class::HANDLE_BAND_MAX,
         "stream id {id:#x} must not overlap pointer-tagged small handles"
     );
 }

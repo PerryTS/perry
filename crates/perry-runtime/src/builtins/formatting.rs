@@ -825,7 +825,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // is smaller than an ObjectHeader).
                 crate::temporal::temporal_inspect_string(value)
                     .unwrap_or_else(|| "[object Object]".to_string())
-            } else if (ptr as usize) < 0x100000 {
+            } else if crate::value::addr_class::is_handle_band(ptr as usize) {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
                 // POINTER_TAG values whose payload is a small registry id, NOT
                 // a heap pointer — reading the GC header at `ptr - 8` would
@@ -1530,7 +1530,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     // Temporal value inside an inspected object → `Temporal.X <iso>`.
                     crate::temporal::temporal_inspect_string(value)
                         .unwrap_or_else(|| "[object Object]".to_string())
-                } else if (ptr as usize) < 0x100000 {
+                } else if crate::value::addr_class::is_handle_band(ptr as usize) {
                     "[object Object]".to_string()
                 } else if crate::symbol::is_registered_symbol(ptr as usize)
                     || crate::regex::is_registered_regex(ptr as usize)

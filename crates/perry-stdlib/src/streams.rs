@@ -179,8 +179,11 @@ unsafe impl Send for WritableStreamData {}
 unsafe impl Send for ReaderData {}
 unsafe impl Send for WriterData {}
 
-pub(crate) const STREAM_HANDLE_ID_START: usize = 0x100000;
-pub(crate) const STREAM_HANDLE_ID_END: usize = 0x200000;
+// Band boundaries owned by `perry_runtime::value::addr_class` (the runtime's
+// finite-number stream probes classify against the same range).
+pub(crate) const STREAM_HANDLE_ID_START: usize =
+    perry_runtime::value::addr_class::STREAM_ID_BAND_START;
+pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class::STREAM_ID_BAND_END;
 
 lazy_static::lazy_static! {
     static ref READABLE_STREAMS: Mutex<HashMap<usize, ReadableStreamData>> = Mutex::new(HashMap::new());

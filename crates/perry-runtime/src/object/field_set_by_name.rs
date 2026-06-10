@@ -1188,7 +1188,10 @@ pub extern "C" fn js_object_set_field_by_name_nonenum(
     // TypedArrays, Temporal cells, etc. are handled by `set_field_by_name`'s own
     // routing and never reach the ordinary enumerable default, so skip them.
     let bits = obj as u64;
-    if (bits >> 48) == 0x7FFE || obj.is_null() || (obj as usize) < 0x100000 || key.is_null() {
+    if (bits >> 48) == 0x7FFE
+        || crate::value::addr_class::is_handle_band(obj as usize)
+        || key.is_null()
+    {
         return;
     }
     unsafe {

@@ -1265,7 +1265,7 @@ pub(crate) unsafe fn try_dispatch_instance_method_value(
         return None;
     }
     let raw = crate::value::js_nanbox_get_pointer(receiver) as usize;
-    if raw < 0x100000 {
+    if crate::value::addr_class::is_handle_band(raw) {
         return None;
     }
     let ptr = raw as *const ObjectHeader;
@@ -1416,7 +1416,7 @@ pub unsafe extern "C" fn js_native_call_method(
         // Fetch, stream, and other runtime objects use small tagged handles that
         // are pointer-shaped but not heap allocations. Avoid asking the closure
         // probe to dereference those handles as addresses.
-        if raw_addr >= 0x100000
+        if crate::value::addr_class::is_above_handle_band(raw_addr)
             && crate::closure::is_closure_ptr(raw_addr)
             && !crate::closure::closure_is_key_deleted(raw_addr, method_name)
             // apply/call/bind/toString on a closure receiver have dedicated
@@ -1460,7 +1460,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // non-accessor programs skip it entirely.
     if jsval.is_pointer() && crate::object::ACCESSORS_IN_USE.with(|c| c.get()) {
         let obj_usize = crate::value::js_nanbox_get_pointer(object) as usize;
-        if obj_usize >= 0x100000 {
+        if crate::value::addr_class::is_above_handle_band(obj_usize) {
             if let Some(acc) = crate::object::get_accessor_descriptor(obj_usize, method_name) {
                 if acc.get != 0 {
                     let getter = (acc.get & crate::value::POINTER_MASK)
@@ -1578,7 +1578,9 @@ pub unsafe extern "C" fn js_native_call_method(
         // codegen-registered text (or a synthesized native form), rather than
         // falling through to the generic `"[object Object]"`.
         let raw_addr = crate::value::js_nanbox_get_pointer(object) as usize;
-        if raw_addr >= 0x100000 && crate::closure::is_closure_ptr(raw_addr) {
+        if crate::value::addr_class::is_above_handle_band(raw_addr)
+            && crate::closure::is_closure_ptr(raw_addr)
+        {
             if let Some(result) = crate::value::function_to_string_method_result(object) {
                 return result;
             }
@@ -1984,10 +1986,10 @@ pub unsafe extern "C" fn js_native_call_method(
     }
 
     // Check for raw handle integer: Perry may bit-cast an i64 handle directly to f64,
-    // producing a subnormal float (bits == handle_id, no NaN-box tag). Values 0 < bits < 0x100000
-    // with no tag are raw handle IDs from Perry's integer-typed handle parameters.
+    // producing a subnormal float (bits == handle_id, no NaN-box tag). Untagged values
+    // in the handle band are raw handle IDs from Perry's integer-typed handle parameters.
     let raw_bits = object.to_bits();
-    if raw_bits > 0 && raw_bits < 0x100000 {
+    if crate::value::addr_class::is_small_handle(raw_bits as usize) {
         if let Some(dispatch) = handle_method_dispatch() {
             let args = refreshed_args();
             return dispatch(
@@ -2676,7 +2678,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // objects in a registry and use integer IDs to reference them.
     if jsval.is_pointer() {
         let raw_ptr = jsval.as_pointer::<u8>() as usize;
-        if raw_ptr > 0 && raw_ptr < 0x100000 {
+        if crate::value::addr_class::is_small_handle(raw_ptr) {
             // This is a handle, not a real memory pointer - dispatch to stdlib
             if let Some(dispatch) = handle_method_dispatch() {
                 return dispatch(
@@ -3631,7 +3633,10 @@ pub unsafe extern "C" fn js_native_call_method(
     {
         let check_ptr = if jsval.is_pointer() {
             (raw_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else if !object.is_nan() && raw_bits >= 0x100000 && (raw_bits >> 48) == 0 {
+        } else if !object.is_nan()
+            && crate::value::addr_class::is_above_handle_band(raw_bits as usize)
+            && (raw_bits >> 48) == 0
+        {
             raw_bits as usize
         } else {
             0
@@ -3790,8 +3795,12 @@ pub unsafe extern "C" fn js_native_call_method(
     // Handle raw pointer values without NaN-box tags.
     // Perry sometimes bitcasts I64 pointers to F64 without NaN-boxing (POINTER_TAG).
     // These appear as subnormal floats with bits in the valid heap address range
-    // (0x100000 .. 0x0000_FFFF_FFFF_FFFF, upper 16 bits = 0).
-    if !jsval.is_pointer() && !object.is_nan() && raw_bits >= 0x100000 && (raw_bits >> 48) == 0 {
+    // (above the handle band, below 0x0000_FFFF_FFFF_FFFF, upper 16 bits = 0).
+    if !jsval.is_pointer()
+        && !object.is_nan()
+        && crate::value::addr_class::is_above_handle_band(raw_bits as usize)
+        && (raw_bits >> 48) == 0
+    {
         // Looks like a raw heap pointer — re-wrap as POINTER_TAG and retry
         let reboxed = f64::from_bits(0x7FFD_0000_0000_0000u64 | raw_bits);
         let reboxed_jsval = JSValue::from_bits(reboxed.to_bits());

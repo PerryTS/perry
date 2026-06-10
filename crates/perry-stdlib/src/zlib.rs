@@ -573,8 +573,11 @@ lazy_static::lazy_static! {
     static ref NEXT_ZLIB_ID: Mutex<i64> = Mutex::new(ZLIB_STREAM_HANDLE_ID_START);
 }
 
-const ZLIB_STREAM_HANDLE_ID_START: i64 = 0xE0000;
-const ZLIB_STREAM_HANDLE_ID_END: i64 = 0xF0000;
+// Band boundaries owned by `perry_runtime::value::addr_class`.
+const ZLIB_STREAM_HANDLE_ID_START: i64 =
+    perry_runtime::value::addr_class::ZLIB_HANDLE_BAND_START as i64;
+const ZLIB_STREAM_HANDLE_ID_END: i64 =
+    perry_runtime::value::addr_class::ZLIB_HANDLE_BAND_END as i64;
 
 static ZLIB_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 

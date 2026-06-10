@@ -57,14 +57,15 @@ pub extern "C" fn js_eq(a: JSValue, b: JSValue) -> JSValue {
 /// Whether `v` has ECMAScript Type Object (not a primitive). True for plain
 /// objects, arrays, functions, Dates and boxed primitive wrappers; false for
 /// Symbols (which are NaN-boxed pointers but are primitives) and for the
-/// native-handle id-space below `0x100000` (sockets, zlib streams, …) which
-/// must not be dereferenced as heap objects in a coercion path.
+/// native-handle id-space (sockets, zlib streams, … — see
+/// `value::addr_class`) which must not be dereferenced as heap objects in a
+/// coercion path.
 fn eq_is_object(v: JSValue) -> bool {
     if !v.is_pointer() {
         return false;
     }
     let ptr = v.as_pointer::<u8>();
-    if ptr.is_null() || (ptr as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
         return false;
     }
     !crate::symbol::is_registered_symbol(ptr as usize)
@@ -508,7 +509,7 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
                 get_cached(&TYPEOF_OBJECT, "object")
             };
         }
-        if !ptr.is_null() && (ptr as usize) >= 0x100000 {
+        if crate::value::addr_class::is_above_handle_band(ptr as usize) {
             // Symbols: registered in SYMBOL_POINTERS (handles both gc_malloc'd
             // and Box-leaked symbols, which have no GcHeader).
             if crate::symbol::is_registered_symbol(ptr as usize) {

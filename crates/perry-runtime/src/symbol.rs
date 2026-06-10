@@ -266,10 +266,10 @@ pub unsafe extern "C" fn js_is_symbol(value: f64) -> i32 {
     // Registry handles (proxies, fetch/stream handles, …) are POINTER_TAG'd
     // small ids, NOT heap allocations — dereferencing one for the magic
     // probe segfaults on Linux (unmapped page; mimalloc on macOS happens to
-    // retain, hiding it). Real heap symbols live above the 0x100000 floor
+    // retain, hiding it). Real heap symbols live above the handle band
     // (same rationale as the typeof / iterator guards, #1843/#4800), and
     // registered symbols already returned above.
-    if ptr.is_null() || (ptr as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
         return 0;
     }
     if (*ptr).magic == SYMBOL_MAGIC {
@@ -1600,7 +1600,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     // otherwise misses the side table and returns undefined.
     if (bits >> 48) == 0x7FFD {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-        if id > 0 && id < 0x100000 && crate::timer::is_known_timer_id(id) {
+        if crate::value::addr_class::is_small_handle(id as usize)
+            && crate::timer::is_known_timer_id(id)
+        {
             let dispose = well_known_symbol("dispose");
             if !dispose.is_null() {
                 let dispose_f64 =
@@ -1621,7 +1623,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     // without adding a runtime-specific special case.
     if (bits >> 48) == 0x7FFD {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-        if id > 0 && id < 0x100000 {
+        if crate::value::addr_class::is_small_handle(id as usize) {
             let dispose = well_known_symbol("dispose");
             if !dispose.is_null() {
                 let dispose_f64 =
@@ -1643,7 +1645,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     // interpreted as heap pointers when the dispatcher owns the method.
     if (bits >> 48) == 0x7FFD {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-        if id > 0 && id < 0x100000 {
+        if crate::value::addr_class::is_small_handle(id as usize) {
             let async_dispose = well_known_symbol("asyncDispose");
             if !async_dispose.is_null() {
                 let async_dispose_f64 = f64::from_bits(
@@ -1668,7 +1670,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     // `Headers` can expose its `entries` method as the iterator function.
     if (bits >> 48) == 0x7FFD {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-        if id > 0 && id < 0x100000 {
+        if crate::value::addr_class::is_small_handle(id as usize) {
             let iter_wk = well_known_symbol("iterator");
             if !iter_wk.is_null() {
                 let iter_f64 =
@@ -1702,8 +1704,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         // `is_valid_obj_ptr` (validates the GcHeader) rather than the address
         // band alone — otherwise a symbol read on a low-address object returned
         // undefined. Proxies (registered small ids) keep their own semantics.
-        if id > 0
-            && id < 0x100000
+        if crate::value::addr_class::is_small_handle(id)
             && !crate::object::is_valid_obj_ptr(id as *const u8)
             && crate::proxy::js_proxy_is_proxy(obj_f64) == 0
         {

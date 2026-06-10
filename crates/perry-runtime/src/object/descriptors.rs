@@ -897,7 +897,7 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         }
         if obj_jv.is_pointer() {
             let raw = crate::value::js_nanbox_get_pointer(obj_value) as usize;
-            if raw > 0 && raw < 0x100000 {
+            if crate::value::addr_class::is_small_handle(raw) {
                 if let Some(dispatch) = super::class_registry::handle_own_property_names_dispatch()
                 {
                     let names = dispatch(raw as i64);

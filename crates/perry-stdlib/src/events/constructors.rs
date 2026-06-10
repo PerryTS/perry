@@ -15,7 +15,7 @@ unsafe fn event_emitter_options_capture_rejections(options: f64) -> bool {
         return false;
     }
     let options_obj = js_nanbox_get_pointer(options) as *const ObjectHeader;
-    if options_obj.is_null() || (options_obj as usize) < 0x100000 {
+    if perry_runtime::value::addr_class::is_handle_band(options_obj as usize) {
         return false;
     }
     let gc_header = (options_obj as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)

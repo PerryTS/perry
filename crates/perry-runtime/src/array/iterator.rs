@@ -122,7 +122,7 @@ pub(crate) fn entries_array_for_small_handle_value(value: f64) -> Option<*mut Ar
 }
 
 pub(crate) fn entries_array_for_small_handle_id(id: i64) -> Option<*mut ArrayHeader> {
-    if id <= 0 || id >= 0x100000 {
+    if id <= 0 || !crate::value::addr_class::is_small_handle(id as usize) {
         return None;
     }
     let dispatch = crate::object::handle_method_dispatch()?;
@@ -726,16 +726,16 @@ pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) ->
 /// (now inherited) `[Symbol.iterator]` method.
 pub(crate) fn is_builtin_iterator_class_id(raw_ptr: usize) -> bool {
     // Native handle ids (Web-Fetch Headers/Request/Response, streams, ws, DB,
-    // …) are NaN-boxed POINTER values in the small-handle band `[1, 0x100000)`:
-    // registry indices, NOT heap pointers. Dereferencing `raw_ptr - 8` as a
-    // GcHeader for one of them reads unmapped memory and segfaults — e.g.
-    // `for (const [k, v] of response.headers)`, where the lazy `for…of`
-    // protocol (#4786) routes the Headers handle (id >= 0x40000) through
-    // `js_get_iterator`, which calls this check. Reject the whole handle band,
-    // matching the `< 0x100000` floor used by `Array.isArray` and
-    // `try_dispatch_instance_method_value`. A real built-in iterator is always a
-    // heap object well above this floor, so this never loses a true match.
-    if raw_ptr < 0x100000 {
+    // …) are NaN-boxed POINTER values in the small-handle band (see
+    // `value::addr_class`): registry indices, NOT heap pointers. Dereferencing
+    // `raw_ptr - 8` as a GcHeader for one of them reads unmapped memory and
+    // segfaults — e.g. `for (const [k, v] of response.headers)` (#4800), where
+    // the lazy `for…of` protocol (#4786) routes the Headers handle
+    // (id >= 0x40000) through `js_get_iterator`, which calls this check.
+    // Reject the whole handle band, matching `Array.isArray` and
+    // `try_dispatch_instance_method_value`. A real built-in iterator is always
+    // a heap object well above this floor, so this never loses a true match.
+    if crate::value::addr_class::is_handle_band(raw_ptr) {
         return false;
     }
     unsafe {

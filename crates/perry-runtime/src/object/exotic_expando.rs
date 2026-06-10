@@ -35,11 +35,11 @@ pub(crate) enum ExoticKind {
 /// `None` for everything else (including the small-handle band). One
 /// `GcHeader` read; the RegExp set probe only runs for `GC_TYPE_OBJECT`.
 pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
-    if addr < 0x100000 || !super::is_valid_obj_ptr(addr as *const u8) {
-        return None;
-    }
-    let gc = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    match unsafe { (*gc).obj_type } {
+    let gc = match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(header) => header,
+        None => return None,
+    };
+    match gc.obj_type {
         crate::gc::GC_TYPE_DATE_CELL => Some(ExoticKind::Date),
         crate::gc::GC_TYPE_ERROR => Some(ExoticKind::Error),
         crate::gc::GC_TYPE_OBJECT if crate::regex::is_regex_pointer(addr as *const u8) => {

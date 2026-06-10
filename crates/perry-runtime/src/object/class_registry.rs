@@ -4155,15 +4155,14 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
 /// so raw Map/Set/Buffer pointers (no GcHeader) are never misread. Used by
 /// `typeof`, `new`, and `instanceof` to recognize a class value.
 pub fn is_class_object_ptr(ptr: *const u8) -> bool {
-    // Reject anything in the native-module handle range (< 0x100000). Those
-    // are registry ids (net.Socket, zlib stream, crypto, fastify, ioredis,
-    // timers, …) bit-OR'd with POINTER_TAG, not real heap pointers — real
-    // objects always live well above 0x100000. The previous 0x1008 floor only
-    // caught the tiny net/fastify id space; a mid-range handle (e.g. zlib's
-    // zlib stream base, #1843) sailed past it and this function then
-    // segfaulted dereferencing `[handle - 8]` as a GcHeader. 0x100000 is the
-    // same handle/real-pointer threshold `js_native_call_method` already uses.
-    if ptr.is_null() || (ptr as usize) < 0x100000 {
+    // Reject anything in the native-module handle band (see
+    // `value::addr_class`). Those are registry ids (net.Socket, zlib stream,
+    // crypto, fastify, ioredis, timers, …) bit-OR'd with POINTER_TAG, not real
+    // heap pointers — real objects always live above the band. The previous
+    // 0x1008 floor only caught the tiny net/fastify id space; a mid-range
+    // handle (e.g. zlib's stream base, #1843) sailed past it and this function
+    // then segfaulted dereferencing `[handle - 8]` as a GcHeader.
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
         return false;
     }
     unsafe {
@@ -5104,7 +5103,7 @@ pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize,
 /// method value (for identity), not the raw stored field — i.e. the own-property
 /// shadow rule applies to genuine instances, not to the prototype itself.
 pub fn is_registered_class_prototype_object(ptr: usize) -> bool {
-    if ptr < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr) {
         return false;
     }
     if let Ok(guard) = CLASS_PROTOTYPE_OBJECTS.read() {

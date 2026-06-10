@@ -2154,54 +2154,11 @@ pub(crate) fn extends_builtin_error(class_id: u32) -> bool {
     false
 }
 
-/// Check if a pointer is a valid heap object (safe to dereference GcHeader).
-/// Values below 0x100000 (1MB) are likely INT32_TAG extracts, small handles,
-/// or null. The upper bound filters out NaN-box tag bits that leaked through.
-///
-/// Issue #73 follow-up: raised the lower bound from 1 MB to 2 TB to reject
-/// corrupted NaN-boxes whose 48-bit handle lands in the 1-2 TB window
-/// (e.g. `0x00FF_0000_0000` from an `ArrayHeader { length: 0, capacity:
-/// 255 }` read as u64). Real macOS mimalloc + arena allocations all
-/// land in the 3-5 TB range; anything below 2 TB is certainly bogus on
-/// that platform. Linux glibc and Windows mimalloc allocate well below
-/// 2 TB though (often in the GB-to-tens-of-GB range), so the macOS floor
-/// silently rejects every legitimate object pointer there — issues
-/// #385/#386/#387 traced back to this exact filter on Windows.
-///
-/// #1136 / #1129: iOS-family *device* targets (aarch64-apple-ios,
-/// -tvos, -watchos, -visionos) ship without mimalloc and use
-/// libsystem_malloc, whose user allocations land in the same low range
-/// as Android/Linux/Windows. Treat them like those platforms — the
-/// downstream `GcHeader.obj_type` check is the real liveness guard.
-/// The simulator (e.g. ios + target_abi = "sim") runs on the macOS
-/// host's mimalloc so its allocations still land above 2 TB; lowering
-/// the floor here is safe because the obj_type validation does the
-/// work.
-#[inline(always)]
-pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
-    let addr = ptr as u64;
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "windows",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-    ))]
-    const HEAP_MIN: u64 = 0x1000;
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "windows",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-    )))]
-    const HEAP_MIN: u64 = 0x200_0000_0000;
-    (HEAP_MIN..0x8000_0000_0000).contains(&addr)
-}
+// `is_valid_obj_ptr` moved to `value/addr_class.rs` (the centralized
+// handle-vs-heap-pointer classification module); re-exported here so the
+// existing `crate::object::is_valid_obj_ptr` call sites keep compiling
+// unchanged.
+pub(crate) use crate::value::addr_class::is_valid_obj_ptr;
 
 /// Object header - precedes the fields in memory
 #[repr(C)]

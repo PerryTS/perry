@@ -42,7 +42,7 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     if raw_ptr.is_null() {
         return false_val;
     }
-    if (raw_ptr as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(raw_ptr as usize) {
         return false_val;
     }
 

@@ -271,17 +271,15 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
 /// Check if a raw pointer points to a ClosureHeader by checking CLOSURE_MAGIC at offset 12.
 /// Safe to call with any non-null, sufficiently aligned pointer >= 0x10000.
 pub fn is_closure_ptr(ptr: usize) -> bool {
-    // Reject the native / Web-Fetch small-handle band (< 0x100000). Fetch
-    // handles (Headers/Request/Response/Blob, [0x40000, 0x100000)), node:http
-    // handles, and revocable-proxy ids ([0xF0000, 0x100000)) are NaN-boxed
-    // POINTER_TAG values holding a small registry id, not heap pointers — a
-    // real closure is always a heap allocation well above 0x100000. The old
-    // 0x10000 floor let a 0x40000 Headers handle through, so the
-    // `*(ptr + 12)` CLOSURE_MAGIC probe below dereferenced unmapped low
-    // memory and SIGSEGVd on Linux (macOS masked it via the much higher
-    // is_valid_obj_ptr heap floor). 0x100000 matches the cutoff used across
-    // the object field-read paths (field_get_set.rs / class_registry.rs).
-    if ptr < 0x100000 {
+    // Reject the native / Web-Fetch small-handle band (see
+    // `value::addr_class` for the band map). Fetch handles, node:http
+    // handles, and revocable-proxy ids are NaN-boxed POINTER_TAG values
+    // holding a small registry id, not heap pointers — a real closure is
+    // always a heap allocation above the band. The old 0x10000 floor let a
+    // 0x40000 Headers handle through, so the `*(ptr + 12)` CLOSURE_MAGIC
+    // probe below dereferenced unmapped low memory and SIGSEGVd on Linux
+    // (macOS masked it via the much higher is_valid_obj_ptr heap floor).
+    if crate::value::addr_class::is_handle_band(ptr) {
         return false;
     }
     if ptr % std::mem::align_of::<ClosureHeader>() != 0 {

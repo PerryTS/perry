@@ -63,19 +63,20 @@ pub fn date_invalid() -> f64 {
 pub fn is_date_cell_addr(addr: usize) -> bool {
     // #4004: small-handle registry ids (Web Fetch Request/Headers/Response,
     // perry-ffi/node:http handles, timer ids, …) are NaN-boxed as POINTER_TAG
-    // values but are NOT real heap addresses — they live in the `< 0x100000`
-    // small-handle band. Real `DateCell`s are arena-allocated, always at or
-    // above the small-handle cutoff. Dereferencing `addr - GC_HEADER_SIZE` on a
-    // small handle reads unmapped memory: once #4018 moved fetch handles up to
-    // 0x40000 (past the old 0x1000 floor), any untyped `request.headers.get()`
-    // dispatch routed its receiver through `is_date_value` here and segfaulted.
-    // Reject the whole small-handle band so this is an exact heap-pointer check.
-    if addr < 0x100000 || !crate::object::is_valid_obj_ptr(addr as *const u8) {
-        return false;
-    }
+    // values but are NOT real heap addresses — they live in the small-handle
+    // band (see `value::addr_class`). Real `DateCell`s are arena-allocated,
+    // always above the small-handle cutoff. Dereferencing
+    // `addr - GC_HEADER_SIZE` on a small handle reads unmapped memory: once
+    // #4018 moved fetch handles up to 0x40000 (past the old 0x1000 floor), any
+    // untyped `request.headers.get()` dispatch routed its receiver through
+    // `is_date_value` here and segfaulted. `try_read_gc_header` rejects the
+    // whole band before the deref, so this is an exact heap-pointer check.
     unsafe {
-        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_DATE_CELL {
+        let header = match crate::value::addr_class::try_read_gc_header(addr) {
+            Some(header) => header,
+            None => return false,
+        };
+        if header.obj_type != crate::gc::GC_TYPE_DATE_CELL {
             return false;
         }
         // #4003: `Buffer`s are raw-`alloc`'d with NO `GcHeader`, so the word at

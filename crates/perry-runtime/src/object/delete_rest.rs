@@ -34,13 +34,13 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
-    // A Proxy is a small registered id in [0xF0000, 0x100000), not a heap
+    // A Proxy is a small registered id in the proxy id band, not a heap
     // ObjectHeader. Dereferencing it below (GC header / keys_array reads) would
     // segfault. Route `delete proxy.k` / `delete proxy[k]` through the proxy
     // `deleteProperty` trap. (#2846-family Proxy crash cluster.)
     {
         let addr = obj as u64;
-        if (0xF0000..0x100000).contains(&addr) {
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
@@ -277,7 +277,7 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
     // `js_object_delete_field`, which has its own guard).
     {
         let addr = obj as u64;
-        if (0xF0000..0x100000).contains(&addr) {
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
