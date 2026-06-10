@@ -1049,6 +1049,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // the raw `js_bigint_<op>`, and re-box with BIGINT_TAG. Also
     // tolerate mixed bigint/int32 operands.
     module.declare_function("js_dynamic_add", DOUBLE, &[DOUBLE, DOUBLE]);
+    // `++`/`--` slow path: ToNumeric read (BigInt passthrough, else ToNumber)
+    // and a type-preserving step by 1n/1.0. Keeps `let i = 10n; i++` a BigInt.
+    module.declare_function("js_to_numeric", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_numeric_step", DOUBLE, &[DOUBLE, I32]);
     // Refs #486: dispatch path for `+` when neither operand has a static
     // type (string|number|bigint). Per JS spec, string concat takes
     // priority; otherwise BigInt or numeric add. Hono's

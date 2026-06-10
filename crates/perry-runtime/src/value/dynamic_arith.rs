@@ -170,6 +170,46 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     a + b
 }
 
+/// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt passes through
+/// unchanged, every other value is coerced via `ToNumber`. The codegen's
+/// update path uses this for the *operand read* so that the postfix return
+/// value and the stepping base keep their BigInt type instead of collapsing
+/// to a Number (`let i = 10n; i++` must stay a BigInt — otherwise a later
+/// `i + 87n` throws a mixed-type TypeError; test262
+/// BigInt/prototype/toString/a-z).
+#[no_mangle]
+pub unsafe extern "C" fn js_to_numeric(value: f64) -> f64 {
+    if JSValue::from_bits(value.to_bits()).is_bigint() {
+        value
+    } else {
+        crate::builtins::js_number_coerce(value)
+    }
+}
+
+/// Step a ToNumeric operand by `1` of its own numeric type for `++`/`--`.
+/// `numeric` is already the result of [`js_to_numeric`]: a BigInt steps by
+/// `1n` (staying a BigInt), any Number steps by `1.0`. `is_increment` is
+/// nonzero for `++`, zero for `--`.
+#[no_mangle]
+pub unsafe extern "C" fn js_numeric_step(numeric: f64, is_increment: i32) -> f64 {
+    if JSValue::from_bits(numeric.to_bits()).is_bigint() {
+        let one_ptr = crate::bigint::js_bigint_from_i64(1);
+        // `js_nanbox_bigint` is pure and `dynamic_bigint_binary_op` roots both
+        // operands before any further allocation, so `one_ptr` survives.
+        let one_val = js_nanbox_bigint(one_ptr as i64);
+        let op = if is_increment != 0 {
+            crate::bigint::js_bigint_add
+        } else {
+            crate::bigint::js_bigint_sub
+        };
+        dynamic_bigint_binary_op(numeric, one_val, op)
+    } else if is_increment != 0 {
+        numeric + 1.0
+    } else {
+        numeric - 1.0
+    }
+}
+
 /// Dynamic `a + b` for type-uncertain operands. Per JS spec, when either
 /// operand is a string after ToPrimitive, the result is string concatenation;
 /// otherwise both operands are coerced to numbers and summed (or BigInt-
@@ -394,3 +434,7 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
 static KEEP_DYNAMIC_POW: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_pow;
 #[used]
 static KEEP_DYNAMIC_USHR: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_ushr;
+#[used]
+static KEEP_TO_NUMERIC: unsafe extern "C" fn(f64) -> f64 = js_to_numeric;
+#[used]
+static KEEP_NUMERIC_STEP: unsafe extern "C" fn(f64, i32) -> f64 = js_numeric_step;

@@ -664,28 +664,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // module globals.
         Expr::Update { id, op, prefix } => {
             super::invalidate_local_write_facts(ctx, *id);
-            // Spec ToNumber: `x++`/`++x` coerce the operand to a number
-            // (ToNumber on bool/null/string/object-with-valueOf) before the
-            // add/sub, and the *returned* value (postfix) is the coerced
-            // number, not the original boxed operand. Statically-integer loop
-            // counters already hold a real f64 and skip the call to keep the
-            // hot path a single `fadd`. (BigInt operands convert to Number here
-            // — full BigInt-preserving `++`/`--` additionally needs the Update
-            // result's static type to be inferred as BigInt so `===` uses the
-            // value path, not `fcmp`; deferred.)
+            // Spec ToNumeric: `x++`/`++x` coerce the operand (ToNumber on
+            // bool/null/string/object-with-valueOf, or BigInt passthrough)
+            // before the add/sub, and the *returned* value (postfix) is the
+            // coerced numeric, not the original boxed operand. Statically-
+            // integer loop counters already hold a real f64 and skip the call
+            // to keep the hot path a single `fadd`. The slow path routes
+            // through `js_to_numeric`/`js_numeric_step` so a BigInt operand
+            // stays a BigInt (`let i = 10n; i++` → `11n`, not the Number `11`
+            // which would make a later `i + 87n` throw a mixed-type
+            // TypeError; test262 BigInt/prototype/toString/a-z).
             let needs_numeric_coerce =
                 !ctx.integer_locals.contains(id) && !ctx.unsigned_i32_locals.contains(id);
+            let is_increment_arg = match op {
+                UpdateOp::Increment => "1",
+                UpdateOp::Decrement => "0",
+            };
             let coerce_old = |blk: &mut crate::block::LlBlock, raw: &str| -> String {
                 if needs_numeric_coerce {
-                    blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, raw)])
+                    blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, raw)])
                 } else {
                     raw.to_string()
                 }
             };
             let step_new = |blk: &mut crate::block::LlBlock, old_num: &str| -> String {
-                match op {
-                    UpdateOp::Increment => blk.fadd(old_num, "1.0"),
-                    UpdateOp::Decrement => blk.fsub(old_num, "1.0"),
+                if needs_numeric_coerce {
+                    blk.call(
+                        DOUBLE,
+                        "js_numeric_step",
+                        &[(DOUBLE, old_num), (I32, is_increment_arg)],
+                    )
+                } else {
+                    match op {
+                        UpdateOp::Increment => blk.fadd(old_num, "1.0"),
+                        UpdateOp::Decrement => blk.fsub(old_num, "1.0"),
+                    }
                 }
             };
             // Closure capture path: runtime get + add/sub + runtime set.
