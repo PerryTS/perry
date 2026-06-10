@@ -199,8 +199,80 @@ pub mod bootstrap {
     }
 }
 
+/// Which rendering backend a `windows-winui` process resolves to (#4680 step 3
+/// seam).
+///
+/// The Fluent (WinUI 3 / `Microsoft.UI.Xaml`) path is only usable when the
+/// Windows App SDK runtime initialized — otherwise the backend falls back to
+/// the re-exported Win32 path so the app still renders. This module is the
+/// single decision point the per-widget XAML dispatch reads: each XAML widget
+/// (landing incrementally) checks [`backend::active`] and constructs an
+/// `Microsoft.UI.Xaml` control on [`RenderBackend::Fluent`], else delegates to
+/// the existing `perry-ui-windows` Win32 constructor.
+pub mod backend {
+    use super::bootstrap::{self, InitStatus};
+
+    /// The effective render backend for this process.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum RenderBackend {
+        /// WinUI 3 / Fluent (`Microsoft.UI.Xaml`) — chosen when the Windows
+        /// App SDK runtime is `Ready`.
+        Fluent,
+        /// Win32 / GDI (the re-exported `perry-ui-windows` backend) — chosen
+        /// whenever the Windows App SDK runtime is unavailable.
+        Win32,
+    }
+
+    impl RenderBackend {
+        /// Stable lowercase identifier, used in diagnostics.
+        pub fn as_str(self) -> &'static str {
+            match self {
+                RenderBackend::Fluent => "fluent",
+                RenderBackend::Win32 => "win32",
+            }
+        }
+    }
+
+    /// The render backend this process will use, derived from the Windows App
+    /// SDK bootstrap probe ([`bootstrap::initialize`]) and memoized by it:
+    /// [`RenderBackend::Fluent`] iff the runtime is `Ready`, otherwise
+    /// [`RenderBackend::Win32`]. Cheap and stable across calls.
+    pub fn active() -> RenderBackend {
+        match bootstrap::initialize() {
+            InitStatus::Ready => RenderBackend::Fluent,
+            InitStatus::RuntimeMissing => RenderBackend::Win32,
+        }
+    }
+}
+
+/// Process-startup probe (#4680 step 3 seam).
+///
+/// Registered as a CRT static initializer (`.CRT$XCU`) so it runs at process
+/// start for *any* binary that links this staticlib — i.e. exactly the
+/// `--target windows-winui` builds, and never the default `--target windows`
+/// builds (which don't link this crate). It resolves the render backend up
+/// front (probing the Windows App SDK once) so the first widget construction
+/// reads an already-decided answer, and emits a one-line backend diagnostic
+/// when `PERRY_WINUI_DIAG` is set. It must never panic — it runs before `main`.
+#[cfg(target_os = "windows")]
+#[used]
+#[link_section = ".CRT$XCU"]
+static PERRY_WINUI_STARTUP: extern "C" fn() = perry_winui_startup;
+
+#[cfg(target_os = "windows")]
+extern "C" fn perry_winui_startup() {
+    let backend = backend::active();
+    if std::env::var_os("PERRY_WINUI_DIAG").is_some() {
+        use std::io::Write;
+        // Best-effort: a failed write in a static initializer is ignored.
+        let _ = std::io::stderr()
+            .write_all(format!("[perry-winui] render backend: {}\n", backend.as_str()).as_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::backend::{active, RenderBackend};
     use super::bootstrap::{initialize, InitStatus};
 
     #[test]
@@ -226,5 +298,24 @@ mod tests {
         // There is no Windows App SDK off Windows, so the verdict is always
         // RuntimeMissing — the caller falls back to Win32.
         assert_eq!(initialize(), InitStatus::RuntimeMissing);
+    }
+
+    #[test]
+    fn active_backend_matches_bootstrap_verdict() {
+        // The backend seam must mirror the bootstrap probe exactly and be
+        // stable across calls.
+        let expected = match initialize() {
+            InitStatus::Ready => RenderBackend::Fluent,
+            InitStatus::RuntimeMissing => RenderBackend::Win32,
+        };
+        assert_eq!(active(), expected);
+        assert_eq!(active(), active(), "backend choice must be stable");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn backend_is_win32_off_windows() {
+        // No Windows App SDK off Windows → always the Win32 fallback.
+        assert_eq!(active(), RenderBackend::Win32);
     }
 }

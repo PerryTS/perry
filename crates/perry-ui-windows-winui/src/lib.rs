@@ -34,7 +34,12 @@
 //!    [`winui::bootstrap::initialize`] dynamically loads the Windows App SDK
 //!    bootstrapper and reports whether the WinUI path is usable, falling back
 //!    to Win32 (this re-export) when the runtime is absent.
-//! 3. Widget mapping layer (perry-ui widget set → XAML controls).
+//! 3. Widget mapping layer (perry-ui widget set → XAML controls). The
+//!    *dispatch seam* is in place ([`winui::backend::active`]): a CRT
+//!    static initializer probes the SDK at process start and resolves a
+//!    [`winui::backend::RenderBackend`] (`Fluent` when the runtime is ready,
+//!    else `Win32`). Each XAML widget lands behind this check; today it always
+//!    resolves to `Win32` until the first control is wired in.
 //! 4. Window chrome: Mica/Acrylic backdrop, Fluent title bar, light/dark/system.
 //! 5. Packaging: MSIX or unpackaged WinAppSDK bootstrap; document the runtime.
 //! 6. `apply_style` (geisterhand) dispatcher parity with the other backends.

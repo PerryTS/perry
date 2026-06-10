@@ -1,3 +1,23 @@
+## v0.5.1172 — feat(ui-windows-winui): render-backend dispatch seam + startup probe (#4680 step 3)
+
+Builds on the Windows App SDK bootstrap probe. Adds `winui::backend` — the single
+decision point the per-widget WinUI 3 mapping reads: `backend::active()` returns
+`RenderBackend::Fluent` when the bootstrap probe is `Ready`, else `RenderBackend::Win32`.
+
+A CRT static initializer (`.CRT$XCU`, anchored with `#[used]`) registered in the
+crate runs the probe at process start for *any* binary that links this staticlib —
+i.e. exactly the `--target windows-winui` builds, never the default `--target windows`
+builds (which don't link the crate). So the first widget construction reads an
+already-resolved backend rather than probing lazily. Setting `PERRY_WINUI_DIAG` prints
+the chosen backend at launch (`[perry-winui] render backend: win32|fluent`) and, on
+bootstrap failure, surfaces the raw HRESULT for diagnosis. The initializer never panics
+(it runs before `main`).
+
+Verified on a Windows host without the SDK: the initializer fires in a linked binary,
+the `.CRT$XCU` section is present in the WHOLEARCHIVE'd `perry_ui_windows_winui.lib`, and
+`active()` mirrors the bootstrap verdict and is stable across calls. Win32
+(`--target windows`) remains the default and is unaffected.
+
 ## v0.5.1171 — fix(dayjs): `arguments` in sequence exprs + computed Date-method dispatch (#5133)
 
 `compilePackages: dayjs` threw `ReferenceError: arguments is not defined`, and once that was resolved `.add()`/`.date(n)` silently no-op'd. Two distinct, general root causes:
