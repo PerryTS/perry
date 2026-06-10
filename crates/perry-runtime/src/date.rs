@@ -362,10 +362,19 @@ pub(crate) fn time_clip(t: f64) -> f64 {
 /// when (and only when) it falls in that range.
 #[inline]
 fn rebase_two_digit_year(year: f64) -> f64 {
-    if year.fract() == 0.0 && (0.0..100.0).contains(&year) {
-        year + 1900.0
+    // ECMAScript MakeFullYear: y = ToInteger(year) (truncate toward zero);
+    // if 0 ≤ y ≤ 99 then the full year is 1900 + y. The truncation happens
+    // BEFORE the range test, so `Date.UTC(-0.999999, 0)` rebases to 1900
+    // (ToInteger(-0.999999) = 0), not the literal year 0 (test262
+    // Date/UTC/year-offset). Non-finite years pass through unchanged.
+    if !year.is_finite() {
+        return year;
+    }
+    let yi = year.trunc();
+    if (0.0..=99.0).contains(&yi) {
+        1900.0 + yi
     } else {
-        year
+        yi
     }
 }
 
@@ -388,11 +397,14 @@ fn parse_date_string(s: &str) -> f64 {
         return f64::NAN;
     }
 
+    // Date.parse always TimeClips: a parsed instant outside ±8.64e15 ms (the
+    // supported Date range) is Invalid (`Date.parse("-271821-04-19T23:59:59.999Z")`
+    // → NaN, one ms below the minimum; test262 Date/parse/time-value-maximum-range).
     if let Some(ts) = parse_iso8601(s) {
-        return ts;
+        return time_clip(ts);
     }
     if let Some(ts) = parse_rfc_or_named(s) {
-        return ts;
+        return time_clip(ts);
     }
     f64::NAN
 }
@@ -735,6 +747,20 @@ fn components_to_timestamp(
     days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
 }
 
+/// Format a calendar year for ISO 8601 (`toISOString` / `toJSON`): `0..=9999`
+/// is 4 zero-padded digits ("2024"), every other year uses the expanded sign +
+/// 6-digit form ("+275760" / "-271821" / "-000001"). Unlike [`format_year`],
+/// which omits the `+` for the human `toString`/`toUTCString` forms.
+fn iso_year(year: i64) -> String {
+    if (0..=9999).contains(&year) {
+        format!("{:04}", year)
+    } else if year < 0 {
+        format!("-{:06}", -year)
+    } else {
+        format!("+{:06}", year)
+    }
+}
+
 /// Get timestamp from Date (date.getTime())
 /// Since we store dates as timestamps, this is an identity function
 #[no_mangle]
@@ -762,10 +788,18 @@ pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHea
     // This is a simplified implementation - proper implementation would use chrono crate
     let (year, month, day, hour, minute, second) = timestamp_to_components(secs);
 
-    // Format as ISO 8601: YYYY-MM-DDTHH:mm:ss.sssZ
+    // ISO 8601 "YYYY-MM-DDTHH:mm:ss.sssZ"; years outside 0..=9999 use the
+    // expanded "±YYYYYY" form (see `iso_year`) — test262
+    // Date/parse/time-value-maximum-range.
     let iso_string = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        year, month, day, hour, minute, second, millis
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        iso_year(year as i64),
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        millis
     );
 
     crate::string::js_string_from_bytes(iso_string.as_ptr(), iso_string.len() as u32)
