@@ -223,10 +223,6 @@ fn package_name_from_package_json(package_root: &std::path::Path) -> Option<Stri
         .map(str::to_string)
 }
 
-fn marker_path_for_display(path: &std::path::Path) -> String {
-    path.display().to_string()
-}
-
 fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathBuf> {
     if max_depth == 0 {
         return None;
@@ -256,11 +252,11 @@ fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathB
 fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, String)> {
     let binding_gyp = package_root.join("binding.gyp");
     if binding_gyp.exists() {
-        return Some(("binding.gyp", marker_path_for_display(&binding_gyp)));
+        return Some(("binding.gyp", binding_gyp.display().to_string()));
     }
     let prebuilds = package_root.join("prebuilds");
     if prebuilds.is_dir() {
-        return Some(("prebuilds/", marker_path_for_display(&prebuilds)));
+        return Some(("prebuilds/", prebuilds.display().to_string()));
     }
     let package_json_path = package_root.join("package.json");
     if let Ok(package_json) = fs::read_to_string(&package_json_path) {
@@ -272,7 +268,7 @@ fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, St
             {
                 return Some((
                     "package.json gypfile",
-                    marker_path_for_display(&package_json_path),
+                    package_json_path.display().to_string(),
                 ));
             }
             if package_json_dependency_uses_native_addon_loader(&parsed, "node-gyp-build")
@@ -280,13 +276,13 @@ fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, St
             {
                 return Some((
                     "native addon loader dependency",
-                    marker_path_for_display(&package_json_path),
+                    package_json_path.display().to_string(),
                 ));
             }
         }
     }
     if let Some(node_file) = find_node_addon_file(package_root, 5) {
-        return Some(("*.node", marker_path_for_display(&node_file)));
+        return Some(("*.node", node_file.display().to_string()));
     }
     None
 }
