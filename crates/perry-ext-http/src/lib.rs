@@ -605,8 +605,11 @@ fn timeout_from_options(opts: &serde_json::Value) -> Option<u64> {
 }
 
 fn method_from_options(opts: &serde_json::Value) -> String {
+    // Node defaults any falsy `options.method` (absent, `''`, `null`,
+    // `undefined`) to `'GET'` — only a truthy string is used (#4970).
     opts.get("method")
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_uppercase())
         .unwrap_or_else(|| "GET".to_string())
 }
@@ -997,17 +1000,12 @@ pub unsafe extern "C" fn js_http_request(opts_f64: f64, callback_i64: i64) -> Ha
 /// `new http.ClientRequest(options)` (#4904). Perry's client model defers
 /// the actual send to `.end()`, so constructing is exactly `http.request`
 /// without a response callback. Node coerces a falsy `options.method` /
-/// `options.path` to the `GET` / `/` defaults — mirror the method side
-/// here (the empty path already reads back as `/` through the surface).
+/// `options.path` to the `GET` / `/` defaults — `method_from_options`
+/// handles the method side (#4970) and the empty path already reads back
+/// as `/` through the surface.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_client_request_standalone_new(opts_f64: f64) -> Handle {
-    let handle = request_common(opts_f64, 0, "http");
-    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        if req.method.is_empty() {
-            req.method = "GET".to_string();
-        }
-    });
-    handle
+    request_common(opts_f64, 0, "http")
 }
 
 #[no_mangle]

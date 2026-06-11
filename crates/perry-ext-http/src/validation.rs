@@ -88,11 +88,14 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
         }
     }
 
-    // `method`, when a string, must be a valid HTTP token. The error message
-    // quotes the *raw* (non-upper-cased) method, matching
-    // `validateHttpToken(method, 'Method')`.
+    // `method`, when a *non-empty* string, must be a valid HTTP token. The
+    // error message quotes the *raw* (non-upper-cased) method, matching
+    // `validateHttpToken(method, 'Method')`. Node only validates a truthy
+    // method (`if (methodIsString && method)` in lib/_http_client.js); a
+    // falsy one (`''`, `undefined`, `null`) falls through to the `'GET'`
+    // default instead of throwing (#4970).
     if let Some(method) = obj.get("method").and_then(|v| v.as_str()) {
-        if !is_valid_token(method) {
+        if !method.is_empty() && !is_valid_token(method) {
             throw_type_error_with_code(
                 &format!("Method must be a valid HTTP token [\"{method}\"]"),
                 "ERR_INVALID_HTTP_TOKEN",
