@@ -969,6 +969,26 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             );
         }
 
+        // Symbol-keyed lookup: route through the SYMBOL_PROPERTIES side
+        // table (mirrors js_object_has_own) — string-coercing a Symbol key
+        // below would never match and reported every symbol prop as
+        // non-enumerable.
+        if crate::symbol::js_is_symbol(key_value) != 0 {
+            let bits = obj_value.to_bits();
+            if (bits >> 48) == 0x7FFE {
+                // ClassRef receivers: statics live in the class registry and
+                // are non-enumerable like builtin statics.
+                return f64::from_bits(TAG_FALSE);
+            }
+            if !crate::symbol::js_object_has_own_symbol(obj_value, key_value) {
+                return f64::from_bits(TAG_FALSE);
+            }
+            let owner = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+            let sym = (key_value.to_bits() & crate::value::POINTER_MASK) as usize;
+            let enumerable = crate::symbol::symbol_property_is_enumerable(owner, sym);
+            return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
+        }
+
         let key_str = crate::builtins::js_string_coerce(key_value);
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);

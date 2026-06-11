@@ -79,6 +79,10 @@ fn eq_is_object(v: JSValue) -> bool {
 /// - string == number: coerce string to number
 #[no_mangle]
 pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
+    // Normalize raw module-slot object pointers (top16 == 0) to their
+    // POINTER_TAG'd form so reference equality sees one representation.
+    let a = JSValue::from_bits(crate::value::equality::normalize_raw_object_bits(a.bits()));
+    let b = JSValue::from_bits(crate::value::equality::normalize_raw_object_bits(b.bits()));
     // Both numbers FIRST: IEEE 754 equality correctly handles NaN!=NaN
     // (NaN has well-defined bits, so the later same-bits fast path
     // would otherwise incorrectly return true for NaN==NaN). Also

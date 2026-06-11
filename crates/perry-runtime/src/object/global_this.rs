@@ -1411,9 +1411,15 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     value: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    // RequireObjectCoercible(this): `Object.prototype.isPrototypeOf.call(null)`
-    // / `.call(undefined)` must throw a TypeError (spec step 1), matching the
-    // sibling Object.prototype methods. Pre-fix this silently returned false.
+    // Spec 20.1.3.3 step order: if V is not an Object, return false FIRST —
+    // `Object.prototype.isPrototypeOf.call(undefined, 1)` is `false`, not a
+    // TypeError. Symbols are POINTER_TAG'd in Perry but are primitives.
+    let value_jsv = JSValue::from_bits(value.to_bits());
+    if !value_jsv.is_pointer() || unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return f64::from_bits(JSValue::bool(false).bits());
+    }
+    // Step 2, ToObject(this): `.call(null, obj)` / `.call(undefined, obj)`
+    // must throw a TypeError, matching the sibling Object.prototype methods.
     let this_jsv = JSValue::from_bits(this_value.to_bits());
     if this_jsv.is_null() || this_jsv.is_undefined() {
         super::object_ops::throw_object_type_error(

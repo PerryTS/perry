@@ -469,6 +469,10 @@ pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSV
     let eff_receiver = ACCESSOR_RECEIVER_OVERRIDE
         .with(|c| c.take())
         .unwrap_or(receiver);
+    // OrdinaryCallBindThis: a primitive receiver (accessor inherited from
+    // Number.prototype / Object.prototype etc.) is boxed ONCE up front for a
+    // sloppy getter; a strict getter observes the raw primitive.
+    let eff_receiver = crate::closure::coerce_call_this(f64::from_bits(get_bits), eff_receiver);
     let call_bits = crate::closure::clone_closure_rebind_this(get_bits, eff_receiver);
     let closure = (call_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure.is_null() {
@@ -487,6 +491,8 @@ pub(crate) unsafe fn invoke_accessor_setter(set_bits: u64, receiver: f64, value:
     if closure.is_null() {
         return;
     }
+    // Strict/sloppy receiver coercion — see invoke_accessor_getter.
+    let receiver = crate::closure::coerce_call_this(f64::from_bits(set_bits), receiver);
     let call_bits = crate::closure::clone_closure_rebind_this(set_bits, receiver);
     let closure = (call_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure.is_null() {
@@ -658,6 +664,23 @@ unsafe fn primitive_builtin_prototype_property(
     let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
     if proto_ptr.is_null() {
         return None;
+    }
+    // An ACCESSOR installed on the builtin prototype
+    // (`Object.defineProperty(Number.prototype, "x", { get(){…} })`) must run
+    // with the ORIGINAL primitive receiver — boxed/raw per getter strictness
+    // inside `invoke_accessor_getter` — not the prototype object the accessor
+    // happens to live on (which a plain field read below would hand it).
+    if ACCESSORS_IN_USE.with(|c| c.get()) {
+        let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let key_len = (*key).byte_len as usize;
+        if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)) {
+            if let Some(acc) = get_accessor_descriptor(proto_ptr as usize, name) {
+                if acc.get == 0 {
+                    return Some(JSValue::undefined());
+                }
+                return Some(invoke_accessor_getter(acc.get, receiver));
+            }
+        }
     }
     let value = js_object_get_field_by_name(proto_ptr, key);
     if value.is_undefined() {
@@ -1143,6 +1166,23 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
                 let own_len = crate::array::js_array_length(own);
                 for i in 0..own_len {
                     let key_val = crate::array::js_array_get(own, i);
+                    // The wrapper's character indices are installed as REAL
+                    // own fields at construction (install_string_wrapper_
+                    // indices), so they come back from `js_object_keys` too —
+                    // skip them here or `Object.keys(Object("abc"))` lists
+                    // every index twice. Only canonical indices below the
+                    // string length are virtual; expando keys pass through.
+                    let key_ptr =
+                        (key_val.bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+                    if let Some(name) =
+                        unsafe { super::has_own_helpers::str_from_string_header(key_ptr) }
+                    {
+                        if let Ok(idx) = name.parse::<u32>() {
+                            if idx.to_string() == name && (idx as usize) < len as usize {
+                                continue;
+                            }
+                        }
+                    }
                     crate::array::js_array_push_f64(arr, f64::from_bits(key_val.bits()));
                 }
             }

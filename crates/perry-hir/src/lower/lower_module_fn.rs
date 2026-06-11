@@ -782,6 +782,57 @@ pub fn lower_module_full(
         }
     }
 
+    // Post-pass: widen declared types lied about by later assignments
+    // (`var x = 2; … set foo(v){ x = this; }` must not leave `x: Number`,
+    // or codegen float-compares NaN-boxed pointers — #3576 family). Collect
+    // over EVERY body first (LocalIds are module-unique; the assignment and
+    // the `Stmt::Let` can live in different bodies), then rewrite.
+    {
+        let mut widening = crate::lower::type_widening::TypeWidening::new();
+        widening.collect(&module.init);
+        for func in &module.functions {
+            widening.collect(&func.body);
+        }
+        for class in &module.classes {
+            for method in &class.methods {
+                widening.collect(&method.body);
+            }
+            for (_, getter) in &class.getters {
+                widening.collect(&getter.body);
+            }
+            for (_, setter) in &class.setters {
+                widening.collect(&setter.body);
+            }
+            for static_method in &class.static_methods {
+                widening.collect(&static_method.body);
+            }
+            if let Some(ref ctor) = class.constructor {
+                widening.collect(&ctor.body);
+            }
+        }
+        widening.apply(&mut module.init);
+        for func in &mut module.functions {
+            widening.apply(&mut func.body);
+        }
+        for class in &mut module.classes {
+            for method in &mut class.methods {
+                widening.apply(&mut method.body);
+            }
+            for (_, getter) in &mut class.getters {
+                widening.apply(&mut getter.body);
+            }
+            for (_, setter) in &mut class.setters {
+                widening.apply(&mut setter.body);
+            }
+            for static_method in &mut class.static_methods {
+                widening.apply(&mut static_method.body);
+            }
+            if let Some(ref mut ctor) = class.constructor {
+                widening.apply(&mut ctor.body);
+            }
+        }
+    }
+
     // Post-pass: infer `extends_name` from `extends_expr` for the bare-factory
     // shape `class Sub extends makeFactory() {}` where `makeFactory` is a
     // top-level function whose body trivially returns a static `ClassRef`.

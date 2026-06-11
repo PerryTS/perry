@@ -813,6 +813,87 @@ pub extern "C" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
 }
 
+/// Keepalive anchor for the auto-optimize whole-program build (generated-code
+///-only callee; see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_GLOBAL_GET_OPTIONAL: extern "C" fn(f64) -> f64 = js_global_get_optional;
+
+#[used]
+static KEEP_JS_GLOBAL_UPDATE: extern "C" fn(f64, f64, f64) -> f64 = js_global_update;
+
+/// `++x` / `x++` / `--x` / `x--` where `x` resolves to no lexical binding —
+/// i.e. a (sloppy) global property reference. Read globalThis[name] (throwing
+/// the spec ReferenceError when the property is absent — a genuinely
+/// unresolvable reference, e.g. `++neverDeclared`), ToNumeric, step by 1 of
+/// its own type, write the result back to globalThis, and return the
+/// post-step value for a prefix op or the pre-step ToNumeric value for a
+/// postfix op (#3575: `for (i = 0; i < n; i++)` with an undeclared `i`).
+/// The boolean flags arrive NaN-boxed (codegen passes HIR `Bool` literals).
+#[no_mangle]
+pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix: f64) -> f64 {
+    let is_increment = crate::value::js_is_truthy(is_increment);
+    let is_prefix = crate::value::js_is_truthy(is_prefix) != 0;
+    let g = crate::object::js_get_global_this();
+    let gj = crate::value::JSValue::from_bits(g.to_bits());
+    let key = crate::builtins::js_string_coerce(name_value);
+    let mut present = false;
+    let old = if gj.is_pointer() && !key.is_null() {
+        let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
+        if !gptr.is_null() {
+            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            if !v.is_undefined()
+                || unsafe {
+                    crate::object::js_object_has_own(g, name_value).to_bits()
+                        == crate::value::TAG_TRUE
+                }
+            {
+                present = true;
+            }
+            f64::from_bits(v.bits())
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
+    if !present {
+        let name = value_to_lossy_string(name_value);
+        let msg = format!("{} is not defined", name);
+        let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = js_referenceerror_new(msg_str);
+        return crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+    }
+    let numeric = unsafe { crate::value::js_to_numeric(old) };
+    let stepped = unsafe { crate::value::js_numeric_step(numeric, is_increment) };
+    let gptr = (gj.bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
+    unsafe { crate::object::js_object_set_field_by_name(gptr, key, stepped) };
+    if is_prefix {
+        stepped
+    } else {
+        numeric
+    }
+}
+
+/// Non-throwing variant of [`js_global_get_or_throw_unresolved`] for
+/// `typeof <unresolved ident>`: the spec's GetValue-skips-on-typeof rule means
+/// a missing global yields `undefined` rather than a ReferenceError, but a
+/// global created at RUNTIME (sloppy `foo = 1` lowers to a globalThis
+/// property set — #3575) must still be observed.
+#[no_mangle]
+pub extern "C" fn js_global_get_optional(name_value: f64) -> f64 {
+    let g = crate::object::js_get_global_this();
+    let gj = crate::value::JSValue::from_bits(g.to_bits());
+    if gj.is_pointer() {
+        let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
+        let key = crate::builtins::js_string_coerce(name_value);
+        if !gptr.is_null() && !key.is_null() {
+            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            return f64::from_bits(v.bits());
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
     throw_reference_error_message(b"assignment to undeclared variable")

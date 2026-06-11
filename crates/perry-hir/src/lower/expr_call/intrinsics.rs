@@ -1238,20 +1238,37 @@ pub(super) fn try_iife_call_rewrite(
                             let lowered_callee = lower_expr(ctx, inner)?;
                             if let Expr::Closure {
                                 captures_this: false,
+                                is_arrow,
+                                body,
                                 ..
                             } = &lowered_callee
                             {
-                                let rest_args = call
-                                    .args
-                                    .iter()
-                                    .skip(1)
-                                    .map(|arg| lower_expr(ctx, &arg.expr))
-                                    .collect::<Result<Vec<_>>>()?;
-                                return Ok(Some(Expr::Call {
-                                    callee: Box::new(lowered_callee),
-                                    args: rest_args,
-                                    type_args: Vec::new(),
-                                }));
+                                // Dropping the `.call` thisArg is only sound
+                                // when the body never observes `this`. An arrow
+                                // (captures_this == false) has no own `this`. A
+                                // regular function expression ALSO reports
+                                // captures_this == false (it has its own dynamic
+                                // `this`, not a captured one — expr_function.rs),
+                                // so its body may still read `this`; folding
+                                // `(function(){ "use strict"; return this })
+                                // .call(null)` to `fn()` would lose the bound
+                                // receiver (the body would see undefined, not
+                                // null). Require a this-free body there. #3576.
+                                let drops_this_safely =
+                                    *is_arrow || !crate::analysis::closure_uses_this(body);
+                                if drops_this_safely {
+                                    let rest_args = call
+                                        .args
+                                        .iter()
+                                        .skip(1)
+                                        .map(|arg| lower_expr(ctx, &arg.expr))
+                                        .collect::<Result<Vec<_>>>()?;
+                                    return Ok(Some(Expr::Call {
+                                        callee: Box::new(lowered_callee),
+                                        args: rest_args,
+                                        type_args: Vec::new(),
+                                    }));
+                                }
                             }
                         }
                     }

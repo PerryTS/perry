@@ -19,6 +19,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // Simple binding: let x = expr
             let name = ident.id.sym.to_string();
 
+            // Strict-mode early error: `var eval` / `var arguments` (and the
+            // let/const forms) are a SyntaxError (ECMA-262 BindingIdentifier
+            // static semantics). Surfaced as a compile error so the test262
+            // negative cases agree with Node (12.2.1-22-s).
+            if ctx.current_strict && matches!(name.as_str(), "eval" | "arguments") {
+                anyhow::bail!(
+                    "SyntaxError: unexpected `{}` as a strict-mode binding identifier",
+                    name
+                );
+            }
+
             // #809: tag locals provably bound to a plain object (an object
             // literal or `Object.create(...)`). `static_receiver_class`
             // consults this so `x.toJSON()` / `.toString()` / `.valueOf()`

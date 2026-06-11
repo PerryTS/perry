@@ -35,7 +35,8 @@ pub use match_all::{
 };
 use replace_expand::{expand_js_replacement, replace_regex_fn_fancy};
 pub use replace_expand::{
-    js_string_replace_all_regex_fn, js_string_replace_regex_fn, js_string_replace_regex_named,
+    js_string_replace_all_regex_fn, js_string_replace_all_regex_named, js_string_replace_regex_fn,
+    js_string_replace_regex_named,
 };
 use replace_fn::call_replace_callback;
 pub use replace_fn::{

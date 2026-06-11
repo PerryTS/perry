@@ -25,8 +25,20 @@ unsafe fn call_primitive_closure_value(
     if !crate::closure::is_closure_ptr(ptr) {
         return None;
     }
-    let bound = crate::closure::clone_closure_rebind_this(bits, receiver);
-    let this_receiver = crate::object::js_object_coerce(receiver);
+    // OrdinaryCallBindThis: a strict callee observes the raw primitive
+    // receiver (`Number.prototype.f = function(){"use strict"; return
+    // typeof this}` must see `"number"` for `(5).f()`); only a sloppy
+    // callee gets the ToObject wrapper — boxed ONCE up front so writes
+    // through `this` land on the wrapper the body later observes.
+    let func_ptr = crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader);
+    let strict_callee =
+        !func_ptr.is_null() && crate::closure::is_registered_strict_function(func_ptr);
+    let this_receiver = if strict_callee {
+        receiver
+    } else {
+        crate::object::js_object_coerce(receiver)
+    };
+    let bound = crate::closure::clone_closure_rebind_this(bits, this_receiver);
     let prev_this = crate::object::js_implicit_this_set(this_receiver);
     let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
     crate::object::js_implicit_this_set(prev_this);
@@ -709,6 +721,15 @@ pub(crate) unsafe fn js_object_default_value_of(receiver: f64) -> f64 {
     }
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(receiver) {
         return payload;
+    }
+    // Spec 20.1.3.7: `Object.prototype.valueOf` returns ToObject(this). A
+    // primitive receiver (`Object.prototype.valueOf.call(true)`) yields its
+    // wrapper object (`typeof` must report "object"), not the primitive.
+    // Object receivers (including the fused boxed-wrapper arm above, which
+    // serves the `Object(5).valueOf()` Number.prototype.valueOf resolution)
+    // pass through unchanged.
+    if !jsval.is_pointer() {
+        return crate::object::js_object_coerce(receiver);
     }
     receiver
 }
@@ -4275,6 +4296,12 @@ pub unsafe extern "C" fn js_native_call_method(
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
+            // Symbol keys must not be string-coerced — route through the
+            // canonical entry, which consults the SYMBOL_PROPERTIES side
+            // table (mirrors hasOwnProperty's symbol arm).
+            if crate::symbol::js_is_symbol(key_value) != 0 {
+                return super::object_ops::js_object_property_is_enumerable(object, key_value);
+            }
             let key_str = crate::builtins::js_string_coerce(key_value);
             if key_str.is_null() {
                 return f64::from_bits(JSValue::bool(false).bits());

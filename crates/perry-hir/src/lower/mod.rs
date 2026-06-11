@@ -66,6 +66,7 @@ mod closure_analysis;
 mod const_fold_fn;
 mod eval_super_scan;
 mod fn_ctor_env;
+pub(crate) mod type_widening;
 pub(crate) use closure_analysis::*;
 mod decorators;
 pub(crate) use decorators::*;

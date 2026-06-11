@@ -255,6 +255,15 @@ pub fn try_lower_closure_typed_local_call(
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)
             };
+            // Receiverless call of a closure-typed local: bind `this` to
+            // undefined for the duration of the call (OrdinaryCallBindThis,
+            // #3576) so an enclosing method dispatch's IMPLICIT_THIS does
+            // not leak into the callee body.
+            let undef_this =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let prev_this =
+                ctx.block()
+                    .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &undef_this)]);
             if let Some(func_id) = ctx.local_closure_func_ids.get(id).copied() {
                 let declared_count = ctx
                     .local_closure_param_counts
@@ -322,13 +331,17 @@ pub fn try_lower_closure_typed_local_call(
                     }
 
                     ctx.current_block = merge_idx;
-                    return Ok(Some(ctx.block().phi(
+                    let merged = ctx.block().phi(
                         DOUBLE,
                         &[
                             (fast_value.as_str(), after_fast.as_str()),
                             (fallback_value.as_str(), after_fallback.as_str()),
                         ],
-                    )));
+                    );
+                    let _ =
+                        ctx.block()
+                            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev_this)]);
+                    return Ok(Some(merged));
                 }
             }
             let runtime_fn = format!("js_closure_call{}", lowered_args.len());
@@ -336,7 +349,11 @@ pub fn try_lower_closure_typed_local_call(
             for v in &lowered_args {
                 call_args.push((DOUBLE, v.as_str()));
             }
-            return Ok(Some(ctx.block().call(DOUBLE, &runtime_fn, &call_args)));
+            let result = ctx.block().call(DOUBLE, &runtime_fn, &call_args);
+            let _ = ctx
+                .block()
+                .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev_this)]);
+            return Ok(Some(result));
         }
     }
     Ok(None)

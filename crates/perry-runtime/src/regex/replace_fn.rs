@@ -258,3 +258,75 @@ pub extern "C" fn js_string_replace_all_string(
     result.push_str(&str_data[last..]);
     js_string_from_str(&result)
 }
+
+/// `replaceValue` whose function-ness is only knowable at RUNTIME (a closure
+/// returned from an IIFE / call / property read — codegen's static
+/// `repl_is_function` detection can't see it). Route to the callback variant
+/// when the value is callable, else ToString-coerce and take the plain
+/// string-replacement path — pre-fix the coercion stringified the closure
+/// source into the result (test262 10.4.3-1-102-s, react-family replacer
+/// callbacks).
+fn replacement_is_callable(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return false;
+    }
+    crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize)
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_string_dyn(
+    s: *const StringHeader,
+    pattern: *const StringHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return js_string_replace_string_fn(s, pattern, replacement);
+    }
+    js_string_replace_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_string_dyn(
+    s: *const StringHeader,
+    pattern: *const StringHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return js_string_replace_all_string_fn(s, pattern, replacement);
+    }
+    js_string_replace_all_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_regex_dyn(
+    s: *const StringHeader,
+    re: *const crate::regex::RegExpHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return crate::regex::js_string_replace_regex_fn(s, re, replacement);
+    }
+    // The `_named` variant handles both `$1` and `$<name>` expansion.
+    crate::regex::js_string_replace_regex_named(
+        s,
+        re,
+        crate::builtins::js_string_coerce(replacement),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_regex_dyn(
+    s: *const StringHeader,
+    re: *const crate::regex::RegExpHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return crate::regex::js_string_replace_all_regex_fn(s, re, replacement);
+    }
+    crate::regex::js_string_replace_all_regex_named(
+        s,
+        re,
+        crate::builtins::js_string_coerce(replacement),
+    )
+}

@@ -336,6 +336,10 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_string_replace_regex_named", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_all_regex_named", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_string_fn", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_string_replace_string_dyn", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_string_replace_all_string_dyn", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_string_replace_regex_dyn", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_string_replace_all_regex_dyn", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_replace_all_string_fn", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_replace_regex_fn", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_string_replace_all_regex_fn", I64, &[I64, I64, DOUBLE]);

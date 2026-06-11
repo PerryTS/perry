@@ -28,13 +28,32 @@ pub extern "C" fn js_jsvalue_same_value_zero(a: f64, b: f64) -> i32 {
     js_jsvalue_equals(a, b)
 }
 
+/// Module-level object/array variables store their heap pointer RAW in an
+/// f64 slot (top16 == 0 — see the NaN-boxing notes in CLAUDE.md), while the
+/// same object circulates POINTER_TAG'd everywhere else. An identity compare
+/// between the two representations must see the same bits, or
+/// `var a = 2; f(){ a = o; } f(); a === o` is permanently false (#3576
+/// probe family). Tagging is safe for genuine numbers: only subnormals have
+/// top16 == 0 with bits >= 0x10000, identical subnormals already hit the
+/// same-bits fast path, and distinct subnormals are unequal either way.
+#[inline(always)]
+pub(crate) fn normalize_raw_object_bits(bits: u64) -> u64 {
+    if bits >> 48 == 0 && bits >= 0x10000 {
+        POINTER_TAG | bits
+    } else {
+        bits
+    }
+}
+
 /// Handles string comparison by comparing actual string contents.
 /// Handles BigInt comparison by comparing underlying bigint values (not pointers).
 /// Returns 1 if equal, 0 if not.
 #[no_mangle]
 pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
-    let abits = a.to_bits();
-    let bbits = b.to_bits();
+    let abits = normalize_raw_object_bits(a.to_bits());
+    let bbits = normalize_raw_object_bits(b.to_bits());
+    let a = f64::from_bits(abits);
+    let b = f64::from_bits(bbits);
 
     // NaN === NaN is false in JS (strict equality follows IEEE 754).
     // Raw IEEE NaN has top16 = 0x7FF8 (the canonical quiet-NaN). NaN-
@@ -150,8 +169,10 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
 /// - Same type → strict equality
 #[no_mangle]
 pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
-    let abits = a.to_bits();
-    let bbits = b.to_bits();
+    let abits = normalize_raw_object_bits(a.to_bits());
+    let bbits = normalize_raw_object_bits(b.to_bits());
+    let a = f64::from_bits(abits);
+    let b = f64::from_bits(bbits);
 
     // Fast path: same bit pattern
     if abits == bbits {

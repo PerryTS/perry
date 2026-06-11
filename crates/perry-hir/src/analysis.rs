@@ -20,6 +20,18 @@ pub(crate) use uses_this::{
     uses_this_expr, uses_this_stmt,
 };
 
+/// Whether a function BODY reads the dynamic `this` binding — directly via
+/// `Expr::This`, or through a nested arrow that captures it. Plain
+/// (non-method) functions resolve `this` through the runtime's
+/// `IMPLICIT_THIS` slot, so codegen uses this to decide which bare-call
+/// sites must reset that slot to `undefined` for the duration of the call
+/// (OrdinaryCallBindThis with no receiver — #3576). Function expressions
+/// with their own `this` binding (`captures_this == false` closures) don't
+/// propagate, matching `uses_this_expr`.
+pub fn body_reads_dynamic_this(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(uses_this_stmt)
+}
+
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///
 /// Per-variant work focuses on the LocalId-bearing variants (LocalGet,
