@@ -73,7 +73,15 @@ fn stub_inventory_matches_known_clusters() {
         // absent: read(view), controller.byobRequest respond/
         // respondWithNewView, and real byteLength desiredSize accounting
         // landed (perry-stdlib/src/streams/byob.rs).
-        ("#4916", 2),  // v8 get/writeHeapSnapshot (empty graph)
+        // #4916 (v8 get/writeHeapSnapshot) heap snapshots intentionally
+        // absent: real object graph from the GC heap walk landed
+        // (perry-runtime/src/gc/heap_snapshot.rs). The remaining #4916
+        // entries are documented approximations/fakes from the same
+        // diagnostics audit: v8 heap-stats provenance(3) +
+        // GCProfiler.stop empty statistics(1) + inspector
+        // open/url/waitForDebugger/Session.post(4) + repl
+        // start/REPLServer no-eval-loop(2).
+        ("#4916", 10),
         ("#4917", 18), // stdlib adapters: zlib(11) + http.Agent(3) + worker ref/unref(2) + mongodb(1) + backoff(1)
     ];
     let expected_map: BTreeMap<String, usize> =
@@ -99,6 +107,8 @@ fn stubs_only_appear_in_allowlisted_modules() {
         "worker_threads",
         "mongodb",
         "exponential-backoff",
+        "inspector",
+        "repl",
     ];
     for e in iter_entries().filter(|e| e.stub) {
         assert!(
@@ -115,13 +125,26 @@ fn keystone_apis_are_flagged() {
     // Spot-check the headline lies from the epic so a refactor can't
     // quietly drop the flag on the worst offenders.
     let must_be_stub: &[(&str, &str)] = &[
-        ("v8", "getHeapSnapshot"),
-        ("v8", "writeHeapSnapshot"),
+        ("repl", "start"),
+        ("inspector", "post"),
         ("zlib", "createGzip"),
         ("mongodb", "findOne"),
     ];
     for (module, name) in must_be_stub {
         let found = iter_entries().any(|e| e.module == *module && e.name == *name && e.stub);
         assert!(found, "expected {}::{} to be flagged stub", module, name);
+    }
+
+    // The inverse: APIs implemented for real must NOT stay flagged.
+    // v8 heap snapshots emit a real GC-walk object graph since #4916.
+    let must_not_be_stub: &[(&str, &str)] =
+        &[("v8", "getHeapSnapshot"), ("v8", "writeHeapSnapshot")];
+    for (module, name) in must_not_be_stub {
+        let flagged = iter_entries().any(|e| e.module == *module && e.name == *name && e.stub);
+        assert!(
+            !flagged,
+            "{}::{} is implemented for real and must not be flagged stub",
+            module, name
+        );
     }
 }

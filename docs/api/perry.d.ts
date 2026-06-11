@@ -1832,11 +1832,11 @@ declare module "inspector" {
   export function Session(...args: any[]): any;
   /** stdlib */
   export function close(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916) */
   export function open(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub always undefined: Perry never exposes a real inspector endpoint (#4916) */
   export function url(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub returns immediately after open(); there is no debugger to wait for (#4916) */
   export function waitForDebugger(...args: any[]): any;
 }
 
@@ -3325,11 +3325,11 @@ declare module "repl" {
   /** stdlib */
   const _default: any;
   export default _default;
-  /** stdlib */
+  /** stdlib @perryStub REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916) */
   export function REPLServer(...args: any[]): any;
   /** stdlib */
   export function Recoverable(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916) */
   export function start(...args: any[]): any;
 }
 
@@ -3975,13 +3975,13 @@ declare module "v8" {
   export function deserialize(...args: any[]): any;
   /** stdlib */
   export function getCppHeapStatistics(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub all fields 0; Perry compiles AOT, there is no JIT code heap (#4916) */
   export function getHeapCodeStatistics(...args: any[]): any;
-  /** stdlib @perryStub empty-but-valid V8 heap graph, not a real snapshot (#4916) */
+  /** stdlib */
   export function getHeapSnapshot(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916) */
   export function getHeapSpaceStatistics(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916) */
   export function getHeapStatistics(...args: any[]): any;
   /** stdlib */
   export function isStringOneByteRepresentation(...args: any[]): any;
@@ -3999,7 +3999,7 @@ declare module "v8" {
   export function stopCoverage(...args: any[]): any;
   /** stdlib */
   export function takeCoverage(...args: any[]): any;
-  /** stdlib @perryStub empty-but-valid V8 heap graph, not a real snapshot (#4916) */
+  /** stdlib */
   export function writeHeapSnapshot(...args: any[]): any;
 }
 

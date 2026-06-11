@@ -1697,10 +1697,10 @@ Total: 2781 entries across 114 modules.
 - `disconnect` — instance *(class: `Session`)*
 - `on` — instance *(class: `Session`)*
 - `once` — instance *(class: `Session`)*
-- `open` — module
-- `post` — instance *(class: `Session`)*
-- `url` — module
-- `waitForDebugger` — module
+- `open` — module ⚠ **stub** — accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916)
+- `post` — instance *(class: `Session`)* ⚠ **stub** — only Runtime.enable and a canned Runtime.evaluate subset respond; every other protocol method throws Inspector error -32601 (#4916)
+- `url` — module ⚠ **stub** — always undefined: Perry never exposes a real inspector endpoint (#4916)
+- `waitForDebugger` — module ⚠ **stub** — returns immediately after open(); there is no debugger to wait for (#4916)
 
 ### Properties
 
@@ -2870,7 +2870,7 @@ Total: 2781 entries across 114 modules.
 
 ### Methods
 
-- `REPLServer` — module
+- `REPLServer` — module ⚠ **stub** — REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)
 - `Recoverable` — module
 - `addListener` — instance *(class: `REPLServer`)*
 - `clearBufferedCommand` — instance *(class: `REPLServer`)*
@@ -2880,7 +2880,7 @@ Total: 2781 entries across 114 modules.
 - `on` — instance *(class: `REPLServer`)*
 - `once` — instance *(class: `REPLServer`)*
 - `setupHistory` — instance *(class: `REPLServer`)*
-- `start` — module
+- `start` — module ⚠ **stub** — REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)
 - `write` — instance *(class: `REPLServer`)*
 
 ### Properties
@@ -3514,10 +3514,10 @@ Total: 2781 entries across 114 modules.
 - `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
 - `getCppHeapStatistics` — module
-- `getHeapCodeStatistics` — module
-- `getHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
-- `getHeapSpaceStatistics` — module
-- `getHeapStatistics` — module
+- `getHeapCodeStatistics` — module ⚠ **stub** — all fields 0; Perry compiles AOT, there is no JIT code heap (#4916)
+- `getHeapSnapshot` — module
+- `getHeapSpaceStatistics` — module ⚠ **stub** — Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916)
+- `getHeapStatistics` — module ⚠ **stub** — Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916)
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
 - `isStringOneByteRepresentation` — module
 - `onAfter` — instance *(class: `promiseHooks`)*
@@ -3538,12 +3538,12 @@ Total: 2781 entries across 114 modules.
 - `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `startCpuProfile` — module
-- `stop` — instance *(class: `GCProfiler`)*
+- `stop` — instance *(class: `GCProfiler`)* ⚠ **stub** — report has the Node shape but the statistics array is always empty (#4916)
 - `stopCoverage` — module
 - `takeCoverage` — module
 - `writeDouble` — instance *(class: `Serializer`)*
 - `writeHeader` — instance *(class: `Serializer`)*
-- `writeHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
+- `writeHeapSnapshot` — module
 - `writeRawBytes` — instance *(class: `Serializer`)*
 - `writeUint32` — instance *(class: `Serializer`)*
 - `writeUint64` — instance *(class: `Serializer`)*

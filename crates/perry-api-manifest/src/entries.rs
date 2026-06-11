@@ -712,10 +712,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sea", "getRawAsset", false, None),
     method("sea", "getAssetKeys", false, None),
     property("inspector", "default"),
-    method("inspector", "open", false, None),
+    method("inspector", "open", false, None).stub_note(
+        "accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916)",
+    ),
     method("inspector", "close", false, None),
-    method("inspector", "url", false, None),
-    method("inspector", "waitForDebugger", false, None),
+    method("inspector", "url", false, None)
+        .stub_note("always undefined: Perry never exposes a real inspector endpoint (#4916)"),
+    method("inspector", "waitForDebugger", false, None).stub_note(
+        "returns immediately after open(); there is no debugger to wait for (#4916)",
+    ),
     property("inspector", "console"),
     property("inspector", "Network"),
     class("inspector", "Session"),
@@ -723,7 +728,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("inspector", "connect", true, Some("Session")),
     method("inspector", "connectToMainThread", true, Some("Session")),
     method("inspector", "disconnect", true, Some("Session")),
-    method("inspector", "post", true, Some("Session")),
+    method("inspector", "post", true, Some("Session")).stub_note(
+        "only Runtime.enable and a canned Runtime.evaluate subset respond; every other protocol method throws Inspector error -32601 (#4916)",
+    ),
     method("inspector", "on", true, Some("Session")),
     method("inspector", "once", true, Some("Session")),
     internal_method("inspector.Network", "requestWillBeSent", false, None),
@@ -4378,8 +4385,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("repl", "REPL_MODE_STRICT"),
     class("repl", "REPLServer"),
     class("repl", "Recoverable"),
-    method("repl", "start", false, None),
-    method("repl", "REPLServer", false, None),
+    method("repl", "start", false, None).stub_note(
+        "REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)",
+    ),
+    method("repl", "REPLServer", false, None).stub_note(
+        "REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)",
+    ),
     method("repl", "Recoverable", false, None),
     internal_method("repl", "on", true, Some("REPLServer")),
     internal_method("repl", "addListener", true, Some("REPLServer")),
@@ -4446,13 +4457,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- node:v8 (#3137/#3138/#3142) ---
     method("v8", "serialize", false, None),
     method("v8", "deserialize", false, None),
-    method("v8", "getHeapStatistics", false, None),
-    method("v8", "getHeapCodeStatistics", false, None),
-    method("v8", "getHeapSpaceStatistics", false, None),
+    method("v8", "getHeapStatistics", false, None).stub_note(
+        "Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916)",
+    ),
+    method("v8", "getHeapCodeStatistics", false, None)
+        .stub_note("all fields 0; Perry compiles AOT, there is no JIT code heap (#4916)"),
+    method("v8", "getHeapSpaceStatistics", false, None).stub_note(
+        "Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916)",
+    ),
     method("v8", "cachedDataVersionTag", false, None),
     class("v8", "GCProfiler"),
     method("v8", "start", true, Some("GCProfiler")),
-    method("v8", "stop", true, Some("GCProfiler")),
+    method("v8", "stop", true, Some("GCProfiler"))
+        .stub_note("report has the Node shape but the statistics array is always empty (#4916)"),
     // #3680: class-based serialization. Serializer / Deserializer plus the
     // Default* subclasses, with their write*/read* instance methods.
     class("v8", "Serializer"),
@@ -4483,13 +4500,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Node's ESM namespace). `getHeapSnapshot`/`writeHeapSnapshot` deeper
     // behavior is tracked by #3140; here they're added to the export surface.
     method("v8", "getCppHeapStatistics", false, None),
-    method("v8", "getHeapSnapshot", false, None)
-        .stub_note("empty-but-valid V8 heap graph, not a real snapshot (#4916)"),
+    method("v8", "getHeapSnapshot", false, None),
     method("v8", "isStringOneByteRepresentation", false, None),
     method("v8", "queryObjects", false, None),
     method("v8", "startCpuProfile", false, None),
-    method("v8", "writeHeapSnapshot", false, None)
-        .stub_note("empty-but-valid V8 heap graph, not a real snapshot (#4916)"),
+    method("v8", "writeHeapSnapshot", false, None),
     method("v8", "isBuildingSnapshot", true, Some("startupSnapshot")),
     method("v8", "addSerializeCallback", true, Some("startupSnapshot")),
     method(

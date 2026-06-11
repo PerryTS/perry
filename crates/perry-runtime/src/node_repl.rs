@@ -652,8 +652,21 @@ pub extern "C" fn js_repl_start(options: f64) -> f64 {
     js_repl_repl_server_new(options)
 }
 
+/// Verified for #4916: this builds the `REPLServer` *shape* (context,
+/// listener/command storage, prompt handling) but there is no real
+/// read-eval-print loop behind it — nothing ever reads from the
+/// `input` stream, and `.write()` routes lines through
+/// `eval_simple_expression`, which only handles numeric literals,
+/// `context` lookups, and a single `+`. Perry is AOT-compiled, so a
+/// real eval loop would need an embedded interpreter; until that
+/// exists this stays flagged `stub: true` in the API manifest.
 #[no_mangle]
 pub extern "C" fn js_repl_repl_server_new(options: f64) -> f64 {
+    crate::error::stub_warn_or_throw(
+        "repl.start",
+        "REPLServer shape only: the input stream is never read and .write() evaluates just numeric literals, context lookups, and a single '+'",
+        Some("#4916"),
+    );
     let server = js_object_alloc(0, 16);
     let server_value = object_value(server);
     let context = object_value(js_object_alloc(0, 0));

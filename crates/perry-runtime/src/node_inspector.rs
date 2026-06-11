@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
@@ -14,17 +13,15 @@ const KEY_RUNTIME_ENABLED: &[u8] = b"__perryInspectorRuntimeEnabled";
 const EVENT_LISTENERS_PREFIX: &[u8] = b"__perryInspectorListeners:";
 const EVENT_ONCE_PREFIX: &[u8] = b"__perryInspectorOnce:";
 
-static NEXT_PORT: AtomicU16 = AtomicU16::new(35000);
-static NEXT_UUID: AtomicU64 = AtomicU64::new(1);
 static INSPECTOR_ENDPOINT: LazyLock<Mutex<EndpointState>> =
     LazyLock::new(|| Mutex::new(EndpointState::default()));
 
+/// `open()`/`close()` bookkeeping only. Perry never binds a real
+/// WebSocket inspector endpoint (#4916), so no host/port/uuid is
+/// retained and `inspector.url()` stays `undefined` throughout.
 #[derive(Default)]
 struct EndpointState {
     active: bool,
-    host: String,
-    port: u16,
-    uuid: String,
 }
 
 fn key(name: &str) -> *mut crate::StringHeader {
@@ -150,17 +147,6 @@ fn string_to_rust(value: f64) -> Option<String> {
         let len = (*ptr).byte_len as usize;
         let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).to_string())
-    }
-}
-
-fn number_value(value: f64) -> Option<f64> {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32() as f64)
-    } else if jsval.is_number() {
-        Some(value)
-    } else {
-        None
     }
 }
 
@@ -415,6 +401,16 @@ fn quoted_console_log_arg(expression: &str) -> Option<String> {
     None
 }
 
+/// The complete protocol-method subset Perry's in-process session
+/// answers (#4916). Everything else returns the spec'd JSON-RPC
+/// method-not-found error (`Inspector error -32601`):
+///
+/// - `Runtime.enable` — flips the runtime-enabled flag and emits
+///   `Runtime.executionContextCreated`.
+/// - `Runtime.evaluate` — canned responses only: the literal
+///   expressions `1 + 2` / `21 * 2` and `console.log("<string
+///   literal>")` (printed to stdout). Perry is AOT-compiled; there is
+///   no general JS evaluator behind this.
 fn run_command(session: f64, method: &str, params: f64) -> Result<f64, f64> {
     match method {
         "Runtime.enable" => {
@@ -473,20 +469,6 @@ fn promise_value(result: Result<f64, f64>) -> f64 {
     boxed_pointer(promise as *const u8)
 }
 
-fn allocate_endpoint_port(requested: f64) -> u16 {
-    let requested = number_value(requested).unwrap_or(9229.0);
-    if requested > 0.0 && requested <= u16::MAX as f64 {
-        requested as u16
-    } else {
-        NEXT_PORT.fetch_add(1, Ordering::Relaxed)
-    }
-}
-
-fn next_uuid() -> String {
-    let n = NEXT_UUID.fetch_add(1, Ordering::Relaxed);
-    format!("00000000-0000-0000-0000-{n:012x}")
-}
-
 extern "C" fn endpoint_dispose(_closure: *const ClosureHeader) -> f64 {
     js_node_inspector_close()
 }
@@ -523,12 +505,18 @@ pub extern "C" fn js_node_inspector_network_notify(_params: f64) -> f64 {
     undefined()
 }
 
+/// `inspector.open([port[, host[, wait]]])` — tracks active state for
+/// `ERR_INSPECTOR_ALREADY_ACTIVATED` / `close()` semantics, but binds
+/// no real WebSocket endpoint (#4916). It deliberately does NOT print
+/// Node's "Debugger listening on ws://..." banner: there is nothing
+/// listening, and `inspector.url()` stays `undefined`.
 #[no_mangle]
-pub extern "C" fn js_node_inspector_open(port: f64, host: f64, _wait: f64) -> f64 {
-    let host = string_to_rust(host).unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = allocate_endpoint_port(port);
-    let uuid = next_uuid();
-    let url = format!("ws://{host}:{port}/{uuid}");
+pub extern "C" fn js_node_inspector_open(_port: f64, _host: f64, _wait: f64) -> f64 {
+    crate::error::stub_warn_or_throw(
+        "inspector.open",
+        "binds no real WebSocket inspector endpoint; inspector.url() stays undefined and sessions are in-process fakes",
+        Some("#4916"),
+    );
     if let Ok(mut endpoint) = INSPECTOR_ENDPOINT.lock() {
         if endpoint.active {
             throw_node_error(
@@ -537,12 +525,7 @@ pub extern "C" fn js_node_inspector_open(port: f64, host: f64, _wait: f64) -> f6
             );
         }
         endpoint.active = true;
-        endpoint.host = host;
-        endpoint.port = port;
-        endpoint.uuid = uuid;
     }
-    eprintln!("Debugger listening on {url}");
-    eprintln!("For help, see: https://nodejs.org/learn/getting-started/debugging");
     endpoint_handle()
 }
 
@@ -554,18 +537,13 @@ pub extern "C" fn js_node_inspector_close() -> f64 {
     undefined()
 }
 
+/// `inspector.url()` — always `undefined`. Node returns the ws:// URL
+/// of the live debug endpoint; Perry never has one (#4916), and a URL
+/// pointing at nothing is exactly the kind of lie this module used to
+/// tell (it previously fabricated `ws://host:port/uuid` after `open()`).
 #[no_mangle]
 pub extern "C" fn js_node_inspector_url() -> f64 {
-    let Ok(endpoint) = INSPECTOR_ENDPOINT.lock() else {
-        return undefined();
-    };
-    if !endpoint.active {
-        return undefined();
-    }
-    str_value(&format!(
-        "ws://{}:{}/{}",
-        endpoint.host, endpoint.port, endpoint.uuid
-    ))
+    undefined()
 }
 
 #[no_mangle]
@@ -577,6 +555,14 @@ pub extern "C" fn js_node_inspector_wait_for_debugger() -> f64 {
     if !active {
         throw_node_error("Inspector is not active", "ERR_INSPECTOR_NOT_ACTIVE");
     }
+    // Node blocks until a debugger client attaches. No client can ever
+    // attach to Perry (#4916), so blocking would hang forever — return
+    // immediately instead, with the first-call stub warning.
+    crate::error::stub_warn_or_throw(
+        "inspector.waitForDebugger",
+        "returns immediately; Perry has no inspector endpoint a debugger could attach to",
+        Some("#4916"),
+    );
     undefined()
 }
 
@@ -741,6 +727,11 @@ pub extern "C" fn js_node_inspector_session_post(
             crate::exception::js_throw(err)
         };
     }
+    crate::error::stub_warn_or_throw(
+        "inspector.Session.post",
+        "in-process fake session: only Runtime.enable and a canned Runtime.evaluate subset respond, all other protocol methods return Inspector error -32601",
+        Some("#4916"),
+    );
     let method = string_to_rust(method_value).unwrap_or_default();
     if promise_mode {
         promise_value(run_command(session, &method, params))
