@@ -55,6 +55,7 @@ pub mod ffi;
 pub mod frame;
 pub mod fs;
 pub mod gc;
+pub mod yoga;
 pub mod intl;
 pub mod iterator_helpers;
 pub mod macos_bundle;

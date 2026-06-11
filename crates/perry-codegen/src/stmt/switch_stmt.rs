@@ -69,6 +69,24 @@ pub(crate) fn lower_switch(
     ctx.loop_targets
         .push((exit_label.clone(), exit_label.clone(), ctx.try_depth));
 
+    // If this switch carries a pending label (from an enclosing
+    // `a: switch (...)`), register it so `break a;` resolves to THIS
+    // switch's exit even when the break sits inside a *nested* switch.
+    // Without this, `LabeledBreak` falls back to the innermost
+    // `loop_targets` entry — the nested switch's own exit — so the break
+    // escapes only the inner switch and execution falls through into the
+    // outer switch's remaining code (e.g. react-reconciler's
+    // `switch (type.$$typeof) { case CTX: t = 10; break a; }`, where the
+    // case body's `break a` was landing in the invalid-element tail and
+    // every Context.Provider became fiber tag 29 → children dropped).
+    let consumed_label = ctx.pending_label.take();
+    if let Some(ref lbl) = consumed_label {
+        ctx.label_targets.insert(
+            lbl.clone(),
+            (exit_label.clone(), exit_label.clone(), ctx.try_depth),
+        );
+    }
+
     // Compile each test block. Each test compares dv against the case
     // expression with fcmp oeq, jumps to the body on match, otherwise
     // jumps to the next *case* test (or to no_match_target if this is the
