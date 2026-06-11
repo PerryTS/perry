@@ -65,7 +65,10 @@ fn stub_inventory_matches_known_clusters() {
         // #4912 (child_process.spawn) intentionally absent: spawn is real
         // since #1780 (Expr::ChildProcessSpawn codegen). The audit's
         // "returns null" premise was stale; only exec() timing remains.
-        ("#4914", 3),  // cluster fork/setupPrimary/setupMaster (no handle distribution)
+        // #4914 (cluster port sharing) intentionally absent: workers share a
+        // listening port via SO_REUSEPORT binds + a fork-IPC 'listening'
+        // round-trip; SCHED_RR fd-passing + shared ephemeral `listen(0)`
+        // port are tracked in #4962 and are policy fidelity, not lies.
         ("#4915", 4),  // BYOB readers + ByteLengthQueuingStrategy (throw)
         ("#4916", 2),  // v8 get/writeHeapSnapshot (empty graph)
         ("#4917", 18), // stdlib adapters: zlib(11) + http.Agent(3) + worker ref/unref(2) + mongodb(1) + backoff(1)
@@ -84,7 +87,6 @@ fn stubs_only_appear_in_allowlisted_modules() {
     // A stub flag showing up on a module not in this list is almost
     // certainly an accident — fail loud so it gets triaged.
     let allowed = [
-        "cluster",
         "stream/web",
         "streams",
         "v8",
@@ -110,7 +112,6 @@ fn keystone_apis_are_flagged() {
     // Spot-check the headline lies from the epic so a refactor can't
     // quietly drop the flag on the worst offenders.
     let must_be_stub: &[(&str, &str)] = &[
-        ("cluster", "fork"),
         ("v8", "getHeapSnapshot"),
         ("v8", "writeHeapSnapshot"),
         ("zlib", "createGzip"),
