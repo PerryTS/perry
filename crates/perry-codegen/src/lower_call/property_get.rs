@@ -1145,6 +1145,21 @@ pub fn try_lower_property_get_method_call(
             let prev_this =
                 ctx.block()
                     .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &recv_box)]);
+            // Receiver-sensitive static `this` for plain class-ref receivers:
+            // `D.f()` resolving to a parent's body at compile time must run
+            // with `this === D` (the prologue's `js_static_this_resolve`
+            // consumes this one-shot arm). Dynamic-value receiver shapes
+            // (ClassExprFresh / factory Call / LocalGet) keep their prior
+            // implicit-this-only behavior to avoid disturbing effect's
+            // per-evaluation class-object statics.
+            let plain_class_receiver = matches!(
+                object.as_ref(),
+                Expr::ClassRef(_) | Expr::ExternFuncRef { .. }
+            );
+            if plain_class_receiver {
+                ctx.block()
+                    .call_void("js_static_this_arm_value", &[(DOUBLE, &recv_box)]);
+            }
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
             let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);

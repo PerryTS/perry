@@ -66,9 +66,10 @@ pub use self::immutable::{
     js_array_with,
 };
 pub(crate) use self::indexing::{
-    array_has_own_index, array_iteration_is_exotic, array_prototype_has_index_flag, array_spec_get,
-    array_spec_has_index, note_object_prototype_index_write, object_prototype_addr_matches,
-    object_prototype_has_index_flag,
+    array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
+    array_prototype_addr, array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
+    note_array_proto_iterator_write, note_object_prototype_index_write,
+    object_prototype_addr_matches, object_prototype_has_index_flag,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,

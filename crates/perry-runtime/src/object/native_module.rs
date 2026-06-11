@@ -5958,6 +5958,29 @@ pub(crate) fn build_bound_method_closure(
 /// call-site `this` (IMPLICIT_THIS) provided it is itself a dispatchable class
 /// receiver (an instance or class ref). Otherwise the captured value is the real
 /// receiver and is returned unchanged. See `dispatch_bound_method`.
+/// Is `value` a bound STATIC-method value — a BOUND_METHOD closure whose
+/// captured receiver is a class constructor ref (`C.staticMethod` read as a
+/// value)? Used by the Function.prototype call/apply arms to arm the one-shot
+/// static-`this` override with the explicit thisArg, so the static method body
+/// sees the receiver (`C.m.call({})` → `this === {}`) and static private brand
+/// checks behave per spec.
+pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(raw) {
+        return false;
+    }
+    let closure = raw as *const crate::closure::ClosureHeader;
+    if unsafe { (*closure).func_ptr } as usize != crate::closure::BOUND_METHOD_FUNC_PTR as usize {
+        return false;
+    }
+    let captured = crate::closure::js_closure_get_capture_f64(closure, 0);
+    class_ref_id(captured).is_some() && class_prototype_ref_id(captured).is_none()
+}
+
 pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
     if class_prototype_ref_id(captured).is_some() {
         let call_this = super::js_implicit_this_get();

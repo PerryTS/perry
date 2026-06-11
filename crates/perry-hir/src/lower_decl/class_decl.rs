@@ -774,11 +774,26 @@ pub fn lower_class_decl(
                         // the property name, not `get_#name`).
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_getter(ctx, method)?;
+                        // A STATIC private accessor must register on the
+                        // class's static-accessor side (mirroring the public
+                        // static getter/setter arms above) so `this.#f` with
+                        // a class-ref receiver dispatches it. Pre-fix it only
+                        // landed in the instance getter registry and the
+                        // static read returned undefined (test262
+                        // static-private-getter*).
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_setter(ctx, method)?;
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         setters.push((prop_name, func));
                     }
                 }
@@ -1025,6 +1040,21 @@ pub fn lower_class_decl(
             .map(|f| (f.name.clone(), f.ty.clone()))
             .collect();
         ctx.register_class_field_types(name.clone(), field_types);
+    }
+
+    // `this` in a STATIC field initializer is the class constructor per
+    // ClassDefinitionEvaluation. Substitute lexically — including inside
+    // arrow / this-capturing closure BODIES (which compile from these very
+    // exprs) — so every consumer (the inline init stmts at the class-decl
+    // source position, init_static_fields_late) evaluates with the right
+    // receiver. Without the in-place rewrite, a stmt-level clone substitution
+    // desyncs the closure creation site from the compiled body (the body is
+    // compiled from this original) and `static f = () => this` returned the
+    // unpatched capture slot (test262 static-field-init-this-inside-arrow).
+    for sf in &mut static_fields {
+        if let Some(init) = &mut sf.init {
+            crate::analysis::substitute_lexical_this_in_expr(init, &Expr::ClassRef(name.clone()));
+        }
     }
 
     // Exit type parameter scope
@@ -1404,11 +1434,21 @@ pub fn lower_class_from_ast(
                     ast::MethodKind::Getter => {
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_getter(ctx, method)?;
+                        // Static private accessor — register on the static
+                        // side (see the matching arm in `lower_class_decl`).
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_setter(ctx, method)?;
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         setters.push((prop_name, func));
                     }
                 }
@@ -1441,6 +1481,17 @@ pub fn lower_class_from_ast(
                 });
             }
             _ => {}
+        }
+    }
+
+    // `this` in static field initializers — see the matching substitution in
+    // `lower_class_decl` above.
+    for sf in &mut static_fields {
+        if let Some(init) = &mut sf.init {
+            crate::analysis::substitute_lexical_this_in_expr(
+                init,
+                &Expr::ClassRef(name.to_string()),
+            );
         }
     }
 

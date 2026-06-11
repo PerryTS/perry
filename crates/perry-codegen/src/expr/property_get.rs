@@ -1459,9 +1459,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return lower_runtime_property_get_by_name(ctx, object, property);
                 }
                 let getter_key = (class_name.clone(), format!("__get_{}", property));
-                if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
-                    let recv_box = lower_expr(ctx, object)?;
-                    return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
+                // STATIC accessors are emitted with the static (no-`this`)
+                // calling convention under a `perry_static_…` symbol, so the
+                // instance direct-call ABI here would reference a symbol that
+                // is never emitted (`__get_get_#f` undefined-value link error
+                // for `static get #f()`). Route them through the dynamic
+                // by-name dispatch below, which hits CLASS_STATIC_ACCESSORS.
+                let is_static_accessor = ctx
+                    .classes
+                    .get(&class_name)
+                    .map(|c| c.static_accessor_names.iter().any(|n| n == property))
+                    .unwrap_or(false);
+                if !is_static_accessor {
+                    if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
+                        let recv_box = lower_expr(ctx, object)?;
+                        return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
+                    }
                 }
                 // #1642: bound-method reference for Web Streams instance methods
                 // (`typeof rs.getReader === "function"`, `const f = rs.getReader;

@@ -352,6 +352,90 @@ thread_local! {
 thread_local! {
     static IMPLICIT_THIS: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
     static NEW_TARGET: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
+    // One-shot receiver override for STATIC method bodies. A compiled static
+    // method's `this` slot used to be a compile-time class-ref literal, so
+    // `C.m.call({})` / `D.m()` (inherited) ran with `this === C` and static
+    // private brand checks could never throw (test262 class/elements
+    // static-private-*). Armed by the dynamic dispatch paths that know the
+    // real receiver (`js_class_static_method_call`, the Function.prototype
+    // call/apply arms for a static bound-method value); consumed (take
+    // semantics) by `js_static_this_resolve` in the static-method prologue.
+    // Direct compiled calls never arm it, so they keep the lexical class-ref.
+    static STATIC_THIS_OVERRIDE: Cell<(bool, u64)> =
+        const { Cell::new((false, crate::value::TAG_UNDEFINED)) };
+}
+
+/// Arm the static-`this` override unconditionally (used by the call/apply
+/// receiver paths, which take precedence over the inner dynamic dispatch).
+pub(crate) fn static_this_arm(value: f64) {
+    STATIC_THIS_OVERRIDE.with(|c| c.set((true, value.to_bits())));
+}
+
+/// Arm the static-`this` override only when no outer caller has already armed
+/// it — `js_class_static_method_call` runs INSIDE the call/apply plumbing, and
+/// the outermost receiver (the `.call(x)` thisArg) must win.
+pub(crate) fn static_this_arm_if_unarmed(value: f64) {
+    STATIC_THIS_OVERRIDE.with(|c| {
+        if !c.get().0 {
+            c.set((true, value.to_bits()));
+        }
+    });
+}
+
+/// Disarm without consuming (paired with arm sites as a safety net in case
+/// the invoked target never reached a static-method prologue).
+pub(crate) fn static_this_disarm() {
+    STATIC_THIS_OVERRIDE.with(|c| c.set((false, crate::value::TAG_UNDEFINED)));
+}
+
+/// Arm the static-`this` override with a class constructor ref. Emitted by
+/// codegen immediately before a direct call to an INHERITED static method
+/// (`D.f()` where `f` lives on a parent class) so the body sees the dispatch
+/// base (`this === D`) instead of the lexical defining class — spec
+/// OrdinaryCallBindThis for `D.f()`, and what makes static-private brand
+/// checks on subclass receivers throw (test262 static-private-method-
+/// subclass-receiver).
+// #1561-style force-keep: only generated IR calls this.
+#[used]
+static KEEP_JS_STATIC_THIS_ARM_CLASSREF: extern "C" fn(u32) = js_static_this_arm_classref;
+
+#[no_mangle]
+pub extern "C" fn js_static_this_arm_classref(class_id: u32) {
+    if class_id != 0 {
+        static_this_arm(native_module::class_constructor_ref_value(class_id));
+    }
+}
+
+/// Arm the static-`this` override with an arbitrary receiver value. Emitted
+/// by the codegen static-dispatch tower (`D.f()` where the receiver is a
+/// class-ref expression and the method resolves on a parent class at compile
+/// time) right before the direct call.
+// #1561-style force-keep: only generated IR calls this.
+#[used]
+static KEEP_JS_STATIC_THIS_ARM_VALUE: extern "C" fn(f64) = js_static_this_arm_value;
+
+#[no_mangle]
+pub extern "C" fn js_static_this_arm_value(value: f64) {
+    static_this_arm(value);
+}
+
+/// Static-method prologue `this` resolution: take the armed override if any,
+/// else the lexical class-ref the codegen passes in.
+// #1561-style force-keep: only generated IR calls this.
+#[used]
+static KEEP_JS_STATIC_THIS_RESOLVE: extern "C" fn(f64) -> f64 = js_static_this_resolve;
+
+#[no_mangle]
+pub extern "C" fn js_static_this_resolve(default_this: f64) -> f64 {
+    STATIC_THIS_OVERRIDE.with(|c| {
+        let (armed, bits) = c.get();
+        if armed {
+            c.set((false, crate::value::TAG_UNDEFINED));
+            f64::from_bits(bits)
+        } else {
+            default_this
+        }
+    })
 }
 
 /// Read the current implicit `this` (issue #519).
@@ -437,6 +521,12 @@ pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
         let mut bits = c.get();
         if visitor.visit_nanbox_u64_slot(&mut bits) {
             c.set(bits);
+        }
+    });
+    STATIC_THIS_OVERRIDE.with(|c| {
+        let (armed, mut bits) = c.get();
+        if visitor.visit_nanbox_u64_slot(&mut bits) {
+            c.set((armed, bits));
         }
     });
 }

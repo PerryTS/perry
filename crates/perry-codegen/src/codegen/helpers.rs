@@ -673,11 +673,56 @@ pub(super) fn init_static_fields_late(
                 continue;
             }
             let key = (c.name.clone(), sf.name.clone());
+            // Register the field in the runtime CLASS_DYNAMIC_PROPS side
+            // table (mirroring the StaticFieldSet lowering) so dynamic
+            // class-ref reads and `getOwnPropertyDescriptor(C, name)` see an
+            // own data property. Uninitialized fields (`static h;`) register
+            // `undefined` — per spec they are still own properties.
+            let emit_static_field_registration = |ctx: &mut crate::expr::FnCtx<'_>, value: &str| {
+                if let Some(&class_id) = ctx.class_ids.get(&c.name) {
+                    if class_id != 0 {
+                        let idx = ctx.strings.intern(&sf.name);
+                        let entry = ctx.strings.entry(idx);
+                        let bytes_ref = format!("@{}", entry.bytes_global);
+                        let len_str = entry.byte_len.to_string();
+                        let cid_str = class_id.to_string();
+                        ctx.block().call_void(
+                            "js_class_register_static_field",
+                            &[
+                                (crate::types::I32, &cid_str),
+                                (crate::types::PTR, &bytes_ref),
+                                (crate::types::I64, &len_str),
+                                (DOUBLE, value),
+                            ],
+                        );
+                    }
+                }
+            };
             let Some(global_name) = ctx.static_field_globals.get(&key).cloned() else {
                 continue;
             };
             if let Some(init_expr) = &sf.init {
                 if init_references_out_of_scope_local(init_expr) {
+                    continue;
+                }
+                // Skip fields whose initializer the HIR already emitted as an
+                // inline `StaticFieldSet` at the class's source position (the
+                // spec evaluation point). Re-running it here would (a) fire
+                // initializer side effects twice and (b) clobber any user
+                // reassignment made between the class decl and end of module
+                // init. Mirrors the static-block dedup below. The inline
+                // lowering also registers the field in CLASS_DYNAMIC_PROPS.
+                let inline_initialized = hir.init.iter().any(|s| {
+                    matches!(
+                        s,
+                        perry_hir::Stmt::Expr(perry_hir::Expr::StaticFieldSet {
+                            class_name,
+                            field_name,
+                            ..
+                        }) if *class_name == c.name && *field_name == sf.name
+                    )
+                });
+                if inline_initialized {
                     continue;
                 }
                 // `this` in a static field initializer is the class
@@ -698,6 +743,11 @@ pub(super) fn init_static_fields_late(
                 let v = v?;
                 let g_ref = format!("@{}", global_name);
                 crate::expr::emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
+                emit_static_field_registration(ctx, &v);
+            } else {
+                let undef =
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                emit_static_field_registration(ctx, &undef);
             }
         }
     }

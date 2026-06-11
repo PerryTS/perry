@@ -372,6 +372,17 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         super::js_class_method_bind(obj_value, leaked.as_ptr(), leaked.len());
                     return build_data_descriptor(value, true, false, true);
                 }
+                // Static FIELDS are own data properties of the constructor,
+                // created via CreateDataPropertyOrThrow → writable, enumerable,
+                // configurable all true. Codegen registers each declared
+                // static field in CLASS_DYNAMIC_PROPS at module init.
+                if super::class_prototype_ref_id(obj_value).is_none() {
+                    if let Some(v) =
+                        super::class_registry::class_own_static_field_value(class_id, &method_name)
+                    {
+                        return build_data_descriptor(v, true, true, true);
+                    }
+                }
             }
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }

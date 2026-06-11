@@ -1445,6 +1445,130 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
 ///
 /// Does NOT recurse into nested closures — those have their own `this`
 /// binding and should keep referencing the outer class context.
+/// Substitute every LEXICAL `this` in `expr` with `replacement` — including
+/// inside arrow / `this`-capturing closure bodies (whose `this` is lexical),
+/// but NOT inside ordinary function-expression closures (own dynamic `this`).
+///
+/// Used by the class-decl static-field-init inline emission: per
+/// ClassDefinitionEvaluation a static initializer runs with `this` bound to
+/// the class constructor, but the inline `StaticFieldSet` stmts evaluate in
+/// module-init context where `this_stack` is empty and `Expr::This` would
+/// read the module's implicit `this` (test262 class/elements
+/// static-field-init-this-inside-arrow-function, class-name-static-initializer).
+pub fn substitute_lexical_this_in_expr(expr: &mut Expr, replacement: &Expr) {
+    match expr {
+        Expr::This => *expr = replacement.clone(),
+        Expr::Closure {
+            body,
+            captures_this,
+            params,
+            ..
+        } => {
+            if *captures_this {
+                for p in params.iter_mut() {
+                    if let Some(d) = &mut p.default {
+                        substitute_lexical_this_in_expr(d, replacement);
+                    }
+                }
+                substitute_lexical_this_in_stmts(body, replacement);
+                // The body no longer reads `this`; drop the reserved capture
+                // slot so the closure-cache key doesn't include a stale
+                // implicit-this snapshot.
+                *captures_this = false;
+            }
+        }
+        _ => crate::walker::walk_expr_children_mut(expr, &mut |child| {
+            substitute_lexical_this_in_expr(child, replacement)
+        }),
+    }
+}
+
+pub fn substitute_lexical_this_in_stmts(stmts: &mut [Stmt], replacement: &Expr) {
+    for s in stmts {
+        substitute_lexical_this_in_stmt(s, replacement);
+    }
+}
+
+fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
+    let mut on_expr = |e: &mut Expr| substitute_lexical_this_in_expr(e, replacement);
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                on_expr(e);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => on_expr(e),
+        Stmt::Return(e) => {
+            if let Some(e) = e {
+                on_expr(e);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            on_expr(condition);
+            substitute_lexical_this_in_stmts(then_branch, replacement);
+            if let Some(eb) = else_branch {
+                substitute_lexical_this_in_stmts(eb, replacement);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            on_expr(condition);
+            substitute_lexical_this_in_stmts(body, replacement);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                substitute_lexical_this_in_stmt(i, replacement);
+            }
+            if let Some(c) = condition {
+                on_expr(c);
+            }
+            if let Some(u) = update {
+                on_expr(u);
+            }
+            substitute_lexical_this_in_stmts(body, replacement);
+        }
+        Stmt::Labeled { body, .. } => substitute_lexical_this_in_stmt(body, replacement),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            substitute_lexical_this_in_stmts(body, replacement);
+            if let Some(c) = catch {
+                substitute_lexical_this_in_stmts(&mut c.body, replacement);
+            }
+            if let Some(f) = finally {
+                substitute_lexical_this_in_stmts(f, replacement);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            on_expr(discriminant);
+            for case in cases {
+                if let Some(t) = &mut case.test {
+                    substitute_lexical_this_in_expr(t, replacement);
+                }
+                substitute_lexical_this_in_stmts(&mut case.body, replacement);
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
+}
+
 pub fn replace_this_in_stmts(stmts: &mut Vec<Stmt>, this_id: LocalId) {
     for s in stmts {
         replace_this_in_stmt(s, this_id);

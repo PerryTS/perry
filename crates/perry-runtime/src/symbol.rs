@@ -536,6 +536,10 @@ pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64
     if get_symbol_property_attrs(obj_key, sym_key).is_some_and(|attrs| !attrs.configurable()) {
         return 0;
     }
+    // `delete Array.prototype[Symbol.iterator]` — the builtin iterator is
+    // virtual (native dispatch, not in the side table), so the delete must
+    // still flip the modified flag for `js_get_iterator` to throw per spec.
+    crate::array::note_array_proto_iterator_write(obj_key, sym_key);
 
     accessors::clear_symbol_accessor_property(obj_key, sym_key);
     {
@@ -757,6 +761,9 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    // `Array.prototype[Symbol.iterator] = fn` disables the array fast path in
+    // `js_get_iterator` so destructuring / GetIterator see the patched method.
+    crate::array::note_array_proto_iterator_write(obj_key, sym_key);
     let has_own_data = object_symbol_data_property_exists(obj_key, sym_key);
     // Frozen / sealed / non-extensible receivers reject symbol-keyed writes
     // like string-keyed ones: an existing prop is non-writable when frozen
@@ -877,7 +884,33 @@ static CLASS_STATIC_SYMBOLS: Mutex<Option<HashMap<(u32, usize), u64>>> = Mutex::
 #[no_mangle]
 pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64, value: f64) {
     let sym_key = sym_key_from_f64(sym);
-    if class_id == 0 || sym_key == 0 {
+    if class_id == 0 {
+        return;
+    }
+    if sym_key == 0 {
+        // Computed STATIC field whose key evaluated to a non-symbol —
+        // ToPropertyKey makes it a string. A "prototype"-named static field
+        // is a TypeError per ClassDefinitionEvaluation; anything else
+        // becomes an ordinary own static data property (numeric keys, a
+        // computed "constructor", drizzle-style `static [name] = v`).
+        let key_str = crate::builtins::js_string_coerce(sym);
+        if key_str.is_null() {
+            return;
+        }
+        let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key_str).byte_len as usize;
+        let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) else {
+            return;
+        };
+        if name == "prototype" {
+            let msg = "Classes may not have a static property named 'prototype'";
+            let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+            let err = crate::error::js_typeerror_new(s);
+            crate::exception::js_throw(f64::from_bits(
+                crate::value::JSValue::pointer(err as *const u8).bits(),
+            ));
+        }
+        crate::object::class_dynamic_prop_root_store(class_id, name.to_string(), value);
         return;
     }
     store_class_static_symbol_root(class_id, sym_key, value.to_bits());
@@ -2077,6 +2110,41 @@ pub extern "C" fn js_iterator_result_validate(result: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     if crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE {
+        if !crate::array::array_proto_iterator_modified() {
+            return crate::array::array_values_iter(val_f64);
+        }
+        // `Array.prototype[Symbol.iterator]` was replaced or deleted. Per
+        // GetIterator, read the (patched) method off the prototype and call it
+        // with `this === val`; a deleted/non-callable method is a TypeError.
+        // The generic symbol lookup below reads OWN symbol props only, so the
+        // prototype is consulted explicitly here.
+        let proto_addr = crate::array::array_prototype_addr();
+        if proto_addr != 0 {
+            let iter_wk = well_known_symbol("iterator");
+            if !iter_wk.is_null() {
+                let proto_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(proto_addr as *const u8).bits());
+                let sym_f64 =
+                    f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+                let iter_fn = unsafe { own_symbol_property(proto_f64, sym_f64) }
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+                let fn_ptr = crate::value::js_nanbox_get_pointer(iter_fn)
+                    as *const crate::closure::ClosureHeader;
+                if iter_fn.to_bits() == TAG_UNDEFINED || fn_ptr.is_null() {
+                    throw_value_not_iterable();
+                }
+                let prev_this = crate::object::js_implicit_this_set(val_f64);
+                let rebound = crate::closure::clone_closure_rebind_this(iter_fn.to_bits(), val_f64);
+                let rebound_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(rebound))
+                    as *const crate::closure::ClosureHeader;
+                let iter = crate::closure::js_closure_call0(rebound_ptr);
+                crate::object::js_implicit_this_set(prev_this);
+                if !is_object_value(iter) {
+                    throw_iterator_result_not_object();
+                }
+                return iter;
+            }
+        }
         return crate::array::array_values_iter(val_f64);
     }
     // Arguments objects iterate like arrays (spec:
