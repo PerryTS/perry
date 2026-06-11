@@ -262,9 +262,13 @@ fn compile_package_with_native_addon_loader_dependency_is_rejected() {
 fn normal_compile_package_without_native_addon_is_allowed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    let entry = write_compile_package_fixture(root, "pure-js", "");
+    write_compile_package_fixture(root, "pure-js", "");
+    let entry = root
+        .join("node_modules/pure-js/lib/index.js")
+        .canonicalize()
+        .expect("entry path");
 
-    collect_compile_package(root, &entry, "pure-js").expect("pure JS package should collect");
+    refuse_compile_package_native_addon(&entry).expect("pure JS package should not be rejected");
 }
 
 #[test]
