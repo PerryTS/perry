@@ -107,5 +107,8 @@ class Agent extends http.Agent {}
 console.log('ok', typeof new Agent() === 'object');
 "#,
     );
-    assert_eq!(stdout, "ok true\n", "empty self-named subclass must compile");
+    assert_eq!(
+        stdout, "ok true\n",
+        "empty self-named subclass must compile"
+    );
 }
