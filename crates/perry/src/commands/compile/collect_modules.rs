@@ -191,7 +191,7 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     }
 }
 
-fn package_root_for_compile_package(path: &std::path::Path) -> Option<PathBuf> {
+fn nearest_package_root(path: &std::path::Path) -> Option<PathBuf> {
     let mut dir = path.parent();
     while let Some(candidate) = dir {
         if candidate.join("package.json").exists() {
@@ -200,6 +200,18 @@ fn package_root_for_compile_package(path: &std::path::Path) -> Option<PathBuf> {
         dir = candidate.parent();
     }
     None
+}
+
+fn package_root_for_compile_package(
+    ctx: &CompilationContext,
+    path: &std::path::Path,
+) -> Option<PathBuf> {
+    ctx.compile_package_dirs
+        .values()
+        .filter(|dir| path.starts_with(dir))
+        .max_by_key(|dir| dir.components().count())
+        .cloned()
+        .or_else(|| nearest_package_root(path))
 }
 
 fn package_name_from_package_json(package_root: &std::path::Path) -> Option<String> {
@@ -229,7 +241,7 @@ fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathB
         if file_name == "node_modules" || file_name == ".git" {
             continue;
         }
-        if path.extension().and_then(|ext| ext.to_str()) == Some("node") {
+        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("node") {
             return Some(path);
         }
         if path.is_dir() {
@@ -252,13 +264,17 @@ fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, St
     }
     let package_json_path = package_root.join("package.json");
     if let Ok(package_json) = fs::read_to_string(&package_json_path) {
-        if package_json.contains("\"gypfile\"") {
-            return Some((
-                "package.json gypfile",
-                marker_path_for_display(&package_json_path),
-            ));
-        }
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&package_json) {
+            if parsed
+                .get("gypfile")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                return Some((
+                    "package.json gypfile",
+                    marker_path_for_display(&package_json_path),
+                ));
+            }
             if package_json_dependency_uses_native_addon_loader(&parsed, "node-gyp-build")
                 || package_json_dependency_uses_native_addon_loader(&parsed, "bindings")
             {
@@ -279,25 +295,29 @@ fn package_json_dependency_uses_native_addon_loader(
     package_json: &serde_json::Value,
     loader_name: &str,
 ) -> bool {
-    [
-        "dependencies",
-        "optionalDependencies",
-        "peerDependencies",
-        "devDependencies",
-    ]
-    .iter()
-    .any(|section| {
-        package_json
-            .get(section)
-            .and_then(|deps| deps.as_object())
-            .is_some_and(|deps| deps.contains_key(loader_name))
-    })
+    ["dependencies", "optionalDependencies"]
+        .iter()
+        .any(|section| {
+            package_json
+                .get(section)
+                .and_then(|deps| deps.as_object())
+                .is_some_and(|deps| deps.contains_key(loader_name))
+        })
 }
 
-fn refuse_compile_package_native_addon(canonical: &std::path::Path) -> Result<()> {
-    let Some(package_root) = package_root_for_compile_package(canonical) else {
+fn refuse_compile_package_native_addon(
+    ctx: &mut CompilationContext,
+    canonical: &std::path::Path,
+) -> Result<()> {
+    let Some(package_root) = package_root_for_compile_package(ctx, canonical) else {
         return Ok(());
     };
+    if !ctx
+        .checked_compile_package_native_addon_roots
+        .insert(package_root.clone())
+    {
+        return Ok(());
+    }
     if has_perry_native_library(&package_root) {
         return Ok(());
     }
@@ -569,7 +589,7 @@ fn collect_module_one(
     let raw_source = fs::read_to_string(&canonical)
         .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
     if is_in_compiled_pkg {
-        refuse_compile_package_native_addon(&canonical)?;
+        refuse_compile_package_native_addon(ctx, &canonical)?;
     }
 
     // Issue #348: when a `compilePackages` target ships CommonJS (e.g. React
