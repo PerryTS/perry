@@ -4603,6 +4603,22 @@ pub extern "C" fn js_object_get_field_by_name(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            // #4949: heap class-expression values (`ClassExprFresh`) are real
+            // OBJECT_TYPE_CLASS objects, not INT32 class refs. Their `.prototype`
+            // read must still expose the live declared-class prototype object so
+            // tsc/tslib decorator code can inspect and mutate method descriptors.
+            if key_bytes == b"prototype"
+                && (*obj).object_type == crate::error::OBJECT_TYPE_CLASS
+                && (*obj).class_id != 0
+            {
+                let class_id = (*obj).class_id;
+                let value = super::class_registry::class_decl_prototype_value(class_id);
+                if value.to_bits() == crate::value::TAG_UNDEFINED {
+                    let value = super::class_prototype_ref_value(class_id);
+                    return JSValue::from_bits(value.to_bits());
+                }
+                return JSValue::from_bits(value.to_bits());
+            }
             if (*obj).class_id == CLASS_ID_BOXED_STRING {
                 if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits()),

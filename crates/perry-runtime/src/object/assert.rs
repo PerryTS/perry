@@ -266,7 +266,56 @@ fn expected_error_matches(thrown: f64, expected: f64) -> bool {
     if crate::value::js_is_truthy(crate::object::js_instanceof_dynamic(thrown, expected)) != 0 {
         return true;
     }
-    constructor_name_matches_builtin_error(thrown, expected)
+    if constructor_name_matches_builtin_error(thrown, expected) {
+        return true;
+    }
+    // Node: a function `expected` not matched by the instanceof / constructor
+    // checks above is treated as a *validation function* — it is called with
+    // the thrown error and a strict `true` return means the error matched
+    // (`lib/internal/assert`). Arrow and plain `function (err) {…}` validators
+    // both land here. A throw from calling it (e.g. an `Error` subclass invoked
+    // without `new`) counts as no-match, mirroring Node's Error-subclass fail
+    // path.
+    if expected_is_callable(expected) {
+        if let Ok(ret) = call_validator_capturing(expected, thrown) {
+            const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+            return ret.to_bits() == TAG_TRUE;
+        }
+    }
+    false
+}
+
+/// Whether `value` is a callable closure (a NaN-boxed `POINTER_TAG` value
+/// pointing at a `ClosureHeader`). Used to recognize an `assert.throws`
+/// validation function.
+fn expected_is_callable(value: f64) -> bool {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) != POINTER_TAG {
+        return false;
+    }
+    crate::closure::is_closure_ptr((bits & POINTER_MASK) as usize)
+}
+
+/// Call an `assert.throws` validation function with the thrown error,
+/// trapping any throw it raises (so a class-without-`new` or a side-effecting
+/// validator can't escape as an uncaught exception). Mirrors
+/// [`call_block_capturing_throw`] but passes one argument.
+fn call_validator_capturing(validator: f64, arg: f64) -> Result<f64, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    let result = if jumped == 0 {
+        let args = [arg];
+        let value = unsafe { crate::closure::js_native_call_value(validator, args.as_ptr(), 1) };
+        Ok(value)
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(exc)
+    };
+    crate::exception::js_try_end();
+    result
 }
 
 fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {

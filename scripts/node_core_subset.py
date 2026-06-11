@@ -100,6 +100,12 @@ _NOISE = re.compile(
     r"|^\(Use `node --trace"
 )
 
+# The `(node:<pid>)` prefix on a process warning carries a per-run pid that is
+# pure environment noise. Canonicalize it so a warning line that survives the
+# `_NOISE` filter (e.g. a `TimeoutOverflowWarning`, which is not a generic
+# `Warning`) compares by message content, not by pid. (#4910)
+_PID_PREFIX = re.compile(r"^\(node:\d+\)")
+
 
 def normalize(text: str) -> str:
     out = []
@@ -107,6 +113,7 @@ def normalize(text: str) -> str:
         line = raw.rstrip()
         if _NOISE.search(line):
             continue
+        line = _PID_PREFIX.sub("(node:PID)", line)
         out.append(line)
     while out and out[-1] == "":
         out.pop()
