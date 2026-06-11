@@ -4170,10 +4170,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("stream/web", "default"),
     class("stream/web", "ReadableStream"),
     class("stream/web", "ReadableStreamDefaultReader"),
-    class("stream/web", "ReadableStreamBYOBReader")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
-    class("stream/web", "ReadableStreamBYOBRequest")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
+    // #4915: BYOB readers are real — `new ReadableStreamBYOBReader(stream)` /
+    // `getReader({ mode: "byob" })` mint a reader whose `read(view)` fills the
+    // caller-supplied buffer; the byte-stream controller's `byobRequest`
+    // exposes `view` / `respond(bytesWritten)` / `respondWithNewView(view)`.
+    class("stream/web", "ReadableStreamBYOBReader"),
+    class("stream/web", "ReadableStreamBYOBRequest"),
     class("stream/web", "ReadableByteStreamController"),
     class("stream/web", "ReadableStreamDefaultController"),
     class("stream/web", "TransformStream"),
@@ -4181,8 +4183,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("stream/web", "WritableStream"),
     class("stream/web", "WritableStreamDefaultWriter"),
     class("stream/web", "WritableStreamDefaultController"),
-    class("stream/web", "ByteLengthQueuingStrategy")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
+    // #4915: real byteLength accounting — per-chunk size() results are summed
+    // into desiredSize for ReadableStream/WritableStream/TransformStream.
+    class("stream/web", "ByteLengthQueuingStrategy"),
     class("stream/web", "CountQueuingStrategy"),
     class("stream/web", "TextEncoderStream"),
     class("stream/web", "TextDecoderStream"),
@@ -5125,9 +5128,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("streams", "TextEncoder"),
     class("streams", "TextDecoder"),
     class("streams", "DecompressionStream"),
-    // node:stream/web QueuingStrategy classes (#1545).
-    class("streams", "ByteLengthQueuingStrategy")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
+    // node:stream/web QueuingStrategy classes (#1545). #4915: the
+    // constructor lowers through the same stdlib builtin arm as the
+    // node:stream/web form, with real byteLength desiredSize accounting.
+    class("streams", "ByteLengthQueuingStrategy"),
     class("streams", "CountQueuingStrategy"),
     // --- node:http server (issue #577) ---
     method("http", "createServer", false, None),

@@ -999,6 +999,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 );
                                 ctx.uses_fetch = true;
                             }
+                            // #4915: `new ReadableStreamBYOBReader(stream)` —
+                            // the handle is a reader, same module tag as
+                            // `stream.getReader({ mode: "byob" })`.
+                            "ReadableStreamBYOBReader" => {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "readable_stream_reader".to_string(),
+                                    "ReadableStreamBYOBReader".to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
                             "WritableStream" => {
                                 ctx.register_native_instance(
                                     name.clone(),

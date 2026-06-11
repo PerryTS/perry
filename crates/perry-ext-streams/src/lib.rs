@@ -27,10 +27,9 @@
 //!   returns the blob handle as-is. A v0.6.0 followup needs a
 //!   cross-wrapper handle-bytes exchange (e.g. perry-ffi
 //!   `wrapper_get_bytes(symbol, handle)`) to wire them up.
-//! - **BYOB readers** — `getReader({ mode: "byob" })`. Throws via
-//!   `js_streams_throw_byob_not_implemented`.
-//! - **`ByteLengthQueuingStrategy`** — custom `size()` callbacks per
-//!   chunk. Throws via `js_streams_throw_byte_length_not_implemented`.
+//! - **BYOB readers / `ByteLengthQueuingStrategy`** — implemented in the
+//!   node:stream/web path (`perry-stdlib/src/streams/byob.rs`, #4915);
+//!   this perry-ffi port doesn't expose them yet.
 //! - **`ReadableStream.from(asyncIterable)`** — needs cooperative
 //!   async iteration which the spawn-blocking-only perry-ffi v0.5.x
 //!   surface can't express; throws.
@@ -1388,19 +1387,10 @@ unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     promise
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Stubs for deferred surface (issue #237 followups)
-// ─────────────────────────────────────────────────────────────────────
-
-#[no_mangle]
-pub unsafe extern "C" fn js_streams_throw_byob_not_implemented() -> f64 {
-    throw_with_message("BYOB readers are not yet implemented (issue #237 followup)");
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_streams_throw_byte_length_not_implemented() -> f64 {
-    throw_with_message("ByteLengthQueuingStrategy is not yet implemented (issue #237 followup)");
-}
+// BYOB readers and ByteLengthQueuingStrategy are implemented in the
+// node:stream/web path (perry-stdlib/src/streams/byob.rs, #4915); the old
+// `js_streams_throw_*_not_implemented` stubs here were never reachable from
+// codegen and are gone.
 
 // ─────────────────────────────────────────────────────────────────────
 // Public helpers

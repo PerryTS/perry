@@ -39,11 +39,14 @@ pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
     }
 
     ensure_gc_registered();
-    let id = alloc_writable(
+    // `hwm` may be a plain number or a whole strategy object (#4915).
+    let (hwm, size_cb) = parse_strategy_value(hwm);
+    let id = alloc_writable_with_strategy(
         closure_from_bits(write_bits.to_bits()),
         closure_from_bits(close_bits.to_bits()),
         closure_from_bits(abort_bits.to_bits()),
         hwm,
+        size_cb,
     );
     // #1545: WritableStream `start(controller)` fires synchronously at
     // construction (before any write), matching the WHATWG order
@@ -66,11 +69,13 @@ pub unsafe extern "C" fn js_writable_stream_new_from_sink_object(sink: f64, hwm:
         );
     }
 
-    let id = alloc_writable(
+    let (hwm, size_cb) = parse_strategy_value(hwm);
+    let id = alloc_writable_with_strategy(
         stream_object_closure(sink, b"write"),
         stream_object_closure(sink, b"close"),
         stream_object_closure(sink, b"abort"),
         hwm,
+        size_cb,
     );
     let start_cb = stream_object_closure(sink, b"start");
     if start_cb != 0 {
@@ -221,7 +226,8 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
 // ─────────────────────────────────────────────────────────────────────
 
 fn writable_desired_size(s: &WritableStreamData) -> f64 {
-    s.high_water_mark - if s.in_flight { 1.0 } else { 0.0 } - s.write_queue.len() as f64
+    let queued: f64 = s.write_queue.iter().map(|(_, _, size)| size).sum();
+    s.high_water_mark - s.in_flight_size - queued
 }
 
 fn sync_writer_ready_promise(stream_id: usize, writer_id: usize, ready: *mut Promise) {
@@ -521,6 +527,26 @@ pub(super) unsafe fn writable_stream_write(
         return transform_write(stream_id, chunk);
     }
     let promise = js_promise_new();
+    // The strategy's size(chunk) is user JS — run it before taking the
+    // registry lock (it may re-enter the streams FFI).
+    let size_cb = WRITABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get(&stream_id)
+        .map(|s| s.strategy_size_cb)
+        .unwrap_or(0);
+    let chunk_size = if size_cb != 0 {
+        let size =
+            JSValue::from_bits(js_closure_call1(size_cb as *const ClosureHeader, chunk).to_bits())
+                .to_number();
+        if size.is_nan() || size < 0.0 || size.is_infinite() {
+            let message = invalid_size_message(size);
+            throw_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+        }
+        size
+    } else {
+        1.0
+    };
     let mut start_write = None;
     let needs_pending_ready;
     {
@@ -533,16 +559,17 @@ pub(super) unsafe fn writable_stream_write(
                 return promise;
             }
             _ => {
-                let err = make_error_with_message("Stream is closed or closing");
-                js_promise_reject(promise, f64::from_bits(err));
+                reject_type_error(promise, "Stream is closed or closing");
                 return promise;
             }
         };
         let before = writable_desired_size(s);
         if s.in_flight {
-            s.write_queue.push_back((chunk.to_bits(), promise));
+            s.write_queue
+                .push_back((chunk.to_bits(), promise, chunk_size));
         } else {
             s.in_flight = true;
+            s.in_flight_size = chunk_size;
             start_write = Some((s.write_cb, chunk, promise));
         }
         let after = writable_desired_size(s);
@@ -583,10 +610,12 @@ unsafe fn finish_writable_write_success(stream_id: usize, writer_id: usize, prom
         match g.get_mut(&stream_id) {
             Some(s) => {
                 s.in_flight = false;
+                s.in_flight_size = 0.0;
                 let next =
                     if s.state == WritableState::Writable || s.state == WritableState::Closing {
-                        s.write_queue.pop_front().map(|(chunk, p)| {
+                        s.write_queue.pop_front().map(|(chunk, p, size)| {
                             s.in_flight = true;
+                            s.in_flight_size = size;
                             (s.write_cb, f64::from_bits(chunk), p)
                         })
                     } else {
@@ -624,12 +653,14 @@ unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, r
         match g.get_mut(&stream_id) {
             Some(s) => {
                 s.in_flight = false;
+                s.in_flight_size = 0.0;
                 s.state = WritableState::Errored;
                 s.error_value = reason.to_bits();
                 let close_request = s.close_request_promise;
                 s.close_request_promise = std::ptr::null_mut();
                 s.close_started = false;
-                let queued: Vec<*mut Promise> = s.write_queue.drain(..).map(|(_, p)| p).collect();
+                let queued: Vec<*mut Promise> =
+                    s.write_queue.drain(..).map(|(_, p, _)| p).collect();
                 (s.ready_promise, s.closed_promise, close_request, queued)
             }
             None => (
@@ -667,8 +698,7 @@ pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut
         Some(w) if w.locked => w.stream_handle,
         _ => {
             let promise = js_promise_new();
-            let err = make_error_with_message("Writer is no longer locked to a stream");
-            js_promise_reject(promise, f64::from_bits(err));
+            reject_type_error(promise, "Writer is no longer locked to a stream");
             return promise;
         }
     };

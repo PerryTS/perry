@@ -138,6 +138,10 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_writer_ready",                             OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_writer_desired_size",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_reader_read",                              OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    // #4915: BYOB reader surface.
+    ("js_reader_read_with_view",                    OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_get_byob_reader",          OwnerKind::Stdlib { feature: Some("bundled-streams") }),
+    ("js_readable_stream_controller_byob_request",  OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_reader_release_lock",                      OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_reader_closed",                            OwnerKind::Stdlib { feature: Some("bundled-streams") }),
     ("js_reader_cancel",                            OwnerKind::Stdlib { feature: Some("bundled-streams") }),

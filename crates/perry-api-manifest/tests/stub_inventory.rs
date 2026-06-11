@@ -69,7 +69,10 @@ fn stub_inventory_matches_known_clusters() {
         // listening port via SO_REUSEPORT binds + a fork-IPC 'listening'
         // round-trip; SCHED_RR fd-passing + shared ephemeral `listen(0)`
         // port are tracked in #4962 and are policy fidelity, not lies.
-        ("#4915", 4),  // BYOB readers + ByteLengthQueuingStrategy (throw)
+        // #4915 (BYOB readers + ByteLengthQueuingStrategy) intentionally
+        // absent: read(view), controller.byobRequest respond/
+        // respondWithNewView, and real byteLength desiredSize accounting
+        // landed (perry-stdlib/src/streams/byob.rs).
         ("#4916", 2),  // v8 get/writeHeapSnapshot (empty graph)
         ("#4917", 18), // stdlib adapters: zlib(11) + http.Agent(3) + worker ref/unref(2) + mongodb(1) + backoff(1)
     ];

@@ -998,6 +998,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    // #4915: BYOB reader surface.
+    module.declare_function("js_readable_stream_get_byob_reader", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_readable_stream_controller_byob_request",
+        DOUBLE,
+        &[DOUBLE],
+    );
     // #1645: ReadableStream.from(iterable) — builds a pre-loaded stream.
     module.declare_function("js_readable_stream_from_iterable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_readable_stream_locked", DOUBLE, &[DOUBLE]);
@@ -1027,6 +1034,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     // ReadableStreamDefaultReader.
     module.declare_function("js_reader_read", I64, &[DOUBLE]);
+    // #4915: BYOB `read(view)` — fills the caller-supplied view.
+    module.declare_function("js_reader_read_with_view", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_reader_release_lock", DOUBLE, &[DOUBLE]);
     module.declare_function("js_reader_closed", I64, &[DOUBLE]);
     module.declare_function("js_reader_cancel", I64, &[DOUBLE, DOUBLE]);
@@ -1059,16 +1068,17 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_writer_ready", I64, &[DOUBLE]);
     module.declare_function("js_writer_desired_size", DOUBLE, &[DOUBLE]);
     // TransformStream.
-    // #1644: leading arg is the `start` hook.
+    // #1644: leading arg is the `start` hook. #4915: the two trailing args
+    // are the writable / readable strategies (number or strategy object).
     module.declare_function(
         "js_transform_stream_new",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_transform_stream_new_from_transformer_object",
         DOUBLE,
-        &[DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_transform_stream_readable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_transform_stream_writable", DOUBLE, &[DOUBLE]);

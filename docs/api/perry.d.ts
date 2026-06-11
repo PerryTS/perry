@@ -3461,7 +3461,7 @@ declare module "stream/promises" {
 }
 
 declare module "stream/web" {
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ByteLengthQueuingStrategy { [key: string]: any; }
   /** stdlib */
   export class CompressionStream { [key: string]: any; }
@@ -3473,9 +3473,9 @@ declare module "stream/web" {
   export class ReadableByteStreamController { [key: string]: any; }
   /** stdlib */
   export class ReadableStream { [key: string]: any; }
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ReadableStreamBYOBReader { [key: string]: any; }
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ReadableStreamBYOBRequest { [key: string]: any; }
   /** stdlib */
   export class ReadableStreamDefaultController { [key: string]: any; }
@@ -3501,7 +3501,7 @@ declare module "stream/web" {
 }
 
 declare module "streams" {
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ByteLengthQueuingStrategy { [key: string]: any; }
   /** stdlib */
   export class CountQueuingStrategy { [key: string]: any; }

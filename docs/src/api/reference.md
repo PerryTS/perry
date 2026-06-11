@@ -3105,14 +3105,14 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ByteLengthQueuingStrategy`
 - `CompressionStream`
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableByteStreamController`
 - `ReadableStream`
-- `ReadableStreamBYOBReader` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
-- `ReadableStreamBYOBRequest` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ReadableStreamBYOBReader`
+- `ReadableStreamBYOBRequest`
 - `ReadableStreamDefaultController`
 - `ReadableStreamDefaultReader`
 - `TextDecoderStream`
@@ -3131,7 +3131,7 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ByteLengthQueuingStrategy`
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableStream`

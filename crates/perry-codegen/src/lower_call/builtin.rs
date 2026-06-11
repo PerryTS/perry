@@ -1274,20 +1274,11 @@ pub(super) fn lower_builtin_new(
                 }
             }
             if args.len() >= 2 {
-                if let Some(qprops) = extract_options_fields(ctx, &args[1]) {
-                    for (k, vexpr) in &qprops {
-                        if k == "highWaterMark" {
-                            hwm = lower_expr(ctx, vexpr)?;
-                        }
-                    }
-                } else {
-                    let strategy = lower_expr(ctx, &args[1])?;
-                    hwm = ctx.block().call(
-                        DOUBLE,
-                        "js_streams_strategy_high_water_mark",
-                        &[(DOUBLE, &strategy)],
-                    );
-                }
+                // #4915: pass the whole strategy value through — the runtime
+                // accepts a plain highWaterMark number or a strategy object
+                // (e.g. ByteLengthQueuingStrategy) and reads highWaterMark +
+                // size() from it.
+                hwm = lower_expr(ctx, &args[1])?;
             }
             if let Some(sink) = sink_object {
                 let h = ctx.block().call(
@@ -1340,20 +1331,26 @@ pub(super) fn lower_builtin_new(
                     transformer_object = Some(lower_expr(ctx, &args[0])?);
                 }
             }
+            // #4915: writableStrategy (arg 1) / readableStrategy (arg 2) —
+            // each may be a plain highWaterMark number or a strategy object;
+            // the runtime parses either form.
+            let mut writable_strategy = hwm;
+            let mut readable_strategy = double_literal(1.0);
             if args.len() >= 2 {
-                if let Some(qprops) = extract_options_fields(ctx, &args[1]) {
-                    for (k, vexpr) in &qprops {
-                        if k == "highWaterMark" {
-                            hwm = lower_expr(ctx, vexpr)?;
-                        }
-                    }
-                }
+                writable_strategy = lower_expr(ctx, &args[1])?;
+            }
+            if args.len() >= 3 {
+                readable_strategy = lower_expr(ctx, &args[2])?;
             }
             if let Some(transformer) = transformer_object {
                 let h = ctx.block().call(
                     DOUBLE,
                     "js_transform_stream_new_from_transformer_object",
-                    &[(DOUBLE, &transformer), (DOUBLE, &hwm)],
+                    &[
+                        (DOUBLE, &transformer),
+                        (DOUBLE, &writable_strategy),
+                        (DOUBLE, &readable_strategy),
+                    ],
                 );
                 return Ok(Some(h));
             }
@@ -1364,7 +1361,8 @@ pub(super) fn lower_builtin_new(
                     (DOUBLE, &start),
                     (DOUBLE, &transform),
                     (DOUBLE, &flush),
-                    (DOUBLE, &hwm),
+                    (DOUBLE, &writable_strategy),
+                    (DOUBLE, &readable_strategy),
                 ],
             );
             Ok(Some(h))
@@ -1417,6 +1415,27 @@ pub(super) fn lower_builtin_new(
                 "js_stream_web_decompression_stream_new"
             };
             let h = ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &format)]);
+            Ok(Some(h))
+        }
+
+        // #4915: `new ReadableStreamBYOBReader(stream)` — equivalent to
+        // `stream.getReader({ mode: "byob" })`. The runtime validates that
+        // the argument is a byte stream (TypeError otherwise) and returns a
+        // reader handle whose `read(view)` fills the caller's buffer.
+        "ReadableStreamBYOBReader" => {
+            let stream = if !args.is_empty() {
+                lower_expr(ctx, &args[0])?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for a in args.iter().skip(1) {
+                let _ = lower_expr(ctx, a)?;
+            }
+            let h = ctx.block().call(
+                DOUBLE,
+                "js_readable_stream_get_byob_reader",
+                &[(DOUBLE, &stream)],
+            );
             Ok(Some(h))
         }
 
