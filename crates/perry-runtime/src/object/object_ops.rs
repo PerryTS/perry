@@ -1161,7 +1161,15 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
         let closure = ptr as *const ClosureHeader;
         if (*closure).type_tag == CLOSURE_MAGIC && (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
             let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
-            if let Some(source_cid) = super::class_ref_id(recv) {
+            let recv_value = crate::JSValue::from_bits(recv.to_bits());
+            let source_cid = super::class_ref_id(recv).or_else(|| {
+                recv_value.is_pointer().then(|| {
+                    super::class_registry::class_id_for_decl_prototype_object(
+                        recv_value.as_pointer::<u8>() as usize,
+                    )
+                })?
+            });
+            if let Some(source_cid) = source_cid {
                 if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                     super::lookup_class_method_in_chain(source_cid, name)
                 {
@@ -1576,6 +1584,23 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
+        // #4949 / #2159 follow-up: `ClassExprFresh.prototype` now materializes
+        // the declared-class prototype object. Keep `Object.defineProperty` on
+        // that live object wired to the same prototype-method side tables used
+        // by the historical ClassRef path, so instances observe decorator/mixin
+        // method replacements.
+        if let Some(target_cid) =
+            super::class_registry::class_id_for_decl_prototype_object(obj as usize)
+        {
+            if let Some(ref name) = key_rust {
+                if desc_has_field(descriptor_value, b"value") {
+                    let value_field = desc_read_field(descriptor_value, b"value");
+                    if !value_field.is_undefined() {
+                        define_class_prototype_method(target_cid, name, value_field.bits());
+                    }
+                }
+            }
+        }
         if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(

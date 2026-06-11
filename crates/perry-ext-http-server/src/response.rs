@@ -27,6 +27,60 @@ use crate::types::{
 
 pub type ResponseBody = BoxBody<Bytes, Infallible>;
 
+// ------------------------------------------------------------------
+// #4907 — Node-compatible header / argument validation.
+//
+// `res.setHeader` / `res.removeHeader` throw after headers are sent, and
+// `setHeader` rejects non-token field names. `res.writeEarlyHints` validates
+// its `hints` argument. Each throws an `ERR_*`-coded error that unwinds back
+// to the JS handler frame.
+// ------------------------------------------------------------------
+
+/// Node HTTP token bytes (`tchar`, mirrored from `lib/_http_common.js`).
+fn http_is_token_byte(b: u8) -> bool {
+    matches!(b,
+        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9'
+        | b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*'
+        | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~')
+}
+
+fn http_is_valid_token(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(http_is_token_byte)
+}
+
+/// Returns whether the response's headers have already been flushed. A throw
+/// must fire even when the handle has gone away, so callers check this before
+/// touching state.
+fn response_headers_sent(handle: i64) -> bool {
+    get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.headers_sent)
+        .unwrap_or(false)
+}
+
+/// `lib/internal/http.js` link-header format: a `<uri>` followed by at least
+/// one `;`-separated parameter. Faithful enough for the invalid cases the
+/// corpus exercises (`'</>; '`, `'rel=preload; </scripts.js>'`,
+/// `'invalid string'`).
+fn is_valid_link_header(value: &str) -> bool {
+    let s = value.trim();
+    if !s.starts_with('<') {
+        return false;
+    }
+    let close = match s.find('>') {
+        Some(i) => i,
+        None => return false,
+    };
+    let rest = s[close + 1..].trim_start();
+    if !rest.starts_with(';') {
+        return false;
+    }
+    let params = rest[1..].trim();
+    if params.is_empty() {
+        return false;
+    }
+    params.split(';').all(|p| !p.trim().is_empty())
+}
+
 struct TrailerBody {
     body: Option<Bytes>,
     trailers: Option<HeaderMap>,
@@ -356,8 +410,24 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
     value: f64,
 ) {
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
+    // #4907 — Node's `OutgoingMessage.setHeader` throws if headers are already
+    // sent, then validates the field name, before touching any state.
+    if response_headers_sent(handle) {
+        perry_ffi::throw_with_code(
+            "Cannot set headers after they are sent to the client",
+            "ERR_HTTP_HEADERS_SENT",
+            perry_ffi::ErrorKind::Error,
+        );
+    }
     if name.is_empty() {
         return;
+    }
+    if !http_is_valid_token(&name) {
+        perry_ffi::throw_with_code(
+            &format!("Header name must be a valid HTTP token [\"{name}\"]"),
+            "ERR_INVALID_HTTP_TOKEN",
+            perry_ffi::ErrorKind::TypeError,
+        );
     }
     let lower = name.to_lowercase();
 
@@ -443,6 +513,15 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) {
+    // #4907 — Node's `OutgoingMessage.removeHeader` throws once headers are
+    // sent (distinct "remove" wording from `setHeader`).
+    if response_headers_sent(handle) {
+        perry_ffi::throw_with_code(
+            "Cannot remove headers after they are sent to the client",
+            "ERR_HTTP_HEADERS_SENT",
+            perry_ffi::ErrorKind::Error,
+        );
+    }
     let name = match read_string_header(name_ptr as *mut _) {
         Some(s) => s.to_lowercase(),
         None => return,
@@ -879,10 +958,60 @@ pub extern "C" fn js_node_http_res_set_timeout(handle: i64, _msecs: f64, _callba
     handle
 }
 
-/// `res.writeEarlyHints(headers[, cb])` — accepted no-op until interim
-/// response streaming is implemented.
+/// `res.writeEarlyHints(hints[, cb])` — interim 103 response is not yet sent
+/// (accepted no-op), but the `hints` argument is validated to match Node
+/// (#4907): a non-object throws `ERR_INVALID_ARG_TYPE`, and a malformed
+/// `link` value throws `ERR_INVALID_ARG_VALUE`.
 #[no_mangle]
-pub extern "C" fn js_node_http_res_write_early_hints(_handle: i64, _headers: f64, _callback: i64) {}
+pub unsafe extern "C" fn js_node_http_res_write_early_hints(
+    _handle: i64,
+    hints: f64,
+    _callback: i64,
+) {
+    // Serialize the hints object and inspect it. Node requires `typeof hints
+    // === 'object'` (and non-null); a string / number / null throws
+    // `ERR_INVALID_ARG_TYPE`.
+    let json = {
+        let ptr = js_json_stringify(hints, 0);
+        if ptr.is_null() {
+            None
+        } else {
+            read_string_header(ptr)
+        }
+    };
+    let value: Option<serde_json::Value> = json.and_then(|j| serde_json::from_str(&j).ok());
+    match value {
+        // Arrays are objects in JS — `hints.link` is simply undefined, so no
+        // validation fires.
+        Some(serde_json::Value::Object(map)) => {
+            if let Some(link) = map.get("link") {
+                let invalid = match link {
+                    serde_json::Value::Null => false,
+                    serde_json::Value::String(s) => !is_valid_link_header(s),
+                    serde_json::Value::Array(items) => items
+                        .iter()
+                        .any(|i| i.as_str().map(|s| !is_valid_link_header(s)).unwrap_or(true)),
+                    _ => true,
+                };
+                if invalid {
+                    perry_ffi::throw_with_code(
+                        "The property 'hints.link' must be an array or string of format \"</styles.css>; rel=preload; as=style\".",
+                        "ERR_INVALID_ARG_VALUE",
+                        perry_ffi::ErrorKind::TypeError,
+                    );
+                }
+            }
+        }
+        Some(serde_json::Value::Array(_)) => {}
+        _ => {
+            perry_ffi::throw_with_code(
+                "The \"hints\" argument must be of type object.",
+                "ERR_INVALID_ARG_TYPE",
+                perry_ffi::ErrorKind::TypeError,
+            );
+        }
+    }
+}
 
 /// `res.writeContinue()` — emits an HTTP/1.1 100-continue. Phase 1
 /// stores the intent only; the actual 100-continue sequence requires
