@@ -552,10 +552,7 @@ pub(super) fn flush_deferred_gc_request() {
             if manual_gc_blocked_by_unsafe_zone() {
                 return;
             }
-            crate::weakref::clear_pending_finalization_jobs();
-            gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
-                .emit_after_current();
-            crate::weakref::queue_pending_finalization_callbacks_after_gc();
+            manual_gc_collect_now();
         }
         DeferredGcRequest::Collect(kind) => {
             if gc_blocked_by_unsafe_zone() {
@@ -1551,6 +1548,14 @@ pub extern "C" fn js_gc_collect() {
     if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Manual)) {
         return;
     }
+    manual_gc_collect_now();
+}
+
+/// Run an explicit (`gc()`) full collection. The `gc()` callsite may hold live
+/// module-init/top-level locals only on the native stack, so the collection
+/// forces the conservative native-stack scan (#4977); see `ManualGcScanGuard`.
+fn manual_gc_collect_now() {
+    let _scan = super::roots::ManualGcScanGuard::force_full_scan();
     crate::weakref::clear_pending_finalization_jobs();
     gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
