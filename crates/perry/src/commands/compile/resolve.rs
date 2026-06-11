@@ -151,24 +151,44 @@ pub(super) fn extract_compile_package_dir(
     resolved_path: &Path,
     package_name: &str,
 ) -> Option<PathBuf> {
-    let path_str = resolved_path.to_string_lossy();
-    let needle = format!("node_modules/{}", package_name);
-    // Use rfind to handle deeply nested node_modules
-    path_str
-        .rfind(&needle)
-        .map(|idx| PathBuf::from(&path_str[..idx + needle.len()]))
+    resolved_path
+        .ancestors()
+        .find(|candidate| is_compile_package_dir(candidate, package_name))
+        .map(Path::to_path_buf)
 }
 
 /// Check if a file path is inside a package listed in compile_packages
 pub(super) fn is_in_compile_package(path: &Path, compile_packages: &HashSet<String>) -> bool {
-    let path_str = path.to_string_lossy();
-    for pkg_name in compile_packages {
-        let pattern = format!("node_modules/{}/", pkg_name);
-        if path_str.contains(&pattern) {
-            return true;
+    compile_packages.iter().any(|pkg_name| {
+        path.ancestors()
+            .any(|candidate| is_compile_package_dir(candidate, pkg_name))
+    })
+}
+
+fn is_compile_package_dir(candidate: &Path, package_name: &str) -> bool {
+    let parts: Vec<&str> = package_name.split('/').collect();
+    match parts.as_slice() {
+        [name] => {
+            candidate.file_name().is_some_and(|part| part == *name)
+                && candidate
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|part| part == "node_modules")
         }
+        [scope, name] => {
+            candidate.file_name().is_some_and(|part| part == *name)
+                && candidate
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|part| part == *scope)
+                && candidate
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::file_name)
+                    .is_some_and(|part| part == "node_modules")
+        }
+        _ => false,
     }
-    false
 }
 
 /// Enumerate every installed package name reachable from `project_root`'s
