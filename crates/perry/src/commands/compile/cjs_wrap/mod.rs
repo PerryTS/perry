@@ -53,6 +53,7 @@ pub(self) use extract_requires::{
 };
 pub(self) use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,
+    source_has_top_level_return, top_level_class_names,
 };
 
 // Public API consumed by `compile.rs` / `collect_modules.rs`.
@@ -69,6 +70,7 @@ mod tests {
     use super::extract_requires::{
         extract_require_aliases_with_ranges, extract_require_specifiers,
     };
+    use super::hoist_classes::{source_has_top_level_return, top_level_class_names};
     use super::wrap::{wrap_commonjs, wrap_commonjs_for_target};
     use std::fs;
     use std::path::PathBuf;
@@ -649,6 +651,87 @@ module.exports = SafeBuffer;"#;
     }
 
     #[test]
+    fn wrap_flat_emits_class_module_exports_that_closes_over_top_level_const() {
+        // Issue #4933: `module.exports = StackUtils` where the class reads a
+        // top-level `const` (so the #2310 hoist guard refuses to lift it). The
+        // old path degraded to `export default _cjs`, losing class identity —
+        // statics, `.prototype`, and the closure all read `undefined` on the
+        // consumer side. The flat path drops the IIFE so the class stays a real
+        // top-level declaration with full identity.
+        let src = "const natives = ['a', 'b'];\n\
+                   class StackUtils {\n\
+                     static nodeInternals() { return natives.slice(); }\n\
+                     clean(s) { return 'x' + s; }\n\
+                   }\n\
+                   module.exports = StackUtils;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        assert!(
+            wrapped.contains("export default StackUtils;"),
+            "expected direct default export of StackUtils, got:\n{}",
+            wrapped
+        );
+        assert!(
+            wrapped.contains("export { StackUtils };"),
+            "expected named export of StackUtils, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("export default _cjs;"),
+            "flat emission must not fall back to the opaque _cjs default, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("const _cjs = (function()"),
+            "flat emission must drop the IIFE wrapper, got:\n{}",
+            wrapped
+        );
+        // The CommonJS runtime shims still run at module scope.
+        assert!(wrapped.contains("const __cjs_module = { exports: {} };"));
+        assert!(wrapped.contains("const _cjs = __cjs_module.exports;"));
+    }
+
+    #[test]
+    fn top_level_class_names_lists_refused_and_hoisted_classes() {
+        let src = "const t = 1;\nclass A { m(){ return t; } }\nclass B {}\n";
+        let names = top_level_class_names(src);
+        assert_eq!(names, vec!["A".to_string(), "B".to_string()]);
+    }
+
+    #[test]
+    fn top_level_return_detection_ignores_returns_inside_bodies_and_regexes() {
+        // No top-level return: every `return` sits inside a function/class body,
+        // and the regex literal's brackets must not corrupt brace depth.
+        let no_return = "const re = /^(.*?) \\[as (.*?)\\]$/;\n\
+                         class C {\n\
+                           m() { if (true) { return 1; } return 2; }\n\
+                         }\n\
+                         module.exports = C;";
+        assert!(
+            !source_has_top_level_return(no_return),
+            "function-body returns must not count as top-level"
+        );
+        // A genuine module-top return keeps the IIFE.
+        let yes_return = "if (!supported) return;\nmodule.exports = {};";
+        assert!(source_has_top_level_return(yes_return));
+    }
+
+    #[test]
+    fn wrap_keeps_iife_for_class_module_exports_with_top_level_return() {
+        // A top-level `return` is legal in CommonJS but not at ESM module scope,
+        // so the IIFE wrap must be retained even for `module.exports = <Class>`.
+        let src = "const t = 1;\n\
+                   if (!t) return;\n\
+                   class C { m(){ return t; } }\n\
+                   module.exports = C;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        assert!(
+            wrapped.contains("const _cjs = (function()"),
+            "module with a top-level return must keep the IIFE, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn wrap_keeps_cjs_default_when_module_exports_is_object_literal() {
         let src = "module.exports = { foo: 1, bar: 2 };";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
@@ -1079,15 +1162,21 @@ module.exports = SafeBuffer;"#;
         );
     }
 
-    /// Issue #2310 — when a top-level class body references a let/const
-    /// declared at the IIFE's top level (the ws/lib/sender.js shape:
-    /// `let randomPoolPointer; class Sender { static frame(){ … r++ } }`),
-    /// hoisting the class out of the IIFE would sever the closure over
-    /// `randomPoolPointer` and the compile hard-errors with
-    /// `Undefined variable in update expression`. Verify the class stays
-    /// inside the IIFE body and is NOT in the hoisted-class block.
+    /// Issue #2310 / #4933 — a top-level class body that references a
+    /// let/const declared at the IIFE's top level (the ws/lib/sender.js shape:
+    /// `let pointer; class Sender { static next(){ … pointer++ } }`) cannot be
+    /// *hoisted* above the IIFE — that would sever the closure and the compile
+    /// hard-errors with `Undefined variable in update expression`.
+    ///
+    /// For a `module.exports = Sender` default-export class, the #4933 flat
+    /// emission supersedes the old IIFE-retention mitigation: dropping the IIFE
+    /// puts BOTH the class and `let pointer` at module scope, so the closure
+    /// (including the `pointer++` mutation) survives AND the class keeps full
+    /// identity — the consumer's default import sees its statics / `.prototype`
+    /// instead of an opaque `_cjs`. Verify the wrap flat-emits the class
+    /// (no IIFE, direct default export) and still parses.
     #[test]
-    fn issue_2310_class_referencing_iife_let_is_not_hoisted() {
+    fn issue_2310_class_referencing_iife_let_flat_emits() {
         let src = "'use strict';\n\
                    const POOL_SIZE = 8;\n\
                    let pointer = 0;\n\
@@ -1096,17 +1185,25 @@ module.exports = SafeBuffer;"#;
                    }\n\
                    module.exports = Sender;\n";
         let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/sender.js"));
-        // The IIFE body must still contain the class — i.e. the wrap must
-        // not lift it above the `const _cjs = (function() { ... })()` line.
-        let iife_open = wrapped
-            .find("const _cjs = (function()")
-            .expect("wrap must produce the IIFE wrapper");
-        let class_pos = wrapped
-            .find("class Sender")
-            .expect("wrap must keep `class Sender` somewhere");
         assert!(
-            class_pos > iife_open,
-            "expected `class Sender` to stay inside the IIFE for #2310; got:\n{}",
+            wrapped.contains("export default Sender;"),
+            "expected flat default export of Sender, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("const _cjs = (function()"),
+            "expected the IIFE to be dropped for the flat default-export class, got:\n{}",
+            wrapped
+        );
+        // `class Sender` and `let pointer` both land at module scope, so the
+        // mutable closure is preserved (behavioral parity verified separately).
+        assert!(wrapped.contains("class Sender"));
+        assert!(wrapped.contains("let pointer = 0;"));
+        let parsed = perry_parser::parse_typescript(&wrapped, "sender.js");
+        assert!(
+            parsed.is_ok(),
+            "flat-emitted sender wrap failed to parse: {:?}\nwrapped:\n{}",
+            parsed.err(),
             wrapped
         );
     }

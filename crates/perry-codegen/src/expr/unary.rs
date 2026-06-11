@@ -92,16 +92,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     Ok(blk.bitcast_i64_to_double(&tagged_i64))
                 }
                 UnaryOp::BitNot => {
-                    // ~x: bitwise NOT with proper JS ToInt32 semantics.
-                    // Direct fptosi(f64→i32) has undefined behavior for
-                    // values outside [-2^31, 2^31-1] (like 0xFFFFFFFF =
-                    // 4294967295). Use fptosi(f64→i64) first (safe for
-                    // all JS numbers), then trunc(i64→i32) to get the
-                    // correct 32-bit pattern, then NOT.
-                    let i64_v = blk.fptosi(DOUBLE, &v, I64);
-                    let i32_v = blk.trunc(I64, &i64_v, I32);
-                    let inv = blk.xor(I32, &i32_v, "-1");
-                    Ok(blk.sitofp(I32, &inv, DOUBLE))
+                    // `~x` preserves BigInt when the runtime value is a BigInt
+                    // and otherwise falls back to JS ToInt32 semantics.
+                    Ok(blk.call(DOUBLE, "js_dynamic_bitnot", &[(DOUBLE, &v)]))
                 }
             }
         }

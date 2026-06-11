@@ -20,6 +20,20 @@ pub(super) struct CpRunOptions {
     stdio: [CpStdio; 3],
 }
 
+impl CpRunOptions {
+    /// Signal used to terminate the child on `timeout` / `maxBuffer` overrun.
+    /// Needed by the async exec reactor (#4912) to kill on a maxBuffer breach.
+    pub(super) fn kill_signal(&self) -> i32 {
+        self.kill_signal
+    }
+
+    /// The `timeout` limit, if any — the async exec reactor (#4912) arms a
+    /// timeout thread with it.
+    pub(super) fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
+}
+
 impl Default for CpRunOptions {
     fn default() -> Self {
         Self {

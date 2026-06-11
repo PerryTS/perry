@@ -888,6 +888,7 @@ pub(crate) fn lower_let(
     let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && i32_safe_local
         && init_in_i32_range
+        && !matches!(refined_ty, perry_types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && !ctx.i32_counter_slots.contains_key(&id);

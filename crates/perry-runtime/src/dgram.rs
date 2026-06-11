@@ -1,12 +1,17 @@
-//! Deterministic `node:dgram` loopback support.
+//! `node:dgram` UDP support.
 //!
-//! Perry does not expose host UDP sockets yet. This module implements the
-//! Node-shaped unicast subset against an in-process loopback registry so
-//! `createSocket`, `bind`, `send`, `message`, `connect`, `remoteAddress`,
-//! `disconnect`, and `close` behave deterministically in parity tests.
+//! By default this drives real host UDP sockets (`std::net::UdpSocket`): `bind`
+//! opens an OS socket and starts a recv thread via [`crate::dgram_reactor`] that
+//! delivers `'message'` events through the event pump; `send` does a real
+//! `send_to`; `addMembership`/`setBroadcast`/`setMulticastTTL`/… apply the
+//! matching socket option (#4911). Setting `PERRY_DETERMINISTIC_NET=1` reverts
+//! to the pre-#4911 in-process loopback registry so unicast delivery between two
+//! sockets in the same process stays reproducible in parity fixtures without
+//! touching the network.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
 use crate::closure::{
@@ -35,6 +40,9 @@ const KEY_REMOTE_FAMILY: &[u8] = b"__perryDgramRemoteFamily";
 const KEY_REMOTE_PORT: &[u8] = b"__perryDgramRemotePort";
 const KEY_RECV_BUFFER_SIZE: &[u8] = b"__perryDgramRecvBufferSize";
 const KEY_SEND_BUFFER_SIZE: &[u8] = b"__perryDgramSendBufferSize";
+/// Reactor id for the live OS socket (real mode only); links a JS socket back
+/// to its `UdpSocket` + recv thread in [`crate::dgram_reactor`].
+const KEY_REACTOR_ID: &[u8] = b"__perryDgramReactorId";
 
 type MethodThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
 
@@ -166,11 +174,11 @@ const SOCKET_METHODS: &[MethodSpec] = &[
     },
     MethodSpec {
         name: "ref",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_ref_thunk,
     },
     MethodSpec {
         name: "unref",
-        thunk: dgram_chain_thunk,
+        thunk: dgram_unref_thunk,
     },
 ];
 
@@ -938,7 +946,11 @@ fn ensure_bound(socket: f64) {
     if is_truthy_hidden(socket, KEY_BOUND) {
         return;
     }
-    bind_socket(socket, 0, default_loopback_address(socket));
+    if deterministic() {
+        bind_socket(socket, 0, default_loopback_address(socket));
+    } else {
+        let _ = real_bind(socket, 0, &default_bind_address(socket));
+    }
 }
 
 fn lookup_bound_socket(address: &str, port: u16, socket: f64) -> Option<f64> {
@@ -1005,6 +1017,236 @@ fn message_value(value: f64) -> Option<(f64, usize)> {
     None
 }
 
+/// Whether `PERRY_DETERMINISTIC_NET=1` — use the in-process loopback registry
+/// instead of real OS sockets (#4911).
+fn deterministic() -> bool {
+    crate::stub_diag::deterministic_net_enabled()
+}
+
+/// The reactor id stashed on a real-mode socket, if it is bound.
+fn reactor_id(socket: f64) -> Option<u64> {
+    get_hidden_value(socket, KEY_REACTOR_ID)
+        .and_then(number_value)
+        .map(|n| n as u64)
+}
+
+fn live_udp(socket: f64) -> Option<Arc<UdpSocket>> {
+    crate::dgram_reactor::udp_for(reactor_id(socket)?)
+}
+
+/// Build a `Buffer` JS value from raw datagram bytes.
+fn make_buffer(data: &[u8]) -> f64 {
+    let buf = crate::buffer::js_buffer_alloc(data.len() as i32, 0);
+    unsafe {
+        if !buf.is_null() {
+            if !data.is_empty() {
+                let dst = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+                // GC_STORE_AUDIT(POINTER_FREE): raw datagram bytes copied into a
+                // freshly-allocated Buffer payload — u8 data, never heap pointers.
+                std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+            }
+            (*buf).length = data.len() as u32;
+        }
+    }
+    boxed_pointer(buf as *const u8)
+}
+
+/// Deliver one received datagram to its socket as a `'message'` event. Called
+/// on the main thread from [`crate::dgram_reactor::pump`]. The `Buffer` is
+/// GC-rooted across the `rinfo` allocation so a collection between the two
+/// can't reclaim it.
+pub(crate) fn dgram_emit_message(
+    socket_bits: u64,
+    data: &[u8],
+    src_ip: &str,
+    src_port: u16,
+    src_family: &str,
+) {
+    let socket = f64::from_bits(socket_bits);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buffer = scope.root_nanbox_f64(make_buffer(data));
+    let rinfo = scope.root_nanbox_f64(build_rinfo(src_ip, src_family, src_port, data.len()));
+    emit_event_value(
+        socket,
+        str_value("message"),
+        &[buffer.get_nanbox_f64(), rinfo.get_nanbox_f64()],
+    );
+}
+
+/// Extract the raw bytes to transmit from a `send()` message argument
+/// (string → UTF-8, Buffer, or TypedArray/DataView).
+fn message_bytes(value: f64) -> Option<Vec<u8>> {
+    if let Some(text) = string_to_rust(value) {
+        return Some(text.into_bytes());
+    }
+    let raw = raw_ptr_from_value(value);
+    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
+        let buf = raw as *const crate::buffer::BufferHeader;
+        unsafe {
+            let len = (*buf).length as usize;
+            let data = (raw as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+            return Some(std::slice::from_raw_parts(data, len).to_vec());
+        }
+    }
+    if raw >= 0x10000 && crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+        return unsafe {
+            crate::typedarray::typed_array_bytes(raw as *const crate::typedarray::TypedArrayHeader)
+                .map(<[u8]>::to_vec)
+        };
+    }
+    None
+}
+
+/// Map a `std::io::ErrorKind` from a socket syscall onto the Node error code.
+fn io_error_code(err: &std::io::Error) -> &'static str {
+    match err.kind() {
+        std::io::ErrorKind::AddrInUse => "EADDRINUSE",
+        std::io::ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL",
+        std::io::ErrorKind::PermissionDenied => "EACCES",
+        std::io::ErrorKind::ConnectionRefused => "ECONNREFUSED",
+        _ => "EINVAL",
+    }
+}
+
+/// Build (not throw) a Node-style socket error value with `code`/`syscall`.
+fn socket_error_value(message: &str, code: &'static str, syscall: &'static str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    crate::node_submodules::register_error_syscall(msg, syscall);
+    let err = crate::error::js_error_new_with_message(msg);
+    boxed_pointer(err as *const u8)
+}
+
+fn dns_not_found_value(host: &str) -> f64 {
+    socket_error_value(
+        &format!("getaddrinfo ENOTFOUND {host}"),
+        "ENOTFOUND",
+        "getaddrinfo",
+    )
+}
+
+/// Resolve a `send()` destination to a concrete `SocketAddr`. IP literals are
+/// used verbatim; hostnames go through `getaddrinfo`.
+fn resolve_send_addr(address: &str, port: u16) -> Result<SocketAddr, f64> {
+    if let Ok(ip) = address.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+    match (address, port).to_socket_addrs() {
+        Ok(mut iter) => iter.next().ok_or_else(|| dns_not_found_value(address)),
+        Err(_) => Err(dns_not_found_value(address)),
+    }
+}
+
+/// Real bind: open + bind an OS `UdpSocket`, register it with the reactor (which
+/// starts the recv thread), and record the actual local address. On failure
+/// returns the error value for the caller to emit as `'error'`.
+fn real_bind(socket: f64, port: u16, address: &str) -> Result<(), f64> {
+    let address = normalize_address(address, socket);
+    let udp = match UdpSocket::bind((address.as_str(), port)) {
+        Ok(udp) => udp,
+        Err(err) => {
+            return Err(socket_error_value(
+                &format!("bind {} {address}:{port}", io_error_code(&err)),
+                io_error_code(&err),
+                "bind",
+            ));
+        }
+    };
+    let (actual_address, actual_port, family) = match udp.local_addr() {
+        Ok(sa) => (
+            sa.ip().to_string(),
+            sa.port(),
+            if sa.is_ipv4() { "IPv4" } else { "IPv6" },
+        ),
+        Err(_) => (address.clone(), port, family_for_address(&address, socket)),
+    };
+    let id = crate::dgram_reactor::register(socket.to_bits(), Arc::new(udp));
+    set_hidden_value(socket, KEY_REACTOR_ID, id as f64);
+    set_hidden_value(socket, KEY_ADDRESS, str_value(&actual_address));
+    set_hidden_value(socket, KEY_FAMILY, str_value(family));
+    set_hidden_value(socket, KEY_PORT, actual_port as f64);
+    set_hidden_value(socket, KEY_BOUND, bool_value(true));
+    Ok(())
+}
+
+/// Real `send()`: transmit over the OS socket. Errors go to the callback when
+/// one is supplied, otherwise to an `'error'` event (Node semantics).
+fn real_send(socket: f64, args: &[f64]) -> f64 {
+    let msg = args.first().copied().unwrap_or_else(undefined_value);
+    let Some(bytes) = message_bytes(msg) else {
+        throw_invalid_message(msg);
+    };
+    let (port, address) = send_destination(socket, args);
+    if let Some(err) = ensure_bound_real(socket) {
+        return finish_send(socket, args, Err(err));
+    }
+    let outcome = match (live_udp(socket), resolve_send_addr(&address, port)) {
+        (Some(udp), Ok(dest)) => match udp.send_to(&bytes, dest) {
+            Ok(_) => Ok(bytes.len()),
+            Err(err) => Err(socket_error_value(
+                &format!("send {}", io_error_code(&err)),
+                io_error_code(&err),
+                "send",
+            )),
+        },
+        (_, Err(err)) => Err(err),
+        (None, _) => Err(socket_error_value("send EBADF", "EBADF", "send")),
+    };
+    finish_send(socket, args, outcome)
+}
+
+fn finish_send(socket: f64, args: &[f64], outcome: Result<usize, f64>) -> f64 {
+    match (outcome, callback_from_args(args)) {
+        (Ok(size), Some(callback)) => {
+            call_function(callback, socket, &[null_value(), size as f64]);
+        }
+        (Ok(_), None) => {}
+        (Err(error), Some(callback)) => {
+            call_function(callback, socket, &[error]);
+        }
+        (Err(error), None) => {
+            emit_event(socket, "error", &[error]);
+        }
+    }
+    undefined_value()
+}
+
+/// Implicit bind on first `send`/`connect` (real mode). Returns an error value
+/// if the bind failed.
+fn ensure_bound_real(socket: f64) -> Option<f64> {
+    if is_truthy_hidden(socket, KEY_BOUND) {
+        return None;
+    }
+    real_bind(socket, 0, &default_bind_address(socket)).err()
+}
+
+/// Borrow the live `UdpSocket` and run `f`; no-op when the socket is not bound
+/// to a real OS socket (e.g. closed).
+fn with_udp<F: FnOnce(&UdpSocket)>(socket: f64, f: F) {
+    if let Some(udp) = live_udp(socket) {
+        f(&udp);
+    }
+}
+
+fn parse_multicast_v4(addr: &str) -> Option<Ipv4Addr> {
+    addr.parse::<Ipv4Addr>().ok()
+}
+
+fn parse_multicast_v6(addr: &str) -> Option<Ipv6Addr> {
+    addr.parse::<Ipv6Addr>().ok()
+}
+
+/// `socket.ref()` / `socket.unref()` — toggle whether the bound socket keeps
+/// the event loop alive. No-op in deterministic mode (no real socket).
+fn ref_impl(socket: f64, refed: bool) -> f64 {
+    if !deterministic() {
+        if let Some(id) = reactor_id(socket) {
+            crate::dgram_reactor::set_refed(id, refed);
+        }
+    }
+    socket
+}
+
 fn create_socket_impl(args: &[f64]) -> f64 {
     let first = args.first().copied().unwrap_or_else(undefined_value);
     let socket_type = if let Some(kind) = string_to_rust(first) {
@@ -1043,10 +1285,22 @@ fn bind_impl(socket: f64, args: &[f64]) -> f64 {
             }
         }
     }
-    bind_socket(socket, port, address);
-    emit_event(socket, "listening", &[]);
-    if let Some(callback) = callback_from_args(args) {
-        call_function(callback, socket, &[]);
+    let bind_result = if deterministic() {
+        bind_socket(socket, port, address);
+        Ok(())
+    } else {
+        real_bind(socket, port, &address)
+    };
+    match bind_result {
+        Ok(()) => {
+            emit_event(socket, "listening", &[]);
+            if let Some(callback) = callback_from_args(args) {
+                call_function(callback, socket, &[]);
+            }
+        }
+        Err(error) => {
+            emit_event(socket, "error", &[error]);
+        }
     }
     socket
 }
@@ -1066,7 +1320,11 @@ fn close_impl(socket: f64, args: &[f64]) -> f64 {
     if is_truthy_hidden(socket, KEY_CLOSED) {
         return undefined_value();
     }
-    remove_bound_socket(socket);
+    if deterministic() {
+        remove_bound_socket(socket);
+    } else if let Some(id) = reactor_id(socket) {
+        crate::dgram_reactor::unregister(id);
+    }
     set_hidden_value(socket, KEY_BOUND, bool_value(false));
     set_hidden_value(socket, KEY_CONNECTED, bool_value(false));
     set_hidden_value(socket, KEY_CLOSED, bool_value(true));
@@ -1162,6 +1420,9 @@ fn send_destination(socket: f64, args: &[f64]) -> (u16, String) {
 }
 
 fn send_impl(socket: f64, args: &[f64]) -> f64 {
+    if !deterministic() {
+        return real_send(socket, args);
+    }
     let msg = args.first().copied().unwrap_or_else(undefined_value);
     let Some((message, size)) = message_value(msg) else {
         throw_invalid_message(msg);
@@ -1185,31 +1446,51 @@ fn send_impl(socket: f64, args: &[f64]) -> f64 {
     undefined_value()
 }
 
-fn membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> f64 {
-    crate::error::stub_warn_or_throw(
-        "dgram multicast membership",
-        "accepted but no OS multicast side effect",
-        Some("#4911"),
-    );
+fn membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
     let multicast_address = args.first().copied().unwrap_or_else(undefined_value);
     if is_missing_membership_arg(multicast_address) {
         throw_missing_arg("multicastAddress");
     }
-    let Some(multicast_address) = string_to_rust(multicast_address) else {
+    let Some(group) = string_to_rust(multicast_address) else {
         throw_socket_errno(syscall, "EINVAL");
     };
-    if multicast_address.is_empty() {
+    if group.is_empty() {
+        throw_socket_errno(syscall, "EINVAL");
+    }
+    if deterministic() {
+        return undefined_value();
+    }
+    let Some(udp) = live_udp(socket) else {
+        throw_socket_errno(syscall, "EBADF");
+    };
+    let interface = args.get(1).copied().and_then(string_to_rust);
+    let dropping = syscall == "dropMembership";
+    let result = if let Some(group_v4) = parse_multicast_v4(&group) {
+        let iface = interface
+            .as_deref()
+            .and_then(|s| s.parse::<Ipv4Addr>().ok())
+            .unwrap_or(Ipv4Addr::UNSPECIFIED);
+        if dropping {
+            udp.leave_multicast_v4(&group_v4, &iface)
+        } else {
+            udp.join_multicast_v4(&group_v4, &iface)
+        }
+    } else if let Some(group_v6) = parse_multicast_v6(&group) {
+        if dropping {
+            udp.leave_multicast_v6(&group_v6, 0)
+        } else {
+            udp.join_multicast_v6(&group_v6, 0)
+        }
+    } else {
+        throw_socket_errno(syscall, "EINVAL");
+    };
+    if result.is_err() {
         throw_socket_errno(syscall, "EINVAL");
     }
     undefined_value()
 }
 
-fn source_membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> f64 {
-    crate::error::stub_warn_or_throw(
-        "dgram multicast membership",
-        "accepted but no OS multicast side effect",
-        Some("#4911"),
-    );
+fn source_membership_impl(socket: f64, args: &[f64], syscall: &'static str) -> f64 {
     let source_address = validate_string_arg(
         args.first().copied().unwrap_or_else(undefined_value),
         "sourceAddress",
@@ -1221,11 +1502,48 @@ fn source_membership_impl(_socket: f64, args: &[f64], syscall: &'static str) -> 
     if source_address.is_empty() || group_address.is_empty() {
         throw_socket_errno(syscall, "EINVAL");
     }
+    if deterministic() {
+        return undefined_value();
+    }
+    let Some(udp) = live_udp(socket) else {
+        throw_socket_errno(syscall, "EBADF");
+    };
+    let (Ok(source_v4), Ok(group_v4)) = (
+        source_address.parse::<Ipv4Addr>(),
+        group_address.parse::<Ipv4Addr>(),
+    ) else {
+        // Source-specific multicast over IPv6 is not exposed here.
+        throw_socket_errno(syscall, "EINVAL");
+    };
+    let iface = args
+        .get(2)
+        .copied()
+        .and_then(string_to_rust)
+        .and_then(|s| s.parse::<Ipv4Addr>().ok())
+        .unwrap_or(Ipv4Addr::UNSPECIFIED);
+    let sock_ref = socket2::SockRef::from(&*udp);
+    let result = if syscall.starts_with("drop") {
+        sock_ref.leave_ssm_v4(&source_v4, &group_v4, &iface)
+    } else {
+        sock_ref.join_ssm_v4(&source_v4, &group_v4, &iface)
+    };
+    if result.is_err() {
+        throw_socket_errno(syscall, "EINVAL");
+    }
     undefined_value()
 }
 
-fn set_broadcast_impl(socket: f64, _args: &[f64]) -> f64 {
+fn set_broadcast_impl(socket: f64, args: &[f64]) -> f64 {
     ensure_running(socket, "setBroadcast");
+    if !deterministic() {
+        let flag = args
+            .first()
+            .copied()
+            .is_some_and(|v| crate::value::js_is_truthy(v) != 0);
+        with_udp(socket, |udp| {
+            let _ = udp.set_broadcast(flag);
+        });
+    }
     undefined_value()
 }
 
@@ -1235,6 +1553,11 @@ fn set_ttl_impl(socket: f64, args: &[f64]) -> f64 {
         throw_socket_errno("setTTL", "EINVAL");
     }
     ensure_running(socket, "setTTL");
+    if !deterministic() {
+        with_udp(socket, |udp| {
+            let _ = udp.set_ttl(ttl as u32);
+        });
+    }
     ttl
 }
 
@@ -1244,12 +1567,23 @@ fn set_multicast_ttl_impl(socket: f64, args: &[f64]) -> f64 {
         throw_socket_errno("setMulticastTTL", "EINVAL");
     }
     ensure_running(socket, "setMulticastTTL");
+    if !deterministic() {
+        with_udp(socket, |udp| {
+            let _ = udp.set_multicast_ttl_v4(ttl as u32);
+        });
+    }
     ttl
 }
 
 fn set_multicast_loopback_impl(socket: f64, args: &[f64]) -> f64 {
     let arg = args.first().copied().unwrap_or_else(undefined_value);
     ensure_running(socket, "setMulticastLoopback");
+    if !deterministic() {
+        let flag = crate::value::js_is_truthy(arg) != 0;
+        with_udp(socket, |udp| {
+            let _ = udp.set_multicast_loop_v4(flag);
+        });
+    }
     arg
 }
 
@@ -1262,6 +1596,13 @@ fn set_multicast_interface_impl(socket: f64, args: &[f64]) -> f64 {
         throw_socket_errno("setMulticastInterface", "EINVAL");
     }
     ensure_running(socket, "setMulticastInterface");
+    if !deterministic() {
+        if let Ok(iface) = interface_address.parse::<Ipv4Addr>() {
+            with_udp(socket, |udp| {
+                let _ = socket2::SockRef::from(udp).set_multicast_if_v4(&iface);
+            });
+        }
+    }
     undefined_value()
 }
 
@@ -1446,8 +1787,12 @@ extern "C" fn dgram_get_send_buffer_size_thunk(closure: *const ClosureHeader, _r
     )
 }
 
-extern "C" fn dgram_chain_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
-    this_value(closure)
+extern "C" fn dgram_ref_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+    ref_impl(this_value(closure), true)
+}
+
+extern "C" fn dgram_unref_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+    ref_impl(this_value(closure), false)
 }
 
 extern "C" fn dgram_zero_thunk(_closure: *const ClosureHeader, _rest: f64) -> f64 {
@@ -1682,6 +2027,16 @@ pub extern "C" fn js_dgram_socket_get_send_buffer_size(
 #[no_mangle]
 pub extern "C" fn js_dgram_socket_chain(handle: i64, _args: *const ArrayHeader) -> f64 {
     socket_value_from_handle(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_ref(handle: i64, _args: *const ArrayHeader) -> f64 {
+    ref_impl(socket_value_from_handle(handle), true)
+}
+
+#[no_mangle]
+pub extern "C" fn js_dgram_socket_unref(handle: i64, _args: *const ArrayHeader) -> f64 {
+    ref_impl(socket_value_from_handle(handle), false)
 }
 
 #[no_mangle]

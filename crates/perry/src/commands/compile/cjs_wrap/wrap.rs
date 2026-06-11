@@ -401,6 +401,31 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         None => "export default _cjs;".to_string(),
     };
 
+    // Issue #4933 — flat-emit a `module.exports = <Class>` module that we
+    // could NOT hoist. The hoist refuses any class whose body references a
+    // top-level `const`/`let`/`var` (#2310 — moving the class out of the
+    // IIFE would sever its closure over that binding). For a default-export
+    // class this is fatal: with the class trapped inside the IIFE, the
+    // module's default becomes the opaque `_cjs` result, so compile.rs never
+    // registers class identity. The consumer's `import StackUtils` then gets
+    // a value whose static methods, `.prototype`, AND closure are all gone
+    // (`StackUtils.nodeInternals` / `.prototype.clean` read `undefined`).
+    //
+    // The IIFE exists only to give the body a function scope (so a CJS
+    // top-level `return` is legal). When the body has no top-level `return`
+    // we can drop the IIFE entirely and run the body at ESM module scope:
+    // the class becomes a real top-level declaration (`export default
+    // StackUtils` resolves to it with full identity), every sibling binding
+    // it closes over stays in scope, and statement order is preserved
+    // verbatim. We only take this path for the case that is *currently
+    // broken* (a top-level class that is the single `module.exports = X`
+    // target but did not hoist), so working packages are unaffected.
+    let flat_default_class = extract_single_module_exports_assignment(source).filter(|name| {
+        !hoisted_class_names.contains(name)
+            && top_level_class_names(source).iter().any(|c| c == name)
+            && !source_has_top_level_return(source)
+    });
+
     // #4872: ESM `export * from` declarations for every `__exportStar`
     // call detected above.
     let export_star_decls = export_star_specs
@@ -409,12 +434,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let wrapped = format!(
-        r#"{imports}
-{import_aliases}
-{hoisted_class_block}
-const _cjs = (function() {{
-    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
+    // #3527 / #4933: the CommonJS runtime preamble (`module` / `exports` /
+    // `require` shims). Built once and shared by the IIFE wrap and the flat
+    // (#4933) emission so the two paths can never drift. The 4-space indent is
+    // written for the in-IIFE position; at module scope (flat) it is purely
+    // cosmetic. Embedding `{cjs_preamble}` reproduces the historical IIFE text
+    // byte-for-byte.
+    let cjs_preamble = format!(
+        r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
     // `var module = X` / `module = X` / `exports = X` — e.g. iconv-lite's
     // `for (...) {{ var module = modules[i]; mergeModules(exports, module); }}`
@@ -508,7 +535,42 @@ const _cjs = (function() {{
         '.json': function(module, filename) {{}},
         '.node': function(module, filename) {{}},
     }};
-    require.main = module;
+    require.main = module;"#
+    );
+
+    let wrapped = if let Some(flat_class) = &flat_default_class {
+        // Issue #4933 — flat emission. Drop the IIFE and run the CommonJS body
+        // at ESM module scope: `module.exports = {flat_class}` then resolves to
+        // a real top-level `class {flat_class}` declaration, so the consumer's
+        // default import keeps full class identity (statics, `.prototype`, and
+        // the closure over sibling top-level bindings). `{hoisted_class_block}`
+        // still carries any sibling classes we DID hoist; `{flat_class}` itself
+        // was refused a hoist (it closes over an IIFE-local), so it stays in
+        // `{body_for_iife}` and lands at module scope here unchanged.
+        format!(
+            r#"{imports}
+{import_aliases}
+{hoisted_class_block}
+{cjs_preamble}
+
+{body_for_iife}
+
+const _cjs = __cjs_module.exports;
+export default {flat_class};
+export {{ {flat_class} }};
+{direct_class_exports}
+{direct_named_reexports}
+{named_export_decls}
+{export_star_decls}
+"#
+        )
+    } else {
+        format!(
+            r#"{imports}
+{import_aliases}
+{hoisted_class_block}
+const _cjs = (function() {{
+{cjs_preamble}
 
     {body_for_iife}
 
@@ -521,7 +583,8 @@ const _cjs = (function() {{
 {named_export_decls}
 {export_star_decls}
 "#
-    );
+        )
+    };
     if std::env::var("PERRY_DEBUG_CJS_WRAP").is_ok() {
         eprintln!(
             "=== CJS WRAP for {} ===\n{}\n=== END ===",

@@ -716,14 +716,31 @@ fn call_async_step_direct(
 /// generator-state-machine chains.
 #[inline]
 fn propagate_callback_result(result: f64, next: *mut Promise) {
-    if js_value_is_promise(result) != 0 {
-        let inner = crate::value::js_nanbox_get_pointer(result) as *mut Promise;
-        if !inner.is_null() && inner != next {
-            js_promise_resolve_with_promise(next, inner);
-        } else {
-            js_promise_resolve(next, result);
-        }
-    } else {
-        js_promise_resolve(next, result);
+    if next.is_null() {
+        return;
     }
+    // The result-capability's [[Resolve]] is the Promise Resolve Function
+    // (27.2.1.3.2). Two spec steps the old direct-store path skipped:
+    //
+    //   step 6 — SameValue(resolution, promise): a reaction that returns its own
+    //     chained promise is a cycle → reject `next` with a TypeError.
+    //   steps 8-12 — Get(resolution, "then") and, if callable, assimilate the
+    //     thenable (running its `then` as a job) rather than fulfilling with the
+    //     thenable object verbatim. A throwing `then` getter rejects `next`.
+    //
+    // `promise_resolve_assimilating` performs steps 8-12 (and keeps the native-
+    // promise fast adopt path, so the steady-state async case is unchanged).
+    let bits = result.to_bits();
+    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        let ptr = (bits & crate::value::POINTER_MASK) as usize;
+        if ptr == next as usize {
+            let msg = b"Chaining cycle detected for promise #<Promise>";
+            let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+            let err_ptr = crate::error::js_typeerror_new(s);
+            let err = f64::from_bits(crate::value::JSValue::pointer(err_ptr as *const u8).bits());
+            js_promise_reject(next, err);
+            return;
+        }
+    }
+    crate::promise::combinators::promise_resolve_assimilating(next, result);
 }
