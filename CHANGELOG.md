@@ -1,3 +1,14 @@
+## v0.5.1159 — security: fix path traversal / arbitrary file write in `perry publish` (GHSA-x55v-q459-68ch)
+
+Security release. `perry publish` trusted the build server's
+`ArtifactReady.artifact_name` and `download_path` verbatim when constructing
+the local destination path, allowing a malicious/compromised hub to write
+downloaded content outside the output directory (arbitrary file write) and, in
+the self-hosted-hub local-copy path, copy out arbitrary local files. All
+versions through v0.5.1158 are affected. Upgrade to v0.5.1159.
+
+- fix(publish): sanitize server-controlled artifact path (GHSA-x55v-q459-68ch) (#4989)
+
 ## v0.5.1158 — release roll-up: stub-elimination epic tail, React render walls, http/cluster/streams parity
 
 Version-bump + changelog roll-up for the 16 commits that landed after the
