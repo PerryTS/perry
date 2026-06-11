@@ -110,6 +110,7 @@ pub(crate) mod typedarray_props;
 pub mod typedarray_view;
 pub mod url;
 pub mod v8;
+pub mod validators;
 pub mod value;
 pub mod wasi;
 pub mod web_storage;

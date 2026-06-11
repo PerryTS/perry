@@ -37,9 +37,41 @@ fn buffer_write_encoding_tag_or_throw(value: f64) -> i32 {
         throw_buffer_type_error_with_code("Invalid Buffer encoding", "ERR_INVALID_ARG_TYPE");
     }
     if crate::buffer::js_buffer_is_encoding(value) == 0 {
-        throw_buffer_type_error_with_code("Unknown encoding", "ERR_UNKNOWN_ENCODING");
+        throw_unknown_encoding(value);
     }
     crate::buffer::js_encoding_tag_from_value(value)
+}
+
+/// Throw `TypeError [ERR_UNKNOWN_ENCODING]: Unknown encoding: <name>` with
+/// the offending encoding name spelled out, matching node's message. `value`
+/// is the rejected encoding argument (a string).
+fn throw_unknown_encoding(value: f64) -> ! {
+    let name = crate::fs::validate::read_js_string_pub(value);
+    let message = format!("Unknown encoding: {name}");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_UNKNOWN_ENCODING");
+}
+
+/// True when `value` is a `Buffer` or `Uint8Array` (the acceptance set of
+/// node's `Buffer.prototype.copy/compare/equals` target argument).
+fn is_buffer_or_uint8array(value: f64) -> bool {
+    let bits = value.to_bits() as i64;
+    if crate::buffer::js_buffer_is_buffer(bits) == 1 {
+        return true;
+    }
+    let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    raw >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw).is_some()
+}
+
+/// `Buffer.prototype.copy/compare/equals` reject a non-`Buffer`/`Uint8Array`
+/// target with `TypeError [ERR_INVALID_ARG_TYPE]` — and without this guard a
+/// number/boolean argument's bit pattern is masked into a bogus pointer and
+/// dereferenced (segfault). `name` is node's parameter name (`target` /
+/// `otherBuffer`).
+fn validate_buffer_target(value: f64, name: &str) {
+    if is_buffer_or_uint8array(value) {
+        return;
+    }
+    crate::validators::throw_invalid_arg_type(name, "an instance of Buffer or Uint8Array", value);
 }
 
 /// Dispatch a Buffer / Uint8Array instance method call. Receiver address
@@ -517,7 +549,11 @@ pub unsafe fn dispatch_buffer_method(
         "entries" => crate::buffer::js_buffer_entries(buf_f64),
         // `src.copy(dst, targetStart?, sourceStart?, sourceEnd?)` — mirrors
         // Node's Buffer.prototype.copy. Returns the number of bytes copied.
-        "copy" if !args.is_empty() => {
+        "copy" => {
+            if args.is_empty() {
+                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target");
+            }
+            validate_buffer_target(args[0], "target");
             let dst_bits = args[0].to_bits();
             let dst_addr = if (dst_bits >> 48) >= 0x7FF8 {
                 dst_bits & 0x0000_FFFF_FFFF_FFFF
@@ -539,7 +575,13 @@ pub unsafe fn dispatch_buffer_method(
         // `buf.write(string, offset?, length?, encoding?)` — writes the
         // utf8/hex/base64 encoding of `string` into `buf` at `offset`.
         // Returns the number of bytes written.
-        "write" if !args.is_empty() => {
+        "write" => {
+            if args.is_empty() || !is_buffer_dispatch_string(args[0]) {
+                throw_buffer_type_error_with_code(
+                    "argument must be a string",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            }
             let str_bits = args[0].to_bits();
             let str_addr = if (str_bits >> 48) >= 0x7FF8 {
                 str_bits & 0x0000_FFFF_FFFF_FFFF
@@ -632,9 +674,12 @@ pub unsafe fn dispatch_buffer_method(
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "equals" => {
-            if args.is_empty() {
-                return i32_bool(0);
-            }
+            validate_buffer_target(
+                args.first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+                "otherBuffer",
+            );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
                 other_bits & 0x0000_FFFF_FFFF_FFFF
@@ -645,9 +690,12 @@ pub unsafe fn dispatch_buffer_method(
             i32_bool(crate::buffer::js_buffer_equals(buf_ptr, other))
         }
         "compare" => {
-            if args.is_empty() {
-                return 0.0;
-            }
+            validate_buffer_target(
+                args.first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+                "target",
+            );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
                 other_bits & 0x0000_FFFF_FFFF_FFFF
