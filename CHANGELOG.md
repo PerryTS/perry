@@ -1,3 +1,26 @@
+## v0.5.1158 — release roll-up: stub-elimination epic tail, React render walls, http/cluster/streams parity
+
+Version-bump + changelog roll-up for the 16 commits that landed after the
+v0.5.1157 bump without per-commit metadata (maintainer-folds-at-merge PRs).
+No code changes in this commit itself.
+
+- feat(runtime): real AsyncLocalStorage + async_hooks context propagation (#788/#789) (#4967)
+- feat(runtime): real child_process spawn/exec ChildProcess handle semantics (#2130/#1934) (#4968)
+- feat(streams): BYOB readers + real ByteLengthQueuingStrategy accounting (#4915) (#4966)
+- feat(cluster): workers share a listening port — SO_REUSEPORT + IPC 'listening' round-trip (#4914) (#4963)
+- feat(diagnostics): real v8 heap snapshot from GC heap walk + inspector/repl honesty (#4916) (#4979)
+- fix(hir,codegen,runtime): clear the #4950 React render-time walls — JSX createElement mode, nested-fn branch-var hoisting, timer/AbortController values, surrogate-range regex classes (#4969)
+- fix(http): client write/end callbacks + backpressure, real client timeouts, dynamic listener registration (#4909) (#4964)
+- fix(http): wire res.write/res.end callbacks + backpressure boolean into static dispatch (#4909) (#4954)
+- fix(http): falsy ClientRequest method defaults to GET instead of throwing (#4970) (#4978)
+- fix(net,ext-http): tls.connect Node overloads + https idle-connection close path (#4971) (#4983)
+- fix(hir): lower inline `export default class` bodies — methods/fields survive (#4976) (#4981)
+- fix(hir): synthesized capture ctor on a derived class must call super() (#4972) (#4980)
+- fix(hir): self-named native member base no longer OOM-loops codegen (#4908) (#4955)
+- fix(compile): support package createRequire interop (#4960)
+- perf(runtime): optimize numeric array raw payload helpers (#4957)
+- test(codegen): unbreak typed_shape_descriptors after #4957 bulk-fill lowering (#4984)
+
 ## v0.5.1157 — feat(atomics): real cross-agent `Atomics.wait`/`notify`/`waitAsync` over a shared SAB (#4913)
 
 Stage 2 of #4913 (Stage 1 — the honesty floor — landed in #4929). `Atomics.wait`,
