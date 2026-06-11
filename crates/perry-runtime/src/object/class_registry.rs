@@ -2053,6 +2053,15 @@ pub unsafe extern "C" fn js_new_function_construct(
                     CLASS_ID_DECOMPRESSION_STREAM,
                 );
             }
+            // #4950 (secondary note): react-reconciler captures the global
+            // `AbortController` into a local (`AbortControllerLocal = typeof
+            // AbortController !== "undefined" ? AbortController : <shim>`) and
+            // constructs through the variable. Without this arm the dynamic
+            // `new` fell through and threw "AbortController is not a function".
+            "AbortController" => {
+                let controller = crate::url::js_abort_controller_new();
+                return crate::value::js_nanbox_pointer(controller as i64);
+            }
             "MessageChannel" => {
                 return crate::messaging::js_message_channel_new();
             }

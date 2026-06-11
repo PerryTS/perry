@@ -600,6 +600,9 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // with that index or higher was defined in the current scope.
     let outer_locals_len = scope_mark.0;
     let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
+    // #4950: undefined-initialised `Stmt::Let`s for `var`s found nested in
+    // compound statements — prepended to the lowered body below.
+    let mut nested_var_prologue: Vec<Stmt> = Vec::new();
     if let Some(ref block) = fn_expr.function.body {
         // Issue #838 followup (b): pre-register top-level `var` decls in
         // this function body BEFORE lowering any statement. dayjs's
@@ -683,6 +686,57 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                 }
             }
         }
+        // #4950: pre-register `var` bindings nested inside compound
+        // statements (if/else arms, loops, try/catch, switch) of this
+        // function body. `var` is function-scoped, so react's
+        //   if (cond) { var getCurrentTime = function () {…}; }
+        //   else { getCurrentTime = function () {…}; }
+        // (react-reconciler's time source, factory shape) must resolve the
+        // else-arm write AND sibling-closure reads to ONE hoisted local.
+        // The top-level pre-pass above only saw direct `Stmt::Decl(Var)`
+        // children, so the if-arm declaration never registered, the
+        // else-arm assignment fell through to an implicit-global write,
+        // and `getCurrentTime()` inside prepareFreshStack threw
+        // `getCurrentTime is not defined` — silently swallowed by the
+        // scheduler pump, killing every React render. Mirrors the
+        // module-level nested-var hoisting in lower_module_fn.rs.
+        for stmt in &block.stmts {
+            // Direct top-level var decls are handled by the pre-pass above;
+            // only walk into compound statements for nested `var`s here.
+            if matches!(stmt, ast::Stmt::Decl(_)) {
+                continue;
+            }
+            let mut names = Vec::new();
+            crate::lower_decl::collect_var_binding_names_from_stmt(stmt, &mut names);
+            names.sort();
+            names.dedup();
+            for name in names {
+                let already_in_scope = ctx
+                    .locals
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .any(|(idx, (n, _, _))| n == &name && idx >= outer_locals_len);
+                if !already_in_scope {
+                    let id = ctx.define_local(name.clone(), Type::Any);
+                    ctx.var_hoisted_ids.insert(id);
+                    hoisted_id_set.insert(id);
+                    // Emit an explicit undefined-initialised slot at body
+                    // entry (same rationale as the module-level pass: a
+                    // read or LocalSet compiled before the nested decl
+                    // needs storage to exist; the nested `Stmt::Let`
+                    // later reuses the slot via the var-redeclaration
+                    // path).
+                    nested_var_prologue.push(Stmt::Let {
+                        id,
+                        name,
+                        ty: Type::Any,
+                        mutable: true,
+                        init: Some(Expr::Undefined),
+                    });
+                }
+            }
+        }
     }
 
     // Lower body with JS hoisting: only function declarations are fully
@@ -729,7 +783,12 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                     _ => exec_stmts.extend(lowered),
                 }
             }
-            let mut combined: Vec<Stmt> = Vec::with_capacity(func_decls.len() + exec_stmts.len());
+            let mut combined: Vec<Stmt> =
+                Vec::with_capacity(nested_var_prologue.len() + func_decls.len() + exec_stmts.len());
+            // Nested-var undefined slots first so every later read/write —
+            // including from hoisted function-declaration closures — sees
+            // initialised storage (#4950).
+            combined.extend(std::mem::take(&mut nested_var_prologue));
             combined.extend(func_decls);
             combined.extend(exec_stmts);
             // Issue #633: prealloc-box for sibling/forward captures.

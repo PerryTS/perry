@@ -394,6 +394,13 @@ pub(crate) fn lower_module_decl(
                             // `perry_fn_<src>__default` — matching what the origin module
                             // actually emits. Closes #901.
                             ctx.register_imported_func(local.clone(), local.clone());
+                            // #4950: remember the react default-import binding
+                            // so JSX in this module lowers to
+                            // `<local>.createElement(...)` instead of Perry's
+                            // eager `js_jsx` adapter (see jsx.rs).
+                            if source == "react" {
+                                ctx.react_default_import_local = Some(local.clone());
+                            }
                         }
                         specifiers.push(ImportSpecifier::Default { local });
                     }
