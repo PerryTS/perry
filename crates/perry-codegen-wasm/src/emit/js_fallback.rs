@@ -599,6 +599,19 @@ impl WasmModuleEmitter {
                     obj, idx, val, val
                 )
             }
+            // #5016: `obj.prop = v` / `obj[i] = v` lower to PutValueSet. In the
+            // JS fallback both are plain `obj[key] = val`; return the RHS value.
+            Expr::PutValueSet {
+                target, key, value, ..
+            } => {
+                let obj = self.emit_js_expr(target, locals);
+                let k = self.emit_js_expr(key, locals);
+                let val = self.emit_js_expr(value, locals);
+                format!(
+                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
+                    obj, k, val, val
+                )
+            }
             Expr::ArrayPush { array_id, value } => {
                 let arr = locals
                     .get(array_id)
