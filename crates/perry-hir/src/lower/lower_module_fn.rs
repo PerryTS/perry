@@ -580,18 +580,31 @@ pub fn lower_module_full(
     // fails if FullMath is declared after SqrtPriceMath.
     for item in &ast_module.body {
         let class_decl = match item {
-            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(cd))) => Some(cd),
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(cd))) => {
+                Some((cd.ident.sym.to_string(), &cd.class))
+            }
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
                 if let ast::Decl::Class(cd) = &export_decl.decl {
-                    Some(cd)
+                    Some((cd.ident.sym.to_string(), &cd.class))
                 } else {
                     None
                 }
             }
+            // #4976: named inline `export default class Name { … }` is a
+            // real class declaration too — pre-register it so same-file
+            // static cross-references resolve regardless of order.
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultDecl(
+                ast::ExportDefaultDecl {
+                    decl: ast::DefaultDecl::Class(class_expr),
+                    ..
+                },
+            )) => class_expr
+                .ident
+                .as_ref()
+                .map(|ident| (ident.sym.to_string(), &class_expr.class)),
             _ => None,
         };
-        if let Some(cd) = class_decl {
-            let name = cd.ident.sym.to_string();
+        if let Some((name, cd)) = class_decl {
             if ctx.lookup_class(&name).is_none() {
                 let id = ctx.fresh_class();
                 ctx.register_class(name.clone(), id);
@@ -599,7 +612,7 @@ pub fn lower_module_full(
             // Collect static field/method names
             let mut static_field_names = Vec::new();
             let mut static_method_names = Vec::new();
-            for member in &cd.class.body {
+            for member in &cd.body {
                 match member {
                     // Only true static *methods* register as callable statics.
                     // Static accessors (`static get foo()`) are NOT methods —

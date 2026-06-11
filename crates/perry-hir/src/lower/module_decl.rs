@@ -1756,13 +1756,85 @@ pub(crate) fn lower_module_decl(
                     }
                 }
                 ast::DefaultDecl::Class(class_expr) => {
-                    if let Some(ref ident) = class_expr.ident {
-                        let class_name = ident.sym.to_string();
-                        module.exports.push(Export::Named {
-                            local: class_name,
-                            exported: "default".to_string(),
-                        });
+                    // Issue #4976: pre-fix this arm only recorded the export
+                    // name and dropped the class body — the class never
+                    // entered `module.classes`, so the importer's
+                    // `exported_classes` lookup missed and `import Widget
+                    // from 'pkg'; new Widget()` fell through to the
+                    // synthetic-default / empty-object placeholder: an
+                    // instance whose prototype holds only `constructor`,
+                    // with every method and field initializer gone (ink's
+                    // `export default class Ink { render() {…} }`).
+                    //
+                    // Synthesize a `ClassDecl` (ident `default` for the
+                    // anonymous `export default class { … }` form, mirroring
+                    // the anonymous-default-function branch above) and run
+                    // it through the same flow as `ExportDecl::Class` so
+                    // methods, field initializers, statics, computed
+                    // members, and decorators are all installed normally.
+                    let synth_ident = class_expr.ident.clone().unwrap_or_else(|| {
+                        ast::Ident::new(
+                            "default".to_string().into(),
+                            swc_common::DUMMY_SP,
+                            Default::default(),
+                        )
+                    });
+                    let synth_class_decl = ast::ClassDecl {
+                        ident: synth_ident,
+                        declare: false,
+                        class: class_expr.class.clone(),
+                    };
+                    let class = lower_class_decl(ctx, &synth_class_decl, true)?;
+                    let class_name = class.name.clone();
+                    // Issue #711: dynamic parent-class registration at the
+                    // source position (see non-export class arm for
+                    // rationale).
+                    if let Some(extends_expr) = &class.extends_expr {
+                        module
+                            .init
+                            .push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                class_name: class_name.clone(),
+                                parent_expr: extends_expr.clone(),
+                            }));
                     }
+                    for member in &class.computed_members {
+                        module
+                            .init
+                            .push(Stmt::Expr(class_computed_member_registration_expr(
+                                &class_name,
+                                member,
+                            )));
+                    }
+                    // Inject static-field-init statements in source order
+                    // (see non-export class arm for rationale).
+                    for sf in &class.static_fields {
+                        if let Some(init) = &sf.init {
+                            if let Some(key) = sf.key_expr.as_ref() {
+                                module.init.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
+                                    class_name: class_name.clone(),
+                                    key: Box::new(key.clone()),
+                                    value: Box::new(init.clone()),
+                                }));
+                            } else {
+                                module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+                                    class_name: class_name.clone(),
+                                    field_name: sf.name.clone(),
+                                    value: Box::new(init.clone()),
+                                }));
+                            }
+                        }
+                    }
+                    append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
+                    push_class_dedup(module, class);
+                    // The `local != exported` shape lets the #485 alias loop
+                    // in compile.rs register the class under `(path,
+                    // "default")` so default-importers resolve full class
+                    // metadata (same machinery the working `class X {};
+                    // export default X` form uses via #665).
+                    module.exports.push(Export::Named {
+                        local: class_name,
+                        exported: "default".to_string(),
+                    });
                 }
                 _ => {}
             }
