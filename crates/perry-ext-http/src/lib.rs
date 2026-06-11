@@ -1265,10 +1265,49 @@ pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle 
 }
 
 unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) -> Handle {
+    // Node's `socket.setTimeout` (which backs `ClientRequest.setTimeout`)
+    // routes the delay through validateTimerDuration → enroll: an out-of-range
+    // (> 2**31-1) delay is clamped to TIMEOUT_MAX and a `TimeoutOverflowWarning`
+    // is emitted. Mirror that so `req.setTimeout(0xffffffff)` parity-matches
+    // Node instead of silently storing the raw value. (#4910)
+    const TIMEOUT_MAX: f64 = 2_147_483_647.0;
+    let effective = if ms > TIMEOUT_MAX {
+        emit_socket_timeout_overflow_warning(ms);
+        TIMEOUT_MAX
+    } else {
+        ms
+    };
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        req.timeout_ms = Some(ms.max(0.0) as u64);
+        req.timeout_ms = Some(effective.max(0.0) as u64);
     });
     handle
+}
+
+/// Emit Node's `TimeoutOverflowWarning` for an out-of-range socket timeout.
+/// The net/timers path warns with a message distinct from the global timer
+/// path ("Timer duration was truncated to 2147483647." rather than "Timeout
+/// duration was set to 1.") because the socket timeout clamps to TIMEOUT_MAX,
+/// not 1. (#4910)
+unsafe fn emit_socket_timeout_overflow_warning(ms: f64) {
+    let value_text = if ms.is_finite() && ms.fract() == 0.0 {
+        format!("{}", ms as i64)
+    } else {
+        format!("{ms}")
+    };
+    let message = format!(
+        "{value_text} does not fit into a 32-bit signed integer.\n\
+         Timer duration was truncated to 2147483647."
+    );
+    let msg_ptr = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let label = "TimeoutOverflowWarning";
+    let label_ptr = perry_runtime::js_string_from_bytes(label.as_ptr(), label.len() as u32);
+    let msg_value = f64::from_bits(perry_runtime::JSValue::string_ptr(msg_ptr).bits());
+    let label_value = f64::from_bits(perry_runtime::JSValue::string_ptr(label_ptr).bits());
+    perry_runtime::process::js_process_emit_warning(
+        msg_value,
+        label_value,
+        f64::from_bits(TAG_UNDEFINED),
+    );
 }
 
 /// `IncomingMessage.setEncoding(encoding)` for client responses. The same
