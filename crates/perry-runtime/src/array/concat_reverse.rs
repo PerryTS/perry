@@ -21,14 +21,20 @@ fn fill_to_number(value: f64) -> f64 {
     }
 }
 
-fn fill_to_length(value: f64) -> u32 {
-    let number = fill_to_number(value);
+fn fill_to_length(value: f64) -> i64 {
+    // `ToLength` clamps to 2^53-1 (NOT u32::MAX — an array-like with
+    // `length: Number.MAX_SAFE_INTEGER` must keep its near-limit indices
+    // addressable; test262 fill/length-near-integer-limit).
+    const MAX_LENGTH: f64 = 9_007_199_254_740_991.0;
+    // Real ToNumber: fires `valueOf` on an object-valued length and throws
+    // TypeError for Symbol/BigInt (fill/return-abrupt-from-this-length*).
+    let number = crate::builtins::js_number_coerce(value);
     if number.is_nan() || number <= 0.0 {
         0
-    } else if !number.is_finite() || number > u32::MAX as f64 {
-        u32::MAX
+    } else if !number.is_finite() || number > MAX_LENGTH {
+        MAX_LENGTH as i64
     } else {
-        number as u32
+        number as i64
     }
 }
 
@@ -403,23 +409,30 @@ pub extern "C" fn js_array_fill_range(
     // end). The previous `idx.is_nan()` clamp silently mapped a NaN-boxed
     // object argument to 0 and never threw. The default-end sentinel
     // (+Infinity from codegen) is a real f64 and survives coercion unchanged.
+    // An explicit `undefined` end means "to length" (step 7) — coercing it
+    // gave NaN → 0 → no-op (`[0, 0].fill(1, 0, undefined)` stayed [0, 0],
+    // test262 fill/coerced-indexes).
     let start = crate::builtins::js_to_integer_or_infinity(start);
-    let end = crate::builtins::js_to_integer_or_infinity(end);
+    let end = if end.to_bits() == crate::value::TAG_UNDEFINED {
+        f64::INFINITY
+    } else {
+        crate::builtins::js_to_integer_or_infinity(end)
+    };
     unsafe {
         let len = (*arr).length as i64;
         if len == 0 {
             return arr;
         }
-        let clamp = |idx: f64, default_to_len: bool| -> i64 {
+        let clamp = |idx: f64, _default_to_len: bool| -> i64 {
             if idx.is_nan() {
                 return 0;
             }
             let mut i = idx as i64;
             if idx.is_infinite() {
+                // ToIntegerOrInfinity: +∞ → len, -∞ → 0 (for BOTH start and
+                // end — `fill(1, 0, -Infinity)` fills nothing; the absent-end
+                // codegen sentinel is +∞ and clamps to len above).
                 if idx > 0.0 {
-                    return len;
-                }
-                if default_to_len {
                     return len;
                 }
                 return 0;
@@ -489,10 +502,17 @@ pub extern "C" fn js_array_fill_generic(
                 return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
             }
             if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
-                let obj = raw as *mut crate::object::ObjectHeader;
+                // `Get(O, "length")` — must fire an own `length` accessor
+                // (propagating its throw, test262
+                // fill/return-abrupt-from-this-length) and walk the prototype
+                // chain; `ToLength` then fires a `valueOf` on an object-valued
+                // length (return-abrupt-from-this-length-as-symbol throws in
+                // the coercion).
                 let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-                let len_value = crate::object::js_object_get_field_by_name_f64(obj, length_key);
-                let len = fill_to_length(len_value) as i64;
+                let key_v = f64::from_bits(JSValue::string_ptr(length_key).bits());
+                let len_value =
+                    unsafe { crate::object::js_object_get_property_key(receiver, key_v) };
+                let len = fill_to_length(len_value);
                 if len == 0 {
                     return receiver;
                 }

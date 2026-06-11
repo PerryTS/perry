@@ -2379,23 +2379,20 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     None
                 };
                 if let Some(idx) = idx {
-                    if idx >= length {
-                        return nanbox_false;
-                    }
-                    let sparse_key = idx.to_string();
-                    if crate::array::array_named_property_get_by_name(arr, &sparse_key).is_some() {
+                    let _ = length;
+                    // Spec HasProperty: own (dense slot / sparse named prop /
+                    // accessor descriptor) OR inherited — a custom array
+                    // [[Prototype]], `Array.prototype[i]`, or an
+                    // `Object.prototype` index (data or accessor; test262
+                    // sort/precise-comparefn-throws checks `'2' in array`
+                    // against an Object.prototype accessor).
+                    if crate::array::array_spec_has_index(arr, idx) {
                         return nanbox_true;
                     }
-                    if idx >= (*arr).capacity {
-                        return nanbox_false;
+                    if crate::array::object_prototype_has_index_prop(idx) {
+                        return nanbox_true;
                     }
-                    let elements = (arr as *const u8)
-                        .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                        as *const u64;
-                    if std::ptr::read(elements.add(idx as usize)) == crate::value::TAG_HOLE {
-                        return nanbox_false;
-                    }
-                    return nanbox_true;
+                    return nanbox_false;
                 }
                 if key_val.is_any_string() {
                     let key_str = crate::value::js_get_string_pointer_unified(key)
@@ -2407,7 +2404,18 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                             if super::has_own_helpers::array_own_key_present(arr, key_str) {
                                 return nanbox_true;
                             }
-                            if super::canonical_array_index(key_name).is_some() {
+                            if let Some(idx) = super::canonical_array_index(key_name) {
+                                // Same spec HasProperty protocol as the
+                                // numeric-key arm above: own + inherited
+                                // (custom array proto / Array.prototype /
+                                // Object.prototype data-or-accessor index;
+                                // test262 sort/precise-comparefn-throws does
+                                // `'2' in array`).
+                                if crate::array::array_spec_has_index(arr, idx)
+                                    || crate::array::object_prototype_has_index_prop(idx)
+                                {
+                                    return nanbox_true;
+                                }
                                 return nanbox_false;
                             }
                             if array_prototype_property_value(key_name, obj_ptr as usize).is_some()

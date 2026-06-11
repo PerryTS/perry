@@ -1372,10 +1372,46 @@ pub unsafe extern "C" fn js_native_call_method(
     // is handled by the real prototype-method thunks instead.)
     if matches!(
         method_name,
-        "pop" | "shift" | "push" | "unshift" | "reverse" | "splice"
+        "pop" | "shift" | "push" | "unshift" | "reverse" | "splice" | "sort" | "concat"
     ) {
         if let Some(result) =
             crate::array::try_object_arraylike_mutator(object, method_name, args_ptr, args_len)
+        {
+            return result;
+        }
+    }
+    // A plain object whose [[Prototype]] chain contains a real array
+    // (`function foo() {}; foo.prototype = new Array(1, 2, 3); new foo()`)
+    // inherits the `Array.prototype` methods through that array, but the
+    // field-scan dispatch below finds no own/proto slot for them and threw
+    // "<m> is not a function" (test262 filter/15.4.4.20-6-*,
+    // some/15.4.4.17-8-*, map/15.4.4.19-9-3). Route the generic array-like
+    // engine; receivers with an own user method or no array on the chain
+    // fall through unchanged.
+    if matches!(
+        method_name,
+        "forEach"
+            | "map"
+            | "filter"
+            | "some"
+            | "every"
+            | "find"
+            | "findIndex"
+            | "findLast"
+            | "findLastIndex"
+            | "reduce"
+            | "reduceRight"
+            | "indexOf"
+            | "lastIndexOf"
+            | "includes"
+            | "at"
+            | "join"
+            | "slice"
+            | "sort"
+            | "concat"
+    ) {
+        if let Some(result) =
+            crate::array::try_array_proto_chain_method(object, method_name, args_ptr, args_len)
         {
             return result;
         }
@@ -2875,14 +2911,14 @@ pub unsafe extern "C" fn js_native_call_method(
                     // inserted at `start`.
                     "splice" => {
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        // ToIntegerOrInfinity with i32 clamping: NaN → 0,
+                        // +Infinity → i32::MAX (clamps to len downstream),
+                        // -Infinity → i32::MIN (relative-from-end → 0). The
+                        // old `is_infinite() → 0` made `splice(Infinity, 3)`
+                        // delete from the front (test262 S15.4.4.12_A2.1_T3).
                         let arg_i32 = |i: usize| -> i32 {
                             if i < args_len && !args_ptr.is_null() {
-                                let v = *args_ptr.add(i);
-                                if v.is_nan() || v.is_infinite() {
-                                    0
-                                } else {
-                                    v as i32
-                                }
+                                crate::array::js_array_splice_delete_count(*args_ptr.add(i))
                             } else {
                                 0
                             }

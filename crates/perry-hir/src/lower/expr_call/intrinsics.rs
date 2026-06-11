@@ -1789,6 +1789,14 @@ fn try_arraylike_receiver_method(
             | "slice"
             | "at"
             | "join"
+            // Generic mutators with dedicated runtime engines (#4597
+            // extension): `sort` sorts the receiver in place via
+            // Get/HasProperty/Set/Delete; `splice`/`concat` apply the spec
+            // algorithms over the array-like (test262 sort/call-with-primitive,
+            // splice/set_length_no_args, concat/call-with-boolean).
+            | "sort"
+            | "splice"
+            | "concat"
     );
     if generic {
         // Receiver lowers before the positional args, matching source order.

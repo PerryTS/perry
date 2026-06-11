@@ -278,14 +278,33 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         // Template literals are always strings
         ast::Expr::Tpl(_) => Type::String,
 
-        // Array literals → infer element type from first element
+        // Array literals → unified element type across ALL elements. Using just
+        // the first element claimed `Array(Number)` for a mixed literal like
+        // `[1, true, "x"]`, and codegen trusted that lie: `a[i] === b[j]`
+        // lowered to a raw `fcmp` where NaN-boxed booleans/strings/undefined
+        // are unordered → strict equality between two mixed-array loads was
+        // always false (test262 sort/S15.4.4.11_A2.1_T3 et al). Divergent
+        // element types now infer `Array(Any)` so the comparison (and every
+        // other consumer) takes the tag-aware path. A spread element's
+        // contribution is unknown statically → Any.
         ast::Expr::Array(arr) => {
-            let elem_ty = arr
-                .elems
-                .iter()
-                .find_map(|e| e.as_ref().map(|elem| infer_type_from_expr(&elem.expr, ctx)))
-                .unwrap_or(Type::Any);
-            Type::Array(Box::new(elem_ty))
+            let mut unified: Option<Type> = None;
+            for e in arr.elems.iter().flatten() {
+                let t = if e.spread.is_some() {
+                    Type::Any
+                } else {
+                    infer_type_from_expr(&e.expr, ctx)
+                };
+                match &unified {
+                    None => unified = Some(t),
+                    Some(u) if *u == t => {}
+                    Some(_) => {
+                        unified = Some(Type::Any);
+                        break;
+                    }
+                }
+            }
+            Type::Array(Box::new(unified.unwrap_or(Type::Any)))
         }
 
         // Variable reference → look up known type

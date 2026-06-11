@@ -330,6 +330,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ],
                     )
                 }
+                // sort(comparator?): validated + run by the runtime engine.
+                "sort" => {
+                    let cmp = nth(0).unwrap_or_else(undef);
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_sort",
+                        &[(DOUBLE, &recv_box), (DOUBLE, &cmp)],
+                    )
+                }
+                // splice(...) / concat(...): variadic — pass an alloca buffer
+                // of raw NaN-boxed doubles + count (mirrors the dense
+                // `js_array_concat_variadic` lowering).
+                "splice" | "concat" => {
+                    let n = arg_boxes.len();
+                    let (buf_reg, count_str) = if n == 0 {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf_reg = blk.next_reg();
+                        blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                        for (i, val) in arg_boxes.iter().enumerate() {
+                            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                            blk.store(DOUBLE, val, &slot);
+                        }
+                        (buf_reg, format!("{}", n))
+                    };
+                    let fname = if method == "splice" {
+                        "js_arraylike_splice"
+                    } else {
+                        "js_arraylike_concat"
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[(DOUBLE, &recv_box), (PTR, &buf_reg), (I32, &count_str)],
+                    )
+                }
                 other => bail!("unsupported generic array-like method '{other}'"),
             };
             Ok(result)

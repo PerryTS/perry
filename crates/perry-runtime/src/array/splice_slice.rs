@@ -20,6 +20,33 @@ pub extern "C" fn js_array_splice(
     out_arr: *mut *mut ArrayHeader,
 ) -> *mut ArrayHeader {
     unsafe {
+        // Runtime plain-object receiver behind a statically-Array variable
+        // (`var x = []; … x = {0:0,1:1}; x.splice(1,1)` — test262
+        // splice/S15.4.4.12_A4_T1 #7): reading it as an ArrayHeader corrupts
+        // (and `clean_arr_ptr` may NULL it out, silently no-op'ing); run the
+        // generic spec engine on the object instead. Probe the RAW pointer
+        // BEFORE the array-plausibility clean.
+        if let Some(recv) = crate::array::non_array_object_receiver(arr) {
+            let mut args: Vec<f64> = vec![
+                start as f64,
+                if delete_count == i32::MAX {
+                    f64::INFINITY
+                } else {
+                    delete_count as f64
+                },
+            ];
+            if !items.is_null() {
+                for i in 0..items_count as usize {
+                    args.push(*items.add(i));
+                }
+            }
+            let removed = crate::array::object_splice(recv, args.as_ptr(), args.len());
+            let removed_ptr = crate::value::js_nanbox_get_pointer(removed) as *mut ArrayHeader;
+            if !out_arr.is_null() {
+                *out_arr = arr;
+            }
+            return removed_ptr;
+        }
         let arr = clean_arr_ptr_mut(arr);
         if arr.is_null() {
             if !out_arr.is_null() {
@@ -55,23 +82,33 @@ pub extern "C" fn js_array_splice(
 
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
 
-        // Copy deleted elements to return array
+        // Copy deleted elements to return array. ECMA-262 §23.1.3.31 step
+        // 12.b: each removed index goes through HasProperty/Get — a hole
+        // backed by an inherited `Array.prototype[k]` element lands as an OWN
+        // property of the deleted array (test262 splice/S15.4.4.12_A4_T3);
+        // a genuinely absent index stays a hole.
+        let spec_read = |i: usize| -> f64 {
+            let v = *elements_ptr.add(start_idx as usize + i);
+            if v.to_bits() == crate::value::TAG_HOLE {
+                let idx = start_idx + i as u32;
+                if crate::array::array_spec_has_index(arr, idx) {
+                    return crate::array::array_spec_get(arr, idx);
+                }
+            }
+            v
+        };
         if deleted_is_plain {
             (*deleted).length = actual_delete;
             let deleted_elements =
                 (deleted as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in 0..actual_delete as usize {
                 // GC_STORE_AUDIT(BARRIERED): deleted-array init is followed by layout/barrier rebuild.
-                ptr::write(
-                    deleted_elements.add(i),
-                    *elements_ptr.add(start_idx as usize + i),
-                );
+                ptr::write(deleted_elements.add(i), spec_read(i));
             }
             rebuild_array_layout(deleted);
         } else {
             for i in 0..actual_delete as usize {
-                let v = *elements_ptr.add(start_idx as usize + i);
-                crate::array::species::species_result_set(deleted_box, i, v);
+                crate::array::species::species_result_set(deleted_box, i, spec_read(i));
             }
         }
 
@@ -106,6 +143,9 @@ pub extern "C" fn js_array_splice(
             }
         }
 
+        // ECMA-262 §23.1.3.31 step 24: Set(O, "length", …, true) — throws on a
+        // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
+        super::push_pop::guard_writable_length(arr);
         (*arr).length = new_len;
         rebuild_array_layout(arr);
 

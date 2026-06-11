@@ -531,7 +531,25 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         }
         let gc_header =
             (proto_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        let obj_type = (*gc_header).obj_type;
+        // `foo.prototype = new Array(...)` — a real-array prototype can't join
+        // the class-id machinery (it has no ObjectHeader), but it must not be
+        // DROPPED: store it as the closure's `prototype` dynamic prop so reads
+        // reflect it and `js_new_function_construct` links instances to it
+        // (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*, map/15.4.4.19-9-3).
+        if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+            if func_ptr != 0 && crate::closure::is_closure_ptr(func_ptr) {
+                crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+                set_builtin_property_attrs(
+                    func_ptr,
+                    "prototype".to_string(),
+                    PropertyAttrs::new(true, false, false),
+                );
+            }
+            return 0;
+        }
+        if obj_type != crate::gc::GC_TYPE_OBJECT {
             return 0;
         }
     }
@@ -2178,12 +2196,44 @@ pub unsafe extern "C" fn js_new_function_construct(
     // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
     let obj_ptr = js_object_alloc(cid, 0);
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
-    let proto = ensure_function_prototype_object(func_value, cid);
-    if !proto.is_null() {
-        super::prototype_chain::object_set_static_prototype(
-            obj_ptr as usize,
-            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
-        );
+    // A user-assigned `foo.prototype = <obj/array>` lives as the closure's
+    // "prototype" dynamic prop; the instance's [[Prototype]] must be THAT
+    // value — notably a real array (`foo.prototype = new Array(1,2,3)`),
+    // which `ensure_function_prototype_object` would shadow with a fresh
+    // empty object (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*).
+    let mut linked_user_proto = false;
+    {
+        let fp = (func_value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if fp != 0 && crate::closure::is_closure_ptr(fp) {
+            let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
+            let dp = JSValue::from_bits(dyn_proto.to_bits());
+            if dp.is_pointer() {
+                let raw = dp.as_pointer::<u8>() as usize;
+                let is_array = raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
+                    let hdr = unsafe {
+                        &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+                    };
+                    hdr.obj_type == crate::gc::GC_TYPE_ARRAY
+                        || hdr.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+                };
+                if is_array {
+                    super::prototype_chain::object_set_static_prototype(
+                        obj_ptr as usize,
+                        dyn_proto.to_bits(),
+                    );
+                    linked_user_proto = true;
+                }
+            }
+        }
+    }
+    if !linked_user_proto {
+        let proto = ensure_function_prototype_object(func_value, cid);
+        if !proto.is_null() {
+            super::prototype_chain::object_set_static_prototype(
+                obj_ptr as usize,
+                crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+            );
+        }
     }
     // Only run the constructor body when the callee is recognised as
     // a closure shape. The codegen LocalGet path widens the route to

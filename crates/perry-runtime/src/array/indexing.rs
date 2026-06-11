@@ -26,6 +26,63 @@ const DENSE_ARRAY_GAP_LIMIT: u32 = 1024;
 static ARRAY_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
+/// Same idea for `Object.prototype`: a numeric index installed there
+/// (`Object.prototype[2] = 2`, or a defineProperty accessor) shows through
+/// array HOLES and OOB reads (chain: arr → Array.prototype →
+/// Object.prototype; test262 concat/S15.4.4.4_A3_T3). Flipped by the object
+/// index-write/defineProperty hooks; consulted by the typed-feedback guards
+/// and the hole/OOB read fallbacks.
+static OBJECT_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
+static OBJECT_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
+
+fn object_prototype_addr() -> usize {
+    let cached = OBJECT_PROTO_ADDR.load(Ordering::Relaxed);
+    if cached != usize::MAX {
+        return cached;
+    }
+    let ctor = crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
+    let addr = if ctor_value.is_pointer() {
+        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
+        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+        let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
+        if proto_value.is_pointer() {
+            proto_value.as_pointer::<u8>() as usize
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    // Cache only a successful resolution — an early call (before globalThis
+    // init) must retry later rather than pinning 0.
+    if addr != 0 {
+        OBJECT_PROTO_ADDR.store(addr, Ordering::Relaxed);
+    }
+    addr
+}
+
+/// Record (if `obj` is the canonical `Object.prototype`) that it now carries
+/// an indexed property. Called from the object index-write / numeric
+/// defineProperty paths; cheap (relaxed loads + compare).
+#[inline]
+pub(crate) fn note_object_prototype_index_write(obj: usize) {
+    if !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed) && obj != 0 && obj == object_prototype_addr()
+    {
+        OBJECT_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn object_prototype_has_index_flag() -> bool {
+    OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
+}
+
+/// `true` when `addr` is the canonical `Object.prototype` (cheap: cached
+/// atomic + compare; lazily computes the address on first use).
+pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
+    addr != 0 && addr == object_prototype_addr()
+}
+
 fn array_prototype_addr() -> usize {
     let cached = ARRAY_PROTO_ADDR.load(Ordering::Relaxed);
     if cached != usize::MAX {
@@ -66,18 +123,32 @@ pub(crate) fn note_array_index_write(arr: usize) {
 #[inline]
 unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
-    if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
-        return TAG_UNDEFINED_F64;
+    // A custom array [[Prototype]] (Object.setPrototypeOf(arr, otherArray))
+    // replaces the default chain — gated on a global relaxed flag.
+    if crate::object::prototype_chain::array_static_proto_recorded() {
+        if let Some(proto_arr) = array_custom_array_prototype(receiver as *const ArrayHeader) {
+            if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
+                return js_array_get_f64(proto_arr, index);
+            }
+        }
     }
-    let proto = array_prototype_addr();
-    if proto == 0 || proto == receiver {
-        return TAG_UNDEFINED_F64;
+    if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        let proto = array_prototype_addr();
+        if proto != 0 && proto != receiver {
+            let proto_arr = proto as *const ArrayHeader;
+            if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
+                return js_array_get_f64(proto_arr, index);
+            }
+        }
     }
-    let proto_arr = proto as *const ArrayHeader;
-    if index >= (*proto_arr).length {
-        return TAG_UNDEFINED_F64;
+    // Object.prototype indexed property (data or defineProperty accessor):
+    // arr → Array.prototype → Object.prototype (concat/S15.4.4.4_A3_T3).
+    if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
+        && crate::array::object_prototype_has_index_prop(index)
+    {
+        return crate::array::sort_object_prototype_index_get(index);
     }
-    js_array_get_f64(proto_arr, index)
+    TAG_UNDEFINED_F64
 }
 
 #[inline]
@@ -125,7 +196,7 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
 /// Spec `OrdinaryGetOwnProperty(O, ToString(index)) != undefined` for an Array:
 /// is `index` present as an *own* property (dense non-hole slot, sparse named
 /// data property, or an accessor descriptor)?
-unsafe fn array_has_own_index(arr: *const ArrayHeader, index: u32) -> bool {
+pub(crate) unsafe fn array_has_own_index(arr: *const ArrayHeader, index: u32) -> bool {
     if crate::object::descriptors_in_use() {
         let key = index.to_string();
         if crate::object::get_accessor_descriptor(arr as usize, &key).is_some() {
@@ -156,6 +227,14 @@ pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool 
         if array_has_own_index(arr, index) {
             return true;
         }
+        // An explicit `Object.setPrototypeOf(arr, otherArray)` replaces the
+        // default chain — consult that array's own indices first (test262
+        // copyWithin/coerced-values-start-change-*).
+        if let Some(proto_arr) = array_custom_array_prototype(arr) {
+            if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
+                return true;
+            }
+        }
         if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
             let proto = array_prototype_addr();
             if proto != 0 && proto != arr as usize {
@@ -165,7 +244,36 @@ pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool 
                 }
             }
         }
+        if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
+            && crate::array::object_prototype_has_index_prop(index)
+        {
+            return true;
+        }
         false
+    }
+}
+
+/// A custom `[[Prototype]]` installed on `arr` via `Object.setPrototypeOf`
+/// that happens to be a real array — `null` otherwise.
+unsafe fn array_custom_array_prototype(arr: *const ArrayHeader) -> Option<*const ArrayHeader> {
+    let bits = crate::object::prototype_chain::object_static_prototype(arr as usize)?;
+    // The recorded proto may be NaN-boxed (0x7FFD) or a RAW untagged pointer
+    // (module-level arrays are stored as raw I64s).
+    let raw = if (bits >> 48) == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if (bits >> 48) == 0 && bits > 0x10000 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 || raw == arr as usize {
+        return None;
+    }
+    let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY {
+        Some(raw as *const ArrayHeader)
+    } else {
+        None
     }
 }
 
@@ -182,6 +290,11 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
         if array_has_own_index(arr, index) {
             return js_array_get_f64(arr, index);
         }
+        if let Some(proto_arr) = array_custom_array_prototype(arr) {
+            if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
+                return js_array_get_f64(proto_arr, index);
+            }
+        }
         if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
             let proto = array_prototype_addr();
             if proto != 0 && proto != arr as usize {
@@ -190,6 +303,11 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
                     return js_array_get_f64(proto_arr, index);
                 }
             }
+        }
+        if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
+            && crate::array::object_prototype_has_index_prop(index)
+        {
+            return crate::array::sort_object_prototype_index_get(index);
         }
         TAG_UNDEFINED_F64
     }
@@ -243,6 +361,28 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
         if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            // Runtime plain-object receiver behind a statically-Array
+            // variable (`var x = []; … x = {0:0}; x.length` — test262
+            // splice/S15.4.4.12_A4_T1 #10): reading the ObjectHeader words
+            // as (length, capacity) returns garbage. Read the `length`
+            // property like any object instead.
+            if crate::value::addr_class::is_above_handle_band(raw_ptr as usize)
+                && crate::object::is_valid_obj_ptr(raw_ptr as *const u8)
+                && ((*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+                    || (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE)
+            {
+                let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                let v = crate::object::js_object_get_field_by_name_f64(
+                    raw_ptr as *const crate::object::ObjectHeader,
+                    key,
+                );
+                let n = crate::builtins::js_number_coerce(v);
+                return if n.is_nan() || n <= 0.0 {
+                    0
+                } else {
+                    n.min(u32::MAX as f64) as u32
+                };
+            }
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = raw_ptr as *const crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
@@ -467,12 +607,29 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let raw = *elements_ptr.add(index as usize);
         // Issue #323: translate HOLE sentinel back to `undefined` (see
-        // `js_array_alloc_with_length` for context).
+        // `js_array_alloc_with_length` for context). Per OrdinaryGet a hole
+        // falls through to the prototype chain — a custom array prototype or
+        // an `Array.prototype[i]` element shows through (test262
+        // concat/S15.4.4.4_A3_T2 reads `a[2]` with a hole at 2). Both probes
+        // are gated (registry lookup / relaxed atomic) so the dense hot path
+        // is unchanged.
         if raw.to_bits() == crate::value::TAG_HOLE {
-            return TAG_UNDEFINED_F64;
+            if let Some(proto_arr) = array_custom_array_prototype(arr) {
+                if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
+                    return js_array_get_f64(proto_arr, index);
+                }
+            }
+            return array_oob_prototype_get(arr as usize, index);
         }
         raw
     }
+}
+
+/// Relaxed read of the `Array.prototype`-has-indexed-properties flag, for the
+/// typed-feedback guards (a polluted prototype invalidates the raw-slot fast
+/// path: holes must read through the chain).
+pub(crate) fn array_prototype_has_index_flag() -> bool {
+    ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed)
 }
 
 /// Fast-path array element write: skips all polymorphic registry checks

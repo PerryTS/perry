@@ -38,6 +38,27 @@ unsafe fn array_element_get_value(elements_ptr: *const f64, index: usize) -> f64
     }
 }
 
+/// Bind the callback's `this` to `undefined` for the duration of a dense
+/// iteration (spec: absent `thisArg` means the callback's `this` is
+/// `undefined` — NOT whatever ambient receiver the enclosing call left in
+/// IMPLICIT_THIS; test262 some/15.4.4.17-5-25, filter/15.4.4.20-5-30).
+/// Explicit-`thisArg` call sites route through the `js_arraylike_*` engine
+/// instead of these helpers. Arrow callbacks capture `this` lexically and
+/// are unaffected.
+struct DenseThisGuard(f64);
+impl DenseThisGuard {
+    fn bind_undefined() -> Self {
+        DenseThisGuard(crate::object::js_implicit_this_set(f64::from_bits(
+            crate::value::TAG_UNDEFINED,
+        )))
+    }
+}
+impl Drop for DenseThisGuard {
+    fn drop(&mut self) {
+        crate::object::js_implicit_this_set(self.0);
+    }
+}
+
 /// forEach - call callback(element, index) for each element
 /// Returns nothing (void)
 #[no_mangle]
@@ -56,6 +77,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
     unsafe {
         let length = (*arr).length;
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
                 if !crate::array::array_spec_has_index(arr, i as u32) {
@@ -103,6 +125,7 @@ pub extern "C" fn js_array_map(
         let length = (*arr).length;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
 
         // ECMA-262 §23.1.3.20 step 5: ArraySpeciesCreate(O, len) runs BEFORE
         // the iteration — it reads `O.constructor` / `@@species` (firing any
@@ -165,6 +188,7 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
     unsafe {
         let length = (*arr).length;
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
                 if !crate::array::array_spec_has_index(arr, i as u32) {
@@ -206,6 +230,7 @@ pub extern "C" fn js_array_filter(
         let length = (*arr).length;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
 
         // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
         // iteration (validates `O.constructor` / `@@species`, throwing on a
@@ -263,6 +288,7 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         let length = (*arr).length;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -304,6 +330,7 @@ pub extern "C" fn js_array_findIndex(
         let length = (*arr).length;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -344,6 +371,7 @@ pub extern "C" fn js_array_find_last(
         let length = (*arr).length as usize;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
@@ -381,6 +409,7 @@ pub extern "C" fn js_array_find_last_index(
         let length = (*arr).length as usize;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
@@ -463,6 +492,7 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         let length = (*arr).length;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -507,6 +537,7 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         let length = (*arr).length;
         let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -548,6 +579,7 @@ pub extern "C" fn js_array_flatMap(
 
         let mut result = js_array_alloc(length);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
 
         for i in 0..length as usize {
             let Some(element) = present_array_element(elements_ptr, i) else {

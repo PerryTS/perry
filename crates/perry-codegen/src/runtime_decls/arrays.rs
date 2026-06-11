@@ -194,6 +194,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, I32, DOUBLE, I32],
     );
+    module.declare_function("js_arraylike_sort", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_arraylike_splice", DOUBLE, &[DOUBLE, PTR, I32]);
+    module.declare_function("js_arraylike_concat", DOUBLE, &[DOUBLE, PTR, I32]);
     // Spread `[...x]` — strict GetIterator/materialization.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);

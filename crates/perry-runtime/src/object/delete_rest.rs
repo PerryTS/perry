@@ -144,6 +144,26 @@ pub extern "C" fn js_object_delete_field(
             }
             return 1;
         }
+        // An accessor-ONLY property (defineProperty get/set with no data
+        // slot) has no keys_array entry — the scan below would "succeed
+        // vacuously" while leaving the descriptor in the side table, so
+        // `delete obj[1]` left a ghost accessor behind (test262
+        // map/15.4.4.19-8-b-8: a getter deletes a sibling accessor
+        // mid-iteration and HasProperty must turn false).
+        if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+            if get_accessor_descriptor(obj as usize, name).is_some() {
+                if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                    if !attrs.configurable() {
+                        return 0;
+                    }
+                }
+                super::clear_accessor_descriptor(obj as usize, name);
+                super::clear_property_attrs(obj as usize, name);
+                // defineProperty may ALSO have planted a keys_array
+                // placeholder entry for the key — fall through to the scan
+                // below so hasOwnProperty / Object.keys stop seeing it.
+            }
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously

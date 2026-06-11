@@ -1047,6 +1047,24 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
         {
             return false;
         }
+        // Index accessors / custom attribute descriptors divert element
+        // reads and writes through the descriptor tables; the inline
+        // raw-slot fast path the guard admits would bypass them (test262
+        // sort/precise-* read accessor indices after defineProperty).
+        if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+            return false;
+        }
+        // A polluted `Array.prototype[i]` (or custom array prototype) makes
+        // holes read through the chain — the raw slot load would return
+        // undefined instead (test262 concat/S15.4.4.4_A3_T2,
+        // copyWithin/coerced-values-start-change-*). Rare global flags;
+        // two relaxed atomic loads.
+        if crate::array::array_prototype_has_index_flag()
+            || crate::array::object_prototype_has_index_flag()
+            || crate::object::prototype_chain::array_static_proto_recorded()
+        {
+            return false;
+        }
         let arr = raw_addr as *const ArrayHeader;
         let len = (*arr).length;
         let cap = (*arr).capacity;

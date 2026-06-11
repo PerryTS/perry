@@ -160,7 +160,44 @@ pub extern "C" fn js_array_concat_variadic(
     args_ptr: *const f64,
     count: i32,
 ) -> *mut ArrayHeader {
-    let result = js_array_alloc(0);
+    // Defensive receiver re-dispatch: a variable whose STATIC type was
+    // inferred `Array` but was reassigned to a plain object at runtime
+    // (`var x = [0]; … x = {0: 0}; x.concat()`, test262 S15.4.4.4_A3_T1)
+    // reaches this dense entry with an ObjectHeader — reading it as an
+    // ArrayHeader spreads garbage. Route plain objects/closures through the
+    // generic array-like engine instead.
+    {
+        let raw = recv as usize;
+        if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let obj_type = unsafe {
+                let hdr =
+                    (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                (*hdr).obj_type
+            };
+            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+                let recv_value = f64::from_bits(JSValue::pointer(recv as *const u8).bits());
+                let result = crate::array::js_arraylike_concat(recv_value, args_ptr, count);
+                return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+            }
+        }
+    }
+    // ECMA-262 §23.1.3.5 step 2: ArraySpeciesCreate(O, 0) runs BEFORE any
+    // element is read — it fires the receiver's `constructor` / `@@species`
+    // accessors (propagating a poisoned-getter throw) and throws TypeError on
+    // a non-constructor species (test262 concat/create-ctor-poisoned,
+    // create-ctor-non-object, create-non-array).
+    let recv_value = f64::from_bits(JSValue::pointer(recv as *const u8).bits());
+    let (result_box, result_is_plain) = unsafe {
+        let b = crate::array::species::array_species_create(recv_value, 0);
+        (b, crate::array::species::species_result_is_plain_array(b))
+    };
+    let result = if result_is_plain {
+        crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader
+    } else {
+        // Custom species container: build the elements in a plain staging
+        // array first, then CreateDataProperty them onto the container below.
+        js_array_alloc(0)
+    };
     // The receiver itself is always spread (it's the array on which `.concat`
     // was invoked). Materialize a clone to read its elements safely.
     let result = append_spread_array(result, recv as *const ArrayHeader);
@@ -169,6 +206,19 @@ pub extern "C" fn js_array_concat_variadic(
         for i in 0..count as usize {
             let value = unsafe { *args_ptr.add(i) };
             result = append_concat_arg(result, value);
+        }
+    }
+    if !result_is_plain {
+        unsafe {
+            let len = (*result).length as usize;
+            let elems = (result as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            for i in 0..len {
+                let v = *elems.add(i);
+                if v.to_bits() != crate::value::TAG_HOLE {
+                    crate::array::species::species_result_set(result_box, i, v);
+                }
+            }
+            return crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
         }
     }
     result
@@ -182,7 +232,7 @@ static KEEP_ARRAY_CONCAT_VARIADIC: extern "C" fn(
 ) -> *mut ArrayHeader = js_array_concat_variadic;
 
 /// Append a single concat argument to `result`, applying spreadability rules.
-fn append_concat_arg(result: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+pub(crate) fn append_concat_arg(result: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
     let bits = value.to_bits();
     let jv = JSValue::from_bits(bits);
     if !jv.is_pointer() {
@@ -651,8 +701,24 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
         let elems =
             (materialized as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let mut out = result;
+        // ECMA-262 §23.1.3.5 step 5.c.iii: each index goes through
+        // `HasProperty(E, k)` / `Get(E, k)` — a hole filled by an inherited
+        // `Array.prototype[k]` element lands as an OWN property of the result
+        // (test262 concat/S15.4.4.4_A3_T1); a genuinely absent index stays a
+        // hole. The dense raw read only differs when the clone has holes, so
+        // gate the spec reads on the per-element hole check.
         for i in 0..len as usize {
-            out = js_array_push_f64(out, *elems.add(i));
+            let v = *elems.add(i);
+            if v.to_bits() == crate::value::TAG_HOLE {
+                if crate::array::array_spec_has_index(materialized, i as u32) {
+                    out = js_array_push_f64(
+                        out,
+                        crate::array::array_spec_get(materialized, i as u32),
+                    );
+                    continue;
+                }
+            }
+            out = js_array_push_f64(out, v);
         }
         out
     }

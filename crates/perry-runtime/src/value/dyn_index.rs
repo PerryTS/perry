@@ -200,10 +200,23 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
                 format!("{}", index)
             };
             let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            return crate::object::js_object_get_field_by_name_f64(
+            let v = crate::object::js_object_get_field_by_name_f64(
                 raw_ptr as *const crate::object::ObjectHeader,
                 key,
             );
+            // An indexed property inherited from the canonical
+            // `Object.prototype` (incl. a defineProperty accessor) shows
+            // through any object/function receiver — e.g. `Array[1]` after
+            // `Object.defineProperty(Object.prototype, "1", { get })`
+            // (test262 filter/15.4.4.20-9-b-6).
+            if v.to_bits() == crate::value::TAG_UNDEFINED
+                && idx_i32 >= 0
+                && index == (idx_i32 as f64)
+                && crate::array::object_prototype_has_index_prop(idx_i32 as u32)
+            {
+                return crate::array::sort_object_prototype_index_get(idx_i32 as u32);
+            }
+            return v;
         }
     }
     if idx_i32 < 0 {
@@ -231,6 +244,11 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
+    // `Object.prototype[i] = v` (computed write) makes the index visible
+    // through every array's hole/OOB reads — flip the global flag.
+    if jsval.is_pointer() {
+        crate::array::note_object_prototype_index_write((bits & POINTER_MASK) as usize);
+    }
     if jsval.is_string() || jsval.is_short_string() {
         return value;
     }

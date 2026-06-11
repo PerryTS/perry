@@ -47,6 +47,24 @@ fn is_constructor(value: f64) -> bool {
 /// prototype chain (resolving to `Array.prototype.constructor` = the intrinsic
 /// `Array` for an ordinary array). Propagates a poisoned-getter exception.
 unsafe fn read_constructor(original: f64) -> f64 {
+    // An own `constructor` ACCESSOR installed directly on the array
+    // (`Object.defineProperty(a, 'constructor', { get })`) lives in the
+    // descriptor side table, which the generic property read below does not
+    // consult for array receivers — fire it here (its throw propagates;
+    // test262 {map,filter,splice,concat}/create-ctor-poisoned).
+    if crate::object::descriptors_in_use() {
+        let raw = crate::value::js_nanbox_get_pointer(original) as usize;
+        if raw != 0 {
+            if let Some(acc) = crate::object::get_accessor_descriptor(raw, "constructor") {
+                if acc.get != 0 {
+                    return f64::from_bits(
+                        crate::object::invoke_accessor_getter(acc.get, original).bits(),
+                    );
+                }
+                return f64::from_bits(TAG_UNDEFINED);
+            }
+        }
+    }
     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
     let key_v = f64::from_bits(JSValue::string_ptr(key).bits());
     crate::object::js_object_get_property_key(original, key_v)

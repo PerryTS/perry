@@ -1250,6 +1250,29 @@ pub extern "C" fn js_object_define_property(
             return obj_value;
         }
 
+        // A numeric key defined on `Object.prototype` (data or accessor) shows
+        // through array hole/OOB reads — flip the global flag.
+        {
+            let kb = key_value.to_bits();
+            let is_numeric_key =
+                (kb >> 48) == 0x7FFE || crate::value::JSValue::from_bits(kb).is_number() || {
+                    let sp = crate::value::js_get_string_pointer_unified(key_value)
+                        as *const crate::StringHeader;
+                    !sp.is_null()
+                        && super::has_own_helpers::str_from_string_header(sp)
+                            .map(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                            .unwrap_or(false)
+                };
+            if is_numeric_key {
+                let ob = obj_value.to_bits();
+                if (ob >> 48) == 0x7FFD {
+                    crate::array::note_object_prototype_index_write(
+                        (ob & crate::value::POINTER_MASK) as usize,
+                    );
+                }
+            }
+        }
+
         // #2817: ES Object.defineProperty validation.
         //   1. Target must be an object (or class-ref / function — all objects
         //      in Node). Primitives / null / undefined throw.
@@ -2893,6 +2916,24 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         && is_valid_obj_ptr(obj_ptr_for_record as *const u8)
     {
         super::prototype_chain::object_set_static_prototype(obj_ptr_for_record, proto_bits);
+        // A grown array's local may still hold the FORWARDED (old) pointer;
+        // the spec [[HasProperty]]/[[Get]] helpers look the prototype up by
+        // the CLEANED address. Record under both keys so either resolves
+        // (test262 copyWithin/coerced-values-start-change-* second case).
+        unsafe {
+            let hdr = (obj_ptr_for_record as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+                || (*hdr).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            {
+                let cleaned = crate::array::clean_arr_ptr(
+                    obj_ptr_for_record as *const crate::array::ArrayHeader,
+                ) as usize;
+                if cleaned != 0 && cleaned != obj_ptr_for_record {
+                    super::prototype_chain::object_set_static_prototype(cleaned, proto_bits);
+                }
+            }
+        }
     }
 
     // Spec: `Object.setPrototypeOf(O, proto)` returns O.
