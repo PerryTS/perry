@@ -607,11 +607,25 @@ pub(super) fn build_optimized_libs(
     // separately so a wasm program's build doesn't get served from a
     // cached non-wasm dir (which would lack `js_webassembly_*` symbols)
     // and vice versa (would carry unresolved `perry_wasm_host_*` refs).
+    //
+    // The compiler version is part of the key too. Codegen emits calls to
+    // runtime entrypoints (e.g. `js_promise_run_promise_jobs`,
+    // `js_mark_entry_module_esm`) that grow with each release; the object
+    // cache is already version-invalidated (see build_cache.rs — it misses on
+    // `perry_version != CARGO_PKG_VERSION`), so on a persistent build host a
+    // newer compiler emits the new calls while this version-blind dir would
+    // hand back a stale `libperry_runtime.a` lacking those symbols — an
+    // "undefined symbol" link failure for exactly the newly-added entrypoints.
+    // Keying on the version forces a matching rebuild whenever perry upgrades.
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
     let key_input = format!(
-        "{}|{}|{}|wasm={}",
-        feature_arg, panic_abort_safe, target_str, ctx.needs_wasm_runtime
+        "{}|{}|{}|wasm={}|v={}",
+        feature_arg,
+        panic_abort_safe,
+        target_str,
+        ctx.needs_wasm_runtime,
+        env!("CARGO_PKG_VERSION"),
     );
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
