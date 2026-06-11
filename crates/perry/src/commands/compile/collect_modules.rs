@@ -189,6 +189,134 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     }
 }
 
+fn package_root_for_compile_package(path: &std::path::Path) -> Option<PathBuf> {
+    let mut dir = path.parent();
+    while let Some(candidate) = dir {
+        if candidate.join("package.json").exists() {
+            return Some(candidate.to_path_buf());
+        }
+        dir = candidate.parent();
+    }
+    None
+}
+
+fn package_name_from_package_json(package_root: &std::path::Path) -> Option<String> {
+    let package_json = fs::read_to_string(package_root.join("package.json")).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&package_json).ok()?;
+    parsed
+        .get("name")
+        .and_then(|name| name.as_str())
+        .map(str::to_string)
+}
+
+fn marker_path_for_display(path: &std::path::Path) -> String {
+    path.display().to_string()
+}
+
+fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 {
+        return None;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return None;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if file_name == "node_modules" || file_name == ".git" {
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("node") {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(found) = find_node_addon_file(&path, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, String)> {
+    let binding_gyp = package_root.join("binding.gyp");
+    if binding_gyp.exists() {
+        return Some(("binding.gyp", marker_path_for_display(&binding_gyp)));
+    }
+    let prebuilds = package_root.join("prebuilds");
+    if prebuilds.is_dir() {
+        return Some(("prebuilds/", marker_path_for_display(&prebuilds)));
+    }
+    let package_json_path = package_root.join("package.json");
+    if let Ok(package_json) = fs::read_to_string(&package_json_path) {
+        if package_json.contains("\"gypfile\"") {
+            return Some((
+                "package.json gypfile",
+                marker_path_for_display(&package_json_path),
+            ));
+        }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&package_json) {
+            if package_json_dependency_uses_native_addon_loader(&parsed, "node-gyp-build")
+                || package_json_dependency_uses_native_addon_loader(&parsed, "bindings")
+            {
+                return Some((
+                    "native addon loader dependency",
+                    marker_path_for_display(&package_json_path),
+                ));
+            }
+        }
+    }
+    if let Some(node_file) = find_node_addon_file(package_root, 5) {
+        return Some(("*.node", marker_path_for_display(&node_file)));
+    }
+    None
+}
+
+fn package_json_dependency_uses_native_addon_loader(
+    package_json: &serde_json::Value,
+    loader_name: &str,
+) -> bool {
+    [
+        "dependencies",
+        "optionalDependencies",
+        "peerDependencies",
+        "devDependencies",
+    ]
+    .iter()
+    .any(|section| {
+        package_json
+            .get(section)
+            .and_then(|deps| deps.as_object())
+            .is_some_and(|deps| deps.contains_key(loader_name))
+    })
+}
+
+fn refuse_compile_package_native_addon(canonical: &std::path::Path) -> Result<()> {
+    let Some(package_root) = package_root_for_compile_package(canonical) else {
+        return Ok(());
+    };
+    if has_perry_native_library(&package_root) {
+        return Ok(());
+    }
+    let Some((marker, marker_path)) = node_addon_marker(&package_root) else {
+        return Ok(());
+    };
+    let package_name = package_name_from_package_json(&package_root)
+        .unwrap_or_else(|| package_root.display().to_string());
+    anyhow::bail!(
+        "package `{}` is in `perry.compilePackages` but uses a Node native addon ({}) at {}.\n\
+         Perry cannot load Node `.node` / N-API addons inside a native Perry binary. \
+         Remove `{}` from `perry.compilePackages`, choose a pure JS/TS package, \
+         or replace the native boundary with a Perry native binding \
+         (`perry.nativeLibrary` / perry-ffi).",
+        package_name,
+        marker,
+        marker_path,
+        package_name
+    );
+}
+
 /// Collect all modules to compile (transitive closure of imports)
 pub(super) fn collect_modules(
     entry_path: &PathBuf,
@@ -438,6 +566,9 @@ fn collect_module_one(
     // It's a TypeScript file to compile natively
     let raw_source = fs::read_to_string(&canonical)
         .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+    if is_in_compiled_pkg {
+        refuse_compile_package_native_addon(&canonical)?;
+    }
 
     // Issue #348: when a `compilePackages` target ships CommonJS (e.g. React
     // 18's `module.exports = require('./cjs/react.production.min.js')`),

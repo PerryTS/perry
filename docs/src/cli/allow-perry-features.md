@@ -105,6 +105,23 @@ allowlist makes that privilege explicit and auditable: a reviewer
 diffing a PR can see exactly which deps have been granted native
 access, and `git blame` records who approved each one.
 
+## Node native addons are not `compilePackages`
+
+`compilePackages` does not support npm packages whose JavaScript entry
+point loads a Node native addon. Markers include `.node` files,
+`binding.gyp`, `prebuilds/`, and `"gypfile"` in `package.json`.
+
+Those packages are not just JavaScript with a dynamic `require()`.
+Their native binary expects Node's addon ABI: Node-API/N-API, NAN, V8,
+libuv, or Node internals. Perry does not host that ABI through
+`compilePackages`, so the compiler rejects these packages early when
+they are opted into `perry.compilePackages`.
+
+Use `perry.nativeLibrary` for supported native code instead. A
+Perry-native replacement should be a thin binding around the native
+boundary, with unsupported targets declared explicitly in the
+native-library manifest.
+
 ## See also
 
 - [`#497`](https://github.com/PerryTS/perry/issues/497) — design discussion.
