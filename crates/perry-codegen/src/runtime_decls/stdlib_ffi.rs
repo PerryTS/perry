@@ -194,19 +194,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_server_listening", I32, &[I64]);
     module.declare_function("js_node_http_server_listening_value", DOUBLE, &[I64]);
     module.declare_function("js_node_http_server_on", DOUBLE, &[I64, I64, I64]);
-    // #4973: util.inherits-era `http(s).Server.call(this, handler)` — lives
-    // in perry-runtime (JS_NATIVE_HTTP_DISPATCH); args are NaN-boxed JSValues.
-    let server_ctor_args = &[DOUBLE, DOUBLE, DOUBLE];
-    module.declare_function(
-        "js_http_server_construct_with_this",
-        DOUBLE,
-        server_ctor_args,
-    );
-    module.declare_function(
-        "js_https_server_construct_with_this",
-        DOUBLE,
-        server_ctor_args,
-    );
+    // #4973 http(s).Server.call(this,…) + net socket.setEncoding decls live in
+    // objects.rs's declare chain to keep this file under the 2000-line gate.
     // IncomingMessage:
     module.declare_function("js_node_http_im_method", I64, &[I64]);
     module.declare_function("js_node_http_im_url", I64, &[I64]);
@@ -1712,8 +1701,6 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // setTimeout takes (socket handle, msecs:DOUBLE, callback:I64).
     module.declare_function("js_net_validate_create_server_options", VOID, &[DOUBLE]);
     module.declare_function("js_net_socket_set_timeout", I64, &[I64, DOUBLE, I64]);
-    // #4973: real `socket.setEncoding(enc)` — string-delivery for 'data'.
-    module.declare_function("js_net_socket_set_encoding", I64, &[I64, I64]);
     // Issue #1123 followup — `net.Server` instance method FFIs. The
     // NA_PTR slot for callbacks is `I64` here (closures arrive as raw
     // pointer-bits after the codegen's `unbox_to_i64` lowering); ports

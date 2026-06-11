@@ -319,5 +319,23 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE],
     );
 
+    // #4973: util.inherits-era `http(s).Server.call(this, handler)` + real
+    // `socket.setEncoding(enc)`. Declared here (rather than in stdlib_ffi.rs)
+    // to keep that file under the 2000-line CI gate. The server-ctor pair
+    // lives in perry-runtime (routes through JS_NATIVE_HTTP_DISPATCH) so it
+    // links for every program; args are NaN-boxed JSValues.
+    let server_ctor_args = &[DOUBLE, DOUBLE, DOUBLE];
+    module.declare_function(
+        "js_http_server_construct_with_this",
+        DOUBLE,
+        server_ctor_args,
+    );
+    module.declare_function(
+        "js_https_server_construct_with_this",
+        DOUBLE,
+        server_ctor_args,
+    );
+    module.declare_function("js_net_socket_set_encoding", I64, &[I64, I64]);
+
     declare_stdlib_ffi(module);
 }
