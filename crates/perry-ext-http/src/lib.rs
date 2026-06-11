@@ -70,6 +70,11 @@ use client_dispatch::dispatch_request;
 mod client_events;
 use client_events::{error_event_arg, fire_request_error_listeners, fire_request_event_listeners};
 
+// Node-compatible argument/header/URL validation for the client factories
+// (#4907) — throws `ERR_*`-coded errors on bad input.
+mod validation;
+use validation::{validate_client_options, validate_client_url_string};
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -914,6 +919,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     // the same as `http.request({ host, port, path }, cb)`.
     let (method, url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
+        validate_client_url_string(&raw); // #4907
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
         } else if !raw.is_empty() {
@@ -924,6 +930,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         ("GET".to_string(), url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
+        validate_client_options(&opts, default_protocol); // #4907
         let method = method_from_options(&opts);
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
@@ -969,6 +976,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
     ensure_gc_scanner_registered();
     let (url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
+        validate_client_url_string(&raw); // #4907
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
         } else if !raw.is_empty() {
@@ -979,6 +987,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         (url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
+        validate_client_options(&opts, default_protocol); // #4907
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
         let timeout = timeout_from_options(&opts);
@@ -1026,6 +1035,16 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
 unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
     ensure_gc_scanner_registered();
     let parsed = parse_client_args(args_array);
+    // #4907 — validate before building the request handle. A string URL
+    // argument is validated as a WHATWG URL; the options bag is validated for
+    // method / path / headers / protocol / option types.
+    if is_string_value(parsed.url) {
+        let raw = extract_string_value(parsed.url).unwrap_or_default();
+        validate_client_url_string(&raw);
+    }
+    if let Some(opts) = parse_options_object(parsed.opts) {
+        validate_client_options(&opts, default_protocol);
+    }
     let method = method_for_overload(parsed.opts);
     let (url, headers, timeout, agent_handle) =
         merge_url_and_options(parsed.url, parsed.opts, default_protocol);
