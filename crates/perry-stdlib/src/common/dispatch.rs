@@ -1945,6 +1945,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "resume"
                 | "destroy"
                 | "read"
+                | "constructor"
         ) && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
         {
             return unsafe {
@@ -1997,6 +1998,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "writeProcessing"
                 | "on"
                 | "addListener"
+                | "constructor"
         ) && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
         {
             return unsafe {

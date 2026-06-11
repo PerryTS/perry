@@ -55,6 +55,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
+    // #4909 — callback-aware client write/end/setTimeout (the `(encoding?,
+    // callback?)` tail rides as raw NaN-boxed JSValues).
+    module.declare_function(
+        "js_http_client_request_end_full",
+        I64,
+        &[I64, DOUBLE, I64, I64],
+    );
+    module.declare_function(
+        "js_http_client_request_write_full",
+        DOUBLE,
+        &[I64, DOUBLE, I64, I64],
+    );
+    module.declare_function("js_http_set_timeout_full", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_http_client_request_method", I64, &[I64]);
     module.declare_function("js_http_client_request_protocol", I64, &[I64]);
     module.declare_function("js_http_client_request_host", I64, &[I64]);

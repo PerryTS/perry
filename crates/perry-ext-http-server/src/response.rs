@@ -1255,6 +1255,10 @@ pub extern "C" fn js_node_http_res_detach_socket(handle: i64, _socket: f64) {
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callback: i64) -> i32 {
     let bytes = jsvalue_to_body_bytes(chunk);
+    // #4909 — real backpressure boolean (mirrors `js_node_http_res_write_full`
+    // on the static path): `false` past the 16 KiB high-water mark, so dynamic
+    // `while (res.write(buf, cb))` producer loops terminate.
+    let mut below_hwm = true;
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.writable_ended {
             sr.headers_sent = true;
@@ -1264,9 +1268,14 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
             if callback != 0 {
                 sr.pending_write_callbacks.push(callback);
             }
+            below_hwm = sr.buffered_body.len() <= DEFAULT_HIGH_WATER_MARK;
         }
     }
-    1
+    if below_hwm {
+        1
+    } else {
+        0
+    }
 }
 
 /// `res.end([chunk][, callback])` — callback-aware variant. Standalone
@@ -1282,16 +1291,23 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
         standalone_end(handle, chunk, callback);
         return;
     }
-    js_node_http_res_end(handle, chunk);
+    // #4909 — Node's flush ordering, matching `js_node_http_res_end_full`:
+    // queued write callbacks → `'finish'` → end callback → `'close'`. The
+    // previous code fired `'finish'`/`'close'` (via `js_node_http_res_end`)
+    // before any callback ran.
+    let listeners = finalize_buffered_end(handle, chunk);
     let write_cbs = get_handle_mut::<ServerResponse>(handle)
         .map(|sr| std::mem::take(&mut sr.pending_write_callbacks))
         .unwrap_or_default();
     for cb in write_cbs {
         call_closure0(cb);
     }
+    let (finish_listeners, close_listeners) = listeners.unwrap_or_default();
+    emit_no_arg_to_listeners(&finish_listeners);
     if callback != 0 {
         call_closure0(callback);
     }
+    emit_no_arg_to_listeners(&close_listeners);
 }
 
 /// Flush a standalone response: serialize the head + buffered body and

@@ -153,6 +153,20 @@ fn headers_object(handle: Handle) -> f64 {
     f64::from_bits(perry_runtime::JSValue::object_ptr(obj as *mut u8).bits())
 }
 
+/// `{ name: <class name> }` — stands in for `<handle>.constructor` so
+/// `out.constructor.name` discriminates ClientRequest/ServerResponse the
+/// way the corpus outgoing-message tests expect (#4909).
+pub(crate) fn constructor_object(name: &str) -> f64 {
+    let obj = perry_runtime::js_object_alloc_null_proto(0, 1);
+    let key_ptr = perry_runtime::js_string_from_bytes("name".as_ptr(), 4);
+    let value_ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    perry_runtime::js_object_set_field(obj, 0, perry_runtime::JSValue::string_ptr(value_ptr));
+    let mut keys = perry_runtime::js_array_alloc(1);
+    keys = perry_runtime::js_array_push(keys, perry_runtime::JSValue::string_ptr(key_ptr));
+    perry_runtime::js_object_set_keys(obj, keys);
+    f64::from_bits(perry_runtime::JSValue::object_ptr(obj as *mut u8).bits())
+}
+
 fn socket_value(handle: Handle) -> f64 {
     if !is_client_request_handle(handle) {
         return undefined_value();
@@ -258,9 +272,41 @@ pub extern "C" fn js_http_client_request_abort(handle: Handle) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) -> Handle {
-    if is_client_request_handle(handle) {
-        with_state_mut(handle, |state| state.destroyed = true);
+    if !is_client_request_handle(handle) {
+        return handle;
     }
+    let already = with_state_mut(handle, |state| {
+        std::mem::replace(&mut state.destroyed, true)
+    });
+    if already {
+        return handle;
+    }
+    // #4909 — Node teardown: destroying an in-flight request (sent, no
+    // response yet) emits the coded ECONNRESET "socket hang up" on
+    // `'error'`, then `'close'`. A request that never went out (or whose
+    // response already completed) just gets the (once-only) `'close'`.
+    let in_flight = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        let was_completed = req.completed;
+        req.completed = true;
+        req.ended && !was_completed
+    })
+    .unwrap_or(false);
+    if in_flight {
+        unsafe {
+            client_events::fire_request_error_listeners(
+                handle,
+                f64::from_bits(
+                    perry_ffi::error_value_with_code(
+                        "socket hang up",
+                        "ECONNRESET",
+                        perry_ffi::ErrorKind::Error,
+                    )
+                    .bits(),
+                ),
+            );
+        }
+    }
+    client_events::fire_request_close_once(handle);
     handle
 }
 
@@ -321,6 +367,12 @@ fn dispatch_property(handle: Handle, property: &str) -> Option<f64> {
     }
     let method: Option<&'static [u8]> = match property {
         "on" => Some(b"on"),
+        "once" => Some(b"once"),
+        "addListener" => Some(b"addListener"),
+        "prependListener" => Some(b"prependListener"),
+        "removeListener" => Some(b"removeListener"),
+        "off" => Some(b"off"),
+        "removeAllListeners" => Some(b"removeAllListeners"),
         "end" => Some(b"end"),
         "write" => Some(b"write"),
         "setHeader" => Some(b"setHeader"),
@@ -382,6 +434,10 @@ fn dispatch_property(handle: Handle, property: &str) -> Option<f64> {
             string_value(&path)
         })
         .unwrap_or_else(undefined_value),
+        // #4909 — `out.constructor.name` discrimination (the corpus
+        // outgoing-message tests branch on it). A plain `{ name }` object:
+        // the real class object isn't reachable from a raw handle.
+        "constructor" => constructor_object("ClientRequest"),
         "aborted" => js_http_client_request_aborted(handle),
         "destroyed" => js_http_client_request_destroyed(handle),
         "finished" => js_http_client_request_finished(handle),
@@ -398,25 +454,33 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
     if !is_client_request_handle(handle) {
         return None;
     }
+    // #4909 — the `(encoding?, callback?)` tail rides in args[1]/args[2]
+    // as raw NaN-boxed bits for the write/end/setTimeout surfaces.
+    let arg_bits = |index: usize| -> i64 {
+        args.get(index)
+            .map(|v| v.to_bits() as i64)
+            .unwrap_or(TAG_UNDEFINED as i64)
+    };
     Some(match method {
         "end" => {
             unsafe {
-                client_request_end_impl(
+                client_outgoing::js_http_client_request_end_full(
                     handle,
                     args.first().copied().unwrap_or_else(undefined_value),
+                    arg_bits(1),
+                    arg_bits(2),
                 );
             }
             handle_value(handle)
         }
-        "write" => {
-            unsafe {
-                client_request_write_impl(
-                    handle,
-                    args.first().copied().unwrap_or_else(undefined_value),
-                );
-            }
-            handle_value(handle)
-        }
+        "write" => unsafe {
+            client_outgoing::js_http_client_request_write_full(
+                handle,
+                args.first().copied().unwrap_or_else(undefined_value),
+                arg_bits(1),
+                arg_bits(2),
+            )
+        },
         "setHeader" => {
             let name = string_arg(args, 0).unwrap_or_default();
             let value = string_arg(args, 1).unwrap_or_default();
@@ -443,7 +507,11 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
         "getRawHeaderNames" => headers_array(handle, true),
         "setTimeout" => {
             unsafe {
-                client_request_set_timeout_impl(handle, args.first().copied().unwrap_or(0.0));
+                client_outgoing::js_http_set_timeout_full(
+                    handle,
+                    args.first().copied().unwrap_or(0.0),
+                    arg_bits(1),
+                );
             }
             handle_value(handle)
         }
@@ -463,6 +531,44 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
         }
         "abort" => js_http_client_request_abort(handle),
         "destroy" => handle_value(js_http_client_request_destroy(handle, undefined_value())),
+        // #4909 — the dynamic path (an untyped `out` parameter) used to fall
+        // through to the unknown-method arm here, so `.on('finish', cb)`
+        // silently dropped the listener even though the statically-typed
+        // route registered it fine via `js_http_on`.
+        "on" | "once" | "addListener" | "prependListener" => {
+            let event = string_arg(args, 0).unwrap_or_default();
+            let cb = client_outgoing::callback_from_bits(arg_bits(1));
+            if !event.is_empty() && cb != 0 {
+                with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+                    req.listeners.entry(event.clone()).or_default().push(cb);
+                });
+            }
+            handle_value(handle)
+        }
+        "removeListener" | "off" => {
+            let event = string_arg(args, 0).unwrap_or_default();
+            let cb = client_outgoing::callback_from_bits(arg_bits(1));
+            if !event.is_empty() && cb != 0 {
+                with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+                    if let Some(cbs) = req.listeners.get_mut(&event) {
+                        if let Some(pos) = cbs.iter().position(|&c| c == cb) {
+                            cbs.remove(pos);
+                        }
+                    }
+                });
+            }
+            handle_value(handle)
+        }
+        "removeAllListeners" => {
+            let event = string_arg(args, 0);
+            with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| match &event {
+                Some(e) => {
+                    req.listeners.remove(e);
+                }
+                None => req.listeners.clear(),
+            });
+            handle_value(handle)
+        }
         "flushHeaders" | "cork" | "uncork" | "setNoDelay" | "setSocketKeepAlive" => {
             undefined_value()
         }

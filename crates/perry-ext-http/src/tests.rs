@@ -65,6 +65,11 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         listeners: request_listeners,
         timeout_ms: None,
         ended: false,
+        pending_write_callbacks: Vec::new(),
+        end_callback: 0,
+        completed: false,
+        timeout_fired: false,
+        close_emitted: false,
         agent_handle: 0,
         tls: crate::tls_client::TlsOptions::default(),
     });

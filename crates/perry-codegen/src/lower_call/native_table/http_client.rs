@@ -141,8 +141,12 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "end",
         class_filter: Some("ClientRequest"),
-        runtime: "js_http_client_request_end",
-        args: &[NA_F64],
+        // #4909: route to the callback-aware end so `req.end(chunk, cb)` /
+        // `req.end(cb)` fire their callback (and the queued write callbacks
+        // + `'finish'`) in Node's flush order. arg2/arg3 carry the
+        // `(encoding?, callback?)` tail.
+        runtime: "js_http_client_request_end_full",
+        args: &[NA_F64, NA_JSV, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -150,9 +154,15 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "write",
         class_filter: Some("ClientRequest"),
-        runtime: "js_http_client_request_write",
-        args: &[NA_F64],
-        ret: NR_PTR,
+        // #4909: pass the trailing `(encoding?, callback?)` args as raw
+        // JSValues so the runtime can queue the write callback and return a
+        // real boolean (NR_F64 → NaN-boxed bool) for backpressure. The
+        // previous `js_http_client_request_write` (NA_F64 only / NR_PTR)
+        // dropped the callback and returned the always-truthy handle, so
+        // `while (req.write(buf))` producer loops never terminated.
+        runtime: "js_http_client_request_write_full",
+        args: &[NA_F64, NA_JSV, NA_JSV],
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -168,8 +178,11 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "setTimeout",
         class_filter: Some("ClientRequest"),
-        runtime: "js_http_set_timeout",
-        args: &[NA_F64],
+        // #4909: the callback arg registers as a `'timeout'` listener and a
+        // real timer is armed (previously the delay was only stored, so
+        // `req.setTimeout(n, cb)` on a never-responding server hung forever).
+        runtime: "js_http_set_timeout_full",
+        args: &[NA_F64, NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {

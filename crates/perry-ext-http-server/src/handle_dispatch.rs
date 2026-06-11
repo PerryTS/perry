@@ -777,6 +777,7 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
         "remotePort" => js_node_http_im_remote_port(handle),
         "rawBody" => js_node_http_im_raw_body(handle),
+        "constructor" => constructor_object("IncomingMessage"),
         _ => undef,
     }
 }
@@ -819,8 +820,28 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "strictContentLength" => bool_value(js_node_http_res_strict_content_length(handle) != 0),
         "req" => handle_value_or_undefined(js_node_http_res_req_handle(handle)),
         "socket" | "connection" => response_socket_value(handle),
+        // #4909 — `out.constructor.name` discrimination (corpus
+        // outgoing-message tests branch on it).
+        "constructor" => constructor_object("ServerResponse"),
         _ => undef,
     }
+}
+
+/// `{ name: <class name> }` — stands in for `<handle>.constructor` so
+/// `out.constructor.name` reads "ServerResponse"/"IncomingMessage" the way
+/// the corpus outgoing-message tests expect (#4909).
+fn constructor_object(name: &str) -> f64 {
+    let (packed, shape_id) = perry_ffi::build_object_shape(&["name"]);
+    let obj =
+        unsafe { js_object_alloc_with_shape(shape_id, 1, packed.as_ptr(), packed.len() as u32) };
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let value = JsValue::from_string_ptr(alloc_string(name).as_raw());
+    unsafe {
+        perry_ffi::js_object_set_field(obj, 0, value);
+    }
+    f64::from_bits(JsValue::from_object_ptr(obj as *mut u8).bits())
 }
 
 /// Dispatch a property write on a registered server-side `ServerResponse`.
@@ -1095,6 +1116,12 @@ fn closure_arg(value: Option<f64>) -> i64 {
     let bits = v.to_bits();
     let tag = bits >> 48;
     if tag != 0x7FFD {
+        return 0;
+    }
+    // #4909 — a Buffer chunk is POINTER_TAG too; `end(buf, cb)` used to
+    // treat the buffer as the `end(cb)` callback form, drop the chunk, and
+    // then call the buffer ("TypeError: value is not a function").
+    if unsafe { crate::types::js_value_is_closure(bits as i64) } == 0 {
         return 0;
     }
     (bits & PTR_MASK) as i64

@@ -68,7 +68,10 @@ use client_dispatch::dispatch_request;
 // Client-request event drain helpers (#4905) — extracted from this file
 // to stay under the 2000-line lint cap.
 mod client_events;
-use client_events::{error_event_arg, fire_request_error_listeners, fire_request_event_listeners};
+
+// Client OutgoingMessage write/end callback + backpressure + setTimeout
+// surface (#4909) — extracted to stay under the 2000-line lint cap.
+mod client_outgoing;
 
 // Node-compatible argument/header/URL validation for the client factories
 // (#4907) — throws `ERR_*`-coded errors on bad input.
@@ -91,6 +94,8 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 // ------------------------------------------------------------------
 // Pending event queue + GC scanner
@@ -115,6 +120,10 @@ pub(crate) enum PendingHttpEvent {
     /// listeners when any exist; falls back to the Error surface
     /// otherwise.
     Timeout { request_handle: Handle },
+    /// #4909 — the request body was handed to the transport at `end()`.
+    /// Drains the queued `write(chunk, cb)` callbacks, then `'finish'`,
+    /// then the `end(..., cb)` callback — Node's flush ordering.
+    Flushed { request_handle: Handle },
 }
 
 lazy_static! {
@@ -165,6 +174,10 @@ pub(crate) fn ensure_gc_scanner_registered() {
 fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
         visitor.visit_i64_slot(&mut req.response_callback);
+        visitor.visit_i64_slot(&mut req.end_callback);
+        for cb in &mut req.pending_write_callbacks {
+            visitor.visit_i64_slot(cb);
+        }
         for cbs in req.listeners.values_mut() {
             for cb in cbs {
                 visitor.visit_i64_slot(cb);
@@ -433,10 +446,26 @@ pub struct ClientRequestHandle {
     headers: HashMap<String, String>,
     body: Vec<u8>,
     response_callback: i64,
-    /// `'error'` is the only event ClientRequest emits today.
+    /// `.on(event, cb)` listeners (`'response'` / `'error'` / `'timeout'`
+    /// / `'finish'` / `'close'`).
     listeners: HashMap<String, Vec<i64>>,
     timeout_ms: Option<u64>,
     ended: bool,
+    /// #4909 — `write(chunk, cb)` callbacks queued until the body is
+    /// flushed at `end()` (Node fires them once the chunk hits the
+    /// transport; our buffered MVP flushes everything at `end()`).
+    pending_write_callbacks: Vec<i64>,
+    /// #4909 — the `end(..., cb)` callback; fires after the queued write
+    /// callbacks and the `'finish'` listeners.
+    end_callback: i64,
+    /// #4909 — set once the response/error was delivered (or the request
+    /// destroyed); suppresses late `'timeout'` timers and stale events.
+    completed: bool,
+    /// #4909 — `'timeout'` fires at most once per request, no matter how
+    /// many timers (`options.timeout` + `setTimeout()` reschedules) land.
+    timeout_fired: bool,
+    /// #4909 — `'close'` fires at most once per request.
+    close_emitted: bool,
     /// `options.agent` handle id when the caller supplied an Agent
     /// (#2154). `0` = use the global `HTTP_CLIENT` (no pooling
     /// distinction). When set, `dispatch_request` calls
@@ -594,7 +623,7 @@ fn make_request_handle(
     callback: i64,
     agent_handle: Handle,
 ) -> Handle {
-    register_handle(ClientRequestHandle {
+    let handle = register_handle(ClientRequestHandle {
         method,
         url,
         headers,
@@ -603,9 +632,23 @@ fn make_request_handle(
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        pending_write_callbacks: Vec::new(),
+        end_callback: 0,
+        completed: false,
+        timeout_fired: false,
+        close_emitted: false,
         agent_handle,
         tls: tls_client::TlsOptions::default(),
-    })
+    });
+    // #4909 — `options.timeout` arms the inactivity timer as soon as the
+    // socket exists in Node, not at `end()`; a request that is never
+    // dispatched (or whose server never answers) still gets `'timeout'`.
+    if let Some(ms) = timeout_ms {
+        if ms > 0 {
+            client_outgoing::arm_client_timeout(handle, ms);
+        }
+    }
+    handle
 }
 
 /// Parse the client-side TLS options (#4906) off a request options value
@@ -1090,9 +1133,11 @@ pub unsafe extern "C" fn js_http_client_request_write(handle: Handle, body_f64: 
 }
 
 unsafe fn client_request_write_impl(handle: Handle, body_f64: f64) -> Handle {
-    if let Some(body) = extract_string_value(body_f64) {
+    // #4909 — Buffer chunks used to be misread as StringHeaders (and
+    // dropped); route through the buffer-aware chunk reader.
+    if let Some(body) = client_outgoing::chunk_to_bytes(body_f64) {
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-            req.body.extend_from_slice(body.as_bytes());
+            req.body.extend_from_slice(&body);
         });
     }
     handle
@@ -1106,10 +1151,10 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
     client_request_end_impl(handle, body_f64)
 }
 
-unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
-    if let Some(body) = extract_string_value(body_f64) {
+pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
+    if let Some(body) = client_outgoing::chunk_to_bytes(body_f64) {
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-            req.body.extend_from_slice(body.as_bytes());
+            req.body.extend_from_slice(&body);
         });
     }
 
@@ -1135,6 +1180,12 @@ unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
     };
 
     let (method, url, headers, body, timeout_ms, agent_handle, tls) = snapshot;
+
+    // #4909 — queue the flush notification before dispatching so the
+    // write/end callbacks and `'finish'` drain ahead of any `'response'`.
+    push_event(PendingHttpEvent::Flushed {
+        request_handle: handle,
+    });
 
     // #2154 — if the agent supplied a `createConnection` / `createSocket`
     // override, invoke it here on the main thread (JS closure calls must not
@@ -1264,7 +1315,7 @@ pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle 
     client_request_set_timeout_impl(handle, ms)
 }
 
-unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) -> Handle {
+pub(crate) unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) -> Handle {
     // Node's `socket.setTimeout` (which backs `ClientRequest.setTimeout`)
     // routes the delay through validateTimerDuration → enroll: an out-of-range
     // (> 2**31-1) delay is clamped to TIMEOUT_MAX and a `TimeoutOverflowWarning`
@@ -1278,7 +1329,12 @@ unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) -> Handle {
         ms
     };
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        req.timeout_ms = Some(effective.max(0.0) as u64);
+        // Node: `setTimeout(0)` clears the inactivity timer.
+        req.timeout_ms = if effective > 0.0 {
+            Some(effective as u64)
+        } else {
+            None
+        };
     });
     handle
 }
@@ -1523,7 +1579,7 @@ fn server_incoming_property(handle: Handle, property_name: &str) -> Option<f64> 
     }
 }
 
-fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
+pub(crate) fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
     match encoding {
         Some(_) => {
             let s = String::from_utf8_lossy(body).into_owned();
@@ -1584,106 +1640,26 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 trailers,
                 body,
             } => {
-                let response_callback = get_handle_mut::<ClientRequestHandle>(request_handle)
-                    .map(|r| r.response_callback)
-                    .unwrap_or(0);
-
-                let mut headers_map = HashMap::new();
-                for (k, v) in headers {
-                    headers_map.insert(k, v);
-                }
-                let mut trailers_map = HashMap::new();
-                for (k, v) in trailers {
-                    trailers_map.insert(k, v);
-                }
-
-                let body_clone = body.clone();
-                let incoming = register_handle(IncomingMessageHandle {
-                    status_code: status,
+                client_events::handle_response_event(
+                    request_handle,
+                    status,
                     status_message,
-                    headers: headers_map,
-                    trailers: trailers_map,
+                    headers,
+                    trailers,
                     body,
-                    listeners: HashMap::new(),
-                    encoding: None,
-                });
-
-                if response_callback != 0 {
-                    // Hand the IncomingMessage handle to the user's
-                    // `(res) => { ... }` callback. POINTER_TAG so the
-                    // closure-arg unboxer extracts the i64.
-                    let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
-                    let closure = JsClosure::from_raw(response_callback as *const RawClosureHeader);
-                    let _ = closure.call1(arg);
-                }
-
-                // `'data'` listeners — body is delivered as a single chunk.
-                // True streaming requires a cooperative spawn_async
-                // perry-ffi surface (v0.6.0 followup).
-                //
-                // Issue #1124 followup: pre-fix this allocated a JS
-                // string via `alloc_string(str::from_utf8(&body).unwrap_or(""))`,
-                // which silently collapsed any non-UTF-8 byte sequence
-                // (PNG file-magic, gzip frames, binary protocols, …) to
-                // the empty string before user code ever saw a byte.
-                // The mirror of the #1124 server-side fix (where the
-                // request body went the OTHER direction through a
-                // wrongly-shaped StringHeader): allocate a JS Buffer
-                // via `alloc_buffer(&bytes)` so the bytes survive the
-                // FFI boundary intact. The Buffer registers itself
-                // through perry-runtime's `is_registered_buffer` path
-                // so the `chunk.toString(enc)` / `chunk.length` /
-                // `Buffer.concat(...)` surface lights up on the
-                // returned value.
-                //
-                // When `res.setEncoding(enc)` was called in the response
-                // callback, mirror Readable's string-chunk behavior. Without
-                // an encoding, preserve Node's default Buffer chunks.
-                let (data_listeners, encoding) = get_handle_mut::<IncomingMessageHandle>(incoming)
-                    .map(|r| {
-                        (
-                            r.listeners.get("data").cloned().unwrap_or_default(),
-                            r.encoding.clone(),
-                        )
-                    })
-                    .unwrap_or_default();
-                if !data_listeners.is_empty() && !body_clone.is_empty() {
-                    let arg = body_chunk_value(&body_clone, encoding.as_deref());
-                    if arg.to_bits() != TAG_UNDEFINED {
-                        for cb in data_listeners {
-                            if cb != 0 {
-                                let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                                let _ = closure.call1(arg);
-                            }
-                        }
-                    }
-                }
-
-                // `'end'` listeners — fire after data.
-                let end_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
-                    .and_then(|r| r.listeners.get("end").cloned())
-                    .unwrap_or_default();
-                for cb in end_listeners {
-                    if cb != 0 {
-                        let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                        let _ = closure.call0();
-                    }
-                }
-
-                // Node emits `'close'` on the request once the response has
-                // fully ended (#4905).
-                fire_request_event_listeners(request_handle, "close");
+                );
             }
             PendingHttpEvent::Error {
                 request_handle,
                 error_message,
             } => {
-                fire_request_error_listeners(request_handle, error_event_arg(&error_message));
-                // Node emits `'close'` on the request after `'error'` (#4905).
-                fire_request_event_listeners(request_handle, "close");
+                client_events::handle_error_event(request_handle, &error_message);
             }
             PendingHttpEvent::Timeout { request_handle } => {
                 client_events::handle_timeout_event(request_handle);
+            }
+            PendingHttpEvent::Flushed { request_handle } => {
+                client_events::handle_flushed_event(request_handle);
             }
         }
     }
