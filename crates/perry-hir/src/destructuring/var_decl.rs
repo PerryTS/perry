@@ -19,6 +19,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // Simple binding: let x = expr
             let name = ident.id.sym.to_string();
 
+            // Strict-mode early error: `var eval` / `var arguments` (and the
+            // let/const forms) are a SyntaxError (ECMA-262 BindingIdentifier
+            // static semantics). Surfaced as a compile error so the test262
+            // negative cases agree with Node (12.2.1-22-s).
+            if ctx.current_strict && matches!(name.as_str(), "eval" | "arguments") {
+                anyhow::bail!(
+                    "SyntaxError: unexpected `{}` as a strict-mode binding identifier",
+                    name
+                );
+            }
+
             // #809: tag locals provably bound to a plain object (an object
             // literal or `Object.create(...)`). `static_receiver_class`
             // consults this so `x.toJSON()` / `.toString()` / `.valueOf()`
@@ -1492,6 +1503,21 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     *existing_ty = ty.clone();
                 }
                 id
+            } else if let Some(fid) = match &decl.name {
+                // #4973: the function-body hoist pass pre-registered this
+                // exact `let`/`const` declarator (span-keyed) so hoisted
+                // sibling functions could forward-reference it. Reuse the
+                // pre-registered id here so the init lands in the slot/box
+                // those references captured.
+                ast::Pat::Ident(ident) => ctx.lexical_forward_decls.remove(&ident.id.span.lo.0),
+                _ => None,
+            } {
+                if let Some((_, _, existing_ty)) =
+                    ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == fid)
+                {
+                    *existing_ty = ty.clone();
+                }
+                fid
             } else if let Some(id) = is_var_decl
                 .then(|| {
                     // Issue #838 followup (b): when the closure-body hoist

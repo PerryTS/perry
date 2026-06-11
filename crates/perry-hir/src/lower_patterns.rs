@@ -360,7 +360,18 @@ fn collect_implicit_assignment_target_names(
     match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
             let name = ident.id.sym.to_string();
-            if should_predeclare_implicit_assignment_name(ctx, &name) {
+            // Only a pre-registered hoisted `var` is predeclared here — this is
+            // its var-hoisting materialization, so `index = index` before the
+            // `for (var index …)` reads the hoisted `undefined` instead of a
+            // throwing global read (S12.6.3_A10). A GENUINELY-new sloppy global
+            // (`foo = 1` with no `var` anywhere) is deliberately NOT predeclared:
+            // it lowers to a globalThis property set (#3575), and a backing local
+            // would make `lower_expr_assignment` emit `LocalSet`, hiding the write
+            // from globalThis. Destructuring targets below always predeclare
+            // because their lowering only emits `LocalSet`.
+            if ctx.pre_registered_module_var_decls.contains(&name)
+                && should_predeclare_implicit_assignment_name(ctx, &name)
+            {
                 push_unique_name(names, name);
             }
         }

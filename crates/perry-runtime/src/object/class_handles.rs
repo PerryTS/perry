@@ -282,6 +282,34 @@ pub fn handle_property_dispatch() -> Option<HandlePropertyDispatchFn> {
     }
 }
 
+/// #4973: the PRIMARY (stdlib) handle method dispatcher only, skipping the
+/// extension dispatchers. The inherits-alias forwarding uses this because it
+/// KNOWS its handle is an http(s) server handle — going through the
+/// composite would let an id-colliding extension registry (an ext-net
+/// socket with the same small id) claim shared method names like
+/// `address`/`on` first and answer for the wrong object.
+#[inline]
+pub(crate) fn handle_method_dispatch_primary() -> Option<HandleMethodDispatchFn> {
+    let p = HANDLE_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandleMethodDispatchFn>(p) })
+    }
+}
+
+/// Primary-only sibling of `handle_property_dispatch` — see
+/// `handle_method_dispatch_primary`.
+#[inline]
+pub(crate) fn handle_property_dispatch_primary() -> Option<HandlePropertyDispatchFn> {
+    let p = HANDLE_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandlePropertyDispatchFn>(p) })
+    }
+}
+
 #[inline]
 pub fn handle_property_set_dispatch() -> Option<HandlePropertySetDispatchFn> {
     if has_extension(&HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS) {

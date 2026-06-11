@@ -26,6 +26,11 @@ pub(crate) fn obj_value_no_extend(value: f64) -> bool {
         if obj.is_null() || (obj as usize) <= 0x10000 {
             return false;
         }
+        // Typed arrays use a side table (small ones carry no `GcHeader`, so
+        // the header read below would be allocator-metadata garbage).
+        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+            return crate::typedarray_props::typed_array_owner_no_extend(obj as usize);
+        }
         let gc = gc_header_for(obj);
         (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0
     }
@@ -46,6 +51,20 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
             return false;
         }
         let obj_addr = obj as usize;
+        // TypedArray FIRST: own keys are the valid integer indices plus the
+        // expando side table. Must precede the GC-header read below — small
+        // typed arrays are plain-`alloc`ed without a `GcHeader`, so reading
+        // `addr - 8` is allocator-metadata garbage.
+        if crate::typedarray::lookup_typed_array_kind(obj_addr).is_some() {
+            let key_str = crate::builtins::js_string_coerce(key);
+            if key_str.is_null() {
+                return false;
+            }
+            return crate::typedarray_props::typed_array_has_own_property(
+                obj as *const crate::typedarray::TypedArrayHeader,
+                key_str,
+            );
+        }
         if obj_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc = gc_header_for(obj);
             if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY

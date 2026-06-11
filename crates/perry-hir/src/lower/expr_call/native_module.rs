@@ -1087,10 +1087,14 @@ pub(super) fn try_native_module_methods(
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let key = it.next().unwrap_or(Expr::Undefined);
                             let value = it.next().unwrap_or(Expr::Undefined);
+                            // Optional `receiver` (4th arg): default `undefined`
+                            // and the runtime substitutes `target`.
+                            let receiver = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectSet {
                                 target: Box::new(target),
                                 key: Box::new(key),
                                 value: Box::new(value),
+                                receiver: Box::new(receiver),
                             }));
                         }
                         "has" => {
@@ -1463,6 +1467,36 @@ pub(super) fn try_native_module_methods(
                                 && matches!(imported_method, Some("EventEmitter"))
                             {
                                 return Ok(Ok(event_emitter_constructor_call(args)));
+                            }
+                            // #4973: named-import form of the inherits
+                            // pattern — `const { Server } = require('http');
+                            // Server.call(this, handler)`. Same extern as
+                            // the dotted `http.Server.call(...)` form in
+                            // module_class_static.rs.
+                            if matches!(normalized_module, "http" | "https")
+                                && matches!(imported_method, Some("Server"))
+                                && !args.is_empty()
+                            {
+                                let mut it = args.into_iter();
+                                let this_arg = it.next().unwrap();
+                                let mut rest: Vec<Expr> = it.collect();
+                                rest.resize(2, Expr::Undefined);
+                                let mut call_args = vec![this_arg];
+                                call_args.extend(rest);
+                                let extern_name = if normalized_module == "https" {
+                                    "js_https_server_construct_with_this"
+                                } else {
+                                    "js_http_server_construct_with_this"
+                                };
+                                return Ok(Ok(Expr::Call {
+                                    callee: Box::new(Expr::ExternFuncRef {
+                                        name: extern_name.to_string(),
+                                        param_types: Vec::new(),
+                                        return_type: Type::Any,
+                                    }),
+                                    args: call_args,
+                                    type_args: Vec::new(),
+                                }));
                             }
                         }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep

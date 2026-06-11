@@ -382,6 +382,33 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args,
             });
         }
+        // #4995: `new EE()` where `EE` is the events module *value* — the
+        // default import (`import EE from 'events'`) or a CJS alias
+        // (`var EE = require('events')`). Node's `events` module exports the
+        // EventEmitter class itself, so construct it exactly like the named
+        // import (`Expr::New { class_name: "EventEmitter" }` → codegen's
+        // lower_builtin_new → `js_event_emitter_new_with_options`).
+        // Previously this fell through to `New { class_name: "EE" }`, which
+        // codegen resolved to the empty-object placeholder — instances had no
+        // `.on`/`.emit`/`.setMaxListeners`, so signal-exit's module init
+        // threw and blocked ink (#348).
+        if ctx.lookup_local(callee_ident.sym.as_ref()).is_none() {
+            let is_events_module_value = ctx
+                .lookup_native_module(callee_ident.sym.as_ref())
+                .map(|(module_name, method)| {
+                    module_name == "events"
+                        && (method.is_none() || method.as_deref() == Some("default"))
+                })
+                .unwrap_or(false)
+                || ctx.lookup_builtin_module_alias(callee_ident.sym.as_ref()) == Some("events");
+            if is_events_module_value {
+                return Ok(Expr::New {
+                    class_name: "EventEmitter".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                });
+            }
+        }
     }
 
     // Issue #422: `new net.Socket()` over a `net` module alias. The
@@ -744,11 +771,30 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args,
                 });
             }
+            // #4995: `new ev.EventEmitter()` over an events module alias
+            // (`import * as ev from 'events'` / `import EE from 'events'` /
+            // `const ev = require('events')`) joins the same `Expr::New`
+            // route as the named import. Aliases registered only as
+            // builtin-module aliases (not native-module bindings) are
+            // covered by the `lookup_builtin_module_alias` arm.
+            if ctx.lookup_builtin_module_alias(module_alias) == Some("events")
+                && matches!(
+                    prop_ident.sym.as_ref(),
+                    "EventEmitter" | "EventEmitterAsyncResource"
+                )
+            {
+                return Ok(Expr::New {
+                    class_name: prop_ident.sym.to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                });
+            }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
                 let class_name = prop_ident.sym.as_ref();
                 if matches!(
                     (module_name, class_name),
-                    ("events", "EventEmitterAsyncResource")
+                    ("events", "EventEmitter")
+                        | ("events", "EventEmitterAsyncResource")
                         | ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
                         | ("sqlite", "DatabaseSync" | "Session" | "StatementSync")
                 ) {

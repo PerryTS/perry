@@ -16,6 +16,11 @@ perry-ffi.workspace = true
 # listeners receive a ws_id usable through the rest of the
 # perry-ext-ws FFI surface (`js_ws_send` / `js_ws_close` / `js_ws_on`).
 perry-ext-ws = { path = "../perry-ext-ws" }
+# #4973: raw-socket `'upgrade'` handoff. perry-ext-net exposes
+# `adopt_upgraded_tcp_stream(TcpStream) -> i64` so keyless Upgrade requests
+# reach JS as a standard net.Socket with nothing written to the wire
+# (Node semantics) — see raw_upgrade.rs.
+perry-ext-net = { path = "../perry-ext-net" }
 hyper = { version = "1.4", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 h2 = "0.4"

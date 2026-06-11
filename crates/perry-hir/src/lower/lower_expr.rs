@@ -288,8 +288,27 @@ pub(crate) fn lower_expr_assignment(
                     "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
                     name
                 );
-                let id = ctx.define_sloppy_implicit_global(name);
-                Ok(Expr::LocalSet(id, value))
+                // Sloppy implicit global: the binding IS a property of
+                // globalThis (spec CreateGlobalVarBinding on the global
+                // object), so `foo = 1` must be visible as
+                // `globalThis.foo`, write through to a pre-existing global
+                // property, and observe a later `delete globalThis.foo`.
+                // Reads of the name resolve through the
+                // `js_global_get_or_throw_unresolved` fallback, so no
+                // module-local shadow may be created here (a stale local
+                // would keep serving deleted/overwritten values).
+                // NOTE: `GlobalGet(0)` alone is a by-name routing SENTINEL in
+                // codegen (bare reads lower to 0.0) — the write must target
+                // the VALUE globalThis, which the `PropertyGet { GlobalGet(0),
+                // "globalThis" }` shape resolves to the real global object.
+                Ok(Expr::PropertySet {
+                    object: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: "globalThis".to_string(),
+                    }),
+                    property: name,
+                    value,
+                })
             }
         }
         ast::Expr::Member(member) => {
@@ -997,7 +1016,20 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         && !is_known_global_identifier_name(n)
                         && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
                     {
-                        return Ok(Expr::String("undefined".to_string()));
+                        // Not foldable to a compile-time "undefined": sloppy
+                        // implicit globals are runtime globalThis properties
+                        // (#3575), so `g = 5; typeof g` must observe the live
+                        // binding. Non-throwing lookup per the spec's
+                        // GetValue-skips-on-typeof rule.
+                        return Ok(Expr::TypeOf(Box::new(Expr::Call {
+                            callee: Box::new(Expr::ExternFuncRef {
+                                name: "js_global_get_optional".to_string(),
+                                param_types: vec![Type::Any],
+                                return_type: Type::Any,
+                            }),
+                            args: vec![Expr::String(n.to_string())],
+                            type_args: Vec::new(),
+                        })));
                     }
                 }
                 // #1395: `typeof process.memoryUsage.rss` is a nested member

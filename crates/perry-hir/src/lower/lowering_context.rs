@@ -349,6 +349,15 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// #4973: top-of-function-body `let`/`const` Ident bindings pre-registered
+    /// by the function-body hoist pass so hoisted sibling FUNCTIONS that
+    /// reference them before their lexical position bind the (boxed) local
+    /// instead of falling through to a global read (the classic Node test
+    /// shape: `function t() { server.close(); }` … `const server = …`).
+    /// Keyed by the declarator-ident span (`span.lo.0`) so ONLY the exact
+    /// declarator reuses the id at its Let site — a shadowing `const` in an
+    /// inner block still lowers a fresh binding.
+    pub(crate) lexical_forward_decls: HashMap<u32, LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec

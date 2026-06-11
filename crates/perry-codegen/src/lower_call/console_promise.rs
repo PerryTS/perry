@@ -983,6 +983,15 @@ pub fn try_lower_closure_call_fallthrough(
     let prev_this: Option<String> = if let Some(ref this_val) = method_recv {
         let blk = ctx.block();
         Some(blk.call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, this_val)]))
+    } else if !matches!(callee, Expr::PropertyGet { .. }) {
+        // Receiverless closure-value call (`fn()`, IIFE, `curry(1)(2)`):
+        // OrdinaryCallBindThis binds `this` to undefined — without the
+        // reset the enclosing method dispatch's IMPLICIT_THIS leaks into
+        // the callee (#3576). Member-shaped callees keep their existing
+        // receiver/skip behavior above.
+        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let blk = ctx.block();
+        Some(blk.call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &undef)]))
     } else {
         None
     };

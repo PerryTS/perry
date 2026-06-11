@@ -166,6 +166,7 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     });
     crate::typedarray_view::clear_view_meta(owner);
     crate::typedarray_props::typed_array_clear_own_props(owner);
+    crate::typedarray_props::typed_array_clear_no_extend(owner);
 }
 
 /// Returns Some(kind) if the (already-stripped) address is a registered
@@ -549,7 +550,7 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
 
 /// Convert an f64 (NaN-boxed JS value) to the numeric value to store. Strings
 /// and undefined become 0/NaN.
-fn jsvalue_to_f64(v: f64) -> f64 {
+pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
     let bits = v.to_bits();
     let top16 = bits >> 48;
     // Plain double — positive, negative, ±Inf, and all NaN patterns that
@@ -822,20 +823,35 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
             );
         }
         // A plain object that is neither a typed array nor a buffer is consumed
-        // per the spec's `new TypedArray(object)` path: if it exposes
-        // `@@iterator` it is iterated (InitializeTypedArrayFromList), otherwise
-        // it is read as an array-like (`ToLength(obj.length)` then each indexed
-        // element). Previously the object pointer was reinterpreted as an
-        // `ArrayHeader`, so `obj.length` was read from the wrong header (garbage,
-        // usually 1) and the elements were raw bytes. Route through the shared
-        // `Array.from` materialization (which performs exactly this dual
-        // iterator/array-like resolution and propagates any user getter/iterator
-        // exceptions), then coerce each element to the per-kind numeric type.
+        // per the spec's `new TypedArray(object)` path: if it exposes a
+        // *callable* `@@iterator` it is iterated (InitializeTypedArrayFromList);
+        // a non-callable non-nullish `@@iterator` is a TypeError; otherwise it
+        // is read as an array-like (`ToLength(Get(obj, "length"))` then each
+        // indexed element). Registered Maps/Sets keep the shared `Array.from`
+        // materialization (their `@@iterator` is native, not a stored symbol
+        // property). Functions are valid array-like/iterable sources too —
+        // previously they were reinterpreted as an `ArrayHeader` (crash).
+        if crate::map::is_registered_map(raw_addr)
+            || crate::set::is_registered_set(raw_addr)
+            || crate::array::is_builtin_iterator_class_id(raw_addr)
+            || crate::object::js_util_types_is_generator_object(val).to_bits()
+                == crate::value::TAG_TRUE
+        {
+            // Built-in iterables whose `@@iterator` is native (not a stored
+            // symbol property): Maps/Sets, builtin iterator objects, and
+            // generator objects (Perry generators carry own `next`/`return`
+            // closures and no `@@iterator` symbol prop). The shared
+            // `Array.from` materialization drives these correctly.
+            let materialized = crate::array::js_array_from_value(val);
+            return js_typed_array_new_from_array(kind, materialized);
+        }
+        if crate::closure::is_closure_ptr(raw_addr) {
+            return unsafe { typed_array_from_plain_object(kind as u8, val) };
+        }
         if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_OBJECT {
-                let materialized = crate::array::js_array_from_value(val);
-                return js_typed_array_new_from_array(kind, materialized);
+                return unsafe { typed_array_from_plain_object(kind as u8, val) };
             }
         }
         return js_typed_array_new_from_array(kind, arr);
@@ -868,8 +884,145 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
         let len = typed_array_length_or_throw(val);
         return typed_array_alloc(kind as u8, len);
     }
-    // Undefined / null / bool / string → empty typed array.
-    typed_array_alloc(kind as u8, 0)
+    // Undefined → ToIndex(undefined) = 0. Null / bool / string run through
+    // ToNumber then ToIndex, so `new TA(true)` and `new TA('1')` have length
+    // 1 (previously all of these built an empty array).
+    if bits == crate::value::TAG_UNDEFINED {
+        return typed_array_alloc(kind as u8, 0);
+    }
+    let len = typed_array_length_or_throw(jsvalue_to_f64(val));
+    typed_array_alloc(kind as u8, len)
+}
+
+/// `new TA(object)` for a plain object / function source (ES2024 §23.2.5.1
+/// step 6.b.iii, InitializeTypedArrayFromList / InitializeTypedArrayFromArrayLike).
+///
+///   - `GetMethod(obj, @@iterator)`: a non-nullish, non-callable value is a
+///     TypeError; a callable one drives the iterator protocol (each `next()`
+///     may throw — propagate).
+///   - Otherwise array-like: `len = ToLength(? Get(obj, "length"))` (a Symbol
+///     length is a TypeError, a `valueOf` runs and may throw), then each
+///     indexed element is read and coerced per kind (`ToNumber`/`ToBigInt`,
+///     both observable / throwing).
+///
+/// Element values are fully collected BEFORE coercion begins, mirroring the
+/// snapshot rule in `js_typed_array_new_from_array`.
+unsafe fn typed_array_from_plain_object(kind: u8, val: f64) -> *mut TypedArrayHeader {
+    let raw = typed_array_plain_object_values(val);
+    typed_array_from_snapshot(kind, raw)
+}
+
+/// Collect the raw (uncoerced) element values of a plain-object / function
+/// source per the spec's iterator-or-array-like resolution (see
+/// `typed_array_from_plain_object` doc above). Observable: the `@@iterator`
+/// validation/iteration, the `ToLength(Get(obj, "length"))` coercion, and
+/// each indexed `Get` all run here and may throw.
+unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let iter_wk = crate::symbol::well_known_symbol("iterator");
+    let using_iter = if iter_wk.is_null() {
+        undefined
+    } else {
+        let sym = f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+        crate::symbol::js_object_get_symbol_property(val, sym)
+    };
+    let ub = using_iter.to_bits();
+    if ub != crate::value::TAG_UNDEFINED && ub != crate::value::TAG_NULL {
+        let fn_raw = crate::value::js_nanbox_get_pointer(using_iter) as usize;
+        if fn_raw < 0x10000 || !crate::closure::is_closure_ptr(fn_raw) {
+            throw_type_error(b"object is not iterable");
+        }
+        let bound = crate::closure::clone_closure_rebind_this(using_iter.to_bits(), val);
+        let iter = crate::closure::js_native_call_value(f64::from_bits(bound), ptr::null(), 0);
+        let mut raw: Vec<f64> = Vec::new();
+        while let Some(v) = crate::collection_iter::iterator_next_value(iter) {
+            raw.push(v);
+        }
+        return raw;
+    }
+    // Array-like path.
+    let len_val = object_like_get(val, "length");
+    let n = jsvalue_to_f64(len_val);
+    // ToLength: NaN / negative → 0, clamp to 2^53-1.
+    let len = if n.is_nan() || n <= 0.0 {
+        0.0
+    } else {
+        n.trunc().min(9_007_199_254_740_991.0)
+    };
+    // AllocateTypedArrayBuffer implementation limit (Node throws RangeError
+    // for lengths past the max typed-array size).
+    if len > u32::MAX as f64 {
+        throw_range_error(format!("Invalid typed array length: {}", len as u64).as_bytes());
+    }
+    let len = len as u32;
+    let mut raw: Vec<f64> = Vec::with_capacity(len as usize);
+    for k in 0..len {
+        raw.push(object_like_get(val, &k.to_string()));
+    }
+    raw
+}
+
+/// Collect the raw (uncoerced) source values for `%TypedArray%.from(source)`:
+/// plain-object / function sources use the spec iterator-or-array-like
+/// resolution (so a throwing `length` getter / `ToLength(Symbol)` / a
+/// non-callable `@@iterator` propagate); every other shape (arrays, strings,
+/// Maps, Sets, iterators, generators, buffers) goes through the shared
+/// `Array.from` materialization.
+pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
+    let bits = val.to_bits();
+    if (bits >> 48) == 0x7FFD {
+        let raw_addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let special = crate::map::is_registered_map(raw_addr)
+            || crate::set::is_registered_set(raw_addr)
+            || crate::array::is_builtin_iterator_class_id(raw_addr)
+            || crate::object::js_util_types_is_generator_object(val).to_bits()
+                == crate::value::TAG_TRUE
+            || lookup_typed_array_kind(raw_addr).is_some()
+            || crate::buffer::is_registered_buffer(raw_addr)
+            || crate::symbol::js_is_symbol(val) != 0;
+        if !special {
+            if crate::closure::is_closure_ptr(raw_addr) {
+                return typed_array_plain_object_values(val);
+            }
+            if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+                let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    return typed_array_plain_object_values(val);
+                }
+            }
+        }
+    }
+    let arr = crate::array::js_array_from_value(val);
+    let len = crate::array::js_array_length(arr);
+    (0..len as u32)
+        .map(|i| crate::array::js_array_get_f64(arr, i))
+        .collect()
+}
+
+/// Coerce a snapshot of raw element values per `kind` (observable, may throw)
+/// and store them into a freshly allocated typed array.
+unsafe fn typed_array_from_snapshot(kind: u8, raw: Vec<f64>) -> *mut TypedArrayHeader {
+    let vals: Vec<f64> = raw
+        .into_iter()
+        .map(|v| bigint::coerce_for_kind(kind, v))
+        .collect();
+    let ta = typed_array_alloc(kind, vals.len() as u32);
+    for (i, v) in vals.iter().enumerate() {
+        store_at(ta, i, *v);
+    }
+    ta
+}
+
+/// `Get(obj, name)` for a plain-object or function source value.
+unsafe fn object_like_get(val: f64, name: &str) -> f64 {
+    let raw = crate::value::js_nanbox_get_pointer(val) as usize;
+    if crate::closure::is_closure_ptr(raw) {
+        return crate::closure::closure_get_dynamic_prop(raw, name);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let v =
+        crate::object::js_object_get_field_by_name(raw as *const crate::object::ObjectHeader, key);
+    f64::from_bits(v.bits())
 }
 
 /// Copy elements from one typed array into a new typed array of `dst_kind`,
@@ -1102,6 +1255,32 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
     let v = crate::value::JSValue::from_bits(source_value.to_bits());
     if v.is_null() || v.is_undefined() {
         return None;
+    }
+    // A primitive string source: `ToObject("567")` is an array-like of
+    // single-char strings (length 3, "5"/"6"/"7"), each coerced per kind —
+    // `ta.set("567")` writes 5, 6, 7 (test262 set/array-arg-primitive-toobject).
+    if v.is_any_string() {
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some((data, len)) = crate::string::str_bytes_from_jsvalue(source_value, &mut scratch)
+        {
+            if data.is_null() || len == 0 {
+                return Some(SetSource::Empty);
+            }
+            let bytes = std::slice::from_raw_parts(data, len as usize);
+            let Ok(s) = std::str::from_utf8(bytes) else {
+                return Some(SetSource::Empty);
+            };
+            let mut out = Vec::new();
+            for ch in s.chars() {
+                let mut buf = [0u8; 4];
+                let cs = ch.encode_utf8(&mut buf);
+                let hdr = crate::string::js_string_from_bytes(cs.as_ptr(), cs.len() as u32);
+                let char_value = crate::value::js_nanbox_string(hdr as i64);
+                out.push(bigint::coerce_for_kind(dst_kind, char_value));
+            }
+            return Some(SetSource::Buffered(out));
+        }
+        return Some(SetSource::Empty);
     }
     let bits = source_value.to_bits();
     let top16 = bits >> 48;
@@ -1396,6 +1575,46 @@ pub extern "C" fn js_typed_array_to_reversed(ta: *const TypedArrayHeader) -> *mu
     }
 }
 
+/// Spec default sort order for typed-array Numbers (`%TypedArray%.prototype.
+/// sort` without a comparator): ascending, every NaN at the end, and `-0`
+/// before `+0`. `partial_cmp` got neither right (NaN compared `Equal` so NaNs
+/// stayed in place; `-0 == +0` left zeros in input order).
+fn typed_array_default_number_cmp(a: &f64, b: &f64) -> std::cmp::Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => a.total_cmp(b),
+    }
+}
+
+/// Default-sort `ta`'s elements in place. BigInt kinds sort the raw 64-bit
+/// lanes (signed/unsigned) — `load_at` boxes each element as a fresh BigInt
+/// pointer, and sorting those bit patterns scrambled the array.
+unsafe fn typed_array_sort_default_in_place(ta: *mut TypedArrayHeader) {
+    let len = (*ta).length as usize;
+    if len <= 1 {
+        return;
+    }
+    match (*ta).kind {
+        KIND_BIGINT64 => {
+            let base = data_ptr_mut(ta) as *mut i64;
+            std::slice::from_raw_parts_mut(base, len).sort_unstable();
+        }
+        KIND_BIGUINT64 => {
+            let base = data_ptr_mut(ta) as *mut u64;
+            std::slice::from_raw_parts_mut(base, len).sort_unstable();
+        }
+        _ => {
+            let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta, i)).collect();
+            buf.sort_by(typed_array_default_number_cmp);
+            for (i, v) in buf.into_iter().enumerate() {
+                store_at(ta, i, v);
+            }
+        }
+    }
+}
+
 /// `ta.sort()` — default ascending numeric sort, **in place**. Per the
 /// JS spec, the same typed-array reference is returned. Issue #654.
 #[no_mangle]
@@ -1405,15 +1624,7 @@ pub extern "C" fn js_typed_array_sort_default(ta: *mut TypedArrayHeader) -> *mut
         return ta_clean;
     }
     unsafe {
-        let len = (*ta_clean).length as usize;
-        if len <= 1 {
-            return ta_clean;
-        }
-        let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta_clean, i)).collect();
-        buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for (i, v) in buf.into_iter().enumerate() {
-            store_at(ta_clean, i, v);
-        }
+        typed_array_sort_default_in_place(ta_clean);
         ta_clean
     }
 }
@@ -1468,12 +1679,11 @@ pub extern "C" fn js_typed_array_to_sorted_default(
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
         let out = typed_array_alloc(kind, len as u32);
-        // Materialize values, sort, store back.
-        let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta, i)).collect();
-        buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for (i, v) in buf.into_iter().enumerate() {
-            store_at(out, i, v);
-        }
+        // Copy the raw lanes, then reuse the in-place default sort (BigInt
+        // kinds sort raw 64-bit lanes; Number kinds use the spec NaN/-0 order).
+        let elem = (*ta).elem_size as usize;
+        ptr::copy_nonoverlapping(data_ptr(ta), data_ptr_mut(out), len * elem);
+        typed_array_sort_default_in_place(out);
         out
     }
 }
@@ -1938,6 +2148,11 @@ pub extern "C" fn js_typed_array_join_value(
     let separator = if separator_value.to_bits() == crate::value::TAG_UNDEFINED {
         ptr::null()
     } else {
+        // `ToString(separator)`: a Symbol separator is a TypeError (§7.1.17),
+        // not a "Symbol(…)" rendering.
+        if unsafe { crate::symbol::js_is_symbol(separator_value) } != 0 {
+            throw_type_error(b"Cannot convert a Symbol value to a string");
+        }
         crate::value::js_jsvalue_to_string(separator_value) as *const crate::string::StringHeader
     };
     js_typed_array_join(ta, separator)

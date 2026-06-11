@@ -173,7 +173,15 @@ pub struct HttpPendingRequest {
 pub struct HttpPendingUpgrade {
     pub server_handle: i64,
     pub request_handle: i64,
+    /// WebSocket path (real handshakes with a `Sec-WebSocket-Key`): the
+    /// perry-ext-ws connection id. 0 on the raw path.
     pub ws_id: i64,
+    /// #4973 raw path (keyless Upgrade requests): the perry-ext-net socket
+    /// id adopted from the connection. 0 on the WebSocket path.
+    pub raw_socket_id: i64,
+    /// #4973 raw path: unconsumed bytes that followed the request head —
+    /// Node's `upgradeHead` argument.
+    pub head: Vec<u8>,
 }
 
 // ============================================================================
@@ -596,7 +604,8 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                                 let busy = Arc::new(AtomicUsize::new(0));
                                 let read_active = Arc::new(AtomicBool::new(false));
                                 let close = Arc::new(tokio::sync::Notify::new());
-                                let io = TokioIo::new(ReadActivity::new(stream, read_active.clone()));
+                                let read_active_for_io = read_active.clone();
+                                let upgrade_tx_peek = upgrade_tx_for_spawn.clone();
                                 CONNECTIONS.lock().unwrap().insert(
                                     conn_id,
                                     TrackedConnection {
@@ -610,6 +619,40 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                                     q.push(server_handle);
                                 }
                                 tokio::spawn(async move {
+                                    // #4973 — when `'upgrade'` listeners exist, peek the
+                                    // request head before hyper writes anything: a keyless
+                                    // Upgrade request must reach JS as a raw net.Socket
+                                    // with NO response on the wire (Node semantics). Other
+                                    // connections replay the peeked bytes to hyper.
+                                    let has_upgrade_listeners =
+                                        get_handle::<HttpServer>(server_handle)
+                                            .map(|s| {
+                                                s.listeners
+                                                    .get("upgrade")
+                                                    .map(|v| !v.is_empty())
+                                                    .unwrap_or(false)
+                                            })
+                                            .unwrap_or(false);
+                                    let stream = if has_upgrade_listeners {
+                                        match crate::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
+                                            server_handle,
+                                            peer,
+                                            stream,
+                                            &upgrade_tx_peek,
+                                        )
+                                        .await
+                                        {
+                                            crate::raw_upgrade::PeekResult::Handled => {
+                                                CONNECTIONS.lock().unwrap().remove(&conn_id);
+                                                return;
+                                            }
+                                            crate::raw_upgrade::PeekResult::Passthrough(s) => s,
+                                        }
+                                    } else {
+                                        crate::raw_upgrade::PrefixedStream::empty(stream)
+                                    };
+                                    let io =
+                                        TokioIo::new(ReadActivity::new(stream, read_active_for_io));
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
                                         let upgrade_tx = upgrade_tx.clone();
@@ -801,6 +844,50 @@ pub unsafe extern "C" fn js_node_http_server_on(
     handle_to_pointer_f64(handle)
 }
 
+/// `server.removeAllListeners([event])` — drop every listener for `event`,
+/// or every listener for every event when `event_name_ptr` is null (#4973:
+/// test-http-upgrade-server clears its `'upgrade'` listeners between
+/// phases so the next Upgrade request falls through to `'request'`).
+///
+/// # Safety
+/// FFI entry; `event_name_ptr` is either null or a valid StringHeader.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_server_remove_all_listeners(
+    handle: i64,
+    event_name_ptr: *const StringHeader,
+) -> f64 {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        if event_name_ptr.is_null() {
+            s.listeners.clear();
+        } else if let Some(event) = read_string_header(event_name_ptr as *mut _) {
+            s.listeners.remove(&event);
+        }
+    }
+    handle_to_pointer_f64(handle)
+}
+
+/// `server.removeListener(event, cb)` / `server.off(event, cb)` — remove one
+/// registration of `cb` for `event` (last-registered first, matching Node).
+///
+/// # Safety
+/// FFI entry; pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_server_remove_listener(
+    handle: i64,
+    event_name_ptr: *const StringHeader,
+    callback: i64,
+) -> f64 {
+    let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        if let Some(cbs) = s.listeners.get_mut(&event) {
+            if let Some(pos) = cbs.iter().rposition(|&c| c == callback) {
+                cbs.remove(pos);
+            }
+        }
+    }
+    handle_to_pointer_f64(handle)
+}
+
 // ============================================================================
 // Request dispatch — hyper service fn + main-thread event loop
 // ============================================================================
@@ -839,18 +926,36 @@ async fn handle_request(
     // task that awaits hyper's upgraded stream + completes the
     // tungstenite server handshake + registers the resulting
     // WebSocketStream with perry-ext-ws.
+    //
+    // #4973 gates: (a) Node dispatches an Upgrade request as a normal
+    // `'request'` when the server has no `'upgrade'` listeners — the
+    // unconditional branch used to hijack it into a bogus 101; (b) only a
+    // real WebSocket handshake (`Sec-WebSocket-Key` present) belongs on the
+    // tungstenite path — keyless Upgrade requests are served Node-style by
+    // the raw peek path in raw_upgrade.rs and only reach hyper when no
+    // listener was attached at accept time.
     if crate::upgrade::is_websocket_upgrade(&req) {
-        return handle_websocket_upgrade(
-            server_handle,
-            peer,
-            req,
-            method,
-            url,
-            headers_lower,
-            raw_headers,
-            upgrade_tx,
-        )
-        .await;
+        let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
+            .map(|s| {
+                s.listeners
+                    .get("upgrade")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if has_upgrade_listeners && req.headers().contains_key("sec-websocket-key") {
+            return handle_websocket_upgrade(
+                server_handle,
+                peer,
+                req,
+                method,
+                url,
+                headers_lower,
+                raw_headers,
+                upgrade_tx,
+            )
+            .await;
+        }
     }
 
     let body_bytes = match req.collect().await {
@@ -981,6 +1086,8 @@ async fn handle_websocket_upgrade(
             server_handle,
             request_handle: im_handle,
             ws_id,
+            raw_socket_id: 0,
+            head: Vec::new(),
         };
         let _ = upgrade_tx.send(pending).await;
         perry_ffi::notify_main_thread();
@@ -1357,12 +1464,25 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
         while let Some(up) = try_recv_upgrade(h) {
-            crate::upgrade::fire_upgrade_listeners(
-                up.server_handle,
-                up.request_handle,
-                up.ws_id,
-                Vec::new(),
-            );
+            if up.raw_socket_id != 0 {
+                // #4973 raw path: make sure the adopted net.Socket's
+                // dispatch extensions + GC scanner are registered on the
+                // main thread before user code touches the socket.
+                perry_ext_net::ensure_adopted_socket_dispatch();
+                crate::upgrade::fire_upgrade_listeners(
+                    up.server_handle,
+                    up.request_handle,
+                    up.raw_socket_id,
+                    up.head,
+                );
+            } else {
+                crate::upgrade::fire_upgrade_listeners(
+                    up.server_handle,
+                    up.request_handle,
+                    up.ws_id,
+                    Vec::new(),
+                );
+            }
             count += 1;
         }
         while let Some(p) = try_recv_pending_nonblocking(h) {

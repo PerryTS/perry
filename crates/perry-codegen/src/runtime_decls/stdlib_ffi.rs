@@ -194,6 +194,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_server_listening", I32, &[I64]);
     module.declare_function("js_node_http_server_listening_value", DOUBLE, &[I64]);
     module.declare_function("js_node_http_server_on", DOUBLE, &[I64, I64, I64]);
+    // #4973 http(s).Server.call(this,…) + net socket.setEncoding decls live in
+    // objects.rs's declare chain to keep this file under the 2000-line gate.
     // IncomingMessage:
     module.declare_function("js_node_http_im_method", I64, &[I64]);
     module.declare_function("js_node_http_im_url", I64, &[I64]);

@@ -203,7 +203,31 @@ pub fn try_lower_func_ref_call(
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
         lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
+    // OrdinaryCallBindThis for a receiverless call: `f()` binds `this` to
+    // undefined (sloppy bodies then substitute globalThis at the read).
+    // Without the reset, a bare call inside a method body leaks the
+    // enclosing dispatch's IMPLICIT_THIS into the callee — a nested
+    // `function inner(){ return this; }` called as `inner()` inside
+    // `o.m()` must NOT see `o` (#3576). Gated on the callee actually
+    // reading dynamic `this` so ordinary helper calls pay nothing. Args
+    // are lowered BEFORE the reset: `this` inside an argument expression
+    // still sees the enclosing binding.
+    let resets_this = ctx.funcs_reading_dynamic_this.contains(fid);
+    let prev_this = if resets_this {
+        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        Some(
+            ctx.block()
+                .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &undef)]),
+        )
+    } else {
+        None
+    };
     let result = ctx.block().call(DOUBLE, &fname, &arg_slices);
+    if let Some(prev) = &prev_this {
+        let _ = ctx
+            .block()
+            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, prev)]);
+    }
     if ctx.local_generator_funcs.contains(fid) {
         let wrap_ptr = format!("@__perry_wrap_{}", fname);
         let closure_handle =

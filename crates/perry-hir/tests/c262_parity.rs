@@ -313,22 +313,48 @@ fn array_elisions_lower_as_holes_not_undefined_values() {
     );
 }
 
+// A sloppy implicit global (`y = 1` with no declaration) is a real property of
+// globalThis (spec CreateGlobalVarBinding), not a synthesized module local
+// (#3575). The write lowers to a `PropertySet` whose receiver is the value
+// globalThis (`PropertyGet { GlobalGet(0), "globalThis" }`); the later read
+// resolves through the runtime globalThis fallback. The old lowering minted a
+// `Let y = undefined` local, which made `globalThis.y` invisible.
+fn implicit_global_property_set_value<'a>(expr: &'a Expr, name: &str) -> Option<&'a Expr> {
+    let Expr::PropertySet {
+        object,
+        property,
+        value,
+    } = expr
+    else {
+        return None;
+    };
+    if property != name {
+        return None;
+    }
+    match object.as_ref() {
+        Expr::PropertyGet {
+            object: inner,
+            property: gt,
+        } if gt == "globalThis" && matches!(inner.as_ref(), Expr::GlobalGet(0)) => {
+            Some(value.as_ref())
+        }
+        _ => None,
+    }
+}
+
 #[test]
-fn sloppy_assignment_expression_creates_storage_before_following_getvalue() {
+fn sloppy_assignment_expression_targets_global_object_not_a_local() {
     let module = lower_src("const result = (y = 1) + y;");
-    let y_id = module
-        .init
-        .iter()
-        .find_map(|stmt| match stmt {
-            Stmt::Let {
-                id,
-                name,
-                init: Some(Expr::Undefined),
-                ..
-            } if name == "y" => Some(*id),
-            _ => None,
-        })
-        .expect("sloppy assignment target should be predeclared");
+
+    // No `Let y` is minted — the binding lives on globalThis.
+    assert!(
+        !module.init.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::Let { name, .. } if name == "y"
+        )),
+        "sloppy global `y` must not be a module local: {:?}",
+        module.init
+    );
 
     let Expr::Binary {
         op: BinaryOp::Add,
@@ -339,29 +365,33 @@ fn sloppy_assignment_expression_creates_storage_before_following_getvalue() {
         panic!("result should lower as addition");
     };
 
+    let set_value = implicit_global_property_set_value(left.as_ref(), "y")
+        .expect("assignment should target globalThis.y");
+    assert!(is_number_literal(set_value, 1.0), "{set_value:?}");
+    // The read `+ y` resolves through the runtime globalThis fallback.
     assert!(
-        matches!(left.as_ref(), Expr::LocalSet(id, value) if *id == y_id && is_number_literal(value, 1.0)),
-        "{left:?}"
+        matches!(
+            right.as_ref(),
+            Expr::Call { callee, .. }
+                if matches!(callee.as_ref(),
+                    Expr::ExternFuncRef { name, .. } if name == "js_global_get_or_throw_unresolved")
+        ),
+        "{right:?}"
     );
-    assert!(matches!(right.as_ref(), Expr::LocalGet(id) if *id == y_id));
 }
 
 #[test]
-fn sloppy_assignment_in_if_test_creates_storage_before_following_getvalue() {
+fn sloppy_assignment_in_if_test_targets_global_object_not_a_local() {
     let module = lower_src("if ((y = 1) + y !== 2) { throw new Error('bad'); }");
-    let y_id = module
-        .init
-        .iter()
-        .find_map(|stmt| match stmt {
-            Stmt::Let {
-                id,
-                name,
-                init: Some(Expr::Undefined),
-                ..
-            } if name == "y" => Some(*id),
-            _ => None,
-        })
-        .expect("sloppy assignment target in if test should be predeclared");
+
+    assert!(
+        !module.init.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::Let { name, .. } if name == "y"
+        )),
+        "sloppy global `y` must not be a module local: {:?}",
+        module.init
+    );
 
     let Some(Stmt::If { condition, .. }) = module
         .init
@@ -383,11 +413,18 @@ fn sloppy_assignment_in_if_test_creates_storage_before_following_getvalue() {
         panic!("comparison lhs should lower as addition, got {left:?}");
     };
 
+    let set_value = implicit_global_property_set_value(left.as_ref(), "y")
+        .expect("assignment should target globalThis.y");
+    assert!(is_number_literal(set_value, 1.0), "{set_value:?}");
     assert!(
-        matches!(left.as_ref(), Expr::LocalSet(id, value) if *id == y_id && is_number_literal(value, 1.0)),
-        "{left:?}"
+        matches!(
+            right.as_ref(),
+            Expr::Call { callee, .. }
+                if matches!(callee.as_ref(),
+                    Expr::ExternFuncRef { name, .. } if name == "js_global_get_or_throw_unresolved")
+        ),
+        "{right:?}"
     );
-    assert!(matches!(right.as_ref(), Expr::LocalGet(id) if *id == y_id));
 }
 
 #[test]

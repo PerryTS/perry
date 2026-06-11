@@ -899,6 +899,11 @@ pub extern "C" fn js_array_join_value(
     let separator = if separator_value.to_bits() == crate::value::TAG_UNDEFINED {
         ptr::null()
     } else {
+        // `ToString(separator)`: a Symbol separator throws a TypeError
+        // (§7.1.17) instead of rendering as "Symbol(…)".
+        if unsafe { crate::symbol::js_is_symbol(separator_value) } != 0 {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+        }
         crate::value::js_jsvalue_to_string(separator_value) as *const crate::string::StringHeader
     };
     js_array_join(arr, separator)

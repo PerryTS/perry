@@ -47,6 +47,15 @@ extern "C" {
         event_name_ptr: *const StringHeader,
         callback: i64,
     ) -> f64;
+    fn js_node_http_server_remove_all_listeners(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+    ) -> f64;
+    fn js_node_http_server_remove_listener(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+        callback: i64,
+    ) -> f64;
     fn js_node_http_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
     fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64;
     fn js_node_https_server_close(server_handle: i64, callback: i64);
@@ -198,6 +207,9 @@ pub const HTTP_SERVER_METHODS: &[&str] = &[
     "address",
     "on",
     "addListener",
+    "removeAllListeners",
+    "removeListener",
+    "off",
     "setTimeout",
     "@@__perry_wk_asyncDispose",
 ];
@@ -211,6 +223,9 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
         "address" => Some(b"address"),
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "removeAllListeners" => Some(b"removeAllListeners"),
+        "removeListener" => Some(b"removeListener"),
+        "off" => Some(b"off"),
         "setTimeout" => Some(b"setTimeout"),
         "@@__perry_wk_asyncDispose" => Some(b"@@__perry_wk_asyncDispose"),
         _ => None,
@@ -345,6 +360,30 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 js_node_https_server_on(handle, event_ptr, cb);
             } else {
                 js_node_http_server_on(handle, event_ptr, cb);
+            }
+            self_ref
+        }
+        // #4973: `server.removeAllListeners([event])` — http/1 only for now
+        // (https/h2 listener registries wrap an HttpServer base; the http
+        // entry covers the plain `node:http` surface the upgrade tests use).
+        "removeAllListeners" => {
+            let event_ptr = args
+                .first()
+                .map(|&a| string_arg(a))
+                .unwrap_or(std::ptr::null());
+            if !is_h2 && !is_https {
+                js_node_http_server_remove_all_listeners(handle, event_ptr);
+            }
+            self_ref
+        }
+        "removeListener" | "off" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            let cb = closure_arg(Some(args[1]));
+            if !is_h2 && !is_https {
+                js_node_http_server_remove_listener(handle, event_ptr, cb);
             }
             self_ref
         }

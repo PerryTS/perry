@@ -1606,13 +1606,20 @@ impl JsEmitter {
                 self.emit_expr(receiver);
                 self.output.push(')');
             }
-            Expr::ReflectSet { target, key, value } => {
+            Expr::ReflectSet {
+                target,
+                key,
+                value,
+                receiver,
+            } => {
                 self.output.push_str("Reflect.set(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(key);
                 self.output.push_str(", ");
                 self.emit_expr(value);
+                self.output.push_str(", ");
+                self.emit_expr(receiver);
                 self.output.push(')');
             }
             Expr::ReflectHas { target, key } => {

@@ -72,10 +72,12 @@ use raw_bridge::RawReadState;
 // perry-runtime (split out to keep lib.rs under the 2000-line gate). The
 // `#[no_mangle]` setter/setTimeout symbols re-export at the crate root; the
 // validator `extern` declarations are imported for the listen/connect sites.
+mod adopt;
+pub use adopt::{adopt_upgraded_tcp_stream, ensure_adopted_socket_dispatch};
 mod option_setters;
 pub use option_setters::{
     js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
-    js_net_socket_set_timeout, js_net_socket_set_type_of_service,
+    js_net_socket_set_encoding, js_net_socket_set_timeout, js_net_socket_set_type_of_service,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
 
@@ -88,7 +90,7 @@ use crate::tls::do_tls_handshake;
 
 // ─── Transport enum (plain or TLS, swappable at runtime) ─────────────────────
 
-enum Transport {
+pub(crate) enum Transport {
     Plain(TcpStream),
     Tls(Box<TlsStream<TcpStream>>),
 }
@@ -187,6 +189,16 @@ pub(crate) mod statics {
     pub fn servers() -> &'static Mutex<HashMap<i64, ServerState>> {
         static S: OnceLock<Mutex<HashMap<i64, ServerState>>> = OnceLock::new();
         S.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// #4973 — per-socket read encoding set via `socket.setEncoding(enc)`.
+    /// When present, the main-thread pump delivers `'data'` as a decoded
+    /// string instead of a Buffer (Node readable-stream semantics). Side
+    /// table (not a SocketState field) so the many SocketState literal
+    /// constructions stay untouched.
+    pub fn encodings() -> &'static Mutex<HashMap<i64, String>> {
+        static E: OnceLock<Mutex<HashMap<i64, String>>> = OnceLock::new();
+        E.get_or_init(|| Mutex::new(HashMap::new()))
     }
 }
 
@@ -1268,7 +1280,7 @@ pub(crate) fn spawn_socket_task(
 }
 
 /// The read/write/command loop. Shared by plain-TCP and direct-TLS paths.
-async fn run_socket_task(
+pub(crate) async fn run_socket_task(
     id: i64,
     initial_transport: Transport,
     rx: &mut mpsc::UnboundedReceiver<SocketCommand>,
@@ -1524,16 +1536,33 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 if cbs.is_empty() {
                     continue;
                 }
-                let buf = alloc_buffer(&bytes);
-                if buf.is_null() {
-                    continue;
-                }
-                // POINTER_TAG over the buffer pointer.
-                let buf_f64 =
-                    f64::from_bits(0x7FFD_0000_0000_0000 | (buf as u64 & 0x0000_FFFF_FFFF_FFFF));
+                // #4973: `socket.setEncoding(enc)` switches 'data' delivery
+                // from Buffers to decoded strings (Node readable-stream
+                // semantics). 'hex'/'base64' render their text forms; the
+                // remaining text encodings decode as UTF-8 (lossy).
+                let encoding = statics::encodings().lock().unwrap().get(&id).cloned();
+                let payload_f64 = if let Some(enc) = encoding {
+                    let s = match enc.as_str() {
+                        "hex" => bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                        "base64" => adopt::base64_encode(&bytes),
+                        _ => String::from_utf8_lossy(&bytes).into_owned(),
+                    };
+                    let hdr = alloc_string(&s);
+                    f64::from_bits(
+                        0x7FFF_0000_0000_0000 | (hdr.as_raw() as u64 & 0x0000_FFFF_FFFF_FFFF),
+                    )
+                } else {
+                    let buf = alloc_buffer(&bytes);
+                    if buf.is_null() {
+                        continue;
+                    }
+                    // POINTER_TAG over the buffer pointer.
+                    f64::from_bits(0x7FFD_0000_0000_0000 | (buf as u64 & 0x0000_FFFF_FFFF_FFFF))
+                };
                 for cb in cbs {
                     if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(buf_f64);
+                        let _ =
+                            JsClosure::from_raw(cb as *const RawClosureHeader).call1(payload_f64);
                     }
                 }
                 lifecycle::drain_once_listeners(id, "data");
@@ -1577,6 +1606,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 statics::listeners().lock().unwrap().remove(&id);
                 statics::sockets().lock().unwrap().remove(&id);
                 statics::once_flags().lock().unwrap().remove(&id);
+                statics::encodings().lock().unwrap().remove(&id);
             }
             // Issue #1123 followup — server-side events. The
             // accept loop pushes `ServerConnection`/`ServerListening`/

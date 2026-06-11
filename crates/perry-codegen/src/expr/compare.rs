@@ -418,6 +418,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let res = blk.call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
                 return Ok(res);
             }
+            // Strict ===/!== where the operands are NOT both certainly
+            // numeric must NOT fall to the bare fcmp tail: a declared
+            // `Number` local can carry an object at runtime (`var a = 2;
+            // f(){ a = o; } f(); a === o` — the static type lies, and fcmp
+            // on NaN-boxed pointers is unordered → permanently false).
+            // js_eq answers correctly for every runtime shape, including
+            // the honest number-vs-object case (#3576 probe family).
+            if matches!(op, CompareOp::Eq | CompareOp::Ne) && !both_numeric {
+                let l = lower_expr(ctx, left)?;
+                let r = lower_expr(ctx, right)?;
+                let blk = ctx.block();
+                let l_bits = blk.bitcast_double_to_i64(&l);
+                let r_bits = blk.bitcast_double_to_i64(&r);
+                let result_bits = blk.call(I64, "js_eq", &[(I64, &l_bits), (I64, &r_bits)]);
+                if matches!(op, CompareOp::Ne) {
+                    let cmp = blk.icmp_eq(I64, &result_bits, crate::nanbox::TAG_TRUE_I64);
+                    let inv = blk.xor(crate::types::I1, &cmp, "true");
+                    let tagged = blk.select(
+                        crate::types::I1,
+                        &inv,
+                        I64,
+                        crate::nanbox::TAG_TRUE_I64,
+                        crate::nanbox::TAG_FALSE_I64,
+                    );
+                    return Ok(blk.bitcast_i64_to_double(&tagged));
+                }
+                return Ok(blk.bitcast_i64_to_double(&result_bits));
+            }
             let l = lower_expr(ctx, left)?;
             let r = lower_expr(ctx, right)?;
             let pred = match op {

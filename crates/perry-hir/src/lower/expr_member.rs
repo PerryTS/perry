@@ -1205,10 +1205,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         property: property_name,
                     });
                 } else if module_name == "events"
+                    // Any native instance registered under module `events` is
+                    // an emitter; the class name can be an alias of the
+                    // constructor binding rather than the canonical
+                    // "EventEmitter" — `var EE = require('events'); new EE()`
+                    // registers class "EE" (#4995). Gating on the canonical
+                    // names sent alias reads down the zero-arg
+                    // NativeMethodCall path, so `typeof emitter.on` CALLED
+                    // `events.on()` and threw ERR_INVALID_ARG_TYPE.
                     && (matches!(
-                        class_name.as_str(),
-                        "EventEmitter" | "EventEmitterAsyncResource"
-                    ) && (matches!(
                         property_name.as_str(),
                         "on" | "addListener"
                             | "once"
@@ -1225,7 +1230,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | "setMaxListeners"
                             | "getMaxListeners"
                     ) || (class_name == "EventEmitterAsyncResource"
-                        && property_name == "emitDestroy")))
+                        && property_name == "emitDestroy"))
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {

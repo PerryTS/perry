@@ -25,14 +25,21 @@ fn typed_array_view_to_index(value: f64) -> i64 {
     if jv.is_undefined() {
         return 0;
     }
-    let n = jv.to_number();
+    // Real `ToNumber`: runs `valueOf`/`Symbol.toPrimitive` on objects
+    // (observable, may throw) and throws TypeError on a Symbol or BigInt
+    // argument — `jv.to_number()` did none of that, so an object byteOffset
+    // silently became 0 and Symbol offsets/lengths never threw.
+    let n = crate::typedarray::jsvalue_to_f64(value);
     if n.is_nan() {
         return 0;
     }
-    if n < 0.0 || n > 9_007_199_254_740_991.0 {
+    // `ToIntegerOrInfinity` truncates BEFORE the range check, so a value in
+    // (-1, 0) is 0, not a RangeError.
+    let integer = n.trunc();
+    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
         throw_range_error(b"Invalid typed array length");
     }
-    n.trunc() as i64
+    integer as i64
 }
 
 /// `new TA(buffer, byteOffset, length?)` for the non-`Uint8Array` typed-array

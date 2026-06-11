@@ -969,6 +969,26 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             );
         }
 
+        // Symbol-keyed lookup: route through the SYMBOL_PROPERTIES side
+        // table (mirrors js_object_has_own) — string-coercing a Symbol key
+        // below would never match and reported every symbol prop as
+        // non-enumerable.
+        if crate::symbol::js_is_symbol(key_value) != 0 {
+            let bits = obj_value.to_bits();
+            if (bits >> 48) == 0x7FFE {
+                // ClassRef receivers: statics live in the class registry and
+                // are non-enumerable like builtin statics.
+                return f64::from_bits(TAG_FALSE);
+            }
+            if !crate::symbol::js_object_has_own_symbol(obj_value, key_value) {
+                return f64::from_bits(TAG_FALSE);
+            }
+            let owner = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+            let sym = (key_value.to_bits() & crate::value::POINTER_MASK) as usize;
+            let enumerable = crate::symbol::symbol_property_is_enumerable(owner, sym);
+            return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
+        }
+
         let key_str = crate::builtins::js_string_coerce(key_value);
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);
@@ -1493,6 +1513,64 @@ pub extern "C" fn js_object_define_property(
         }
 
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+            // A Symbol key on a TypedArray is an ORDINARY define — store it in
+            // the symbol side tables (string-coercing it would file the value
+            // under a "Symbol(x)" string name, unreachable via `ta[sym]`),
+            // honoring accessor descriptors and recording the attributes
+            // (defineProperty defaults absent fields to false, unlike a plain
+            // `ta[sym] = v` write). Mirrors the generic symbol-define block.
+            if crate::symbol::js_is_symbol(key_value) != 0 {
+                let desc_ptr = extract_obj_ptr(descriptor_value);
+                if desc_ptr.is_null() {
+                    return obj_value;
+                }
+                let has_get = desc_has_field(descriptor_value, b"get");
+                let has_set = desc_has_field(descriptor_value, b"set");
+                let has_accessor = has_get || has_set;
+                if has_accessor {
+                    let get_field = desc_read_field(descriptor_value, b"get");
+                    let set_field = desc_read_field(descriptor_value, b"set");
+                    let get_bits = if !has_get || get_field.is_undefined() {
+                        0
+                    } else {
+                        crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+                    };
+                    let set_bits = if !has_set || set_field.is_undefined() {
+                        0
+                    } else {
+                        crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+                    };
+                    crate::symbol::set_symbol_accessor_property(
+                        obj_value, key_value, get_bits, set_bits,
+                    );
+                } else {
+                    let value_field = desc_read_field(descriptor_value, b"value");
+                    crate::symbol::js_object_set_symbol_property(
+                        obj_value,
+                        key_value,
+                        f64::from_bits(value_field.bits()),
+                    );
+                }
+                let read_flag = |name: &[u8]| -> Option<bool> {
+                    if !desc_has_field(descriptor_value, name) {
+                        return None;
+                    }
+                    let v = desc_read_field(descriptor_value, name);
+                    Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+                };
+                let owner = crate::symbol::obj_key_from_f64(obj_value);
+                let sym_key = crate::symbol::sym_key_from_f64(key_value);
+                crate::symbol::set_symbol_property_attrs(
+                    owner,
+                    sym_key,
+                    PropertyAttrs::new(
+                        read_flag(b"writable").unwrap_or(has_accessor),
+                        read_flag(b"enumerable").unwrap_or(false),
+                        read_flag(b"configurable").unwrap_or(false),
+                    ),
+                );
+                return obj_value;
+            }
             let key_str = crate::builtins::js_string_coerce(key_value);
             if key_str.is_null() {
                 return obj_value;

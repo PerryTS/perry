@@ -508,6 +508,13 @@ pub(crate) struct CrossModuleCtx {
     /// from the lowered iterator-return body shape and used by call lowering
     /// to attach instances to the closure-owned `g.prototype`.
     pub local_generator_funcs: std::collections::HashSet<u32>,
+    /// FuncIds of locally-defined plain functions whose body reads the
+    /// dynamic `this` binding (directly or via a this-capturing arrow).
+    /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS
+    /// slot to `undefined` for the duration of the call so the callee's
+    /// sloppy/strict `this` resolution sees "no receiver" instead of a
+    /// leaked receiver from an enclosing method dispatch (#3576).
+    pub funcs_reading_dynamic_this: std::collections::HashSet<u32>,
     pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.

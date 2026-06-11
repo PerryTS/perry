@@ -482,6 +482,30 @@ pub(crate) fn lower_string_method(
                 );
                 return Ok(nanbox_string_inline(blk, &result));
             }
+            // A replacement whose shape codegen can't prove (not a Closure
+            // literal/FuncRef/function-typed local AND not a static string)
+            // may still be a FUNCTION at runtime — an IIFE-returned closure,
+            // a call result, a property read (test262 10.4.3-1-102-s). Route
+            // those through the `_dyn` runtime dispatchers, which check
+            // callability before ToString-coercing.
+            if !repl_is_str {
+                let runtime_fn = match (needle_is_regex, property) {
+                    (true, "replaceAll") => "js_string_replace_all_regex_dyn",
+                    (true, _) => "js_string_replace_regex_dyn",
+                    (false, "replaceAll") => "js_string_replace_all_string_dyn",
+                    (false, _) => "js_string_replace_string_dyn",
+                };
+                let result = blk.call(
+                    I64,
+                    runtime_fn,
+                    &[
+                        (I64, &recv_handle),
+                        (I64, &needle_handle),
+                        (DOUBLE, &repl_box),
+                    ],
+                );
+                return Ok(nanbox_string_inline(blk, &result));
+            }
             // Issue #214: SSO-safe unbox of replacement string; a non-static-
             // string replacement is `ToString`-coerced (after `searchValue`).
             let repl_handle = if repl_is_str {

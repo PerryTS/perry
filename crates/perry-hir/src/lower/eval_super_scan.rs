@@ -54,6 +54,89 @@ pub(crate) fn throw_eval_super_unexpected_expr() -> Expr {
     throw_eval_syntax_error_expr("'super' keyword unexpected here")
 }
 
+/// Scan parsed eval-body statements for an abrupt completion that is illegal at
+/// the top level of eval code: an unlabeled `break`/`continue` with no enclosing
+/// iteration (or `switch`, for `break`) inside the eval source, or a `return`
+/// anywhere outside a contained function. Both are *parse-level* SyntaxErrors in
+/// the spec (the eval source is parsed for the goal symbol `Script`), thrown
+/// when the eval call evaluates.
+///
+/// SWC's error-recovery parser accepts `break;`/`continue;`/`return;` at script
+/// top level (emitting only a recoverable warning), so they survive into the
+/// HIR fold and either crash a downstream closure-lowering pass (`break`/
+/// `continue`) or run silently (`return`). Detecting them here lets the eval
+/// fold emit the spec-faithful runtime `SyntaxError` instead. Returns the throw
+/// expression on the first violation found. (test262 language/eval-code
+/// {direct,indirect}/parse-failure-{3,4,5})
+pub(crate) fn check_eval_illegal_abrupt(stmts: &[ast::Stmt]) -> Option<Expr> {
+    fn walk(stmt: &ast::Stmt, loop_depth: u32, switch_depth: u32) -> Option<&'static str> {
+        use ast::Stmt as S;
+        match stmt {
+            // A `return` is never legal at eval top level (eval code is Script,
+            // not a function body). Labeled `break`/`continue` are assumed to
+            // target an enclosing labeled statement in the body and are left
+            // alone to avoid false positives.
+            S::Return(_) => Some("'return' statement is not allowed here"),
+            S::Break(b) => {
+                if b.label.is_none() && loop_depth == 0 && switch_depth == 0 {
+                    Some("Illegal break statement")
+                } else {
+                    None
+                }
+            }
+            S::Continue(c) => {
+                if c.label.is_none() && loop_depth == 0 {
+                    Some("Illegal continue statement")
+                } else {
+                    None
+                }
+            }
+            S::Block(blk) => walk_list(&blk.stmts, loop_depth, switch_depth),
+            S::If(i) => walk(&i.cons, loop_depth, switch_depth).or_else(|| {
+                i.alt
+                    .as_deref()
+                    .and_then(|a| walk(a, loop_depth, switch_depth))
+            }),
+            S::Labeled(l) => walk(&l.body, loop_depth, switch_depth),
+            S::With(w) => walk(&w.body, loop_depth, switch_depth),
+            S::Try(t) => walk_list(&t.block.stmts, loop_depth, switch_depth)
+                .or_else(|| {
+                    t.handler
+                        .as_ref()
+                        .and_then(|h| walk_list(&h.body.stmts, loop_depth, switch_depth))
+                })
+                .or_else(|| {
+                    t.finalizer
+                        .as_ref()
+                        .and_then(|f| walk_list(&f.stmts, loop_depth, switch_depth))
+                }),
+            // Iteration bodies admit `break`/`continue`.
+            S::While(s) => walk(&s.body, loop_depth + 1, switch_depth),
+            S::DoWhile(s) => walk(&s.body, loop_depth + 1, switch_depth),
+            S::For(s) => walk(&s.body, loop_depth + 1, switch_depth),
+            S::ForIn(s) => walk(&s.body, loop_depth + 1, switch_depth),
+            S::ForOf(s) => walk(&s.body, loop_depth + 1, switch_depth),
+            // `switch` admits `break` (but not `continue`).
+            S::Switch(sw) => sw
+                .cases
+                .iter()
+                .find_map(|case| walk_list(&case.cons, loop_depth, switch_depth + 1)),
+            // Function / class bodies own their own abrupt completions — opaque.
+            _ => None,
+        }
+    }
+    fn walk_list(stmts: &[ast::Stmt], loop_depth: u32, switch_depth: u32) -> Option<&'static str> {
+        stmts.iter().find_map(|s| walk(s, loop_depth, switch_depth))
+    }
+    walk_list(stmts, 0, 0).map(throw_eval_syntax_error_expr)
+}
+
+/// Public wrapper around the eval-`SyntaxError` throw expression, for the
+/// general indirect-eval fold's parse-failure / illegal-statement paths.
+pub(crate) fn throw_eval_syntax_error_public(msg: &str) -> Expr {
+    throw_eval_syntax_error_expr(msg)
+}
+
 fn throw_eval_syntax_error_expr(msg: &str) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {

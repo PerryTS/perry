@@ -454,8 +454,20 @@ fn lower_assignment_target(
                     "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
                     name
                 );
-                let id = ctx.define_sloppy_implicit_global(name);
-                Ok(Expr::LocalSet(id, value))
+                // Sloppy implicit global — a real globalThis property, not
+                // a module local (see the sibling arm in lower_expr.rs).
+                // NOTE: `GlobalGet(0)` alone is a by-name routing SENTINEL in
+                // codegen (bare reads lower to 0.0) — the write must target
+                // the VALUE globalThis, which the `PropertyGet { GlobalGet(0),
+                // "globalThis" }` shape resolves to the real global object.
+                Ok(Expr::PropertySet {
+                    object: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: "globalThis".to_string(),
+                    }),
+                    property: name,
+                    value,
+                })
             }
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {

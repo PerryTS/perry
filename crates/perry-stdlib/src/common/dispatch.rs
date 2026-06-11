@@ -83,9 +83,54 @@ unsafe fn dispatch_async_local_storage_method(
     })
 }
 
-#[cfg(feature = "bundled-events")]
+/// Shared `extern "C"` surface of the EventEmitter implementation. Both
+/// perry-stdlib (`bundled-events`) and perry-ext-events export these exact
+/// symbols, kept byte-identical per #3072. The dispatch arms below call
+/// through the linker-resolved symbol instead of `crate::events::*` so that
+/// when the well-known flip links perry-ext-events, dynamic dispatch
+/// consults the SAME handle registry the constructors used. An in-crate call
+/// always hit perry-stdlib's registry and returned `None` for ext-events
+/// handles — every dynamic `.on`/`.emit`/`.setMaxListeners` on an emitter
+/// silently no-op'd and method-value reads came back `undefined` (#4995).
+/// Mirrors the sqlite duplicate-symbol contract noted in
+/// `compile/optimized_libs.rs` (#643).
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+extern "C" {
+    fn js_event_emitter_is_handle(handle: i64) -> bool;
+    fn js_event_emitter_on(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_once(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_prepend_listener(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_prepend_once_listener(
+        handle: i64,
+        event_bits: i64,
+        listener_bits: i64,
+    ) -> i64;
+    fn js_event_emitter_remove_listener(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_remove_all_listeners(
+        handle: i64,
+        args_ptr: *const perry_runtime::ArrayHeader,
+    ) -> i64;
+    fn js_event_emitter_emit(
+        handle: i64,
+        event_bits: i64,
+        args_ptr: *mut perry_runtime::ArrayHeader,
+    ) -> f64;
+    fn js_event_emitter_listener_count(handle: i64, event_bits: i64, listener_bits: i64) -> f64;
+    fn js_event_emitter_listeners(handle: i64, event_bits: i64) -> *mut perry_runtime::ArrayHeader;
+    fn js_event_emitter_raw_listeners(
+        handle: i64,
+        event_bits: i64,
+    ) -> *mut perry_runtime::ArrayHeader;
+    fn js_event_emitter_event_names(handle: i64) -> *mut perry_runtime::ArrayHeader;
+    fn js_event_emitter_set_max_listeners(handle: i64, n: f64) -> i64;
+    fn js_event_emitter_get_max_listeners(handle: i64) -> f64;
+    fn js_event_emitter_domain_value(handle: i64) -> f64;
+    fn js_event_emitter_new_with_options(options: f64) -> i64;
+}
+
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
 unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
-    if !crate::events::is_event_emitter_handle(handle) {
+    if !js_event_emitter_is_handle(handle) {
         return None;
     }
 
@@ -99,40 +144,64 @@ unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64])
         f64::from_bits(POINTER_TAG_BITS | (ptr as u64 & POINTER_MASK_BITS))
     };
 
+    // EventEmitterAsyncResource extras exist only in the bundled impl;
+    // perry-ext-events has no async-resource constructor, so its handles
+    // never satisfy this probe.
+    #[cfg(feature = "bundled-events")]
+    if crate::events::is_event_emitter_async_resource_handle(handle) {
+        match method {
+            "asyncId" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_id(
+                    handle,
+                ));
+            }
+            "triggerAsyncId" => {
+                return Some(
+                    crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
+                );
+            }
+            "asyncResource" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_resource(handle));
+            }
+            "emitDestroy" => {
+                return Some(crate::events::js_event_emitter_async_resource_emit_destroy(
+                    handle,
+                ));
+            }
+            _ => {}
+        }
+    }
+
     let value = match method {
         "on" | "addListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_on(handle, event_bits(0), event_bits(1));
+            js_event_emitter_on(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "once" if args.len() >= 2 => {
-            crate::events::js_event_emitter_once(handle, event_bits(0), event_bits(1));
+            js_event_emitter_once(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "prependListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_prepend_listener(handle, event_bits(0), event_bits(1));
+            js_event_emitter_prepend_listener(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "prependOnceListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_prepend_once_listener(
-                handle,
-                event_bits(0),
-                event_bits(1),
-            );
+            js_event_emitter_prepend_once_listener(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_remove_listener(handle, event_bits(0), event_bits(1));
+            js_event_emitter_remove_listener(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "removeAllListeners" => {
-            crate::events::js_event_emitter_remove_all_listeners(handle, pack_args_array(args));
+            js_event_emitter_remove_all_listeners(handle, pack_args_array(args));
             nanbox_handle_value(handle)
         }
         "emit" => {
             let rest = if args.len() > 1 { &args[1..] } else { &[] };
-            crate::events::js_event_emitter_emit(handle, event_bits(0), pack_args_array(rest))
+            js_event_emitter_emit(handle, event_bits(0), pack_args_array(rest))
         }
-        "listenerCount" if !args.is_empty() => crate::events::js_event_emitter_listener_count(
+        "listenerCount" if !args.is_empty() => js_event_emitter_listener_count(
             handle,
             event_bits(0),
             args.get(1)
@@ -140,40 +209,27 @@ unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64])
                 .map(|value| value.to_bits() as i64)
                 .unwrap_or(TAG_UNDEFINED_BITS),
         ),
-        "listeners" if !args.is_empty() => nanbox_array(crate::events::js_event_emitter_listeners(
-            handle,
-            event_bits(0),
-        )),
-        "rawListeners" if !args.is_empty() => nanbox_array(
-            crate::events::js_event_emitter_raw_listeners(handle, event_bits(0)),
-        ),
-        "eventNames" => nanbox_array(crate::events::js_event_emitter_event_names(handle)),
+        "listeners" if !args.is_empty() => {
+            nanbox_array(js_event_emitter_listeners(handle, event_bits(0)))
+        }
+        "rawListeners" if !args.is_empty() => {
+            nanbox_array(js_event_emitter_raw_listeners(handle, event_bits(0)))
+        }
+        "eventNames" => nanbox_array(js_event_emitter_event_names(handle)),
         "setMaxListeners" if !args.is_empty() => {
-            crate::events::js_event_emitter_set_max_listeners(handle, args[0]);
+            js_event_emitter_set_max_listeners(handle, args[0]);
             nanbox_handle_value(handle)
         }
-        "getMaxListeners" => crate::events::js_event_emitter_get_max_listeners(handle),
-        "domain" => crate::events::js_event_emitter_domain_value(handle),
-        "asyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_async_id(handle)
-        }
-        "triggerAsyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_trigger_async_id(handle)
-        }
-        "asyncResource" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_async_resource(handle)
-        }
-        "emitDestroy" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_emit_destroy(handle)
-        }
+        "getMaxListeners" => js_event_emitter_get_max_listeners(handle),
+        "domain" => js_event_emitter_domain_value(handle),
         _ => return None,
     };
     Some(value)
 }
 
-#[cfg(feature = "bundled-events")]
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
 unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option<f64> {
-    if !crate::events::is_event_emitter_handle(handle) {
+    if !js_event_emitter_is_handle(handle) {
         return None;
     }
 
@@ -188,6 +244,7 @@ unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option
         js_class_method_bind(nanbox_handle_value(handle), method.as_ptr(), method.len())
     };
 
+    #[cfg(feature = "bundled-events")]
     if crate::events::is_event_emitter_async_resource_handle(handle) {
         match property {
             "asyncId" => {
@@ -275,7 +332,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
 
-    #[cfg(feature = "bundled-events")]
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
         return value;
     }
@@ -830,7 +887,12 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             "listen" | "close" | "address" | "on" | "addListener" | "setTimeout"
         ) || matches!(
             method_name,
-            "closeAllConnections" | "closeIdleConnections" | "@@__perry_wk_asyncDispose"
+            "closeAllConnections"
+                | "closeIdleConnections"
+                | "removeAllListeners"
+                | "removeListener"
+                | "off"
+                | "@@__perry_wk_asyncDispose"
         );
         if is_http_server_method && unsafe { js_ext_http_server_is_handle(handle) } != 0 {
             return unsafe {
@@ -1713,7 +1775,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return v;
     }
 
-    #[cfg(feature = "bundled-events")]
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
         return value;
     }
@@ -3056,11 +3118,20 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     );
     #[cfg(feature = "http-client")]
     js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
-    #[cfg(feature = "bundled-events")]
+    // Probe / `on` hook / constructor all route through the shared
+    // `extern "C"` events surface declared above dispatch_event_emitter_method
+    // (#4995): the linker resolves them to whichever EventEmitter impl is in
+    // the binary (perry-stdlib `bundled-events` or perry-ext-events under the
+    // well-known flip), so the registry these consult is always the one the
+    // constructors used. Registered eagerly at startup — perry-ext-events
+    // alone only registers its hooks lazily on the first *static* emitter
+    // construction, which a dynamic-first program (signal-exit's
+    // `new (require('events'))()`) never performs.
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
-        crate::events::is_event_emitter_handle(handle)
+        js_event_emitter_is_handle(handle)
     }
-    #[cfg(feature = "bundled-events")]
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     js_register_event_emitter_handle_probe(event_emitter_probe);
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_async_resource_probe(handle: i64) -> bool {
@@ -3068,8 +3139,48 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     }
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_async_resource_handle_probe(event_emitter_async_resource_probe);
-    #[cfg(feature = "bundled-events")]
-    js_register_event_emitter_on(crate::events::js_event_emitter_on);
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    unsafe extern "C" fn event_emitter_on_hook(
+        handle: i64,
+        event_bits: i64,
+        listener_bits: i64,
+    ) -> i64 {
+        js_event_emitter_on(handle, event_bits, listener_bits)
+    }
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    js_register_event_emitter_on(event_emitter_on_hook);
+    // #4995: serve dynamic `new` on the bound `events.EventEmitter` /
+    // `events.EventEmitterAsyncResource` export values (`require('events')`,
+    // default import, namespace property read) with the same constructors the
+    // named-import codegen path calls. Without this the runtime's
+    // `js_new_function_construct` fell through to the generic empty-object
+    // path and the instance had no `.on`/`.emit`/`.setMaxListeners`.
+    // EventEmitterAsyncResource exists only in the bundled impl.
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    unsafe extern "C" fn events_native_construct(
+        class_name_ptr: *const u8,
+        class_name_len: usize,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64 {
+        let class_name = std::slice::from_raw_parts(class_name_ptr, class_name_len);
+        let options = if !args_ptr.is_null() && args_len > 0 {
+            *args_ptr
+        } else {
+            TAG_UNDEFINED_F64
+        };
+        let handle = match class_name {
+            b"EventEmitter" => js_event_emitter_new_with_options(options),
+            #[cfg(feature = "bundled-events")]
+            b"EventEmitterAsyncResource" => {
+                crate::events::js_event_emitter_async_resource_new(options)
+            }
+            _ => return TAG_UNDEFINED_F64,
+        };
+        perry_runtime::js_nanbox_pointer(handle)
+    }
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    perry_runtime::js_set_native_events_construct(events_native_construct);
     super::net_socket_bridge::register_net_socket_handle_probe();
     js_register_worker_threads_namespace_getters(
         crate::worker_threads::js_worker_threads_get_worker_data,

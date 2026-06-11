@@ -432,6 +432,9 @@ pub(crate) struct FnCtx<'a> {
     /// Used by direct `FuncRef` calls to re-link returned iterator objects to
     /// the same closure-cached prototype that `g.prototype` reads expose.
     pub local_generator_funcs: &'a std::collections::HashSet<u32>,
+    /// FuncIds whose body reads dynamic `this` — see
+    /// `CrossModuleCtx::funcs_reading_dynamic_this` (#3576).
+    pub funcs_reading_dynamic_this: &'a std::collections::HashSet<u32>,
     /// Type alias map (name → Type) aggregated from all modules. Used
     /// to resolve `Named` types in function signatures and dispatch.
     pub type_aliases: &'a std::collections::HashMap<String, perry_types::Type>,

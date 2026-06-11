@@ -599,6 +599,63 @@ fn try_indirect_eval_super_private(ctx: &LoweringContext, call: &ast::CallExpr) 
     super::eval_super_scan::check_indirect_eval_super_private(&stmts)
 }
 
+/// General indirect-eval fold for a `(0, eval)('<const>')` site whose body is
+/// not the `this`/`globalThis` idiom. Indirect eval runs as sloppy *global*
+/// code: a parse failure (or a top-level `return`/`break`/`continue`, or
+/// `import`/`export`) is a runtime `SyntaxError`; an otherwise-valid body
+/// evaluated at module top level (`scope_depth == 0`, where the only enclosing
+/// bindings are the globals indirect eval may legitimately see) runs through the
+/// shared completion-tracking IIFE so the call yields the body's completion
+/// value. A non-constant or non-string argument returns `None` so the call
+/// reaches the runtime global-`eval` thunk (which returns a non-string argument
+/// unchanged). (test262 language/eval-code/indirect/parse-failure-*,
+/// cptn-nrml-expr-prim)
+pub(crate) fn try_indirect_eval_general(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    span: swc_common::Span,
+) -> Result<Option<Expr>> {
+    let Some(body_src) = indirect_eval_const_body(ctx, call) else {
+        return Ok(None);
+    };
+    let body_module = match perry_parser::parse_typescript(&body_src, "<eval body>.cjs") {
+        Ok(m) => m,
+        Err(_) => {
+            return Ok(Some(
+                super::eval_super_scan::throw_eval_syntax_error_public("Unexpected end of input"),
+            ))
+        }
+    };
+    let mut body_stmts: Vec<ast::Stmt> = Vec::with_capacity(body_module.body.len());
+    for item in body_module.body {
+        match item {
+            ast::ModuleItem::Stmt(s) => body_stmts.push(s),
+            // `import` / `export` is illegal in eval (global) code.
+            _ => {
+                return Ok(Some(
+                    super::eval_super_scan::throw_eval_syntax_error_public(
+                        "Cannot use import/export statements in eval code",
+                    ),
+                ))
+            }
+        }
+    }
+    if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts) {
+        return Ok(Some(throw));
+    }
+    // Do NOT model value-producing execution here. Indirect eval runs as global
+    // code: its body sees only the *global* environment, not any enclosing
+    // module/function bindings. A completion-tracking IIFE necessarily captures
+    // the enclosing scope, so it would wrongly resolve module-scoped `var`s that
+    // are invisible to real global eval (e.g. `(0,eval)("y = x")` must throw
+    // ReferenceError when `x` is a module-local) and wrongly persist `var`/
+    // function/class declarations that belong in the global var environment.
+    // Defer all valid bodies to the runtime global-`eval` thunk. (Only the
+    // parse-/early-error SyntaxError cases above are modeled at compile time.)
+    let _ = span;
+    Ok(None)
+}
+
 pub(crate) fn try_indirect_eval_globalthis(
     ctx: &LoweringContext,
     call: &ast::CallExpr,
@@ -642,9 +699,19 @@ fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) ->
         return None;
     }
     let body = const_string_of(&call.args[0].expr)?;
+    // Direct eval observes the caller's `this`. At module top level that is the
+    // CJS `module.exports` stand-in (`Expr::ModuleTopThis`), the SAME cached
+    // object a bare `this` lowers to there (see `lower_expr` `ast::Expr::This`)
+    // — NOT `globalThis`, so `eval('this') === this`. (test262
+    // language/eval-code/direct/this-value-global)
+    let module_top_this = ctx.scope_depth == 0
+        && ctx.current_class.is_none()
+        && ctx.with_env_stack.is_empty()
+        && !ctx.is_external_module;
     if let Some(normalized) = normalize_eval_this_body(&body) {
         return match normalized.as_str() {
             "globalThis" => Some(Expr::GlobalThisExpr),
+            "this" if module_top_this => Some(Expr::ModuleTopThis),
             "this" if ctx.current_strict && ctx.scope_depth > 0 => Some(Expr::Undefined),
             "this" => Some(Expr::This),
             "typeof this" if ctx.current_strict && ctx.scope_depth > 0 => {
@@ -658,6 +725,25 @@ fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) ->
         return Some(expr);
     }
     try_direct_eval_constant_add_fold(&body)
+}
+
+/// Words that are reserved only in strict-mode code. Using one as a binding
+/// name (`var public`) inside strict eval code is a SyntaxError. (`eval` /
+/// `arguments` bindings are a separate early error handled in
+/// `intrinsics::try_strict_eval_arguments_assignment`.)
+fn is_strict_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "implements"
+            | "interface"
+            | "let"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "static"
+            | "yield"
+    )
 }
 
 fn parse_eval_ident_name(src: &str) -> Option<&str> {
@@ -709,18 +795,31 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
         Some(parts) => parts,
         None if is_var_assignment => {
             let name = direct_eval_var_decl_name(body)?;
-            if let Some(id) = ctx.lookup_local(&name) {
-                if !ctx.var_hoisted_ids.contains(&id) {
-                    return Some(Expr::SyntaxErrorNew(Box::new(Expr::String(format!(
-                        "eval var declaration conflicts with lexical binding `{name}`"
-                    )))));
+            // Strict direct eval instantiates `var` bindings in the eval's OWN
+            // variable environment (EvalDeclarationInstantiation runs with a
+            // fresh varEnv when `strictEval` is true), discarded when the eval
+            // returns. It must neither alias the caller's binding nor introduce
+            // a visible one, so a later reference to the same name still throws
+            // ReferenceError. (test262 language/eval-code/direct/
+            // var-env-var-strict-caller{,-2,-3}, var-env-lower-lex-strict-caller)
+            if ctx.current_strict {
+                if is_strict_reserved_word(&name) {
+                    return Some(super::eval_super_scan::throw_eval_syntax_error_public(
+                        &format!("Unexpected strict mode reserved word `{name}`"),
+                    ));
                 }
                 return Some(Expr::Undefined);
             }
-            if !ctx.current_strict {
-                let id = ctx.define_local(name, perry_types::Type::Any);
-                ctx.var_hoisted_ids.insert(id);
+            if let Some(id) = ctx.lookup_local(&name) {
+                if !ctx.var_hoisted_ids.contains(&id) {
+                    return Some(super::eval_super_scan::throw_eval_syntax_error_public(
+                        &format!("Identifier '{name}' has already been declared"),
+                    ));
+                }
+                return Some(Expr::Undefined);
             }
+            let id = ctx.define_local(name, perry_types::Type::Any);
+            ctx.var_hoisted_ids.insert(id);
             return Some(Expr::Undefined);
         }
         None => return None,
@@ -740,11 +839,24 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
             assign
         }
     };
+    // Strict direct eval `var x = v` binds in the eval's own variable
+    // environment, discarded on return — it must not touch the caller's `x` nor
+    // introduce a visible binding. The folded initializer here is always a
+    // primitive literal (no side effects to preserve), so the whole declaration
+    // collapses to its empty completion value. (var-env-var-strict-caller{,-2,-3})
+    if is_var_assignment && ctx.current_strict {
+        if is_strict_reserved_word(name) {
+            return Some(super::eval_super_scan::throw_eval_syntax_error_public(
+                &format!("Unexpected strict mode reserved word `{name}`"),
+            ));
+        }
+        return Some(Expr::Undefined);
+    }
     if let Some(id) = ctx.lookup_local(name) {
         if is_var_assignment && !ctx.var_hoisted_ids.contains(&id) {
-            return Some(Expr::SyntaxErrorNew(Box::new(Expr::String(format!(
-                "eval var declaration conflicts with lexical binding `{name}`"
-            )))));
+            return Some(super::eval_super_scan::throw_eval_syntax_error_public(
+                &format!("Identifier '{name}' has already been declared"),
+            ));
         }
         Some(finish(Expr::LocalSet(id, Box::new(value))))
     } else if ctx.current_strict {
@@ -826,6 +938,12 @@ pub(crate) fn try_eval_function_call_fold(
         return Ok(Some(expr));
     }
     if let Some(expr) = try_direct_eval_this_fold(ctx, call) {
+        return Ok(Some(expr));
+    }
+    // General indirect eval `(0, eval)('<const>')`: parse-failure / illegal
+    // top-level abrupt completion → runtime SyntaxError; valid body at module
+    // scope → completion-value IIFE.
+    if let Some(expr) = try_indirect_eval_general(ctx, call, call.span)? {
         return Ok(Some(expr));
     }
     let ast::Callee::Expr(callee) = &call.callee else {
@@ -1168,6 +1286,34 @@ fn try_const_fold_eval(
         return Ok(Some(throw));
     }
 
+    // PerformEval parse-level early errors: a top-level `return`, or an
+    // unlabeled `break`/`continue` with no enclosing loop/switch in the eval
+    // source, is a SyntaxError thrown when the eval call evaluates.
+    if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts) {
+        return Ok(Some(throw));
+    }
+
+    // Eval code is strict when the calling context is strict (direct eval) or
+    // the body opens with a Use Strict Directive — detected on the *original*
+    // statements, before completion-tracking rewrites the directive into a
+    // plain assignment. (test262 language/eval-code/direct/strictness-override)
+    let eval_strict = ctx.current_strict || crate::lower_decl::body_has_use_strict(&body_stmts);
+
+    build_eval_completion_iife(ctx, body_stmts, eval_strict, span)
+}
+
+/// Build the completion-tracking IIFE that runs an eval body AOT and yields its
+/// ECMAScript completion value: `(() => { var __perry_cv; <tracked body>; return
+/// __perry_cv })()`. Shared by direct eval and global (indirect) eval. `strict`
+/// selects the lowering mode for the wrapper body — direct eval inherits the
+/// caller's strictness (or a Use Strict Directive in the body); indirect eval is
+/// sloppy global code unless its own directive opts in.
+fn build_eval_completion_iife(
+    ctx: &mut LoweringContext,
+    mut body_stmts: Vec<ast::Stmt>,
+    strict: bool,
+    span: swc_common::Span,
+) -> Result<Option<Expr>> {
     // Wrapper template: stmts == [var __perry_cv = undefined;
     //                            __perry_cv = undefined;   (reset/assign template)
     //                            return __perry_cv;]
@@ -1201,9 +1347,12 @@ fn try_const_fold_eval(
         insert_at += 1;
     }
 
-    // Lower the wrapper (sloppy) and immediately call it: `(() => {…})()`.
+    // Lower the wrapper and immediately call it: `(() => {…})()`. The wrapper
+    // body may use `with` / undeclared sloppy assignments only when `strict` is
+    // false; a strict eval honors strict early errors (assignment to an
+    // unresolvable reference throws ReferenceError, etc.).
     let outer_strict = ctx.current_strict;
-    ctx.current_strict = false;
+    ctx.current_strict = strict;
     let lowered = lower_expr(ctx, &ast::Expr::Arrow(arrow));
     ctx.current_strict = outer_strict;
     let closure = match lowered {

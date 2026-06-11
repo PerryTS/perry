@@ -501,6 +501,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut local_async_funcs: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut local_generator_funcs: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
+    let mut funcs_reading_dynamic_this: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     for f in &hir.functions {
         // Include both truly-async functions and those transformed from
         // async to generator (was_plain_async=true, is_async=false after
@@ -511,6 +513,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         if function_body_returns_generator_object(&f.body) {
             local_generator_funcs.insert(f.id);
+        }
+        if perry_hir::analysis::body_reads_dynamic_this(&f.body) {
+            funcs_reading_dynamic_this.insert(f.id);
         }
     }
 
@@ -1032,6 +1037,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         imported_async_funcs: opts.imported_async_funcs,
         local_async_funcs,
         local_generator_funcs,
+        funcs_reading_dynamic_this,
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
         import_function_origin_names: opts.import_function_origin_names.clone(),

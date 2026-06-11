@@ -251,8 +251,24 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             crate::js_net_socket_set_timeout(handle, msecs, callback);
             nanbox_handle(handle)
         }
-        "setNoDelay" | "setKeepAlive" | "setEncoding" | "pause" | "resume" | "ref" | "unref"
-        | "cork" | "uncork" | "setDefaultEncoding" => nanbox_handle(handle),
+        // #4973: real setEncoding — switches 'data' delivery to strings.
+        "setEncoding" => {
+            let enc_ptr = args
+                .first()
+                .map(|a| {
+                    let bits = a.to_bits();
+                    if (bits >> 48) == 0x7FFF {
+                        (bits & 0x0000_FFFF_FFFF_FFFF) as i64
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0);
+            crate::js_net_socket_set_encoding(handle, enc_ptr);
+            nanbox_handle(handle)
+        }
+        "setNoDelay" | "setKeepAlive" | "pause" | "resume" | "ref" | "unref" | "cork"
+        | "uncork" | "setDefaultEncoding" => nanbox_handle(handle),
         _ => undefined(),
     };
     Some(result)
