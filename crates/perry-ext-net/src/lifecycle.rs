@@ -317,6 +317,23 @@ pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
 /// `handle` must be a registered socket id (raw, NOT NaN-boxed).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
+    js_ext_net_destroy_socket(handle);
+}
+
+/// Destroy an `ext-net` socket by id, operating directly on this crate's
+/// socket registry.
+///
+/// This carries a DISTINCT `#[no_mangle]` symbol (`js_ext_net_destroy_socket`),
+/// deliberately NOT the `js_net_socket_destroy` name that the bundled stdlib
+/// net ALSO exports. In a workspace/auto-optimize build both are linked, so
+/// `js_net_socket_destroy` is a duplicate symbol bound to whichever twin
+/// wins (stdlib's). The handle-dispatch `socket_method` "destroy" arm and the
+/// extern wrapper above call THIS uniquely-named entry point instead — a
+/// symbol with no twin — so an adopted raw-`'upgrade'` socket is actually
+/// marked destroyed in ext-net's own registry rather than in stdlib's empty
+/// one, which is what let the event loop drain. (#5010)
+#[no_mangle]
+pub extern "C" fn js_ext_net_destroy_socket(handle: i64) {
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
         s.destroyed = true;
