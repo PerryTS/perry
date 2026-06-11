@@ -376,8 +376,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "setEncoding",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
+        // #4973: real setEncoding — switches 'data' delivery to strings.
+        runtime: "js_net_socket_set_encoding",
+        args: &[NA_STR],
         ret: NR_PTR,
     },
     NativeModSig {

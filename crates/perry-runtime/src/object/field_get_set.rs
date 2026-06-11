@@ -5172,6 +5172,22 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     // routes `.constructor` to the global Date constructor closure and every
     // other key to `undefined` without derefing the small cell as an object.
     let value = js_object_get_field_by_name(obj, key);
+    // #4973: inherits-pattern instances (`http.Server.call(this, …)`) —
+    // a read that missed every layer forwards to the aliased native handle
+    // so `server.listen` / `server.address` resolve to bound callables on
+    // the codegen static-typed read-then-call path.
+    if value.bits() == crate::value::TAG_UNDEFINED
+        && super::native_this_alias::alias_active()
+        && !key.is_null()
+    {
+        if let Some(name) = unsafe { super::has_own_helpers::str_from_string_header(key) } {
+            if let Some(fwd) =
+                super::native_this_alias::alias_forward_property_read(obj as usize, name)
+            {
+                return fwd;
+            }
+        }
+    }
     f64::from_bits(value.bits())
 }
 

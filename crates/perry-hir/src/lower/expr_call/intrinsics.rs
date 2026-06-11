@@ -1338,6 +1338,47 @@ pub(super) fn try_native_module_method_apply_call(
         return Ok(None);
     }
 
+    // #4973: `http.Server.call(this, handler)` — the util.inherits-era
+    // subclass pattern. For native CLASS exports the thisArg is NOT
+    // irrelevant: Node initializes `this` as the server. Route to the
+    // construct-with-this extern (which constructs the server AND aliases
+    // `this` → handle) instead of dropping the receiver below.
+    if !is_apply && !call.args.is_empty() {
+        let module = ctx
+            .lookup_builtin_module_alias(ns_name)
+            .map(str::to_string)
+            .or_else(|| {
+                ctx.lookup_native_module(ns_name)
+                    .map(|(m, _)| m.to_string())
+            });
+        if let (Some(module), ast::MemberProp::Ident(method_ident)) = (module, &inner.prop) {
+            let normalized = module.strip_prefix("node:").unwrap_or(&module);
+            if matches!(normalized, "http" | "https") && method_ident.sym.as_ref() == "Server" {
+                let mut lowered: Vec<Expr> = call
+                    .args
+                    .iter()
+                    .map(|a| lower_expr(ctx, &a.expr))
+                    .collect::<Result<Vec<_>>>()?;
+                // (this, options?, listener?) — fixed 3-arg extern ABI.
+                lowered.resize(3, Expr::Undefined);
+                let extern_name = if normalized == "https" {
+                    "js_https_server_construct_with_this"
+                } else {
+                    "js_http_server_construct_with_this"
+                };
+                return Ok(Some(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: extern_name.to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: lowered,
+                    type_args: Vec::new(),
+                }));
+            }
+        }
+    }
+
     // Build the synthesized direct-call argument list at the AST level.
     let synth_args: Vec<ast::ExprOrSpread> = if is_apply {
         match call.args.get(1) {

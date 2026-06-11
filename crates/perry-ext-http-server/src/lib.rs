@@ -59,6 +59,7 @@ mod http2_session_settings;
 mod http2_settings;
 mod http2_stream_props;
 mod https_server;
+mod raw_upgrade;
 mod request;
 mod response;
 mod server;

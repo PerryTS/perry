@@ -686,6 +686,57 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                 }
             }
         }
+        // #4973: pre-register top-level `let`/`const` Ident bindings of this
+        // function body so a hoisted sibling FUNCTION that references them
+        // before their lexical position binds the (boxed) function-scope
+        // local instead of falling through to a global read. The classic
+        // Node test shape (test-http-upgrade-server):
+        //   function t() { … server.close(); }
+        //   const server = createTestServer();
+        //   server.listen(0, () => t());
+        // JS hoists the *binding* (with a TDZ Perry is lax about); pre-fix,
+        // `server` inside `t` lowered to a globalThis read → undefined.
+        // Gated on the body containing at least one hoisted function
+        // declaration — the only consumers that can legally observe the
+        // binding before its source position — to bound the blast radius.
+        // Keyed by declarator-ident span: the Let site in var_decl.rs reuses
+        // the id only for the *exact* declarator (`lexical_forward_decls`),
+        // so a shadowing `const` in an inner block still gets a fresh
+        // binding.
+        let body_has_fn_decl = block
+            .stmts
+            .iter()
+            .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Fn(_))));
+        if body_has_fn_decl {
+            for stmt in &block.stmts {
+                if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
+                    if matches!(
+                        var_decl.kind,
+                        ast::VarDeclKind::Let | ast::VarDeclKind::Const
+                    ) {
+                        for decl in &var_decl.decls {
+                            if let ast::Pat::Ident(ident) = &decl.name {
+                                let name = ident.id.sym.to_string();
+                                let already_in_scope =
+                                    ctx.locals.iter().enumerate().rev().any(|(idx, (n, _, _))| {
+                                        n == &name && idx >= outer_locals_len
+                                    });
+                                if !already_in_scope {
+                                    let id = ctx.define_local(name, Type::Any);
+                                    // Boxed-capture semantics: a closure
+                                    // created before the init must see the
+                                    // post-init value through the box, not a
+                                    // snapshot of the empty slot.
+                                    ctx.var_hoisted_ids.insert(id);
+                                    hoisted_id_set.insert(id);
+                                    ctx.lexical_forward_decls.insert(ident.id.span.lo.0, id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // #4950: pre-register `var` bindings nested inside compound
         // statements (if/else arms, loops, try/catch, switch) of this
         // function body. `var` is function-scoped, so react's

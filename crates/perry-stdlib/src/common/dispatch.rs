@@ -830,7 +830,12 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             "listen" | "close" | "address" | "on" | "addListener" | "setTimeout"
         ) || matches!(
             method_name,
-            "closeAllConnections" | "closeIdleConnections" | "@@__perry_wk_asyncDispose"
+            "closeAllConnections"
+                | "closeIdleConnections"
+                | "removeAllListeners"
+                | "removeListener"
+                | "off"
+                | "@@__perry_wk_asyncDispose"
         );
         if is_http_server_method && unsafe { js_ext_http_server_is_handle(handle) } != 0 {
             return unsafe {

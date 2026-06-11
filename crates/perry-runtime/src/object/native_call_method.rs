@@ -4341,6 +4341,12 @@ pub unsafe extern "C" fn js_native_call_method(
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
                 let result = crate::closure::js_native_call_value(object, rest_ptr, rest_len);
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
+                // #4973: `http.Server.call(this, handler)` — the inherits
+                // pattern. Alias the explicit `this` object to the handle the
+                // native class export constructed.
+                super::native_this_alias::maybe_alias_explicit_this_construction(
+                    object, this_arg, result,
+                );
                 return result;
             }
             // #3662: `Function.prototype.call.call(x, …)` on a non-callable
@@ -4434,6 +4440,11 @@ pub unsafe extern "C" fn js_native_call_method(
                 let result =
                     crate::closure::js_native_call_value(object, call_args_ptr, call_args_len);
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
+                // #4973: `http.Server.apply(this, args)` — same inherits
+                // pattern as the `call` arm above.
+                super::native_this_alias::maybe_alias_explicit_this_construction(
+                    object, this_arg, result,
+                );
                 return result;
             }
             // #3662: `Function.prototype.apply.call(x, …)` on a non-callable
@@ -4962,6 +4973,32 @@ pub unsafe extern "C" fn js_native_call_method(
                     id,
                     method_name.as_ptr(),
                     method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                );
+            }
+        }
+    }
+
+    // #4973: inherits-pattern instances (`http.Server.call(this, …)`) forward
+    // method calls that missed every user-defined dispatch layer (own fields,
+    // vtable, prototype walk) to their aliased native handle, so
+    // `server.listen(...)` / `server.on(...)` on the plain-object `this`
+    // behave as calls on the underlying server. See native_this_alias.rs.
+    if super::native_this_alias::alias_active() {
+        if let Some(handle_val) = super::native_this_alias::alias_handle_for_object(object) {
+            // Dispatch through the PRIMARY handle dispatcher only: the alias
+            // handle is known to be an http(s) server handle, and the
+            // composite's extension dispatchers (ext-net) may own an
+            // id-colliding socket that would claim shared names like
+            // `address`/`on` first.
+            if let Some(dispatch) = super::class_handles::handle_method_dispatch_primary() {
+                let handle = (handle_val.to_bits() & crate::value::POINTER_MASK) as i64;
+                let args = refreshed_args();
+                return dispatch(
+                    handle,
+                    method_name_ptr as *const u8,
+                    method_name_len,
                     args.as_ptr(),
                     args.len(),
                 );
