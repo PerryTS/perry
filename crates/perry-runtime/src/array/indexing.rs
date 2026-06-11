@@ -538,6 +538,9 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
                 return 0;
             };
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(POINTER_FREE): RawF64-layout payload slot —
+            // `number` is a plain f64, never a NaN-boxed pointer, so no
+            // write barrier is needed.
             ptr::write(elements_ptr.add(index as usize), number);
             return 1;
         }
