@@ -122,6 +122,7 @@ unsafe fn stable_merge_sort_raw(
                 l += 1;
                 k += 1;
             }
+            // GC_STORE_AUDIT(STACK): tail copies target caller-rooted scratch buffers.
             while r < right {
                 *dst.add(k) = *src.add(r);
                 r += 1;

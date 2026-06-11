@@ -360,6 +360,16 @@ pub unsafe extern "C" fn js_fastify_app_on(app_handle: Handle, event_ptr: i64, c
     let event = std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("");
 
     if event == "upgrade" {
+        // Warn at registration, not first upgrade request: storing the
+        // callback used to be silent, and a registered-but-never-fired
+        // handler is exactly the "works at boot, breaks in production"
+        // lie #4917 targets. Upgrade requests themselves get a loud 501
+        // in server.rs until #1113 lands real dispatch.
+        perry_runtime::stub_diag::perry_stub_warn(
+            "fastify app.server.on('upgrade')",
+            "the handler is stored but never fires; upgrade requests get 501",
+            Some("#1113"),
+        );
         if let Some(app) = get_handle_mut::<FastifyApp>(app_handle) {
             app.upgrade_handlers.push(callback);
         }

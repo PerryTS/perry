@@ -1409,7 +1409,7 @@ declare module "events" {
 }
 
 declare module "exponential-backoff" {
-  /** stdlib @perryStub retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917) */
+  /** stdlib */
   export function backOff(p0: any, p1: any): any;
 }
 
@@ -4182,27 +4182,27 @@ declare module "zlib" {
   export function brotliDecompressSync(p0: string): Buffer;
   /** stdlib */
   export function crc32(p0: string, seed?: number): number;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createBrotliCompress(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createBrotliDecompress(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createDeflate(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createDeflateRaw(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createGunzip(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createGzip(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createInflate(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createInflateRaw(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createUnzip(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createZstdCompress(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createZstdDecompress(options?: any): any;
   /** stdlib */
   export function deflate(buffer: any, callback: any): void;

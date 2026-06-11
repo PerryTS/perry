@@ -1200,7 +1200,7 @@ Total: 2782 entries across 114 modules.
 
 ### Methods
 
-- `backOff` — module ⚠ **stub** — retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917)
+- `backOff` — module
 
 ## `fastify`
 
@@ -1521,7 +1521,7 @@ Total: 2782 entries across 114 modules.
 - `createServer` — module
 - `createServer` — module
 - `defaultPort` — instance *(class: `Agent`)*
-- `destroy` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
+- `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `destroy` — instance *(class: `ClientRequest`)*
 - `destroyed` — instance *(class: `Agent`)*
@@ -1548,7 +1548,7 @@ Total: 2782 entries across 114 modules.
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
-- `keepSocketAlive` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
+- `keepSocketAlive` — instance *(class: `Agent`)* ⚠ **stub** — reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)
 - `listen` — instance *(class: `HttpServer`)*
 - `listenerCount` — instance *(class: `ClientRequest`)*
 - `listening` — instance *(class: `HttpServer`)*
@@ -1570,7 +1570,7 @@ Total: 2782 entries across 114 modules.
 - `requestTimeout` — instance *(class: `HttpServer`)*
 - `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
-- `reuseSocket` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
+- `reuseSocket` — instance *(class: `Agent`)* ⚠ **stub** — reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)
 - `setEncoding` — instance *(class: `IncomingMessage`)*
 - `setGlobalProxyFromEnv` — module
 - `setHeader` — instance *(class: `ClientRequest`)*
@@ -1883,7 +1883,7 @@ Total: 2782 entries across 114 modules.
 - `deleteMany` — instance
 - `deleteOne` — instance
 - `find` — instance
-- `findOne` — instance ⚠ **stub** — resolves a JSON string, not a document object (#4917)
+- `findOne` — instance
 - `insertMany` — instance
 - `insertOne` — instance
 - `updateMany` — instance
@@ -3645,12 +3645,12 @@ Total: 2782 entries across 114 modules.
 - `once` — instance *(class: `Worker`)*
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
-- `ref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
+- `ref` — instance *(class: `Worker`)*
 - `setEnvironmentData` — module
 - `startCpuProfile` — instance *(class: `Worker`)*
 - `startHeapProfile` — instance *(class: `Worker`)*
 - `terminate` — instance *(class: `Worker`)*
-- `unref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
+- `unref` — instance *(class: `Worker`)*
 
 ### Properties
 
@@ -3726,17 +3726,17 @@ Total: 2782 entries across 114 modules.
 - `brotliDecompress` — module
 - `brotliDecompressSync` — module
 - `crc32` — module
-- `createBrotliCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createBrotliDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createDeflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createDeflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createGunzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createGzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createInflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createInflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createUnzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createZstdCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createZstdDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createBrotliCompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createBrotliDecompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createDeflate` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
+- `createDeflateRaw` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
+- `createGunzip` — module
+- `createGzip` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
+- `createInflate` — module
+- `createInflateRaw` — module
+- `createUnzip` — module
+- `createZstdCompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createZstdDecompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
 - `deflate` — module
 - `deflateRaw` — module
 - `deflateRawSync` — module

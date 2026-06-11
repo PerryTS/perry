@@ -330,16 +330,59 @@ fn column_value_to_jsvalue(row: &MySqlRow, index: usize) -> JSValue {
     }
 }
 
+/// Map sqlx's MySQL type *name* back to the wire-protocol numeric type ID
+/// (`enum_field_types`, what Node's mysql2 puts in `field.type`/`columnType`).
+/// sqlx 0.8 keeps the raw `ColumnType` byte `pub(crate)`, but its `name()`
+/// strings are a bijection over (type, BINARY/UNSIGNED flags), so the wire ID
+/// is recoverable (#4917). `DECIMAL` maps to 246 (`NEWDECIMAL`) and
+/// `VARCHAR` to 253 (`VAR_STRING`) — the values servers actually send in
+/// result sets, not the legacy 0/15 aliases.
+pub fn mysql_type_id_from_name(name: &str) -> f64 {
+    let base = name.strip_suffix(" UNSIGNED").unwrap_or(name);
+    let id: u8 = match base {
+        "BOOLEAN" | "TINYINT" => 1,
+        "SMALLINT" => 2,
+        "INT" => 3,
+        "FLOAT" => 4,
+        "DOUBLE" => 5,
+        "NULL" => 6,
+        "TIMESTAMP" => 7,
+        "BIGINT" => 8,
+        "MEDIUMINT" => 9,
+        "DATE" => 10,
+        "TIME" => 11,
+        "DATETIME" => 12,
+        "YEAR" => 13,
+        "BIT" => 16,
+        "JSON" => 245,
+        "DECIMAL" => 246,
+        // Servers usually transmit ENUM/SET as STRING (254) plus a flag, but
+        // sqlx has already folded the flag into the name; report the named ID.
+        "ENUM" => 247,
+        "SET" => 248,
+        "TINYBLOB" | "TINYTEXT" => 249,
+        "MEDIUMBLOB" | "MEDIUMTEXT" => 250,
+        "LONGBLOB" | "LONGTEXT" => 251,
+        "BLOB" | "TEXT" => 252,
+        "VARCHAR" | "VARBINARY" => 253,
+        "CHAR" | "BINARY" => 254,
+        "GEOMETRY" => 255,
+        _ => 0,
+    };
+    id as f64
+}
+
 /// Create a FieldPacket object for a column
 pub fn column_to_field_packet(col: &sqlx::mysql::MySqlColumn) -> *mut ObjectHeader {
     // FieldPacket has these fields:
     // 0: name (string)
-    // 1: type (number - MySQL type code)
-    // 2: length (number)
-    let obj = js_object_alloc(0, 3);
+    // 1: type (number - MySQL wire type ID)
+    // 2: columnType (number - mysql2 alias of `type`)
+    // 3: length (number)
+    let obj = js_object_alloc(0, 4);
 
     // Create keys array for property name lookup
-    let mut keys_array = js_array_alloc(3);
+    let mut keys_array = js_array_alloc(4);
 
     // Set name
     let name = col.name();
@@ -348,17 +391,23 @@ pub fn column_to_field_packet(col: &sqlx::mysql::MySqlColumn) -> *mut ObjectHead
     let key0 = js_string_from_bytes("name".as_ptr(), 4);
     keys_array = js_array_push(keys_array, JSValue::string_ptr(key0));
 
-    // Set type (as string for now)
-    let type_name = col.type_info().name();
-    let type_ptr = js_string_from_bytes(type_name.as_ptr(), type_name.len() as u32);
-    js_object_set_field(obj, 1, JSValue::string_ptr(type_ptr));
+    // Set type — the numeric wire ID mysql2 exposes (#4917), recovered from
+    // sqlx's type name.
+    let type_id = mysql_type_id_from_name(col.type_info().name());
+    js_object_set_field(obj, 1, JSValue::number(type_id));
     let key1 = js_string_from_bytes("type".as_ptr(), 4);
     keys_array = js_array_push(keys_array, JSValue::string_ptr(key1));
 
-    // Set length (0 for now - would need to extract from column metadata)
-    js_object_set_field(obj, 2, JSValue::number(0.0));
-    let key2 = js_string_from_bytes("length".as_ptr(), 6);
+    // mysql2 exposes the same value as `columnType` too.
+    js_object_set_field(obj, 2, JSValue::number(type_id));
+    let key2 = js_string_from_bytes("columnType".as_ptr(), 10);
     keys_array = js_array_push(keys_array, JSValue::string_ptr(key2));
+
+    // Set length (0 — sqlx 0.8 keeps the wire `max_size` pub(crate), so the
+    // column display length is not recoverable; see #4917)
+    js_object_set_field(obj, 3, JSValue::number(0.0));
+    let key3 = js_string_from_bytes("length".as_ptr(), 6);
+    keys_array = js_array_push(keys_array, JSValue::string_ptr(key3));
 
     // Attach keys to object
     js_object_set_keys(obj, keys_array);

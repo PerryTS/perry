@@ -320,16 +320,56 @@ fn raw_row_to_js_array(row: &RawRowData) -> *mut ArrayHeader {
     arr
 }
 
+/// Map sqlx's MySQL type *name* back to the wire-protocol numeric type ID
+/// (`enum_field_types`, what Node's mysql2 puts in `field.type`/`columnType`).
+/// Twin of `perry_stdlib::mysql2::types::mysql_type_id_from_name` (#4917) —
+/// this crate cannot depend on perry-stdlib, keep the two in sync.
+fn mysql_type_id_from_name(name: &str) -> f64 {
+    let base = name.strip_suffix(" UNSIGNED").unwrap_or(name);
+    let id: u8 = match base {
+        "BOOLEAN" | "TINYINT" => 1,
+        "SMALLINT" => 2,
+        "INT" => 3,
+        "FLOAT" => 4,
+        "DOUBLE" => 5,
+        "NULL" => 6,
+        "TIMESTAMP" => 7,
+        "BIGINT" => 8,
+        "MEDIUMINT" => 9,
+        "DATE" => 10,
+        "TIME" => 11,
+        "DATETIME" => 12,
+        "YEAR" => 13,
+        "BIT" => 16,
+        "JSON" => 245,
+        "DECIMAL" => 246,
+        "ENUM" => 247,
+        "SET" => 248,
+        "TINYBLOB" | "TINYTEXT" => 249,
+        "MEDIUMBLOB" | "MEDIUMTEXT" => 250,
+        "LONGBLOB" | "LONGTEXT" => 251,
+        "BLOB" | "TEXT" => 252,
+        "VARCHAR" | "VARBINARY" => 253,
+        "CHAR" | "BINARY" => 254,
+        "GEOMETRY" => 255,
+        _ => 0,
+    };
+    id as f64
+}
+
 fn raw_column_to_field_packet(col: &RawColumnInfo) -> *mut ObjectHeader {
-    let (packed, shape_id) = build_object_shape(&["name", "type", "length"]);
+    let (packed, shape_id) = build_object_shape(&["name", "type", "columnType", "length"]);
     let obj =
-        unsafe { js_object_alloc_with_shape(shape_id, 3, packed.as_ptr(), packed.len() as u32) };
+        unsafe { js_object_alloc_with_shape(shape_id, 4, packed.as_ptr(), packed.len() as u32) };
     let name_str = alloc_string(&col.name);
-    let type_str = alloc_string(&col.type_name);
+    // #4917: `type`/`columnType` carry the numeric wire ID mysql2 exposes;
+    // `length` stays 0 (sqlx 0.8 keeps the wire `max_size` pub(crate)).
+    let type_id = mysql_type_id_from_name(&col.type_name);
     unsafe {
         js_object_set_field(obj, 0, JsValue::from_string_ptr(name_str.as_raw()));
-        js_object_set_field(obj, 1, JsValue::from_string_ptr(type_str.as_raw()));
-        js_object_set_field(obj, 2, JsValue::from_number(0.0));
+        js_object_set_field(obj, 1, JsValue::from_number(type_id));
+        js_object_set_field(obj, 2, JsValue::from_number(type_id));
+        js_object_set_field(obj, 3, JsValue::from_number(0.0));
     }
     obj
 }
