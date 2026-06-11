@@ -19,7 +19,24 @@
 //! literals are avoided too (compile-time blowup, #4880).
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+    fn setsid() -> i32;
+}
+
+#[cfg(unix)]
+const SIGTERM: i32 = 15;
+#[cfg(unix)]
+const SIGKILL: i32 = 9;
+
+const COMPILED_BINARY_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
@@ -46,11 +63,61 @@ fn compile_and_run(source: &str) -> std::process::Output {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    Command::new(&output)
-        .env("PERRY_GC_FORCE_EVACUATE", "1")
-        .env("PERRY_GC_VERIFY_EVACUATION", "1")
-        .output()
-        .expect("run compiled binary")
+    let mut run = Command::new(&output);
+    run.env("PERRY_GC_FORCE_EVACUATE", "1")
+        .env("PERRY_GC_VERIFY_EVACUATION", "1");
+    run_compiled_binary_with_timeout(run, COMPILED_BINARY_TIMEOUT)
+}
+
+fn run_compiled_binary_with_timeout(mut command: Command, timeout: Duration) -> Output {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command.spawn().expect("run compiled binary");
+    let start = Instant::now();
+    loop {
+        match child.try_wait().expect("poll compiled binary") {
+            Some(_) => {
+                return child
+                    .wait_with_output()
+                    .expect("collect compiled binary output")
+            }
+            None if start.elapsed() >= timeout => {
+                #[cfg(unix)]
+                unsafe {
+                    let pgid = -(child.id() as i32);
+                    kill(pgid, SIGTERM);
+                    std::thread::sleep(Duration::from_millis(250));
+                    if child.try_wait().expect("poll after SIGTERM").is_none() {
+                        kill(pgid, SIGKILL);
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    child.kill().expect("kill timed out compiled binary");
+                }
+                let output = child
+                    .wait_with_output()
+                    .expect("collect timed out compiled binary output");
+                panic!(
+                    "compiled binary timed out after {:?}\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+                    timeout,
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
 fn assert_ok_output(run: &std::process::Output, expected: &str) {
