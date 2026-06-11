@@ -180,6 +180,21 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // `Object.prototype["2"] = v` (stringified-index write) makes the index
+    // visible through array hole/OOB reads. Cheap gate: one relaxed flag
+    // load, then an address compare against the cached canonical
+    // Object.prototype; the digit scan only runs on a match (test262
+    // concat/S15.4.4.4_A3_T3).
+    {
+        let raw = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::array::object_prototype_addr_matches(raw) && !key.is_null() {
+            if let Some(name) = unsafe { super::has_own_helpers::str_from_string_header(key) } {
+                if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+                    crate::array::note_object_prototype_index_write(raw);
+                }
+            }
+        }
+    }
     // A `Temporal.*` value is an opaque, immutable NaN-boxed cell that is NOT
     // an `ObjectHeader` — writing an arbitrary property (e.g. test262's
     // `instance.constructor = …` subclassing probes) must NOT interpret the

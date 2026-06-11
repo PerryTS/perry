@@ -30,7 +30,7 @@ use crate::type_analysis::{
     is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::arrays_finds::lower_buffer_index_get_i32;
 #[allow(unused_imports)]
@@ -378,6 +378,16 @@ fn lower_bounded_array_index_get(
     let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
     let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
     let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
+    // Index accessors / custom attribute descriptors (`Object.defineProperty
+    // (arr, i, { get })`) divert element reads through the descriptor tables —
+    // the raw slot load below would bypass them (test262 sort/precise-*).
+    // GcHeader._reserved (u16 at -6) carries OBJ_FLAG_ARRAY_DESCRIPTORS=0x400.
+    let obj_flags_addr = blk.sub(I64, &arr_handle, "6");
+    let obj_flags_ptr = blk.inttoptr(I64, &obj_flags_addr);
+    let obj_flags = blk.load(I16, &obj_flags_ptr);
+    let desc_bits = blk.and(I16, &obj_flags, "1024");
+    let has_desc = blk.icmp_ne(I16, &desc_bits, "0");
+    let needs_slow = blk.or(I1, &needs_slow, &has_desc);
 
     let lazy_idx = ctx.new_block("bidx.lazy");
     let fast_idx = ctx.new_block("bidx.fast");
@@ -443,6 +453,16 @@ fn lower_legacy_array_index_get(
     let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
     let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
     let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
+    // Index accessors / custom attribute descriptors (`Object.defineProperty
+    // (arr, i, { get })`) divert element reads through the descriptor tables —
+    // the raw slot load below would bypass them (test262 sort/precise-*).
+    // GcHeader._reserved (u16 at -6) carries OBJ_FLAG_ARRAY_DESCRIPTORS=0x400.
+    let obj_flags_addr = blk.sub(I64, &arr_handle, "6");
+    let obj_flags_ptr = blk.inttoptr(I64, &obj_flags_addr);
+    let obj_flags = blk.load(I16, &obj_flags_ptr);
+    let desc_bits = blk.and(I16, &obj_flags, "1024");
+    let has_desc = blk.icmp_ne(I16, &desc_bits, "0");
+    let needs_slow = blk.or(I1, &needs_slow, &has_desc);
 
     let lazy_idx = ctx.new_block("arr.lazy");
     let fast_idx = ctx.new_block("arr.fast");

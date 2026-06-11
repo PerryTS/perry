@@ -19,8 +19,11 @@
 //! fetch path eagerly buffers the whole response anyway, so the user-
 //! visible contract is identical for the consumers we expose here.
 //!
-//! Stubs: BYOB readers and full custom `QueuingStrategy` size accounting —
-//! see the inline comment on each site.
+//! BYOB readers (`getReader({ mode: "byob" })`, `read(view)`,
+//! `controller.byobRequest.respond/respondWithNewView`) and real
+//! `QueuingStrategy` size accounting (per-chunk `size()` results summed
+//! into `desiredSize`) live in `streams/byob.rs` and the queue helpers on
+//! `ReadableStreamData` (#4915).
 
 use perry_runtime::{
     js_array_alloc, js_array_push, js_closure_call0, js_closure_call1, js_closure_call2,
@@ -32,12 +35,25 @@ use std::collections::{HashMap, VecDeque};
 use std::os::raw::c_int;
 use std::sync::Mutex;
 
+mod byob;
 mod pipe;
+mod strategy;
 mod subclass;
 #[cfg(test)]
 mod tests;
 mod transform;
 mod writable;
+
+pub use self::byob::{
+    js_readable_stream_controller_byob_request, js_readable_stream_get_byob_reader,
+    js_reader_read_with_view,
+};
+pub(crate) use self::strategy::parse_strategy_value;
+pub use self::strategy::{
+    js_byte_length_queuing_strategy_new, js_count_queuing_strategy_new,
+    js_streams_strategy_high_water_mark,
+};
+use self::strategy::{read_high_water_mark, read_queuing_strategy_size};
 
 use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
@@ -49,7 +65,6 @@ pub use self::subclass::{
 pub use self::transform::{
     js_stream_web_compression_stream_new, js_stream_web_decompression_stream_new,
     js_stream_web_text_decoder_stream_new, js_stream_web_text_encoder_stream_new,
-    js_streams_throw_byob_not_implemented, js_streams_throw_byte_length_not_implemented,
     js_transform_stream_new, js_transform_stream_new_from_transformer_object,
     js_transform_stream_readable, js_transform_stream_writable,
 };
@@ -91,6 +106,16 @@ struct ReadableStreamData {
     state: ReadableState,
     /// Queued chunks as NaN-boxed pointers (typically Uint8Array via POINTER_TAG).
     chunks: VecDeque<u64>,
+    /// Per-chunk strategy sizes, parallel to `chunks` (#4915). The size of a
+    /// chunk is `strategy.size(chunk)` when a custom strategy is installed,
+    /// `chunk.byteLength` on byte streams, else 1 — computed once at enqueue
+    /// time per spec. Mutate the queue only through `push_chunk` /
+    /// `pop_chunk` / `clear_chunks` / `drain_chunks` so the running
+    /// `queue_total_size` stays in sync.
+    chunk_sizes: VecDeque<f64>,
+    /// Running sum of `chunk_sizes` — what `desiredSize` subtracts from the
+    /// highWaterMark (real ByteLengthQueuingStrategy accounting, #4915).
+    queue_total_size: f64,
     /// FIFO of read() promises waiting for a chunk.
     pending_reads: VecDeque<*mut Promise>,
     start_cb: i64,
@@ -111,14 +136,47 @@ struct ReadableStreamData {
     canceled: bool,
 }
 
+impl ReadableStreamData {
+    fn push_chunk(&mut self, bits: u64, size: f64) {
+        self.chunks.push_back(bits);
+        self.chunk_sizes.push_back(size);
+        self.queue_total_size += size;
+    }
+
+    fn pop_chunk(&mut self) -> Option<u64> {
+        let bits = self.chunks.pop_front()?;
+        let size = self.chunk_sizes.pop_front().unwrap_or(1.0);
+        self.queue_total_size = (self.queue_total_size - size).max(0.0);
+        Some(bits)
+    }
+
+    fn clear_chunks(&mut self) {
+        self.chunks.clear();
+        self.chunk_sizes.clear();
+        self.queue_total_size = 0.0;
+    }
+
+    fn drain_chunks(&mut self) -> Vec<u64> {
+        self.chunk_sizes.clear();
+        self.queue_total_size = 0.0;
+        self.chunks.drain(..).collect()
+    }
+}
+
 #[allow(dead_code)]
 struct WritableStreamData {
     state: WritableState,
     write_cb: i64,
     close_cb: i64,
     abort_cb: i64,
-    /// Backlog of writes while the sink's previous `write()` Promise is pending.
-    write_queue: VecDeque<(u64, *mut Promise)>,
+    /// Custom `strategy.size(chunk)` callback (#4915). 0 when absent; each
+    /// chunk then counts as 1 toward `desiredSize`.
+    strategy_size_cb: i64,
+    /// Backlog of writes while the sink's previous `write()` Promise is
+    /// pending: `(chunk_bits, write_promise, strategy_size)`.
+    write_queue: VecDeque<(u64, *mut Promise, f64)>,
+    /// Strategy size of the chunk currently in flight (0.0 when idle).
+    in_flight_size: f64,
     in_flight: bool,
     high_water_mark: f64,
     writer_handle: Option<usize>,
@@ -165,6 +223,10 @@ struct ReaderData {
     stream_handle: usize,
     locked: bool,
     closed_promise: *mut Promise,
+    /// True for readers minted by `getReader({ mode: "byob" })` /
+    /// `new ReadableStreamBYOBReader(stream)` (#4915). BYOB readers route
+    /// `read(view)` through `byob::js_reader_read_with_view`.
+    is_byob: bool,
 }
 
 struct WriterData {
@@ -258,12 +320,14 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             }
         }
     }
+    byob::scan_byob_roots(visitor);
     if let Ok(mut map) = WRITABLE_STREAMS.lock() {
         for s in map.values_mut() {
             visitor.visit_i64_slot(&mut s.write_cb);
             visitor.visit_i64_slot(&mut s.close_cb);
             visitor.visit_i64_slot(&mut s.abort_cb);
-            for (chunk, p) in s.write_queue.iter_mut() {
+            visitor.visit_i64_slot(&mut s.strategy_size_cb);
+            for (chunk, p, _size) in s.write_queue.iter_mut() {
                 visit_stream_value_slot(visitor, chunk);
                 visitor.visit_raw_mut_ptr_slot(p);
             }
@@ -493,12 +557,28 @@ fn alloc_readable_with_strategy(
         ReadableStreamData {
             state: ReadableState::Readable,
             chunks: VecDeque::new(),
+            chunk_sizes: VecDeque::new(),
+            queue_total_size: 0.0,
             pending_reads: VecDeque::new(),
             start_cb,
             pull_cb,
             cancel_cb,
             strategy_size_cb,
-            high_water_mark: if hwm.is_nan() || hwm <= 0.0 { 1.0 } else { hwm },
+            // Byte streams default to highWaterMark 0 (per spec — no eager
+            // pull at construction; the first pull fires when a read
+            // request arrives, #4915). Default streams keep the legacy
+            // clamp-to-1 behavior.
+            high_water_mark: if hwm.is_nan() {
+                if is_byte_stream {
+                    0.0
+                } else {
+                    1.0
+                }
+            } else if !is_byte_stream && hwm <= 0.0 {
+                1.0
+            } else {
+                hwm.max(0.0)
+            },
             is_byte_stream,
             pull_returns_byte_chunk: false,
             pulling: false,
@@ -513,6 +593,16 @@ fn alloc_readable_with_strategy(
 }
 
 fn alloc_writable(write_cb: i64, close_cb: i64, abort_cb: i64, hwm: f64) -> usize {
+    alloc_writable_with_strategy(write_cb, close_cb, abort_cb, hwm, 0)
+}
+
+fn alloc_writable_with_strategy(
+    write_cb: i64,
+    close_cb: i64,
+    abort_cb: i64,
+    hwm: f64,
+    strategy_size_cb: i64,
+) -> usize {
     let id = next_id(&NEXT_STREAM_ID);
     let ready = js_promise_new();
     let closed = js_promise_new();
@@ -524,7 +614,9 @@ fn alloc_writable(write_cb: i64, close_cb: i64, abort_cb: i64, hwm: f64) -> usiz
             write_cb,
             close_cb,
             abort_cb,
+            strategy_size_cb,
             write_queue: VecDeque::new(),
+            in_flight_size: 0.0,
             in_flight: false,
             high_water_mark: if hwm.is_nan() || hwm <= 0.0 { 1.0 } else { hwm },
             writer_handle: None,
@@ -587,11 +679,19 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
 }
 
 pub(super) unsafe fn maybe_pull(stream_id: usize) {
+    // ShouldCallPull (#4915): a parked read request always justifies a
+    // pull (this is what drives byte streams with highWaterMark 0 — the
+    // pull only fires once a `read()` / `read(view)` is waiting);
+    // otherwise pull while the queue is under the highWaterMark.
+    let has_byob_pending = byob::has_pending(stream_id);
     let (cb, controller, should_pull, pull_returns_byte_chunk) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) if s.state == ReadableState::Readable && !s.pulling && s.started => {
-                let need = s.chunks.is_empty() || (s.chunks.len() as f64) < s.high_water_mark;
+                let has_read_request = !s.pending_reads.is_empty() || has_byob_pending;
+                let need = has_read_request
+                    || (s.chunks.is_empty() && s.high_water_mark > 0.0)
+                    || (!s.chunks.is_empty() && s.queue_total_size < s.high_water_mark);
                 if need && s.pull_cb != 0 {
                     s.pulling = true;
                     (s.pull_cb, stream_id as f64, true, s.pull_returns_byte_chunk)
@@ -639,6 +739,7 @@ unsafe fn close_pending(stream_id: usize) {
         let result = build_iter_result(TAG_UNDEFINED, true);
         js_promise_resolve(p, f64::from_bits(result));
     }
+    byob::close_pending_byob(stream_id);
 }
 
 unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
@@ -652,6 +753,7 @@ unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
     for p in promises {
         js_promise_reject(p, f64::from_bits(reason_bits));
     }
+    byob::error_pending_byob(stream_id, reason_bits);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -779,83 +881,6 @@ pub unsafe extern "C" fn js_readable_stream_new_from_source_object(
     id as f64
 }
 
-// ── #1545: node:stream/web QueuingStrategy classes ──────────────────────
-//
-// `new CountQueuingStrategy({ highWaterMark })` and
-// `new ByteLengthQueuingStrategy({ highWaterMark })` produce plain objects
-// with a numeric `highWaterMark` field and a `size` method, matching the
-// WHATWG built-ins. CountQueuingStrategy.size always returns 1 (chunks are
-// counted one-by-one); ByteLengthQueuingStrategy.size returns
-// `chunk.byteLength`. Both are surfaced through codegen's builtin-`new`
-// dispatch (lower_call/builtin.rs); the import binding lives in
-// node_submodules.
-
-/// `CountQueuingStrategy.prototype.size` — every chunk counts as 1.
-extern "C" fn count_queuing_strategy_size(_c: *const ClosureHeader, _chunk: f64) -> f64 {
-    1.0
-}
-
-/// `ByteLengthQueuingStrategy.prototype.size` — `chunk.byteLength`.
-extern "C" fn byte_length_queuing_strategy_size(_c: *const ClosureHeader, chunk: f64) -> f64 {
-    // Mirror Node's `return chunk.byteLength`: the generic property getter
-    // resolves `.byteLength` for both registered buffers/typed arrays and
-    // plain `{ byteLength }` objects.
-    unsafe { perry_runtime::value::js_get_property(chunk, b"byteLength".as_ptr() as i64, 10) }
-}
-
-/// Build a `{ highWaterMark, size }` object for a queuing strategy. `hwm_bits`
-/// is the raw JSValue bits read from the caller's options object.
-unsafe fn build_queuing_strategy(
-    hwm_bits: u64,
-    size_fn: extern "C" fn(*const ClosureHeader, f64) -> f64,
-) -> f64 {
-    let obj = js_object_alloc(0, 2);
-    let keys = js_array_alloc(2);
-    let k_hwm = js_string_from_bytes(b"highWaterMark".as_ptr(), 13);
-    let k_size = js_string_from_bytes(b"size".as_ptr(), 4);
-    js_array_push(keys, JSValue::string_ptr(k_hwm));
-    js_array_push(keys, JSValue::string_ptr(k_size));
-    js_object_set_field(obj, 0, JSValue::from_bits(hwm_bits));
-    // `size` is a 1-arg native function value. Register the arity so closure
-    // dispatch pads/forwards the single `chunk` argument correctly.
-    let fn_ptr = size_fn as *const u8;
-    perry_runtime::closure::js_register_closure_arity(fn_ptr, 1);
-    let closure = perry_runtime::closure::js_closure_alloc(fn_ptr, 0);
-    js_object_set_field(obj, 1, JSValue::pointer(closure as *const u8));
-    js_object_set_keys(obj, keys);
-    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
-}
-
-/// Read `opts.highWaterMark` (raw JSValue bits) from a strategy's options
-/// object; undefined when absent (matches `new CountQueuingStrategy({})`).
-unsafe fn read_high_water_mark(opts: f64) -> u64 {
-    perry_runtime::value::js_get_property(opts, b"highWaterMark".as_ptr() as i64, 13).to_bits()
-}
-
-unsafe fn read_queuing_strategy_size(strategy: f64) -> i64 {
-    let size = perry_runtime::value::js_get_property(strategy, b"size".as_ptr() as i64, 4);
-    closure_from_bits(size.to_bits())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_streams_strategy_high_water_mark(strategy: f64) -> f64 {
-    f64::from_bits(read_high_water_mark(strategy))
-}
-
-/// `new CountQueuingStrategy({ highWaterMark })`.
-#[no_mangle]
-pub unsafe extern "C" fn js_count_queuing_strategy_new(opts: f64) -> f64 {
-    let hwm = read_high_water_mark(opts);
-    build_queuing_strategy(hwm, count_queuing_strategy_size)
-}
-
-/// `new ByteLengthQueuingStrategy({ highWaterMark })`.
-#[no_mangle]
-pub unsafe extern "C" fn js_byte_length_queuing_strategy_new(opts: f64) -> f64 {
-    let hwm = read_high_water_mark(opts);
-    build_queuing_strategy(hwm, byte_length_queuing_strategy_size)
-}
-
 /// Internal helper: build a single-chunk readable stream from an owned
 /// byte buffer. Used by `blob.stream()` and `response.body`.
 pub fn alloc_readable_from_bytes(bytes: Vec<u8>) -> usize {
@@ -867,7 +892,7 @@ pub fn alloc_readable_from_bytes(bytes: Vec<u8>) -> usize {
         if let Some(s) = g.get_mut(&id) {
             s.started = true;
             if !bytes.is_empty() {
-                s.chunks.push_back(chunk_bits);
+                s.push_chunk(chunk_bits, 1.0);
             }
             s.state = ReadableState::Closed;
         }
@@ -923,6 +948,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
                     stream_handle: id,
                     locked: true,
                     closed_promise: closed_p,
+                    is_byob: byob_requested,
                 },
             );
             return reader_id as f64;
@@ -1017,7 +1043,7 @@ unsafe fn js_readable_stream_cancel_inner(
                 } else {
                     s.canceled = true;
                     s.state = ReadableState::Closed;
-                    s.chunks.clear();
+                    s.clear_chunks();
                     s.cancel_cb
                 }
             }
@@ -1315,7 +1341,9 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&id) {
-            s.chunks.extend(source.chunks);
+            for bits in source.chunks {
+                s.push_chunk(bits, 1.0);
+            }
             s.started = true;
             if let Some(error) = source.error {
                 if s.chunks.is_empty() {
@@ -1373,7 +1401,7 @@ unsafe fn error_readable_stream(stream_id: usize, reason_bits: u64) {
                 s.state = ReadableState::Errored;
                 s.error_value = reason_bits;
                 s.pending_error_after_chunks = None;
-                s.chunks.clear();
+                s.clear_chunks();
                 s.reader_handle
             }
             None => return,
@@ -1415,6 +1443,11 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
             "The \"buffer\" argument must be an instance of Buffer, TypedArray, or DataView",
         );
     }
+    // A pending BYOB read (byte streams only) takes the chunk before the
+    // default-read queue: the bytes land directly in the caller's view.
+    if is_byte_stream && byob::service_pending_with_chunk(id, chunk_bits) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let (popped, strategy_size_cb) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
@@ -1432,7 +1465,9 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
         let result = build_iter_result(chunk_bits, false);
         js_promise_resolve(p, f64::from_bits(result));
     } else {
-        if strategy_size_cb != 0 {
+        // Per spec the strategy's size(chunk) runs once at enqueue time; the
+        // result is the chunk's contribution to desiredSize accounting.
+        let size = if strategy_size_cb != 0 {
             let size = readable_strategy_size_to_number(js_closure_call1(
                 strategy_size_cb as *const ClosureHeader,
                 chunk,
@@ -1440,11 +1475,16 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
             if size.is_nan() || size < 0.0 || size.is_infinite() {
                 throw_invalid_readable_strategy_size(id, size);
             }
-        }
+            size
+        } else if is_byte_stream {
+            byob::chunk_byte_length(chunk_bits)
+        } else {
+            1.0
+        };
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&id) {
             if s.state == ReadableState::Readable {
-                s.chunks.push_back(chunk_bits);
+                s.push_chunk(chunk_bits, size);
             }
         }
     }
@@ -1498,9 +1538,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handl
     let id = stream_handle as usize;
     let g = READABLE_STREAMS.lock().unwrap();
     match g.get(&id) {
-        Some(s) if s.state == ReadableState::Readable => {
-            (s.high_water_mark - s.chunks.len() as f64).max(0.0)
-        }
+        Some(s) if s.state == ReadableState::Readable => s.high_water_mark - s.queue_total_size,
         Some(s) if s.state == ReadableState::Errored => f64::NAN,
         _ => 0.0,
     }
@@ -1579,13 +1617,11 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
     let stream_id = match READERS.lock().unwrap().get(&reader_id) {
         Some(r) if r.locked => r.stream_handle,
         Some(_) => {
-            let err = make_error_with_message("Reader is no longer locked to a stream");
-            js_promise_reject(promise, f64::from_bits(err));
+            reject_type_error(promise, "Reader is no longer locked to a stream");
             return promise;
         }
         None => {
-            let err = make_error_with_message("Invalid reader");
-            js_promise_reject(promise, f64::from_bits(err));
+            reject_type_error(promise, "Invalid reader");
             return promise;
         }
     };
@@ -1595,7 +1631,7 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) => {
-                if let Some(c) = s.chunks.pop_front() {
+                if let Some(c) = s.pop_chunk() {
                     if s.chunks.is_empty() {
                         if let Some(error) = s.pending_error_after_chunks.take() {
                             s.state = ReadableState::Errored;
@@ -1818,7 +1854,7 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
         match g.get_mut(&id) {
             Some(s) if s.reader_handle.is_none() => {
                 is_byte_stream = s.is_byte_stream;
-                let drained: Vec<u64> = s.chunks.drain(..).collect();
+                let drained = s.drain_chunks();
                 s.state = ReadableState::Closed;
                 drained
             }
@@ -1843,6 +1879,8 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
                 ReadableStreamData {
                     state: ReadableState::Closed,
                     chunks: chunks.iter().copied().collect(),
+                    chunk_sizes: chunks.iter().map(|_| 1.0).collect(),
+                    queue_total_size: chunks.len() as f64,
                     pending_reads: VecDeque::new(),
                     start_cb: 0,
                     pull_cb: 0,

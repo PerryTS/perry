@@ -428,7 +428,19 @@ const ZLIB_OPTIONS_PARAM: ParamSpec = ParamSpec::Named {
 };
 const fn zlib_stream_factory(name: &'static str) -> ApiEntry {
     method_sig("zlib", name, false, None, ZLIB_STREAM_OPTS, TypeSpec::Any)
-        .stub_note("options (level/chunkSize/dictionary/...) accepted but ignored (#4917)")
+}
+/// Deflate-family compressor factory: `level` is honored (#4917);
+/// `strategy`/`memLevel` are validated but not applied, and a supplied
+/// `dictionary` warns once instead of silently mis-compressing.
+const fn zlib_compressor_factory(name: &'static str) -> ApiEntry {
+    zlib_stream_factory(name)
+        .stub_note("level honored; strategy/memLevel validated but not applied (#4917)")
+}
+/// Brotli/zstd factory: their `params` option shape is not wired up; a
+/// passed options object warns once (#4917).
+const fn zlib_params_factory(name: &'static str) -> ApiEntry {
+    zlib_stream_factory(name)
+        .stub_note("params/quality options accepted but ignored, warns once (#4917)")
 }
 
 /// Source-of-truth manifest. See module-level docs for what feeds it.
@@ -590,8 +602,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("mongodb", "insertOne", true, None),
     method("mongodb", "insertMany", true, None),
     method("mongodb", "find", true, None),
-    method("mongodb", "findOne", true, None)
-        .stub_note("resolves a JSON string, not a document object (#4917)"),
+    // #4917 — resolves a parsed document object (BSON-specific types in
+    // relaxed extended-JSON shape, e.g. `_id.$oid`), or null.
+    method("mongodb", "findOne", true, None),
     method("mongodb", "updateOne", true, None),
     method("mongodb", "updateMany", true, None),
     method("mongodb", "deleteOne", true, None),
@@ -712,10 +725,15 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sea", "getRawAsset", false, None),
     method("sea", "getAssetKeys", false, None),
     property("inspector", "default"),
-    method("inspector", "open", false, None),
+    method("inspector", "open", false, None).stub_note(
+        "accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916)",
+    ),
     method("inspector", "close", false, None),
-    method("inspector", "url", false, None),
-    method("inspector", "waitForDebugger", false, None),
+    method("inspector", "url", false, None)
+        .stub_note("always undefined: Perry never exposes a real inspector endpoint (#4916)"),
+    method("inspector", "waitForDebugger", false, None).stub_note(
+        "returns immediately after open(); there is no debugger to wait for (#4916)",
+    ),
     property("inspector", "console"),
     property("inspector", "Network"),
     class("inspector", "Session"),
@@ -723,7 +741,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("inspector", "connect", true, Some("Session")),
     method("inspector", "connectToMainThread", true, Some("Session")),
     method("inspector", "disconnect", true, Some("Session")),
-    method("inspector", "post", true, Some("Session")),
+    method("inspector", "post", true, Some("Session")).stub_note(
+        "only Runtime.enable and a canned Runtime.evaluate subset respond; every other protocol method throws Inspector error -32601 (#4916)",
+    ),
     method("inspector", "on", true, Some("Session")),
     method("inspector", "once", true, Some("Session")),
     internal_method("inspector.Network", "requestWillBeSent", false, None),
@@ -1224,12 +1244,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("tls", "rootCertificates"),
     property("tls", "CLIENT_RENEG_LIMIT"),
     property("tls", "CLIENT_RENEG_WINDOW"),
+    // #4971 — all-any params: the runtime resolves Node's overloads
+    // (`connect(options[, cb])`, `connect(port[, host][, options][, cb])`)
+    // plus the legacy positional `(host, port, servername?, verify?)` from
+    // the raw NaN-boxed args; the old `(string, any, string, any)` shape
+    // string-coerced an options-object first arg.
     method_sig(
         "tls",
         "connect",
         false,
         None,
-        &[p_str("p0"), p_any("p1"), p_str("p2"), p_any("p3")],
+        &[p_any("p0"), p_any("p1"), p_any("p2"), p_any("p3")],
         TypeSpec::Any,
     ),
     class("tls", "SecureContext"),
@@ -1620,6 +1645,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         }],
         TypeSpec::Bool,
     ),
+    // #4917 — real retry semantics: options (numOfAttempts/startingDelay/
+    // timeMultiple/maxDelay/delayFirstAttempt/jitter/retry) honored;
+    // Promise-returning tasks retry on rejection via promise reactions.
     method_sig(
         "exponential-backoff",
         "backOff",
@@ -1627,8 +1655,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         None,
         &[p_any("p0"), p_any("p1")],
         TypeSpec::Any,
-    )
-    .stub_note("retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917)"),
+    ),
     method_sig(
         "argon2",
         "hash",
@@ -2211,19 +2238,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     // #1843 — Transform-stream factories. Each returns a stream handle
     // supporting `.write`/`.end`/`.on('data'|'end'|'error')`/`.pipe`.
-    zlib_stream_factory("createGzip"),
+    // #4917 — deflate-family factories honor `options.level`; a supplied
+    // `dictionary` warns once (decompressors fail loudly without it, so
+    // the plain factories are no longer flagged).
+    zlib_compressor_factory("createGzip"),
     zlib_stream_factory("createGunzip"),
-    zlib_stream_factory("createDeflate"),
+    zlib_compressor_factory("createDeflate"),
     zlib_stream_factory("createInflate"),
-    zlib_stream_factory("createDeflateRaw"),
+    zlib_compressor_factory("createDeflateRaw"),
     zlib_stream_factory("createInflateRaw"),
     zlib_stream_factory("createUnzip"),
-    zlib_stream_factory("createBrotliCompress"),
+    zlib_params_factory("createBrotliCompress"),
     // `zlib.createBrotliDecompress(options?)` — now a real Transform stream
     // (still passes axios's `typeof === 'function'` module-init gate).
-    zlib_stream_factory("createBrotliDecompress"),
-    zlib_stream_factory("createZstdCompress"),
-    zlib_stream_factory("createZstdDecompress"),
+    zlib_params_factory("createBrotliDecompress"),
+    zlib_params_factory("createZstdCompress"),
+    zlib_params_factory("createZstdDecompress"),
     method_sig(
         "cron",
         "validate",
@@ -2785,10 +2815,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("worker_threads", "once", true, Some("Worker")),
     method("worker_threads", "off", true, Some("Worker")),
     method("worker_threads", "terminate", true, Some("Worker")),
-    method("worker_threads", "ref", true, Some("Worker"))
-        .stub_note("no-op; does not affect process event-loop ref-count (#4917)"),
-    method("worker_threads", "unref", true, Some("Worker"))
-        .stub_note("no-op; does not affect process event-loop ref-count (#4917)"),
+    // #4917 — real: `ref()`/`unref()` flip `WorkerRecord.refed`, which
+    // `js_worker_threads_has_pending` checks to keep the event loop alive
+    // (a live refed worker holds the process; `unref()` releases it).
+    method("worker_threads", "ref", true, Some("Worker")),
+    method("worker_threads", "unref", true, Some("Worker")),
     method("worker_threads", "getHeapStatistics", true, Some("Worker")),
     method("worker_threads", "cpuUsage", true, Some("Worker")),
     method("worker_threads", "getHeapSnapshot", true, Some("Worker")),
@@ -3643,19 +3674,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("querystring", "encode", false, None),
     // node:cluster — primary lifecycle surface. `setupPrimary` /
     // `setupMaster`, `fork`, and `disconnect` route through the native
-    // module bound-method path; handle sharing/listening distribution is
-    // outside this manifest entry.
+    // module bound-method path. Workers share a listening port via
+    // SO_REUSEPORT binds + a fork-IPC 'listening' round-trip (#4914);
+    // `SCHED_RR` fd-passing and the shared ephemeral port for `listen(0)`
+    // remain tracked in #4962.
     // #3687: default import (`import cluster from "node:cluster"`) is the
     // EventEmitter-shaped `cluster.default` namespace; the `import * as`
     // namespace keeps the shape-only surface.
     property("cluster", "default"),
-    method("cluster", "fork", false, None)
-        .stub_note("no socket/listening-handle distribution; workers cannot share a port (#4914)"),
+    method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
-    method("cluster", "setupPrimary", false, None)
-        .stub_note("no socket/listening-handle distribution; workers cannot share a port (#4914)"),
-    method("cluster", "setupMaster", false, None)
-        .stub_note("no socket/listening-handle distribution; workers cannot share a port (#4914)"),
+    method("cluster", "setupPrimary", false, None),
+    method("cluster", "setupMaster", false, None),
     class("cluster", "Worker"),
     property("cluster", "isPrimary"),
     property("cluster", "isMaster"),
@@ -4171,10 +4201,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("stream/web", "default"),
     class("stream/web", "ReadableStream"),
     class("stream/web", "ReadableStreamDefaultReader"),
-    class("stream/web", "ReadableStreamBYOBReader")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
-    class("stream/web", "ReadableStreamBYOBRequest")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
+    // #4915: BYOB readers are real — `new ReadableStreamBYOBReader(stream)` /
+    // `getReader({ mode: "byob" })` mint a reader whose `read(view)` fills the
+    // caller-supplied buffer; the byte-stream controller's `byobRequest`
+    // exposes `view` / `respond(bytesWritten)` / `respondWithNewView(view)`.
+    class("stream/web", "ReadableStreamBYOBReader"),
+    class("stream/web", "ReadableStreamBYOBRequest"),
     class("stream/web", "ReadableByteStreamController"),
     class("stream/web", "ReadableStreamDefaultController"),
     class("stream/web", "TransformStream"),
@@ -4182,8 +4214,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("stream/web", "WritableStream"),
     class("stream/web", "WritableStreamDefaultWriter"),
     class("stream/web", "WritableStreamDefaultController"),
-    class("stream/web", "ByteLengthQueuingStrategy")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
+    // #4915: real byteLength accounting — per-chunk size() results are summed
+    // into desiredSize for ReadableStream/WritableStream/TransformStream.
+    class("stream/web", "ByteLengthQueuingStrategy"),
     class("stream/web", "CountQueuingStrategy"),
     class("stream/web", "TextEncoderStream"),
     class("stream/web", "TextDecoderStream"),
@@ -4376,8 +4409,12 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("repl", "REPL_MODE_STRICT"),
     class("repl", "REPLServer"),
     class("repl", "Recoverable"),
-    method("repl", "start", false, None),
-    method("repl", "REPLServer", false, None),
+    method("repl", "start", false, None).stub_note(
+        "REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)",
+    ),
+    method("repl", "REPLServer", false, None).stub_note(
+        "REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)",
+    ),
     method("repl", "Recoverable", false, None),
     internal_method("repl", "on", true, Some("REPLServer")),
     internal_method("repl", "addListener", true, Some("REPLServer")),
@@ -4444,13 +4481,19 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // --- node:v8 (#3137/#3138/#3142) ---
     method("v8", "serialize", false, None),
     method("v8", "deserialize", false, None),
-    method("v8", "getHeapStatistics", false, None),
-    method("v8", "getHeapCodeStatistics", false, None),
-    method("v8", "getHeapSpaceStatistics", false, None),
+    method("v8", "getHeapStatistics", false, None).stub_note(
+        "Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916)",
+    ),
+    method("v8", "getHeapCodeStatistics", false, None)
+        .stub_note("all fields 0; Perry compiles AOT, there is no JIT code heap (#4916)"),
+    method("v8", "getHeapSpaceStatistics", false, None).stub_note(
+        "Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916)",
+    ),
     method("v8", "cachedDataVersionTag", false, None),
     class("v8", "GCProfiler"),
     method("v8", "start", true, Some("GCProfiler")),
-    method("v8", "stop", true, Some("GCProfiler")),
+    method("v8", "stop", true, Some("GCProfiler"))
+        .stub_note("report has the Node shape but the statistics array is always empty (#4916)"),
     // #3680: class-based serialization. Serializer / Deserializer plus the
     // Default* subclasses, with their write*/read* instance methods.
     class("v8", "Serializer"),
@@ -4481,13 +4524,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // Node's ESM namespace). `getHeapSnapshot`/`writeHeapSnapshot` deeper
     // behavior is tracked by #3140; here they're added to the export surface.
     method("v8", "getCppHeapStatistics", false, None),
-    method("v8", "getHeapSnapshot", false, None)
-        .stub_note("empty-but-valid V8 heap graph, not a real snapshot (#4916)"),
+    method("v8", "getHeapSnapshot", false, None),
     method("v8", "isStringOneByteRepresentation", false, None),
     method("v8", "queryObjects", false, None),
     method("v8", "startCpuProfile", false, None),
-    method("v8", "writeHeapSnapshot", false, None)
-        .stub_note("empty-but-valid V8 heap graph, not a real snapshot (#4916)"),
+    method("v8", "writeHeapSnapshot", false, None),
     method("v8", "isBuildingSnapshot", true, Some("startupSnapshot")),
     method("v8", "addSerializeCallback", true, Some("startupSnapshot")),
     method(
@@ -4627,6 +4668,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // helpers validate header tokens/values or are deterministic no-ops.
     property("http", "maxHeaderSize"),
     property("http", "globalAgent"),
+    // #4974 — `require('_http_server').kConnectionsCheckingInterval`
+    // (Perry aliases `_http_server` to `http`). Node exports a Symbol
+    // tests use as `server[k]._destroyed`; Perry resolves it to the
+    // sentinel key the server handle dispatch recognizes.
+    property("http", "kConnectionsCheckingInterval"),
     method("http", "validateHeaderName", false, None),
     method("http", "validateHeaderValue", false, None),
     method("http", "setMaxIdleHTTPParsers", false, None),
@@ -4643,13 +4689,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http", "Agent"),
     method("http", "Agent", false, None),
     method("http", "getName", true, Some("Agent")),
-    method("http", "destroy", true, Some("Agent"))
-        .stub_note("real Agent object, but Perry does not pool sockets; this is a no-op (#4917)"),
+    // #4917 — `destroy()` really drops the per-agent reqwest client (=
+    // releases its keep-alive pool) and flips `destroyed`; not a stub.
+    method("http", "destroy", true, Some("Agent")),
     method("http", "close", true, Some("Agent")),
     method("http", "keepSocketAlive", true, Some("Agent"))
-        .stub_note("real Agent object, but Perry does not pool sockets; this is a no-op (#4917)"),
+        .stub_note("reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)"),
     method("http", "reuseSocket", true, Some("Agent"))
-        .stub_note("real Agent object, but Perry does not pool sockets; this is a no-op (#4917)"),
+        .stub_note("reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)"),
     // Synthetic `__get_<name>` / `__set_<name>` accessor methods (HIR
     // rewrites bare `agent.maxSockets` reads to `__get_maxSockets()`
     // when the receiver is class-tagged) + their bare-name twins for
@@ -5126,9 +5173,10 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("streams", "TextEncoder"),
     class("streams", "TextDecoder"),
     class("streams", "DecompressionStream"),
-    // node:stream/web QueuingStrategy classes (#1545).
-    class("streams", "ByteLengthQueuingStrategy")
-        .stub_note("constructor/use throws: not yet implemented (#4915)"),
+    // node:stream/web QueuingStrategy classes (#1545). #4915: the
+    // constructor lowers through the same stdlib builtin arm as the
+    // node:stream/web form, with real byteLength desiredSize accounting.
+    class("streams", "ByteLengthQueuingStrategy"),
     class("streams", "CountQueuingStrategy"),
     // --- node:http server (issue #577) ---
     method("http", "createServer", false, None),

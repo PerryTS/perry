@@ -2,11 +2,196 @@
 
 use super::*;
 
-use crate::expr::{BoundedIndexPair, IntRangeFact};
+use crate::expr::{nanbox_pointer_inline, BoundedIndexPair, IntRangeFact};
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
 use crate::native_value::{BoundedBufferIndex, BoundsProof, BoundsState, LengthSource};
-use crate::types::I32;
+use crate::types::{I1, I32, I64};
+
+#[derive(Clone, Copy)]
+enum NumericBulkFillValue {
+    Const(f64),
+    Iota,
+}
+
+struct NumericBulkFillLoop {
+    counter_id: u32,
+    array_id: u32,
+    bound: perry_hir::Expr,
+    value: NumericBulkFillValue,
+}
+
+fn match_numeric_bulk_fill_loop(
+    ctx: &FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<NumericBulkFillLoop> {
+    let init = init?;
+    let (counter_id, init_expr) = match init {
+        Stmt::Let { id, init, .. } => (*id, init.as_ref()?),
+        _ => return None,
+    };
+    match init_expr {
+        perry_hir::Expr::Integer(0) => {}
+        perry_hir::Expr::Number(n) if *n == 0.0 => {}
+        _ => return None,
+    }
+    match update {
+        Some(perry_hir::Expr::Update {
+            id,
+            op: perry_hir::UpdateOp::Increment,
+            ..
+        }) if *id == counter_id => {}
+        _ => return None,
+    }
+    let bound = match condition? {
+        perry_hir::Expr::Compare {
+            op: perry_hir::CompareOp::Lt,
+            left,
+            right,
+        } if matches!(left.as_ref(), perry_hir::Expr::LocalGet(id) if *id == counter_id) => {
+            right.as_ref().clone()
+        }
+        _ => return None,
+    };
+    let (object, index, value) = match body {
+        [Stmt::Expr(perry_hir::Expr::IndexSet {
+            object,
+            index,
+            value,
+        })] => (object, index, value),
+        [Stmt::Expr(perry_hir::Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        })] if matches!(
+            (target.as_ref(), receiver.as_ref()),
+            (perry_hir::Expr::LocalGet(a), perry_hir::Expr::LocalGet(b)) if a == b
+        ) =>
+        {
+            (target, key, value)
+        }
+        _ => return None,
+    };
+    if !matches!(index.as_ref(), perry_hir::Expr::LocalGet(id) if *id == counter_id) {
+        return None;
+    }
+    let array_id = match object.as_ref() {
+        perry_hir::Expr::LocalGet(id) => *id,
+        _ => return None,
+    };
+    let is_numeric_array = matches!(
+        ctx.local_types.get(&array_id),
+        Some(perry_types::Type::Array(elem))
+            if matches!(elem.as_ref(), perry_types::Type::Number | perry_types::Type::Int32)
+    );
+    if !is_numeric_array {
+        return None;
+    }
+    let value = match value.as_ref() {
+        perry_hir::Expr::LocalGet(id) if *id == counter_id => NumericBulkFillValue::Iota,
+        perry_hir::Expr::Integer(n) => NumericBulkFillValue::Const(*n as f64),
+        perry_hir::Expr::Number(n) if n.is_finite() => NumericBulkFillValue::Const(*n),
+        _ => return None,
+    };
+    Some(NumericBulkFillLoop {
+        counter_id,
+        array_id,
+        bound,
+        value,
+    })
+}
+
+fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoop) -> Result<bool> {
+    let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.array_id))?;
+    let arr_handle = {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+        blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64)
+    };
+
+    let is_len_bound = matches!(
+        &matched.bound,
+        perry_hir::Expr::PropertyGet { object, property }
+            if property == "length"
+                && matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == matched.array_id)
+    );
+    let (new_arr, bound_i32) = if is_len_bound {
+        let bound_i32 = ctx
+            .block()
+            .call(I32, "js_array_length", &[(I64, &arr_handle)]);
+        let new_arr = match matched.value {
+            NumericBulkFillValue::Const(value) => {
+                let value_lit = crate::nanbox::double_literal(value);
+                ctx.block().call(
+                    I64,
+                    "js_array_fill_f64_const_len_extend",
+                    &[(I64, &arr_handle), (DOUBLE, &value_lit)],
+                )
+            }
+            NumericBulkFillValue::Iota => ctx.block().call(
+                I64,
+                "js_array_fill_f64_iota_len_extend",
+                &[(I64, &arr_handle)],
+            ),
+        };
+        (new_arr, bound_i32)
+    } else {
+        let bound_i32 = match &matched.bound {
+            perry_hir::Expr::Integer(n) if *n >= 0 && *n <= u32::MAX as i64 => n.to_string(),
+            perry_hir::Expr::Number(n)
+                if n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= u32::MAX as f64 =>
+            {
+                (*n as u32).to_string()
+            }
+            perry_hir::Expr::LocalGet(id)
+                if ctx.integer_locals.contains(id)
+                    || matches!(
+                        ctx.local_types.get(id),
+                        Some(perry_types::Type::Number | perry_types::Type::Int32)
+                    ) =>
+            {
+                let bound_d = lower_expr(ctx, &matched.bound)?;
+                let raw_i32 = ctx.block().fptosi(DOUBLE, &bound_d, I32);
+                let positive = ctx.block().fcmp("ogt", &bound_d, "0.0");
+                ctx.block().select(I1, &positive, I32, &raw_i32, "0")
+            }
+            _ => return Ok(false),
+        };
+        let new_arr = match matched.value {
+            NumericBulkFillValue::Const(value) => {
+                let value_lit = crate::nanbox::double_literal(value);
+                ctx.block().call(
+                    I64,
+                    "js_array_fill_f64_const_extend",
+                    &[(I64, &arr_handle), (I32, &bound_i32), (DOUBLE, &value_lit)],
+                )
+            }
+            NumericBulkFillValue::Iota => ctx.block().call(
+                I64,
+                "js_array_fill_f64_iota_extend",
+                &[(I64, &arr_handle), (I32, &bound_i32)],
+            ),
+        };
+        (new_arr, bound_i32)
+    };
+    let new_box = nanbox_pointer_inline(ctx.block(), &new_arr);
+    if let Some(slot) = ctx.locals.get(&matched.array_id).cloned() {
+        ctx.block().store(DOUBLE, &new_box, &slot);
+    }
+    if let Some(counter_slot) = ctx.locals.get(&matched.counter_id).cloned() {
+        let bound_d = ctx.block().sitofp(I32, &bound_i32, DOUBLE);
+        ctx.block().store(DOUBLE, &bound_d, &counter_slot);
+    }
+    if let Some(i32_slot) = ctx.i32_counter_slots.get(&matched.counter_id).cloned() {
+        ctx.block().store(I32, &bound_i32, &i32_slot);
+    }
+    Ok(true)
+}
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
 ///
@@ -45,6 +230,12 @@ pub(crate) fn lower_for(
         lower_stmt(ctx, init_stmt)?;
     }
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
+
+    if let Some(matched) = match_numeric_bulk_fill_loop(ctx, init, condition, update, body) {
+        if lower_numeric_bulk_fill_loop(ctx, matched)? {
+            return Ok(());
+        }
+    }
 
     // Loop-invariant length hoisting peephole. Detect the very common
     // shape `for (...; i < arr.length; ...)` where `arr` is a local

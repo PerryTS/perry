@@ -557,7 +557,8 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
         Ok(a) => a,
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
-    let std_listener = match std::net::TcpListener::bind(addr) {
+    // #4914 — SO_REUSEPORT in cluster workers; plain bind otherwise.
+    let std_listener = match crate::cluster_bind::bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("[node:http2] bind {}:{} failed: {}", host, port, e);
@@ -569,6 +570,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
         eprintln!("[node:http2] set_nonblocking failed: {}", e);
         return server_handle;
     }
+    crate::cluster_bind::notify_listening(&host, actual_port);
 
     let (tls_config, plaintext) =
         if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
@@ -1958,6 +1960,7 @@ pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) 
     let close_listeners;
     if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
         s.base.listening = false;
+        s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();
         close_listeners = s.base.listeners.get("close").cloned().unwrap_or_default();
     } else {

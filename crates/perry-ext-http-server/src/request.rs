@@ -391,20 +391,22 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     let encoding;
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.paused = false;
-        if !im.data_emitted && !im.body_bytes.is_empty() {
-            should_emit_data = true;
-        }
-        if !im.end_emitted {
-            should_emit_end = true;
-        }
         body_bytes = im.body_bytes.clone();
         data_listeners = im.listeners.get("data").cloned().unwrap_or_default();
         end_listeners = im.listeners.get("end").cloned().unwrap_or_default();
         encoding = im.encoding.clone();
-        if should_emit_data {
+        // #4909 — only consume the one-shot emit flags when a listener is
+        // actually present. `req.resume(); req.on('end', cb)` (the canonical
+        // body-drain pattern) registers the listener one statement AFTER
+        // resume; marking `end_emitted` here meant `im_on`'s sync-emit arm
+        // saw the event as already delivered and the server hung without
+        // ever responding.
+        if !im.data_emitted && !im.body_bytes.is_empty() && !data_listeners.is_empty() {
+            should_emit_data = true;
             im.data_emitted = true;
         }
-        if should_emit_end {
+        if !im.end_emitted && !end_listeners.is_empty() {
+            should_emit_end = true;
             im.end_emitted = true;
             im.complete = true;
         }

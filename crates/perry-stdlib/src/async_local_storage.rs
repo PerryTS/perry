@@ -93,9 +93,15 @@ pub unsafe extern "C" fn js_async_local_storage_run(
     // without leaving a pushed store behind (#3092).
     let cb = validate_callback(callback);
 
+    // A context guard mirrors the pop below: if the callback throws,
+    // `js_throw` applies the guard while unwinding so the catch site still
+    // observes the pre-`run` store (#788, Node restores via try/finally).
     async_context::push_store(handle, store);
+    async_context::push_context_guard(async_context::ContextGuardAction::PopStore(handle));
     let result = call_with_forwarded_args(cb, args_array);
-    async_context::pop_store(handle);
+    if let Some(action) = async_context::pop_context_guard() {
+        async_context::apply_context_guard(action);
+    }
 
     result
 }
@@ -141,10 +147,21 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
         None
     };
 
+    // Guarded like run(): a throwing callback must still restore the saved
+    // store stack at the catch site (#788).
+    let guarded = saved.is_some();
+    if let Some(saved) = saved {
+        async_context::push_context_guard(async_context::ContextGuardAction::RestoreStores(
+            handle, saved,
+        ));
+    }
+
     let result = call_with_forwarded_args(cb, args_array);
 
-    if let Some(saved) = saved {
-        async_context::restore_store(handle, saved);
+    if guarded {
+        if let Some(action) = async_context::pop_context_guard() {
+            async_context::apply_context_guard(action);
+        }
     }
 
     result

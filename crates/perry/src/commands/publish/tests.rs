@@ -439,3 +439,53 @@ fn test_validate_passes_when_all_present() {
     );
     assert!(result.is_ok());
 }
+
+// --- GHSA-x55v-q459-68ch: server-controlled artifact path handling ---
+
+#[test]
+fn test_sanitize_artifact_name_accepts_plain_names() {
+    assert_eq!(sanitize_artifact_name("app.zip").unwrap(), "app.zip");
+    assert_eq!(
+        sanitize_artifact_name("MyGame-1.2.3.dmg").unwrap(),
+        "MyGame-1.2.3.dmg"
+    );
+    // Surrounding whitespace is trimmed, not treated as part of the name.
+    assert_eq!(sanitize_artifact_name("  app.ipa  ").unwrap(), "app.ipa");
+}
+
+#[test]
+fn test_sanitize_artifact_name_rejects_traversal() {
+    for evil in [
+        "../../.ssh/authorized_keys",
+        "../x",
+        "a/b",
+        "a/../b",
+        "/etc/cron.d/x",
+        "/etc/passwd",
+        "..",
+        ".",
+        "",
+        "   ",
+        "foo/bar.zip",
+        "..\\windows\\system32",
+        "C:\\Users\\victim\\evil.exe",
+    ] {
+        assert!(
+            sanitize_artifact_name(evil).is_err(),
+            "expected {evil:?} to be rejected as unsafe"
+        );
+    }
+}
+
+#[test]
+fn test_server_is_local() {
+    assert!(server_is_local("http://localhost:3000"));
+    assert!(server_is_local("https://LOCALHOST"));
+    assert!(server_is_local("http://127.0.0.1:8080"));
+    assert!(server_is_local("http://[::1]:9000"));
+
+    assert!(!server_is_local("https://hub.perryts.com"));
+    assert!(!server_is_local("https://attacker.example.com"));
+    assert!(!server_is_local("http://10.0.0.5:3000"));
+    assert!(!server_is_local("not a url"));
+}

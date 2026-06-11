@@ -1170,6 +1170,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     | "Blob"
                     | "File"
                     | "ReadableStream"
+                    | "ReadableStreamBYOBReader"
                     | "WritableStream"
                     | "TransformStream"
             ) {

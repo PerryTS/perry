@@ -1161,7 +1161,15 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
         let closure = ptr as *const ClosureHeader;
         if (*closure).type_tag == CLOSURE_MAGIC && (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
             let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
-            if let Some(source_cid) = super::class_ref_id(recv) {
+            let recv_value = crate::JSValue::from_bits(recv.to_bits());
+            let source_cid = super::class_ref_id(recv).or_else(|| {
+                recv_value.is_pointer().then(|| {
+                    super::class_registry::class_id_for_decl_prototype_object(
+                        recv_value.as_pointer::<u8>() as usize,
+                    )
+                })?
+            });
+            if let Some(source_cid) = source_cid {
                 if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                     super::lookup_class_method_in_chain(source_cid, name)
                 {
@@ -1240,6 +1248,29 @@ pub extern "C" fn js_object_define_property(
                 throw_object_type_error(b"'defineProperty' on proxy: trap returned falsish");
             }
             return obj_value;
+        }
+
+        // A numeric key defined on `Object.prototype` (data or accessor) shows
+        // through array hole/OOB reads — flip the global flag.
+        {
+            let kb = key_value.to_bits();
+            let is_numeric_key =
+                (kb >> 48) == 0x7FFE || crate::value::JSValue::from_bits(kb).is_number() || {
+                    let sp = crate::value::js_get_string_pointer_unified(key_value)
+                        as *const crate::StringHeader;
+                    !sp.is_null()
+                        && super::has_own_helpers::str_from_string_header(sp)
+                            .map(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                            .unwrap_or(false)
+                };
+            if is_numeric_key {
+                let ob = obj_value.to_bits();
+                if (ob >> 48) == 0x7FFD {
+                    crate::array::note_object_prototype_index_write(
+                        (ob & crate::value::POINTER_MASK) as usize,
+                    );
+                }
+            }
         }
 
         // #2817: ES Object.defineProperty validation.
@@ -1576,6 +1607,23 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
+        // #4949 / #2159 follow-up: `ClassExprFresh.prototype` now materializes
+        // the declared-class prototype object. Keep `Object.defineProperty` on
+        // that live object wired to the same prototype-method side tables used
+        // by the historical ClassRef path, so instances observe decorator/mixin
+        // method replacements.
+        if let Some(target_cid) =
+            super::class_registry::class_id_for_decl_prototype_object(obj as usize)
+        {
+            if let Some(ref name) = key_rust {
+                if desc_has_field(descriptor_value, b"value") {
+                    let value_field = desc_read_field(descriptor_value, b"value");
+                    if !value_field.is_undefined() {
+                        define_class_prototype_method(target_cid, name, value_field.bits());
+                    }
+                }
+            }
+        }
         if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(
@@ -2868,6 +2916,24 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         && is_valid_obj_ptr(obj_ptr_for_record as *const u8)
     {
         super::prototype_chain::object_set_static_prototype(obj_ptr_for_record, proto_bits);
+        // A grown array's local may still hold the FORWARDED (old) pointer;
+        // the spec [[HasProperty]]/[[Get]] helpers look the prototype up by
+        // the CLEANED address. Record under both keys so either resolves
+        // (test262 copyWithin/coerced-values-start-change-* second case).
+        unsafe {
+            let hdr = (obj_ptr_for_record as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+                || (*hdr).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            {
+                let cleaned = crate::array::clean_arr_ptr(
+                    obj_ptr_for_record as *const crate::array::ArrayHeader,
+                ) as usize;
+                if cleaned != 0 && cleaned != obj_ptr_for_record {
+                    super::prototype_chain::object_set_static_prototype(cleaned, proto_bits);
+                }
+            }
+        }
     }
 
     // Spec: `Object.setPrototypeOf(O, proto)` returns O.

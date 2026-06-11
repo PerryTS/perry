@@ -1909,9 +1909,16 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
             js_tls_check_server_identity(arg(0).to_bits() as i64, arg(1).to_bits() as i64)
         }
         "connect" => {
-            let host = js_get_string_pointer_unified(arg(0));
-            let servername = js_get_string_pointer_unified(arg(2));
-            let handle = crate::net::js_tls_connect(host, arg(1), servername, arg(3));
+            // Pass the args through raw — js_tls_connect resolves Node's
+            // `connect(options[, cb])` / `connect(port[, host][, options][,
+            // cb])` overloads plus the legacy positional form itself (#4971).
+            let handle = crate::net::js_tls_connect(arg(0), arg(1), arg(2), arg(3));
+            if handle == 0 {
+                // Unresolvable args (e.g. no port) — undefined beats a
+                // NaN-boxed null pointer that every later method call
+                // trips over (#4971).
+                return undefined();
+            }
             record_tls_client_handle(handle);
             nanbox_handle(handle)
         }

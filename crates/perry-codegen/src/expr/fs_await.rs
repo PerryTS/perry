@@ -157,13 +157,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .cond_br(&is_promise_bool, &drain_once_label, &merge_label);
 
             // === drain_once ===
-            // Flush queueMicrotask callbacks before the first state check.
-            // When the promise is already settled (e.g. `await Promise.resolve()`)
-            // the wait loop below is never entered, so microtasks queued before
-            // this await would never fire. One drain here covers that path;
-            // the wait loop covers all subsequent ticks for pending promises.
+            // Run pending promise/queueMicrotask jobs before the first state
+            // check. When the promise is already settled (e.g.
+            // `await Promise.resolve()`) the wait loop below is never
+            // entered, so jobs queued before this await would never fire
+            // before execution continues. Promise jobs ONLY — nextTick
+            // callbacks queued in the same synchronous stretch wait for the
+            // next real tick boundary, matching Node's checkpoint ordering
+            // (#788; previously this drained the tick queue instead, so a
+            // nextTick callback overtook earlier-queued microtasks). The
+            // wait loop covers ticks/timers for pending promises.
             ctx.current_block = drain_once_idx;
-            ctx.block().call_void("js_drain_queued_microtasks", &[]);
+            let _ = ctx.block().call(I32, "js_promise_run_promise_jobs", &[]);
             ctx.block().br(&check_label);
 
             // === check ===

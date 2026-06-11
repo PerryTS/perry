@@ -310,11 +310,132 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
     );
 }
 
+fn is_bare_package_specifier(source: &str) -> bool {
+    !source.starts_with('.') && !source.starts_with('/')
+}
+
+fn module_provides_export(
+    ctx: &mut CompilationContext,
+    module_path: &Path,
+    export_name: &str,
+    seen: &mut HashSet<(PathBuf, String)>,
+) -> bool {
+    let key = (module_path.to_path_buf(), export_name.to_string());
+    if !seen.insert(key) {
+        return false;
+    }
+
+    let Some(module) = ctx.native_modules.get(module_path) else {
+        return false;
+    };
+    let exports = module.exports.clone();
+
+    for export in exports {
+        match export {
+            perry_hir::Export::Named { exported, .. } if exported == export_name => {
+                return true;
+            }
+            perry_hir::Export::NamespaceReExport { name, .. } if name == export_name => {
+                return true;
+            }
+            perry_hir::Export::ReExport {
+                source,
+                imported,
+                exported,
+            } if exported == export_name => {
+                if let Some((resolved, perry_hir::ModuleKind::NativeCompiled)) =
+                    super::cached_resolve_import(&source, module_path, ctx)
+                {
+                    if module_provides_export(ctx, &resolved, &imported, seen) {
+                        return true;
+                    }
+                }
+            }
+            perry_hir::Export::ExportAll { source } if export_name != "default" => {
+                if let Some((resolved, perry_hir::ModuleKind::NativeCompiled)) =
+                    super::cached_resolve_import(&source, module_path, ctx)
+                {
+                    if module_provides_export(ctx, &resolved, export_name, seen) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+/// Validate default imports from package entries that Perry compiles natively.
+///
+/// Perry lowers JS-module default imports to a `__default` wrapper symbol. If a
+/// package entry is ESM-shaped and exposes only named exports, that wrapper has
+/// no producer and the user sees a native linker error. Match Node's static ESM
+/// behavior for the package-import case by rejecting the import while the module
+/// graph still has source/package context.
+pub(super) fn enforce_package_default_exports(ctx: &mut CompilationContext) -> Result<()> {
+    let import_edges: Vec<(PathBuf, String, String, String)> = ctx
+        .native_modules
+        .iter()
+        .flat_map(|(importer_path, module)| {
+            module.imports.iter().filter_map(|import| {
+                if import.type_only
+                    || import.is_dynamic
+                    || import.is_native
+                    || import.module_kind != perry_hir::ModuleKind::NativeCompiled
+                    || !is_bare_package_specifier(&import.source)
+                {
+                    return None;
+                }
+                let resolved_path = import.resolved_path.as_ref()?;
+                let default_local =
+                    import
+                        .specifiers
+                        .iter()
+                        .find_map(|specifier| match specifier {
+                            perry_hir::ImportSpecifier::Default { local } => Some(local.clone()),
+                            _ => None,
+                        })?;
+                Some((
+                    importer_path.clone(),
+                    import.source.clone(),
+                    resolved_path.clone(),
+                    default_local,
+                ))
+            })
+        })
+        .collect();
+
+    for (importer_path, source, resolved_path, local) in import_edges {
+        let target_path = PathBuf::from(&resolved_path);
+        if !ctx.native_modules.contains_key(&target_path) {
+            continue;
+        }
+        if !module_provides_export(ctx, &target_path, "default", &mut HashSet::new()) {
+            anyhow::bail!(
+                "The requested package '{}' does not provide an export named 'default' \
+                 (imported as '{}' in {}). Resolved package entry: {}",
+                source,
+                local,
+                importer_path.display(),
+                target_path.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod js_runtime_gate_tests {
     use std::path::PathBuf;
 
-    use super::{enforce_js_runtime_gate, CompilationContext};
+    use super::{enforce_js_runtime_gate, enforce_package_default_exports, CompilationContext};
+
+    fn empty_module(name: &str) -> perry_hir::Module {
+        perry_hir::Module::new(name)
+    }
 
     #[test]
     fn diagnostic_suggests_missing_compile_package_on_windows_paths() {
@@ -364,6 +485,44 @@ mod js_runtime_gate_tests {
         assert!(message.contains(&format!("declarations: {}", declaration.display())));
         assert!(message.contains("Declaration hint:"));
         assert!(message.contains("typed-js"));
+    }
+
+    #[test]
+    fn package_default_import_without_default_export_fails_preflight() {
+        let mut ctx = CompilationContext::new(PathBuf::from("/repo"));
+        let importer_path = PathBuf::from("/repo/main.ts");
+        let package_path = PathBuf::from("/repo/node_modules/pkg/index.ts");
+
+        let mut importer = empty_module("main");
+        importer.imports.push(perry_hir::Import {
+            source: "pkg".to_string(),
+            specifiers: vec![perry_hir::ImportSpecifier::Default {
+                local: "Pkg".to_string(),
+            }],
+            is_native: false,
+            module_kind: perry_hir::ModuleKind::NativeCompiled,
+            resolved_path: Some(package_path.to_string_lossy().to_string()),
+            type_only: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+        });
+
+        let mut package = empty_module("pkg");
+        package.exports.push(perry_hir::Export::Named {
+            local: "named".to_string(),
+            exported: "named".to_string(),
+        });
+
+        ctx.native_modules.insert(importer_path, importer);
+        ctx.native_modules.insert(package_path, package);
+
+        let message = enforce_package_default_exports(&mut ctx)
+            .expect_err("missing package default export must fail before codegen")
+            .to_string();
+
+        assert!(message.contains("pkg"));
+        assert!(message.contains("default"));
+        assert!(message.contains("Resolved package entry"));
     }
 }
 
@@ -717,6 +876,7 @@ pub(super) fn run_post_collect_preflight(
     format: OutputFormat,
 ) -> Result<()> {
     enforce_js_runtime_gate(ctx)?;
+    enforce_package_default_exports(ctx)?;
     recompute_common_project_root(ctx);
 
     let total_modules = ctx.native_modules.len() + ctx.js_modules.len();

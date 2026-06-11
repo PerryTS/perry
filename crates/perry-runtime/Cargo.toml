@@ -88,7 +88,7 @@ resolv-conf = "0.7"
 # + the common multicast/broadcast/TTL options; socket2 borrows the same fd
 # (SockRef) for the few std lacks — set_multicast_if and source-specific
 # membership — so those are real rather than silent no-ops.
-socket2 = "0.6"
+socket2 = { version = "0.6", features = ["all"] }
 # Issue #62: mimalloc replaces the system allocator for gc_malloc/arena/etc.
 # macOS `malloc` is ~25-40ns/alloc; mimalloc's per-thread free-list is ~5-10ns.
 # Set as #[global_allocator] in lib.rs, so it covers Rust heap allocations in

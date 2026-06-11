@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1924 entries across 111 modules
+// Coverage: 1925 entries across 111 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -316,11 +316,11 @@ declare module "cluster" {
   export const workers: any;
   /** stdlib */
   export function disconnect(...args: any[]): any;
-  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
+  /** stdlib */
   export function fork(...args: any[]): any;
-  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
+  /** stdlib */
   export function setupMaster(...args: any[]): any;
-  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
+  /** stdlib */
   export function setupPrimary(...args: any[]): any;
 }
 
@@ -1409,7 +1409,7 @@ declare module "events" {
 }
 
 declare module "exponential-backoff" {
-  /** stdlib @perryStub retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917) */
+  /** stdlib */
   export function backOff(p0: any, p1: any): any;
 }
 
@@ -1746,6 +1746,8 @@ declare module "http" {
   /** stdlib */
   export const globalAgent: any;
   /** stdlib */
+  export const kConnectionsCheckingInterval: any;
+  /** stdlib */
   export const maxHeaderSize: any;
   /** stdlib */
   export function Agent(...args: any[]): any;
@@ -1832,11 +1834,11 @@ declare module "inspector" {
   export function Session(...args: any[]): any;
   /** stdlib */
   export function close(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916) */
   export function open(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub always undefined: Perry never exposes a real inspector endpoint (#4916) */
   export function url(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub returns immediately after open(); there is no debugger to wait for (#4916) */
   export function waitForDebugger(...args: any[]): any;
 }
 
@@ -3325,11 +3327,11 @@ declare module "repl" {
   /** stdlib */
   const _default: any;
   export default _default;
-  /** stdlib */
+  /** stdlib @perryStub REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916) */
   export function REPLServer(...args: any[]): any;
   /** stdlib */
   export function Recoverable(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916) */
   export function start(...args: any[]): any;
 }
 
@@ -3461,7 +3463,7 @@ declare module "stream/promises" {
 }
 
 declare module "stream/web" {
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ByteLengthQueuingStrategy { [key: string]: any; }
   /** stdlib */
   export class CompressionStream { [key: string]: any; }
@@ -3473,9 +3475,9 @@ declare module "stream/web" {
   export class ReadableByteStreamController { [key: string]: any; }
   /** stdlib */
   export class ReadableStream { [key: string]: any; }
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ReadableStreamBYOBReader { [key: string]: any; }
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ReadableStreamBYOBRequest { [key: string]: any; }
   /** stdlib */
   export class ReadableStreamDefaultController { [key: string]: any; }
@@ -3501,7 +3503,7 @@ declare module "stream/web" {
 }
 
 declare module "streams" {
-  /** stdlib @perryStub constructor/use throws: not yet implemented (#4915) */
+  /** stdlib */
   export class ByteLengthQueuingStrategy { [key: string]: any; }
   /** stdlib */
   export class CountQueuingStrategy { [key: string]: any; }
@@ -3709,7 +3711,7 @@ declare module "tls" {
   /** stdlib */
   export function checkServerIdentity(hostname: any, cert: any): any;
   /** stdlib */
-  export function connect(p0: string, p1: any, p2: string, p3: any): any;
+  export function connect(p0: any, p1: any, p2: any, p3: any): any;
   /** stdlib */
   export function createSecureContext(options: any): any;
   /** stdlib */
@@ -3975,13 +3977,13 @@ declare module "v8" {
   export function deserialize(...args: any[]): any;
   /** stdlib */
   export function getCppHeapStatistics(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub all fields 0; Perry compiles AOT, there is no JIT code heap (#4916) */
   export function getHeapCodeStatistics(...args: any[]): any;
-  /** stdlib @perryStub empty-but-valid V8 heap graph, not a real snapshot (#4916) */
+  /** stdlib */
   export function getHeapSnapshot(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916) */
   export function getHeapSpaceStatistics(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916) */
   export function getHeapStatistics(...args: any[]): any;
   /** stdlib */
   export function isStringOneByteRepresentation(...args: any[]): any;
@@ -3999,7 +4001,7 @@ declare module "v8" {
   export function stopCoverage(...args: any[]): any;
   /** stdlib */
   export function takeCoverage(...args: any[]): any;
-  /** stdlib @perryStub empty-but-valid V8 heap graph, not a real snapshot (#4916) */
+  /** stdlib */
   export function writeHeapSnapshot(...args: any[]): any;
 }
 
@@ -4180,27 +4182,27 @@ declare module "zlib" {
   export function brotliDecompressSync(p0: string): Buffer;
   /** stdlib */
   export function crc32(p0: string, seed?: number): number;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createBrotliCompress(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createBrotliDecompress(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createDeflate(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createDeflateRaw(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createGunzip(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createGzip(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createInflate(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createInflateRaw(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib */
   export function createUnzip(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createZstdCompress(options?: any): any;
-  /** stdlib @perryStub options (level/chunkSize/dictionary/...) accepted but ignored (#4917) */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createZstdDecompress(options?: any): any;
   /** stdlib */
   export function deflate(buffer: any, callback: any): void;

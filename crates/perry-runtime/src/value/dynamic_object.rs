@@ -138,7 +138,24 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
                 )
                 .unwrap_or(0) as f64;
             }
-            // BigInts, Promises, Errors, plain Objects, Maps: no `.length`.
+            // A plain object CAN carry a `length` property — notably a
+            // variable whose static type was inferred `Array` but was
+            // reassigned to an array-like object (`var x = []; … x = {0:0};
+            // x.splice(1,1); x.length` — test262 splice/S15.4.4.12_A4_T1
+            // #10). Read it like any field; absent stays the 0 fallback.
+            crate::gc::GC_TYPE_OBJECT => {
+                let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                let v = crate::object::js_object_get_field_by_name_f64(
+                    handle as *const crate::object::ObjectHeader,
+                    key,
+                );
+                if v.to_bits() == crate::value::TAG_UNDEFINED {
+                    return 0.0;
+                }
+                let n = crate::builtins::js_number_coerce(v);
+                return if n.is_nan() { 0.0 } else { n };
+            }
+            // BigInts, Promises, Errors, Maps: no `.length`.
             // Return 0 to match Perry's existing fallback for missing fields
             // (JS would produce `undefined`, but the generic PropertyGet slow
             // path already degrades to 0 here).

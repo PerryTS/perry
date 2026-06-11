@@ -330,6 +330,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    invalidate_class_prototype_fast_guards();
     class_decl_prototype_object_root_store(class_id, proto);
 
     let constructor_key =
@@ -530,7 +531,25 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         }
         let gc_header =
             (proto_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        let obj_type = (*gc_header).obj_type;
+        // `foo.prototype = new Array(...)` — a real-array prototype can't join
+        // the class-id machinery (it has no ObjectHeader), but it must not be
+        // DROPPED: store it as the closure's `prototype` dynamic prop so reads
+        // reflect it and `js_new_function_construct` links instances to it
+        // (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*, map/15.4.4.19-9-3).
+        if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+            if func_ptr != 0 && crate::closure::is_closure_ptr(func_ptr) {
+                crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+                set_builtin_property_attrs(
+                    func_ptr,
+                    "prototype".to_string(),
+                    PropertyAttrs::new(true, false, false),
+                );
+            }
+            return 0;
+        }
+        if obj_type != crate::gc::GC_TYPE_OBJECT {
             return 0;
         }
     }
@@ -1207,6 +1226,16 @@ pub unsafe extern "C" fn js_class_register_static_field(
 /// `*ClosureHeader` shapes.
 pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
     RwLock::new(None);
+static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn invalidate_class_prototype_fast_guards() {
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
+}
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
     let mut guard = CLASS_PROTOTYPE_METHODS.write().unwrap();
@@ -1219,6 +1248,7 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
         .entry(class_id)
         .or_insert_with(HashMap::new)
         .insert(name, value_bits);
+    invalidate_class_prototype_fast_guards();
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);
 }
 
@@ -1234,6 +1264,7 @@ pub unsafe extern "C" fn js_register_prototype_method(
     name_len: usize,
     value: f64,
 ) {
+    invalidate_class_prototype_fast_guards();
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }
@@ -2040,6 +2071,15 @@ pub unsafe extern "C" fn js_new_function_construct(
                     CLASS_ID_DECOMPRESSION_STREAM,
                 );
             }
+            // #4950 (secondary note): react-reconciler captures the global
+            // `AbortController` into a local (`AbortControllerLocal = typeof
+            // AbortController !== "undefined" ? AbortController : <shim>`) and
+            // constructs through the variable. Without this arm the dynamic
+            // `new` fell through and threw "AbortController is not a function".
+            "AbortController" => {
+                let controller = crate::url::js_abort_controller_new();
+                return crate::value::js_nanbox_pointer(controller as i64);
+            }
             "MessageChannel" => {
                 return crate::messaging::js_message_channel_new();
             }
@@ -2165,12 +2205,44 @@ pub unsafe extern "C" fn js_new_function_construct(
     // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
     let obj_ptr = js_object_alloc(cid, 0);
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
-    let proto = ensure_function_prototype_object(func_value, cid);
-    if !proto.is_null() {
-        super::prototype_chain::object_set_static_prototype(
-            obj_ptr as usize,
-            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
-        );
+    // A user-assigned `foo.prototype = <obj/array>` lives as the closure's
+    // "prototype" dynamic prop; the instance's [[Prototype]] must be THAT
+    // value — notably a real array (`foo.prototype = new Array(1,2,3)`),
+    // which `ensure_function_prototype_object` would shadow with a fresh
+    // empty object (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*).
+    let mut linked_user_proto = false;
+    {
+        let fp = (func_value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if fp != 0 && crate::closure::is_closure_ptr(fp) {
+            let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
+            let dp = JSValue::from_bits(dyn_proto.to_bits());
+            if dp.is_pointer() {
+                let raw = dp.as_pointer::<u8>() as usize;
+                let is_array = raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
+                    let hdr = unsafe {
+                        &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+                    };
+                    hdr.obj_type == crate::gc::GC_TYPE_ARRAY
+                        || hdr.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+                };
+                if is_array {
+                    super::prototype_chain::object_set_static_prototype(
+                        obj_ptr as usize,
+                        dyn_proto.to_bits(),
+                    );
+                    linked_user_proto = true;
+                }
+            }
+        }
+    }
+    if !linked_user_proto {
+        let proto = ensure_function_prototype_object(func_value, cid);
+        if !proto.is_null() {
+            super::prototype_chain::object_set_static_prototype(
+                obj_ptr as usize,
+                crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+            );
+        }
     }
     // Only run the constructor body when the callee is recognised as
     // a closure shape. The codegen LocalGet path widens the route to
@@ -3165,6 +3237,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
     if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
         *guard = None;
     }
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(false, std::sync::atomic::Ordering::Release);
     if let Ok(mut guard) = FUNCTION_CLASS_IDS.write() {
         *guard = None;
     }

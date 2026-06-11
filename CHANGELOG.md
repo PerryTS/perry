@@ -1,3 +1,92 @@
+## v0.5.1159 — security: fix path traversal / arbitrary file write in `perry publish` (GHSA-x55v-q459-68ch)
+
+Security release. `perry publish` trusted the build server's
+`ArtifactReady.artifact_name` and `download_path` verbatim when constructing
+the local destination path, allowing a malicious/compromised hub to write
+downloaded content outside the output directory (arbitrary file write) and, in
+the self-hosted-hub local-copy path, copy out arbitrary local files. All
+versions through v0.5.1158 are affected. Upgrade to v0.5.1159.
+
+- fix(publish): sanitize server-controlled artifact path (GHSA-x55v-q459-68ch) (#4989)
+
+## v0.5.1158 — release roll-up: stub-elimination epic tail, React render walls, http/cluster/streams parity
+
+Version-bump + changelog roll-up for the 16 commits that landed after the
+v0.5.1157 bump without per-commit metadata (maintainer-folds-at-merge PRs).
+No code changes in this commit itself.
+
+- feat(runtime): real AsyncLocalStorage + async_hooks context propagation (#788/#789) (#4967)
+- feat(runtime): real child_process spawn/exec ChildProcess handle semantics (#2130/#1934) (#4968)
+- feat(streams): BYOB readers + real ByteLengthQueuingStrategy accounting (#4915) (#4966)
+- feat(cluster): workers share a listening port — SO_REUSEPORT + IPC 'listening' round-trip (#4914) (#4963)
+- feat(diagnostics): real v8 heap snapshot from GC heap walk + inspector/repl honesty (#4916) (#4979)
+- fix(hir,codegen,runtime): clear the #4950 React render-time walls — JSX createElement mode, nested-fn branch-var hoisting, timer/AbortController values, surrogate-range regex classes (#4969)
+- fix(http): client write/end callbacks + backpressure, real client timeouts, dynamic listener registration (#4909) (#4964)
+- fix(http): wire res.write/res.end callbacks + backpressure boolean into static dispatch (#4909) (#4954)
+- fix(http): falsy ClientRequest method defaults to GET instead of throwing (#4970) (#4978)
+- fix(net,ext-http): tls.connect Node overloads + https idle-connection close path (#4971) (#4983)
+- fix(hir): lower inline `export default class` bodies — methods/fields survive (#4976) (#4981)
+- fix(hir): synthesized capture ctor on a derived class must call super() (#4972) (#4980)
+- fix(hir): self-named native member base no longer OOM-loops codegen (#4908) (#4955)
+- fix(compile): support package createRequire interop (#4960)
+- perf(runtime): optimize numeric array raw payload helpers (#4957)
+- test(codegen): unbreak typed_shape_descriptors after #4957 bulk-fill lowering (#4984)
+
+## v0.5.1157 — feat(atomics): real cross-agent `Atomics.wait`/`notify`/`waitAsync` over a shared SAB (#4913)
+
+Stage 2 of #4913 (Stage 1 — the honesty floor — landed in #4929). `Atomics.wait`,
+`Atomics.notify`, and `Atomics.waitAsync` were non-blocking fakes: `wait` always
+returned `"timed-out"`, `notify` always returned `0`, and `waitAsync` resolved
+`"timed-out"` immediately. They now block and wake for real across `perry/thread`
+agents.
+
+**Shared backing that actually aliases across threads.** The prerequisite was a
+`SharedArrayBuffer` whose bytes are visible from every agent. Previously every
+value crossing a `perry/thread` boundary was deep-copied (`SerializedValue`), so a
+SAB lost its sharing. Now:
+
+- `new SharedArrayBuffer(n)` allocates its `BufferHeader + data` block from the
+  global allocator (`crate::shared_sab`) — a stable, process-wide address that is
+  never freed (matching Perry's "buffers live for the life of the process" model)
+  and is therefore valid and writable from any OS thread.
+- A new `SerializedValue::SharedArrayBuffer { addr }` variant carries the SAB
+  **by reference** across the thread boundary instead of copying it; the receiving
+  agent re-registers the same address in its thread-local buffer / SAB tables, so
+  `new Int32Array(sab)` there aliases the exact same physical bytes (via the
+  existing #4103 view-meta backing path). The serializer recognises a SAB before
+  the `GcHeader` dispatch (buffers carry no `GcHeader`).
+
+**Futex park/wake (`crate::atomics_futex`).** A process-global wait table keyed by
+the **absolute physical byte address** of the atomic slot. Because a SAB aliases
+the same bytes on every agent, two agents viewing the same index compute the same
+key.
+
+- `Atomics.wait` re-checks the slot value and enqueues a waiter **atomically under
+  the table lock**, then parks the OS thread on a `Condvar` until a matching
+  `notify` or the timeout deadline — so a `notify` racing the call is never lost
+  (the agent either sees the changed value and returns `"not-equal"`, or parks and
+  is woken). Returns the real `"ok"` / `"not-equal"` / `"timed-out"`. A
+  `timeout === 0` poll still returns immediately; an `undefined`/`Infinity` timeout
+  blocks until notified.
+- `Atomics.notify` wakes up to `count` parked agents (default `undefined` →
+  `+Infinity` → all) and returns the **actual** number woken.
+- `Atomics.waitAsync` enqueues the waiter synchronously (atomic with the value
+  check, so the wake can't be missed), then resolves its promise from a background
+  thread — `"ok"` on notify, `"timed-out"` on the deadline — via the same
+  pending-result → event-loop path `spawn` uses.
+
+The `perry_stub_warn` / `PERRY_STRICT_STUBS` honesty gates added in #4929 are
+removed from these three ops — they are no longer lies.
+
+Caveat: only the `SharedArrayBuffer` itself shares across agents; a typed-array
+*view* captured directly into a thread closure still deep-copies (build the view
+per-agent from the shared SAB). The agent-coordinated test262 cases
+(`$262.agent`) remain out of scope.
+
+New: `crates/perry-runtime/src/shared_sab.rs`, `crates/perry-runtime/src/atomics_futex.rs`,
+`crates/perry/tests/issue_4913_atomics_cross_thread.rs`,
+`test-files/test_issue_4913_atomics_cross_thread.ts`.
+
 ## v0.5.1156 — fix(fetch): send dynamically-built request headers (#4932)
 
 `fetch(url, { headers })` silently dropped **every** request header whenever the

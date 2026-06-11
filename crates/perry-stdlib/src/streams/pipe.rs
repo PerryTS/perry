@@ -187,7 +187,7 @@ unsafe fn pipe_next_read(readable_id: usize) -> PipeReadStep {
     let mut g = READABLE_STREAMS.lock().unwrap();
     match g.get_mut(&readable_id) {
         Some(s) => {
-            if let Some(c) = s.chunks.pop_front() {
+            if let Some(c) = s.pop_chunk() {
                 PipeReadStep::Chunk(c)
             } else if s.state == ReadableState::Closed {
                 PipeReadStep::Done

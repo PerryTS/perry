@@ -414,10 +414,22 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
+                // `arr[i] = i + 1`: integer-classified but neither iota nor
+                // constant, so the #4957 bulk-fill matcher
+                // (`match_numeric_bulk_fill_loop`) does NOT fire and the loop
+                // keeps exercising the per-element guarded store path this
+                // test is about. The plain `arr[i] = i` shape now lowers to
+                // `js_array_fill_f64_iota_len_extend` — covered by
+                // `numeric_iota_fill_loop_uses_bulk_helper_without_barrier`
+                // below.
                 body: vec![Stmt::Expr(Expr::IndexSet {
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(2)),
-                    value: Box::new(Expr::LocalGet(2)),
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
                 })],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
@@ -441,11 +453,84 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     );
     assert!(
         !ir.contains("call void @js_gc_note_slot_layout"),
-        "integer LocalGet store into a numeric array should not update slot layout"
+        "integer store into a numeric array should not update slot layout"
     );
     assert!(
         !ir.contains("call void @js_write_barrier_slot"),
-        "integer LocalGet store into a numeric array should not emit a slot barrier"
+        "integer store into a numeric array should not emit a slot barrier"
+    );
+}
+
+#[test]
+fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
+    // #4957 lowers `for (let i = 0; i < arr.length; i++) arr[i] = i` over a
+    // numeric array to a bulk iota fill instead of per-element guarded
+    // stores. Pin that lowering — and that the bulk path, like the
+    // per-element one, emits no layout note and no slot barrier for raw-f64
+    // payloads.
+    let module = base_module(
+        "numeric_iota_fill_loop.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::Array(vec![
+                    Expr::Number(0.0),
+                    Expr::Number(0.0),
+                    Expr::Number(0.0),
+                ])),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "length".to_string(),
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(2)),
+                    value: Box::new(Expr::LocalGet(2)),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+
+    assert!(
+        ir.contains("call i64 @js_array_fill_f64_iota_len_extend"),
+        "iota fill over `arr.length` should lower to the bulk iota helper"
+    );
+    assert!(
+        !ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
+        "bulk-fill loop should not also emit per-element raw-f64 stores"
+    );
+    assert!(
+        !ir.contains("call void @js_gc_note_slot_layout"),
+        "bulk iota fill of a numeric array should not update slot layout"
+    );
+    assert!(
+        !ir.contains("call void @js_write_barrier_slot"),
+        "bulk iota fill of a numeric array should not emit a slot barrier"
     );
 }
 

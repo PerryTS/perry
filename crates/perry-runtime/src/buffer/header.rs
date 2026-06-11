@@ -137,7 +137,14 @@ pub fn mark_as_shared_array_buffer(addr: usize) {
 }
 
 pub fn is_shared_array_buffer(addr: usize) -> bool {
-    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+    if SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+        return true;
+    }
+    // #4913: a SAB backing is process-global. If this thread received it as a
+    // module-level value (not a serialized `perry/thread` capture, which would
+    // have re-registered it locally) the thread-local set misses, so fall back
+    // to the process-global registry. Slow path only — thread-local hits first.
+    crate::shared_sab::is_shared_sab(addr)
 }
 
 pub fn is_any_array_buffer(addr: usize) -> bool {
@@ -261,10 +268,17 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
         return true;
     }
-    external_buffers()
+    if external_buffers()
         .lock()
         .map(|r| r.contains(&addr))
         .unwrap_or(false)
+    {
+        return true;
+    }
+    // #4913: recognise a process-global SAB backing reached as a module-level
+    // value on a thread that never locally registered it (see
+    // `is_shared_array_buffer`).
+    crate::shared_sab::is_shared_sab(addr)
 }
 
 /// Mark this buffer as one that came from `new Uint8Array(...)` so it

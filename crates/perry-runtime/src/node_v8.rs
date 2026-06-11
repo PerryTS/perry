@@ -17,9 +17,10 @@
 //!   Perry's arena / RSS counters. The field *names and types* match Node so
 //!   package feature-detection works; the values reflect Perry internals.
 //! * `v8.getHeapSnapshot([options])` / `writeHeapSnapshot([filename[, options]])`
-//!   (#3140) — expose Node-shaped heap snapshot output. Perry does not embed V8,
-//!   so the snapshot is a minimal valid V8 heap-snapshot JSON document rather
-//!   than a full object graph dump.
+//!   (#3140, #4916) — a real V8-format heap snapshot built from Perry's GC heap
+//!   walk (`gc::gc_build_v8_heap_snapshot_json`): actual nodes, sizes, and
+//!   reference edges for the calling thread's heap. The `options` bag
+//!   (`exposeInternals` etc.) is validated but ignored.
 //! * `v8.GCProfiler` (#3142) — `new v8.GCProfiler()` allocates a small native
 //!   instance; `start()` returns `undefined` and `stop()` returns a
 //!   `{ version, startTime, statistics, endTime }` report object only after the
@@ -79,20 +80,6 @@ const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
 fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED_BITS)
 }
-
-const V8_HEAP_SNAPSHOT_JSON: &str = concat!(
-    r#"{"snapshot":{"meta":{"#,
-    r#""node_fields":["type","name","id","self_size","edge_count","trace_node_id","detachedness"],"#,
-    r#""node_types":[["hidden","array","string","object","code","closure","regexp","number","native","synthetic","concatenated string","sliced string","symbol","bigint"],"string","number","number","number","number","number"],"#,
-    r#""edge_fields":["type","name_or_index","to_node"],"#,
-    r#""edge_types":[["context","element","property","internal","hidden","shortcut","weak"],"string_or_number","node"],"#,
-    r#""trace_function_info_fields":["function_id","name","script_name","script_id","line","column"],"#,
-    r#""trace_node_fields":["id","function_info_index","count","size","children"],"#,
-    r#""sample_fields":["timestamp_us","last_assigned_id"],"#,
-    r#""location_fields":["object_index","script_id","line","column"]},"#,
-    r#""node_count":0,"edge_count":0,"trace_function_count":0},"#,
-    r#""nodes":[],"edges":[],"trace_function_infos":[],"trace_tree":[],"samples":[],"locations":[],"strings":["<dummy>"]}"#
-);
 
 /// Build a plain object from `(name, value)` numeric/any pairs.
 unsafe fn build_object(pairs: &[(&str, f64)]) -> f64 {
@@ -183,8 +170,8 @@ fn string_value(value: &str) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
-fn snapshot_readable_stream() -> f64 {
-    let chunk = bytes_to_buffer(V8_HEAP_SNAPSHOT_JSON.as_bytes());
+fn snapshot_readable_stream(json: &str) -> f64 {
+    let chunk = bytes_to_buffer(json.as_bytes());
     let mut chunks = crate::array::js_array_alloc(1);
     chunks = crate::array::js_array_push_f64(chunks, chunk);
     let chunks_value = f64::from_bits(JSValue::pointer(chunks as *const u8).bits());
@@ -337,15 +324,18 @@ pub extern "C" fn js_v8_cached_data_version_tag() -> f64 {
 }
 
 /// `v8.getHeapSnapshot([options])` → Readable stream of heap-snapshot JSON.
+///
+/// The document is a real object graph from Perry's GC heap walk
+/// (#4916): nodes are the calling thread's live arena/malloc GC
+/// allocations after a full collection, edges are the reference slots
+/// the collector itself traces. The JSON must be fully built BEFORE
+/// any JS-heap allocation (the stream below) happens — see the safety
+/// note in `gc/heap_snapshot.rs`.
 #[no_mangle]
 pub extern "C" fn js_v8_get_heap_snapshot(options: f64) -> f64 {
     validate_heap_snapshot_options(options);
-    crate::error::stub_warn_or_throw(
-        "v8.getHeapSnapshot",
-        "emits an empty-but-valid V8 heap graph, not a real snapshot of live objects (see PERRY_GC_DIAG=1)",
-        Some("#4916"),
-    );
-    snapshot_readable_stream()
+    let json = crate::gc::gc_build_v8_heap_snapshot_json();
+    snapshot_readable_stream(&json)
 }
 
 /// `v8.writeHeapSnapshot([filename[, options]])` → written filename.
@@ -362,12 +352,8 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
         }
     };
     validate_heap_snapshot_options(options);
-    crate::error::stub_warn_or_throw(
-        "v8.writeHeapSnapshot",
-        "writes an empty-but-valid V8 heap graph, not a real snapshot of live objects (see PERRY_GC_DIAG=1)",
-        Some("#4916"),
-    );
-    match std::fs::write(&path, V8_HEAP_SNAPSHOT_JSON.as_bytes()) {
+    let json = crate::gc::gc_build_v8_heap_snapshot_json();
+    match std::fs::write(&path, json.as_bytes()) {
         Ok(()) => string_value(&path),
         Err(err) => unsafe {
             crate::exception::js_throw(crate::fs::build_fs_error_value(&err, "open", &path))

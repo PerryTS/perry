@@ -259,6 +259,14 @@ pub enum SerializedValue {
     /// Perry's fd registry is thread-local, so handles are not transferable;
     /// deserialize as a FileHandle-shaped object with `fd === -1`.
     DetachedFileHandle,
+
+    /// A `SharedArrayBuffer` crossing a `perry/thread` boundary (#4913).
+    /// Carries the process-global backing-store address by reference — NOT a
+    /// byte copy — so the receiving agent's views alias the same physical
+    /// memory and `Atomics.wait`/`notify` coordinate across threads. The
+    /// backing is never freed (see `crate::shared_sab`), so the raw address
+    /// stays valid for the life of the process.
+    SharedArrayBuffer { addr: usize },
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
@@ -322,6 +330,16 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
         let raw_ptr = (bits & POINTER_MASK) as *const u8;
         if raw_ptr.is_null() || (raw_ptr as usize) < 0x1000 {
             return SerializedValue::Inline(TAG_UNDEFINED);
+        }
+
+        // SharedArrayBuffer: a process-global backing store (no GcHeader).
+        // Pass it by reference so the receiving agent aliases the same bytes
+        // (#4913). This MUST precede the GcHeader read below — a SAB header has
+        // no preceding GcHeader, so reading one would misclassify it.
+        if crate::shared_sab::is_shared_sab(raw_ptr as usize) {
+            return SerializedValue::SharedArrayBuffer {
+                addr: raw_ptr as usize,
+            };
         }
 
         // Check GcHeader to determine type
@@ -617,6 +635,16 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
 
         SerializedValue::DetachedFileHandle => {
             crate::fs::build_detached_filehandle_object().to_bits()
+        }
+
+        SerializedValue::SharedArrayBuffer { addr } => {
+            // Alias the same process-global backing store (#4913) — no copy.
+            // Re-register it in THIS thread's buffer / SAB tables so local
+            // predicates (`is_registered_buffer`, `is_shared_array_buffer`) and
+            // `new Int32Array(sab)` view construction recognise it here too.
+            crate::buffer::register_buffer(*addr as *const crate::buffer::BufferHeader);
+            crate::buffer::mark_as_shared_array_buffer(*addr);
+            JSValue::pointer(*addr as *const u8).bits()
         }
     }
 }
@@ -1199,6 +1227,35 @@ fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
     // resolve as soon as the OS thread finishes, not at the next
     // event-loop quantum.
     crate::event_pump::js_notify_main_thread();
+}
+
+/// Register the start of a background job that will later resolve a promise on
+/// the main thread via [`queue_promise_string_result`]. Keeps the event loop
+/// alive until the result arrives (mirrors `spawn`'s job accounting). Used by
+/// `Atomics.waitAsync` (#4913).
+pub fn thread_job_begin() {
+    ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Pin `promise` so GC keeps it alive while a background job runs; the matching
+/// unpin happens in [`js_thread_process_pending`] when the result resolves.
+///
+/// # Safety
+/// `promise` must be a live promise allocation preceded by an 8-byte GcHeader.
+pub unsafe fn pin_promise(promise: *mut crate::promise::Promise) {
+    let header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
+    (*header).gc_flags |= gc::GC_FLAG_PINNED;
+}
+
+/// Resolve the promise at `promise_usize` with a UTF-8 string on the main
+/// thread. Routes through the same pending-result path `spawn` uses (which
+/// unpins the promise, deserializes the value into the main arena, decrements
+/// the active-job count, and wakes the event loop). Used by `Atomics.waitAsync`.
+pub fn queue_promise_string_result(promise_usize: usize, value: &str) {
+    queue_thread_result(
+        promise_usize,
+        SerializedValue::String(value.as_bytes().to_vec()),
+    );
 }
 
 /// A pending thread result waiting to be resolved on the main thread.

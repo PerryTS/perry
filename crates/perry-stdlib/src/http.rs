@@ -1785,10 +1785,18 @@ unsafe fn append_https_agent_name_fields(name: &mut String, options_f64: f64) {
     push_truthy_string(name, "privateKeyEngine");
 }
 
-/// `agent.destroy()` — release pooled sockets. Perry doesn't pool today, so
-/// it's a no-op that returns the receiver for chainability.
+/// `agent.keepSocketAlive(socket)` / `agent.reuseSocket(socket, req)` —
+/// this Agent flavor exposes no per-socket hooks to act on, so these return
+/// the receiver for chainability but otherwise do nothing. Warn once instead
+/// of silently succeeding (#4917). (Default builds route http through
+/// perry-ext-http, where reqwest owns the keep-alive pool.)
 #[no_mangle]
 pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "http.Agent keepSocketAlive/reuseSocket",
+        "this http Agent has no per-socket hooks; the call is a no-op",
+        Some("#4917"),
+    );
     handle
 }
 

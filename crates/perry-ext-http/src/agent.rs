@@ -851,11 +851,18 @@ fn json_value_to_string(v: &serde_json::Value) -> String {
 }
 
 // ------------------------------------------------------------------
-// destroy / keepSocketAlive / reuseSocket — chainable no-ops
+// keepSocketAlive / reuseSocket — chainable no-ops (reqwest owns the
+// keep-alive pool, so there is no per-socket hook to forward to);
+// destroy is real (drops the cached client below).
 // ------------------------------------------------------------------
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "http.Agent keepSocketAlive/reuseSocket",
+        "reqwest owns the keep-alive pool; per-socket hooks are no-ops",
+        Some("#4917"),
+    );
     handle
 }
 

@@ -13,6 +13,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tokio_tungstenite::tungstenite::Message;
+use url::Url;
 use walkdir::WalkDir;
 
 use crate::{OutputFormat, Platform};
@@ -1789,10 +1790,25 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                 }
 
                 fs::create_dir_all(&args.output)?;
-                let dest = args.output.join(&name);
+                // `name` is supplied verbatim by the build server over the
+                // WebSocket. Reduce it to a bare, traversal-free file name so a
+                // malicious hub cannot write outside the output directory
+                // (GHSA-x55v-q459-68ch).
+                let safe_name = sanitize_artifact_name(&name)?;
+                let dest = args.output.join(&safe_name);
 
                 if let Some(ref src_path) = download_path {
-                    // Local path available (self-hosted hub) - copy directly
+                    // `download_path` is also server-controlled. A filesystem
+                    // path is only meaningful when the hub shares this machine's
+                    // filesystem; honoring it for a remote hub would let a
+                    // malicious server copy out any file the user can read
+                    // (GHSA-x55v-q459-68ch, Path B). Fall back to HTTP otherwise.
+                    if !server_is_local(&server_url) {
+                        bail!(
+                            "Hub at {server_url} reported a local artifact path ({src_path}) but is not a local hub; refusing to read from an arbitrary local path"
+                        );
+                    }
+                    // Local path available (self-hosted hub on this machine) - copy directly
                     fs::copy(src_path, &dest)
                         .with_context(|| format!("Failed to copy artifact from {src_path}"))?;
                 } else {
@@ -1873,6 +1889,42 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     }
 
     Ok(())
+}
+
+/// Reduce a server-supplied artifact name to a single, traversal-free file
+/// name. The build server controls this value over the WebSocket, so it must
+/// never be able to escape the chosen output directory: absolute paths, `..`,
+/// `.`, and embedded path separators are all rejected (GHSA-x55v-q459-68ch).
+fn sanitize_artifact_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    let is_unsafe = trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        // Anything whose final path component is not exactly the input (drive
+        // prefixes, embedded NULs, platform-specific separators, ...).
+        || Path::new(trimmed).file_name().and_then(|s| s.to_str()) != Some(trimmed);
+
+    if is_unsafe {
+        bail!("Server sent an unsafe artifact name {name:?}; refusing to write outside the output directory");
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Whether the resolved hub URL points at the local machine. Used to gate the
+/// `download_path` local-copy shortcut, which trusts a server-controlled local
+/// filesystem path (GHSA-x55v-q459-68ch, Path B).
+fn server_is_local(server_url: &str) -> bool {
+    match Url::parse(server_url) {
+        Ok(u) => match u.host() {
+            Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        },
+        Err(_) => false,
+    }
 }
 
 pub(crate) async fn auto_register_license(server_url: &str) -> Result<String> {

@@ -65,10 +65,34 @@ fn stub_inventory_matches_known_clusters() {
         // #4912 (child_process.spawn) intentionally absent: spawn is real
         // since #1780 (Expr::ChildProcessSpawn codegen). The audit's
         // "returns null" premise was stale; only exec() timing remains.
-        ("#4914", 3),  // cluster fork/setupPrimary/setupMaster (no handle distribution)
-        ("#4915", 4),  // BYOB readers + ByteLengthQueuingStrategy (throw)
-        ("#4916", 2),  // v8 get/writeHeapSnapshot (empty graph)
-        ("#4917", 18), // stdlib adapters: zlib(11) + http.Agent(3) + worker ref/unref(2) + mongodb(1) + backoff(1)
+        // #4914 (cluster port sharing) intentionally absent: workers share a
+        // listening port via SO_REUSEPORT binds + a fork-IPC 'listening'
+        // round-trip; SCHED_RR fd-passing + shared ephemeral `listen(0)`
+        // port are tracked in #4962 and are policy fidelity, not lies.
+        // #4915 (BYOB readers + ByteLengthQueuingStrategy) intentionally
+        // absent: read(view), controller.byobRequest respond/
+        // respondWithNewView, and real byteLength desiredSize accounting
+        // landed (perry-stdlib/src/streams/byob.rs).
+        // #4916 (v8 get/writeHeapSnapshot) heap snapshots intentionally
+        // absent: real object graph from the GC heap walk landed
+        // (perry-runtime/src/gc/heap_snapshot.rs). The remaining #4916
+        // entries are documented approximations/fakes from the same
+        // diagnostics audit: v8 heap-stats provenance(3) +
+        // GCProfiler.stop empty statistics(1) + inspector
+        // open/url/waitForDebugger/Session.post(4) + repl
+        // start/REPLServer no-eval-loop(2).
+        ("#4916", 10),
+        // #4917 (stdlib-adapter no-ops) — what remains after the real
+        // semantics landed: zlib deflate-family compressor factories
+        // honor `level` but still drop strategy/memLevel (3) +
+        // Brotli/zstd factories ignore `params`, warn once (4) +
+        // http.Agent per-socket keepSocketAlive/reuseSocket hooks (2).
+        // Intentionally absent now: zlib decompressor factories (level
+        // honored; a missing dictionary fails loudly), Agent.destroy
+        // (drops the per-agent reqwest pool), worker ref/unref (real
+        // event-loop refcount), mongodb.findOne (parsed document),
+        // exponential-backoff options (honored, incl. retry predicate).
+        ("#4917", 9),
     ];
     let expected_map: BTreeMap<String, usize> =
         expected.iter().map(|(k, v)| (k.to_string(), *v)).collect();
@@ -84,7 +108,6 @@ fn stubs_only_appear_in_allowlisted_modules() {
     // A stub flag showing up on a module not in this list is almost
     // certainly an accident — fail loud so it gets triaged.
     let allowed = [
-        "cluster",
         "stream/web",
         "streams",
         "v8",
@@ -94,6 +117,8 @@ fn stubs_only_appear_in_allowlisted_modules() {
         "worker_threads",
         "mongodb",
         "exponential-backoff",
+        "inspector",
+        "repl",
     ];
     for e in iter_entries().filter(|e| e.stub) {
         assert!(
@@ -110,14 +135,38 @@ fn keystone_apis_are_flagged() {
     // Spot-check the headline lies from the epic so a refactor can't
     // quietly drop the flag on the worst offenders.
     let must_be_stub: &[(&str, &str)] = &[
-        ("cluster", "fork"),
-        ("v8", "getHeapSnapshot"),
-        ("v8", "writeHeapSnapshot"),
+        ("repl", "start"),
+        ("inspector", "post"),
+        // still partial after #4917: level honored, strategy/memLevel dropped
         ("zlib", "createGzip"),
-        ("mongodb", "findOne"),
+        ("zlib", "createBrotliCompress"),
+        ("http", "keepSocketAlive"),
     ];
     for (module, name) in must_be_stub {
         let found = iter_entries().any(|e| e.module == *module && e.name == *name && e.stub);
         assert!(found, "expected {}::{} to be flagged stub", module, name);
+    }
+
+    // The inverse: APIs implemented for real must NOT stay flagged.
+    // v8 heap snapshots emit a real GC-walk object graph since #4916.
+    // mongodb.findOne resolves a parsed document, backOff honors its
+    // options, and worker ref/unref drive the event-loop refcount since
+    // #4917.
+    let must_not_be_stub: &[(&str, &str)] = &[
+        ("v8", "getHeapSnapshot"),
+        ("v8", "writeHeapSnapshot"),
+        ("mongodb", "findOne"),
+        ("exponential-backoff", "backOff"),
+        ("worker_threads", "ref"),
+        ("worker_threads", "unref"),
+        ("http", "destroy"),
+    ];
+    for (module, name) in must_not_be_stub {
+        let flagged = iter_entries().any(|e| e.module == *module && e.name == *name && e.stub);
+        assert!(
+            !flagged,
+            "{}::{} is implemented for real and must not be flagged stub",
+            module, name
+        );
     }
 }

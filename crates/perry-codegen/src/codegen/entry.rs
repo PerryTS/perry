@@ -384,6 +384,14 @@ pub(super) fn compile_module_entry(
         // fallback both validate against the known-heap-pointer set and
         // discard non-matching bits.
         register_module_globals_as_gc_roots(&mut ctx, module_globals);
+        // ESM entry (import/export syntax or top-level await — Node's module
+        // detection): mark the pending module-evaluation checkpoint so the
+        // first microtask drain finishes promise/queueMicrotask jobs before
+        // the nextTick queue, matching Node's job-within-checkpoint ordering
+        // for ESM evaluation (#788). CJS-style entries keep ticks-first.
+        if !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await {
+            ctx.block().call_void("js_mark_entry_module_esm", &[]);
+        }
         // Initialize static class fields with their declared init
         // expressions. Runs once at the top of main, before user code.
         //

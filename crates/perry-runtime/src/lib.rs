@@ -29,6 +29,7 @@ pub mod array;
 pub mod async_context;
 pub mod async_hooks;
 pub mod atomics;
+pub mod atomics_futex;
 pub mod bigint;
 pub mod r#box;
 pub mod buffer;
@@ -94,6 +95,7 @@ pub mod readline_helpers;
 pub mod regex;
 pub mod safe_area;
 pub mod set;
+pub mod shared_sab;
 pub mod string;
 pub mod symbol;
 /// TC39 Temporal API (#4686): `Temporal.Duration`, `Temporal.Instant`,

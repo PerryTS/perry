@@ -1,15 +1,15 @@
 //! Net module - provides TCP networking capabilities
 
-use std::net::{TcpListener, TcpStream, SocketAddr};
-use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use crate::string::{js_string_from_bytes, StringHeader};
-use crate::object::ObjectHeader;
 use crate::buffer::BufferHeader;
 use crate::closure::ClosureHeader;
+use crate::object::ObjectHeader;
+use crate::string::{js_string_from_bytes, StringHeader};
 
 // Global handle registry for servers and sockets
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
@@ -66,9 +66,28 @@ pub extern "C" fn js_net_server_listen(
     };
 
     let addr = format!("{}:{}", host, port);
-    match TcpListener::bind(&addr) {
+    // #4914 — cluster workers bind with SO_REUSEPORT so N workers share the
+    // port, then report the bound address to the primary for 'listening'.
+    #[cfg(unix)]
+    let bind_result = if crate::cluster::is_cluster_worker() {
+        crate::cluster::worker_reuseport_bind(&addr)
+    } else {
+        TcpListener::bind(&addr)
+    };
+    #[cfg(not(unix))]
+    let bind_result = TcpListener::bind(&addr);
+    match bind_result {
         Ok(listener) => {
-            let address = listener.local_addr().unwrap_or_else(|_| addr.parse().unwrap());
+            let address = listener
+                .local_addr()
+                .unwrap_or_else(|_| addr.parse().unwrap());
+            let address_type: i32 = if address.is_ipv6() { 6 } else { 4 };
+            crate::cluster::perry_cluster_worker_listening(
+                host.as_ptr(),
+                host.len() as u32,
+                address.port() as i32,
+                address_type,
+            );
             let wrapper = TcpListenerWrapper { listener, address };
 
             if let Ok(mut servers) = TCP_SERVERS.lock() {
@@ -107,29 +126,21 @@ pub extern "C" fn js_net_server_address(handle: f64) -> *mut ObjectHeader {
 
             unsafe {
                 // Set port (field 0)
-                crate::object::js_object_set_field_f64(
-                    obj,
-                    0,
-                    wrapper.address.port() as f64
-                );
+                crate::object::js_object_set_field_f64(obj, 0, wrapper.address.port() as f64);
 
                 // Set address (field 1)
                 let addr_str = wrapper.address.ip().to_string();
                 let addr_val = js_string_from_bytes(addr_str.as_ptr(), addr_str.len() as u32);
-                crate::object::js_object_set_field_f64(
-                    obj,
-                    1,
-                    (addr_val as u64) as f64
-                );
+                crate::object::js_object_set_field_f64(obj, 1, (addr_val as u64) as f64);
 
                 // Set family (field 2)
-                let family = if wrapper.address.is_ipv4() { "IPv4" } else { "IPv6" };
+                let family = if wrapper.address.is_ipv4() {
+                    "IPv4"
+                } else {
+                    "IPv6"
+                };
                 let family_val = js_string_from_bytes(family.as_ptr(), family.len() as u32);
-                crate::object::js_object_set_field_f64(
-                    obj,
-                    2,
-                    (family_val as u64) as f64
-                );
+                crate::object::js_object_set_field_f64(obj, 2, (family_val as u64) as f64);
             }
 
             return obj;
@@ -164,7 +175,10 @@ pub extern "C" fn js_net_create_connection(
         Ok(stream) => {
             let remote_address = stream.peer_addr().ok();
             let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
-            let wrapper = TcpStreamWrapper { stream, remote_address };
+            let wrapper = TcpStreamWrapper {
+                stream,
+                remote_address,
+            };
 
             if let Ok(mut sockets) = TCP_SOCKETS.lock() {
                 sockets.insert(handle, wrapper);
@@ -179,10 +193,7 @@ pub extern "C" fn js_net_create_connection(
 /// Write data to a socket
 /// Returns the number of bytes written, or -1 on error
 #[no_mangle]
-pub extern "C" fn js_net_socket_write(
-    handle: f64,
-    data_ptr: *const BufferHeader,
-) -> i32 {
+pub extern "C" fn js_net_socket_write(handle: f64, data_ptr: *const BufferHeader) -> i32 {
     let handle = handle as u64;
 
     if data_ptr.is_null() {
@@ -223,7 +234,8 @@ pub extern "C" fn js_net_socket_read(handle: f64, max_size: i32) -> *mut BufferH
                     let buf = crate::buffer::js_buffer_alloc(n as i32, 0);
                     if !buf.is_null() {
                         unsafe {
-                            let buf_data = (buf as *mut u8).add(std::mem::size_of::<BufferHeader>());
+                            let buf_data =
+                                (buf as *mut u8).add(std::mem::size_of::<BufferHeader>());
                             std::ptr::copy_nonoverlapping(buffer.as_ptr(), buf_data, n);
                             (*buf).length = n as u32;
                         }

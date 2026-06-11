@@ -139,6 +139,16 @@ fn as_real_array(recv: f64) -> *mut ArrayHeader {
     if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return ptr::null_mut();
     }
+    // Pointer-shaped non-heap handles (Proxy ids live at 0xF0000+, stream ids
+    // and friends in nearby bands) would be dereferenced as a GcHeader below —
+    // `Array.prototype.indexOf.call(proxy, …)` SIGSEGV'd. The Linux heap
+    // range check alone admits the id bands (they start at 0x1000), so gate
+    // on the handle-band classifier too.
+    if !crate::value::addr_class::is_above_handle_band(raw)
+        || !crate::object::is_valid_obj_ptr(raw as *const u8)
+    {
+        return ptr::null_mut();
+    }
     let obj_type = unsafe {
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
@@ -170,15 +180,40 @@ enum PtrKind {
     /// Typed array or buffer — `js_value_length_f64` /
     /// `js_object_get_index_polymorphic` handle these by registry.
     IndexedNative,
-    /// Date / Map / Set / Symbol / BigInt / … — no safe array-like access;
+    /// Date / RegExp / Error / … exotic cell that carries expando own
+    /// properties in the `exotic_expando` side table (`d = new Date();
+    /// d.length = 2; d[0] = 11`). Array-like reads resolve through that
+    /// table (test262 Array.prototype.*-1-11/-1-14 "applied to Date").
+    ExpandoExotic(crate::object::exotic_expando::ExoticKind),
+    /// A Proxy id — every array-like op routes through its traps.
+    Proxy,
+    /// Map / Set / Symbol / BigInt / … — no safe array-like access;
     /// treated as an empty array-like.
     Exotic,
+}
+
+fn proxy_string_key(k: i64) -> f64 {
+    let s = k.to_string();
+    let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(key).bits())
+}
+
+fn proxy_named_key(name: &str) -> f64 {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    f64::from_bits(JSValue::string_ptr(key).bits())
 }
 
 fn classify_pointer(recv: f64) -> Option<PtrKind> {
     let b = recv.to_bits();
     if top16(b) != 0x7FFD {
         return None;
+    }
+    // Proxies are small registered ids (pointer-shaped, below the heap floor)
+    // — classify BEFORE any address-based probe. All array-like ops route
+    // through the proxy traps (so a revoked proxy's Get(length) throws —
+    // test262 {map,filter,splice,concat}/create-revoked-proxy).
+    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+        return Some(PtrKind::Proxy);
     }
     let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
     // Typed arrays / buffers are `std::alloc`-backed (no GC header) — probe
@@ -191,15 +226,24 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
     if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return Some(PtrKind::Exotic);
     }
+    // Non-heap registry ids (stream/fetch handles) must not be dereferenced
+    // as a GcHeader. (The Linux heap-range check alone admits the id bands.)
+    if !crate::value::addr_class::is_above_handle_band(raw)
+        || !crate::object::is_valid_obj_ptr(raw as *const u8)
+    {
+        return Some(PtrKind::Exotic);
+    }
     let obj_type = unsafe {
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
     if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
-        Some(PtrKind::Object)
-    } else {
-        Some(PtrKind::Exotic)
+        return Some(PtrKind::Object);
     }
+    if let Some(kind) = crate::object::exotic_expando::exotic_expando_kind(raw) {
+        return Some(PtrKind::ExpandoExotic(kind));
+    }
+    Some(PtrKind::Exotic)
 }
 
 /// `LengthOfArrayLike(ToObject(recv))`.
@@ -218,13 +262,43 @@ fn al_length(recv: f64) -> i64 {
     }
     match classify_pointer(recv) {
         Some(PtrKind::Object) => {
-            // Plain object / function: read the `length` property (its absence
-            // ToLength-coerces to 0). Safe — guaranteed `GC_TYPE_OBJECT/CLOSURE`.
-            let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-            let len_val = crate::object::js_object_get_field_by_name_f64(
-                (b & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader,
-                key,
-            );
+            // Plain object / function: `Get(O, "length")`. An OWN accessor —
+            // even a setter-only one — shadows anything inherited (test262
+            // some/15.4.4.17-2-12): fire its getter or read undefined, and
+            // never fall through to the prototype probes.
+            let raw_addr = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
+            let mut len_val;
+            if let Some(acc) = crate::object::get_accessor_descriptor(raw_addr, "length") {
+                len_val = if acc.get != 0 {
+                    f64::from_bits(
+                        unsafe { crate::object::invoke_accessor_getter(acc.get, recv) }.bits(),
+                    )
+                } else {
+                    undef()
+                };
+            } else {
+                let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+                len_val = crate::object::js_object_get_field_by_name_f64(
+                    raw_addr as *const crate::object::ObjectHeader,
+                    key,
+                );
+                let key_v = f64::from_bits(JSValue::string_ptr(key).bits());
+                let own_present =
+                    crate::object::js_object_has_own(recv, key_v).to_bits() == TAG_TRUE;
+                // `Get(O, "length")` walks the prototype chain — an inherited
+                // `Object.prototype.length = 2` (test262 sort/S15.4.4.11_A6_T2,
+                // splice/S15.4.4.12_A4_T1) resolves only when there is no own
+                // property at all.
+                if len_val.to_bits() == TAG_UNDEFINED && !own_present {
+                    len_val = object_get_named_property_chain(raw_addr, "length");
+                    // The recorded/default proto tables may resolve a DIFFERENT
+                    // cell than the user-visible `Object.prototype` (read off
+                    // the `Object` constructor) — probe it as a last resort.
+                    if len_val.to_bits() == TAG_UNDEFINED {
+                        len_val = canonical_object_prototype_named_get("length");
+                    }
+                }
+            }
             // `LengthOfArrayLike` is `ToLength(ToNumber(Get(O, "length")))`.
             // A non-numeric `length` (e.g. `length: true` → 1, `length: "2"` →
             // 2) must be ToNumber-coerced first — the raw NaN-boxed bool/string
@@ -233,9 +307,90 @@ fn al_length(recv: f64) -> i64 {
         }
         // Typed arrays / buffers expose a real length via the safe dispatcher.
         Some(PtrKind::IndexedNative) => to_length(crate::value::js_value_length_f64(recv)),
+        // Proxy: Get("length") through the `get` trap (throws on revoked).
+        Some(PtrKind::Proxy) => to_length(crate::builtins::js_number_coerce(
+            crate::proxy::js_proxy_get(recv, proxy_named_key("length")),
+        )),
+        // Date/RegExp/Error expando receiver: `length` lives in the exotic
+        // side table.
+        Some(PtrKind::ExpandoExotic(kind)) => {
+            let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
+            match crate::object::exotic_expando::value_lookup(kind, raw, "length") {
+                Some(bits) => to_length(crate::builtins::js_number_coerce(f64::from_bits(bits))),
+                None => 0,
+            }
+        }
         // Exotic cells / bare primitives → empty array-like.
         Some(PtrKind::Exotic) | None => 0,
     }
+}
+
+/// Read a named property off the user-visible `Object.prototype` (resolved
+/// through the `Object` constructor, where user writes like
+/// `Object.prototype.length = 2` actually land).
+fn canonical_object_prototype_named_get(name: &str) -> f64 {
+    let ctor = crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_v = JSValue::from_bits(ctor.to_bits());
+    if !ctor_v.is_pointer() {
+        return undef();
+    }
+    let proto =
+        crate::closure::closure_get_dynamic_prop(ctor_v.as_pointer::<u8>() as usize, "prototype");
+    let proto_v = JSValue::from_bits(proto.to_bits());
+    if !proto_v.is_pointer() {
+        return undef();
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_get_field_by_name_f64(
+        proto_v.as_pointer::<crate::object::ObjectHeader>(),
+        key,
+    )
+}
+
+/// `Get(O, name)` over the recorded/default prototype chain for an ordinary
+/// heap object, for a *named* (non-index) key. Companion to
+/// `object_get_property_chain`; used when the direct own read misses.
+fn object_get_named_property_chain(obj_ptr: usize, name: &str) -> f64 {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key_val = f64::from_bits(JSValue::string_ptr(key).bits());
+    let mut cur = obj_ptr;
+    for _ in 0..1000 {
+        if cur == 0 {
+            return undef();
+        }
+        let cur_val = f64::from_bits(crate::value::js_nanbox_pointer(cur as i64).to_bits());
+        if crate::object::js_object_has_own(cur_val, key_val).to_bits() == TAG_TRUE {
+            return crate::object::js_object_get_field_by_name_f64(
+                cur as *const crate::object::ObjectHeader,
+                key,
+            );
+        }
+        let proto_bits = match crate::object::prototype_chain::object_static_prototype(cur) {
+            Some(bits) => bits,
+            None => match unsafe {
+                crate::object::prototype_chain::default_object_prototype_for_owner(cur)
+            } {
+                Some(bits) => bits,
+                None => return undef(),
+            },
+        };
+        if proto_bits == TAG_NULL {
+            return undef();
+        }
+        let t16 = proto_bits >> 48;
+        let next = if t16 == 0x7FFD {
+            (proto_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if t16 == 0 && proto_bits > 0x10000 {
+            proto_bits as usize
+        } else {
+            return undef();
+        };
+        if next == cur {
+            return undef();
+        }
+        cur = next;
+    }
+    undef()
 }
 
 /// `Get(ToObject(recv), k)` (returns `undefined` for absent/out-of-range).
@@ -265,11 +420,42 @@ fn al_get(recv: f64, k: i64) -> f64 {
             // index living on `Object.prototype[k]` must resolve. Fall back to a
             // chain read only when the direct read missed.
             if v.to_bits() == TAG_UNDEFINED {
-                object_get_property_chain((b & 0x0000_FFFF_FFFF_FFFF) as usize, k)
+                // An OWN property — even a setter-only accessor — shadows
+                // anything inherited (test262 some/15.4.4.17-7-c-i-19):
+                // `Get` resolves to undefined, never the prototype value.
+                let raw_addr = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
+                let key_s = k.to_string();
+                if crate::object::get_accessor_descriptor(raw_addr, &key_s).is_some() {
+                    return undef();
+                }
+                let key = crate::string::js_string_from_bytes(key_s.as_ptr(), key_s.len() as u32);
+                let key_v = f64::from_bits(JSValue::string_ptr(key).bits());
+                if crate::object::js_object_has_own(recv, key_v).to_bits() == TAG_TRUE {
+                    return undef();
+                }
+                let chained = object_get_property_chain(raw_addr, k);
+                if chained.to_bits() == TAG_UNDEFINED && k >= 0 && k <= u32::MAX as i64 {
+                    // Canonical Object.prototype probe (data or accessor) —
+                    // the recorded/default proto tables may miss it.
+                    if crate::array::object_prototype_has_index_prop(k as u32) {
+                        return super::sort::object_prototype_index_get(k as u32);
+                    }
+                }
+                chained
             } else {
                 v
             }
         }
+        // Date/RegExp/Error expando receiver: indexed expandos live in the
+        // exotic side table.
+        Some(PtrKind::ExpandoExotic(kind)) => {
+            let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
+            match crate::object::exotic_expando::value_lookup(kind, raw, &k.to_string()) {
+                Some(bits) => f64::from_bits(bits),
+                None => undef(),
+            }
+        }
+        Some(PtrKind::Proxy) => crate::proxy::js_proxy_get(recv, proxy_string_key(k)),
         Some(PtrKind::Exotic) | None => undef(),
     }
 }
@@ -342,12 +528,31 @@ fn al_has(recv: f64, k: i64) -> bool {
     match classify_pointer(recv) {
         Some(PtrKind::Object) => {
             let s = k.to_string();
+            // An own accessor (even setter-only) counts as present.
+            if crate::object::get_accessor_descriptor((b & 0x0000_FFFF_FFFF_FFFF) as usize, &s)
+                .is_some()
+            {
+                return true;
+            }
             let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             let key_val = f64::from_bits(JSValue::string_ptr(key).bits());
-            object_has_property_chain((b & 0x0000_FFFF_FFFF_FFFF) as usize, key_val)
+            if object_has_property_chain((b & 0x0000_FFFF_FFFF_FFFF) as usize, key_val) {
+                return true;
+            }
+            // Canonical Object.prototype probe (data or accessor).
+            k >= 0
+                && k <= u32::MAX as i64
+                && crate::array::object_prototype_has_index_prop(k as u32)
         }
         // Typed arrays / buffers are dense over their length.
         Some(PtrKind::IndexedNative) => k < al_length(recv),
+        Some(PtrKind::ExpandoExotic(kind)) => {
+            let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
+            crate::object::exotic_expando::exotic_has_own_property(kind, raw, &k.to_string())
+        }
+        Some(PtrKind::Proxy) => {
+            crate::value::js_is_truthy(crate::proxy::js_proxy_has(recv, proxy_string_key(k))) != 0
+        }
         Some(PtrKind::Exotic) | None => false,
     }
 }
@@ -446,6 +651,11 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv);
     let cb = callable(cb);
+    // ArraySpeciesCreate → ArrayCreate throws RangeError for len ≥ 2^32
+    // (test262 map/create-non-array-invalid-len) — BEFORE any callback runs.
+    if len > u32::MAX as i64 {
+        crate::array::array_length_range_error();
+    }
     let result = js_array_alloc_with_length(len.max(0) as u32);
     let elems = unsafe { (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
     let _g = ThisGuard::new(this_arg);
@@ -938,18 +1148,57 @@ static KEEP_ARRAYLIKE_SLICE: extern "C" fn(f64, f64, i32, f64, i32) -> f64 = js_
 
 /// `Set(O, ToString(k), v, true)` for an array-like object receiver.
 fn al_set(recv: f64, k: i64, v: f64) {
+    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+        crate::proxy::js_proxy_set(recv, proxy_string_key(k), v);
+        return;
+    }
     crate::object::js_object_set_index_polymorphic(recv.to_bits() as i64, k as f64, v);
 }
 
 /// `DeletePropertyOrThrow(O, ToString(k))` for an array-like object receiver.
 fn al_delete(recv: f64, k: i64) {
+    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+        crate::proxy::js_proxy_delete(recv, proxy_string_key(k));
+        return;
+    }
     let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
     crate::object::js_object_delete_dynamic(raw, k as f64);
 }
 
-/// `Set(O, "length", len, true)` for an array-like object receiver.
+/// `Set(O, "length", len, true)` for an array-like object receiver. An own
+/// `length` ACCESSOR fires its setter — and throws TypeError when there is
+/// none (getter-only `length`, test262 splice/S15.4.4.12_A6.1_T3), matching
+/// `Set(..., true)` on a non-writable slot.
 fn al_set_length(recv: f64, len: i64) {
-    let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
+    let raw_addr = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if let Some(acc) = crate::object::get_accessor_descriptor(raw_addr, "length") {
+        if acc.set != 0 {
+            unsafe { crate::object::invoke_accessor_setter(acc.set, recv, len as f64) };
+            return;
+        }
+        crate::collection_iter::throw_type_error(
+            "Cannot set property length of object which has only a getter",
+        );
+    }
+    // An object-LITERAL `get length()` lives in the anon-shape class vtable,
+    // not the defineProperty descriptor table — a getter with no setter makes
+    // `Set(O, "length", ..., true)` throw (test262 splice/S15.4.4.12_A6.1_T3).
+    {
+        let raw = raw_addr as *const crate::object::ObjectHeader;
+        let class_id = crate::object::js_object_get_class_id(raw);
+        if class_id != 0 {
+            if let Some((getter, setter)) =
+                crate::object::class_own_accessor_ptrs(class_id, "length")
+            {
+                if setter == 0 && getter != 0 {
+                    crate::collection_iter::throw_type_error(
+                        "Cannot set property length of object which has only a getter",
+                    );
+                }
+            }
+        }
+    }
+    let raw = raw_addr as *mut crate::object::ObjectHeader;
     let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     crate::object::js_object_set_field_by_name(raw, key, len as f64);
 }
@@ -989,6 +1238,32 @@ fn arg_at(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
         unsafe { *args_ptr.add(i) }
     } else {
         undef()
+    }
+}
+
+/// A receiver that reached a dense `ArrayHeader` entry point but is actually
+/// a plain object/closure at runtime (a variable whose static type was
+/// inferred `Array` and later reassigned — `var x = [1, 0]; … x = {0:1,1:0};
+/// x.sort()`, test262 sort/S15.4.4.11_A6_T2 #5, splice/S15.4.4.12_A4_T1 #7).
+/// Returns it NaN-boxed for the generic engine, or `None` for real arrays.
+pub(crate) fn non_array_object_receiver(arr: *const ArrayHeader) -> Option<f64> {
+    let raw = arr as usize;
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    if !crate::value::addr_class::is_above_handle_band(raw)
+        || !crate::object::is_valid_obj_ptr(raw as *const u8)
+    {
+        return None;
+    }
+    let obj_type = unsafe {
+        let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*hdr).obj_type
+    };
+    if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+        Some(f64::from_bits(JSValue::pointer(raw as *const u8).bits()))
+    } else {
+        None
     }
 }
 
@@ -1119,7 +1394,7 @@ fn object_reverse(recv: f64) -> f64 {
 
 /// `Array.prototype.splice` over an array-like object receiver. Returns a fresh
 /// plain array of the removed elements (holes preserved).
-fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
+pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
     let len = al_length(recv);
     let actual_start = relative_index(arg_at(args_ptr, args_len, 0), len);
     let delete_count = if args_len == 0 {
@@ -1130,7 +1405,11 @@ fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
         let dc = to_integer_or_infinity(arg_at(args_ptr, args_len, 1));
         dc.max(0.0).min((len - actual_start) as f64) as i64
     };
-    // Removed elements -> fresh plain array (holes preserved).
+    // Removed elements -> fresh plain array (holes preserved). ArrayCreate
+    // throws RangeError for a count ≥ 2^32 (splice/create-non-array-invalid-len).
+    if delete_count > u32::MAX as i64 {
+        crate::array::array_length_range_error();
+    }
     let removed = js_array_alloc_with_length(delete_count.max(0) as u32);
     let removed_elems =
         unsafe { (removed as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
@@ -1191,6 +1470,201 @@ fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
     nanbox_arr(removed)
 }
 
+/// `Array.prototype.sort` over an array-like (non-real-array) receiver:
+/// ECMA-262 SortIndexedProperties with holes skipped — collect via
+/// `HasProperty`/`Get`, sort (undefined trailing, never compared), write back
+/// via `Set` and `Delete` the trailing range. Returns the receiver.
+/// `cmp_validated` is the already-validated comparator (null = default sort).
+pub(crate) fn object_sort(recv: f64, cmp_validated: *const ClosureHeader) -> f64 {
+    let cmp = if cmp_validated.is_null() {
+        None
+    } else {
+        Some(super::sort::ComparatorCall::new(cmp_validated))
+    };
+    let len = al_length(recv);
+    unsafe {
+        // Rooted temp array: keeps accessor-produced values alive across
+        // comparator calls (a Rust Vec would be invisible to the GC scan).
+        let temp = js_array_alloc_with_length(len.clamp(0, u32::MAX as i64) as u32);
+        let temp_elems = (temp as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let mut count = 0usize;
+        let mut undef_count = 0usize;
+        for j in 0..len {
+            if al_has(recv, j) {
+                let v = al_get(recv, j);
+                if v.to_bits() == TAG_UNDEFINED {
+                    undef_count += 1;
+                } else {
+                    // GC_STORE_AUDIT(BARRIERED): temp collection array rebuilt below.
+                    ptr::write(temp_elems.add(count), v);
+                    count += 1;
+                }
+            }
+        }
+        (*temp).length = count as u32;
+        rebuild_array_layout(temp);
+        super::sort::sort_rooted_values(temp_elems, count, cmp);
+        rebuild_array_layout(temp);
+        for j in 0..count {
+            al_set(recv, j as i64, *temp_elems.add(j));
+        }
+        for j in count..count + undef_count {
+            al_set(recv, j as i64, undef());
+        }
+        for j in (count + undef_count) as i64..len {
+            al_delete(recv, j);
+        }
+    }
+    recv
+}
+
+/// `Array.prototype.concat` over a non-real-array receiver: the receiver is
+/// the first concat element (spread only when `@@isConcatSpreadable` says so —
+/// a plain object/wrapper lands as a single element), then each argument is
+/// appended with the usual spreadability rules.
+fn object_concat(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
+    let mut result = super::from_concat::append_concat_arg(js_array_alloc(0), recv);
+    for i in 0..args_len {
+        result = super::from_concat::append_concat_arg(result, arg_at(args_ptr, args_len, i));
+    }
+    nanbox_arr(result)
+}
+
+/// Generic `Array.prototype.sort.call(receiver, comparator?)` entry
+/// (#4597 extension): ToObject + route real arrays to the dense/spec sort,
+/// everything else through the array-like engine. Returns the receiver.
+#[no_mangle]
+pub extern "C" fn js_arraylike_sort(recv: f64, comparator: f64) -> f64 {
+    // Spec step 1: comparator must be undefined or callable — BEFORE ToObject.
+    let cmp = crate::array::js_validate_array_comparator(comparator) as *const ClosureHeader;
+    let o = to_object(recv);
+    let arr = as_real_array(o);
+    if !arr.is_null() {
+        let r = crate::array::js_array_sort_with_comparator(arr, cmp);
+        return nanbox_arr(r);
+    }
+    object_sort(o, cmp)
+}
+
+/// Generic `Array.prototype.concat.call(receiver, ...items)` entry.
+#[no_mangle]
+pub extern "C" fn js_arraylike_concat(recv: f64, args_ptr: *const f64, count: i32) -> f64 {
+    let o = to_object(recv);
+    let arr = as_real_array(o);
+    if !arr.is_null() {
+        let r = crate::array::js_array_concat_variadic(arr, args_ptr, count.max(0));
+        return nanbox_arr(r);
+    }
+    object_concat(o, args_ptr, count.max(0) as usize)
+}
+
+/// Generic `Array.prototype.splice.call(receiver, start?, deleteCount?, ...items)`.
+#[no_mangle]
+pub extern "C" fn js_arraylike_splice(recv: f64, args_ptr: *const f64, count: i32) -> f64 {
+    let o = to_object(recv);
+    let count = count.max(0) as usize;
+    let arr = as_real_array(o);
+    if !arr.is_null() {
+        return unsafe { real_array_mutator(arr, "splice", args_ptr, count) };
+    }
+    object_splice(o, args_ptr, count)
+}
+
+#[used]
+static KEEP_ARRAYLIKE_SORT: extern "C" fn(f64, f64) -> f64 = js_arraylike_sort;
+#[used]
+static KEEP_ARRAYLIKE_VARIADIC: [extern "C" fn(f64, *const f64, i32) -> f64; 2] =
+    [js_arraylike_concat, js_arraylike_splice];
+
+/// Walk the receiver's [[Prototype]] chain looking for a *real array* link —
+/// the `function foo() {}; foo.prototype = new Array(1, 2, 3); new foo()`
+/// shape (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*). Such a receiver
+/// inherits `Array.prototype` methods through the array, so the generic
+/// engine must serve them; a plain `{}` (no array on the chain) keeps the
+/// normal "not a function" behavior.
+fn proto_chain_contains_real_array(obj_ptr: usize) -> bool {
+    let mut cur = obj_ptr;
+    for _ in 0..64 {
+        let proto_bits = match crate::object::prototype_chain::object_static_prototype(cur) {
+            Some(bits) => bits,
+            None => match unsafe {
+                crate::object::prototype_chain::default_object_prototype_for_owner(cur)
+            } {
+                Some(bits) => bits,
+                None => return false,
+            },
+        };
+        if proto_bits == TAG_NULL {
+            return false;
+        }
+        let t16 = proto_bits >> 48;
+        let next = if t16 == 0x7FFD {
+            (proto_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if t16 == 0 && proto_bits > 0x10000 {
+            proto_bits as usize
+        } else {
+            return false;
+        };
+        if next == cur {
+            return false;
+        }
+        let next_val = f64::from_bits(crate::value::js_nanbox_pointer(next as i64).to_bits());
+        if !as_real_array(next_val).is_null() {
+            return true;
+        }
+        cur = next;
+    }
+    false
+}
+
+/// Dynamic-dispatch hook: a plain-object receiver whose prototype chain
+/// contains a real array inherits the `Array.prototype` methods through it.
+/// Routes the generic-engine methods; returns `None` for receivers with an
+/// own user method of this name, no array on the chain, or unsupported names.
+pub fn try_array_proto_chain_method(
+    object: f64,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if !matches!(classify_pointer(object), Some(PtrKind::Object)) {
+        return None;
+    }
+    let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
+    let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+    let own = crate::object::js_object_get_field_by_name_f64(raw, key);
+    if matches!(classify_own_slot(own), OwnSlot::UserMethod) {
+        return None;
+    }
+    if !proto_chain_contains_real_array(raw as usize) {
+        return None;
+    }
+    let a = |i: usize| arg_at(args_ptr, args_len, i);
+    let has = |i: usize| (args_len > i) as i32;
+    Some(match method {
+        "forEach" => js_arraylike_forEach(object, a(0), a(1)),
+        "map" => js_arraylike_map(object, a(0), a(1)),
+        "filter" => js_arraylike_filter(object, a(0), a(1)),
+        "some" => js_arraylike_some(object, a(0), a(1)),
+        "every" => js_arraylike_every(object, a(0), a(1)),
+        "find" => js_arraylike_find(object, a(0), a(1)),
+        "findIndex" => js_arraylike_findIndex(object, a(0), a(1)),
+        "findLast" => js_arraylike_findLast(object, a(0), a(1)),
+        "findLastIndex" => js_arraylike_findLastIndex(object, a(0), a(1)),
+        "reduce" => js_arraylike_reduce(object, a(0), has(1), a(1)),
+        "reduceRight" => js_arraylike_reduceRight(object, a(0), has(1), a(1)),
+        "indexOf" => js_arraylike_indexOf(object, a(0), a(1), has(1)),
+        "lastIndexOf" => js_arraylike_lastIndexOf(object, a(0), a(1), has(1)),
+        "includes" => js_arraylike_includes(object, a(0), a(1), has(1)),
+        "at" => js_arraylike_at(object, a(0)),
+        "join" => js_arraylike_join(object, a(0)),
+        "slice" => js_arraylike_slice(object, a(0), has(0), a(1), has(1)),
+        "sort" => js_arraylike_sort(object, a(0)),
+        "concat" => js_arraylike_concat(object, args_ptr, args_len as i32),
+        _ => return None,
+    })
+}
+
 /// Run a generic `Array.prototype` mutator on `recv` for the reified prototype
 /// method thunks (`Array.prototype.pop`, etc.). A real-array receiver routes to
 /// the dense helpers; a plain array-like object routes to the spec-generic
@@ -1243,14 +1717,28 @@ unsafe fn real_array_mutator(
                 crate::array::js_array_length(r) as f64
             }
         }
+        "sort" => {
+            let cmp =
+                crate::array::js_validate_array_comparator(arg_or_undef(args_ptr, args_len, 0))
+                    as *const ClosureHeader;
+            nanbox_arr(crate::array::js_array_sort_with_comparator(arr, cmp))
+        }
+        "concat" => {
+            let count = if args_ptr.is_null() {
+                0
+            } else {
+                args_len as i32
+            };
+            nanbox_arr(crate::array::js_array_concat_variadic(arr, args_ptr, count))
+        }
         "splice" => {
+            // ToIntegerOrInfinity with i32 clamping: NaN → 0, +Infinity →
+            // i32::MAX (clamps to len downstream), -Infinity → i32::MIN
+            // (relative-from-end clamps to 0). The old `is_infinite() → 0`
+            // made `splice(Infinity, 3)` delete from the front (test262
+            // splice/S15.4.4.12_A2.1_T3).
             let arg_i32 = |i: usize| -> i32 {
-                let v = arg_or_undef(args_ptr, args_len, i);
-                if v.is_nan() || v.is_infinite() {
-                    0
-                } else {
-                    v as i32
-                }
+                crate::array::js_array_splice_delete_count(arg_or_undef(args_ptr, args_len, i))
             };
             let start = if args_len >= 1 { arg_i32(0) } else { 0 };
             let delete_count = if args_len == 0 {
@@ -1309,7 +1797,14 @@ fn classify_own_slot(v: f64) -> OwnSlot {
     let fp = crate::closure::get_valid_func_ptr(c);
     if fp.is_null() {
         OwnSlot::Absent
-    } else if fp == crate::closure::BOUND_METHOD_FUNC_PTR {
+    } else if fp == crate::closure::BOUND_METHOD_FUNC_PTR
+        // A raw built-in prototype-method closure (`{ splice:
+        // Array.prototype.splice }` stores the thunk itself, not a bound
+        // reification) must also run the generic engine on THIS receiver —
+        // dispatching it as a user method loses the receiver entirely
+        // (test262 splice/S15.4.4.12_A6.1_T3).
+        || crate::object::builtin_closure_is_non_constructable_value(v)
+    {
         OwnSlot::BorrowedBuiltin
     } else {
         OwnSlot::UserMethod
@@ -1383,6 +1878,12 @@ pub fn run_object_mutator(
         "unshift" => object_unshift(recv, args_ptr, args_len),
         "reverse" => object_reverse(recv),
         "splice" => object_splice(recv, args_ptr, args_len),
+        "sort" => {
+            let cmp = crate::array::js_validate_array_comparator(arg_at(args_ptr, args_len, 0))
+                as *const ClosureHeader;
+            object_sort(recv, cmp)
+        }
+        "concat" => object_concat(recv, args_ptr, args_len),
         _ => return None,
     };
     Some(result)

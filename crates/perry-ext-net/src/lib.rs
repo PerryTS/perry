@@ -441,13 +441,13 @@ pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
 /// missing user args with `TAG_UNDEFINED` (`0x7FFC` band), so this
 /// check has to reject `undefined` cleanly to keep "user passed only
 /// 2 args" from misfiring as "user passed a callback". Issue #770.
-fn is_nanboxed_pointer(val_f64: f64) -> bool {
+pub(crate) fn is_nanboxed_pointer(val_f64: f64) -> bool {
     (val_f64.to_bits() >> 48) == 0x7FFD
 }
 
 /// Unbox a NaN-boxed value to the raw 48-bit pointer payload, regardless
 /// of which `0x7FFx` tag it carries.
-unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
+pub(crate) unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
     let bits = val_f64.to_bits();
     (bits & 0x0000_FFFF_FFFF_FFFF) as *mut u8
 }
@@ -502,6 +502,31 @@ pub(crate) unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> 
                 return Some(n);
             }
         }
+    }
+    None
+}
+
+/// Read a boolean option off a NaN-boxed JS object. Accepts real
+/// booleans plus numbers (`rejectUnauthorized: 0` shows up in npm
+/// code). `None` when the field is absent/undefined/null. #4971.
+pub(crate) unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Option<bool> {
+    if !is_nanboxed_pointer(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val = JsValue::from_bits(js_object_get_field_by_name_f64(obj_ptr, key).to_bits());
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_bool() {
+        return Some(val.to_bool());
+    }
+    if val.is_number() {
+        return Some(val.to_number() != 0.0);
     }
     None
 }
@@ -1153,40 +1178,18 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
     });
 }
 
-// ─── FFI: tls.connect(host, port, servername) ────────────────────────────────
-
-/// `tls.connect(host, port, servername, verify)` — opens a plain TCP socket
-/// and runs the TLS handshake before firing `'connect'`. Use this for
-/// HTTPS-style protocols that start TLS from byte 0.
-///
-/// # Safety
-///
-/// `host_ptr` and `servername_ptr` must be null or Perry-runtime
-/// `StringHeader` pointers cast to `i64`.
-#[no_mangle]
-pub unsafe extern "C" fn js_tls_connect(
-    host_ptr: i64,
-    port: f64,
-    servername_ptr: i64,
-    verify: f64,
-) -> i64 {
-    let host = match string_from_header_i64(host_ptr) {
-        Some(h) => h,
-        None => return 0,
-    };
-    let servername = match string_from_header_i64(servername_ptr) {
-        Some(s) => s,
-        None => host.clone(),
-    };
-    let port = port as u16;
-    let verify = verify != 0.0;
-    spawn_socket_task(host, port, Some((servername, verify)))
-}
+// ─── FFI: tls.connect ────────────────────────────────────────────────────────
+// `js_tls_connect` lives in tls.rs (this file is at the 2000-line gate);
+// it resolves Node's connect overloads and reuses `spawn_socket_task`.
 
 /// Internal: allocate the handle, spawn the tokio task.
 /// `direct_tls = Some((servername, verify))` runs a TLS handshake before
 /// firing 'connect'; None keeps the socket in plain TCP mode.
-fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>) -> i64 {
+pub(crate) fn spawn_socket_task(
+    host: String,
+    port: u16,
+    direct_tls: Option<(String, bool)>,
+) -> i64 {
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
@@ -1505,6 +1508,16 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                     }
                 }
                 lifecycle::drain_once_listeners(id, "connect");
+                // TLS sockets additionally fire 'secureConnect' once the
+                // handshake completes — the direct-TLS connect path only
+                // signals Connect after the handshake, so this is the right
+                // tick. Plain sockets simply have no listeners here. #4971.
+                for cb in listeners_for(id, "secureConnect") {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
+                    }
+                }
+                lifecycle::drain_once_listeners(id, "secureConnect");
             }
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");

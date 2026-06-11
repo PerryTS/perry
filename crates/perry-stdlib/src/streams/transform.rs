@@ -9,30 +9,62 @@ use flate2::read::{
 use flate2::Compression;
 use std::io::Read;
 
+/// `new TransformStream(transformer, writableStrategy, readableStrategy)`
+/// (#4915): both strategy params accept a plain highWaterMark number, a
+/// strategy object (`{ highWaterMark, size }`, e.g. a
+/// ByteLengthQueuingStrategy), or undefined.
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_new(
     start_bits: f64,
     transform_bits: f64,
     flush_bits: f64,
-    hwm: f64,
+    writable_strategy: f64,
+    readable_strategy: f64,
 ) -> f64 {
     let start_cb = closure_from_bits(start_bits.to_bits());
     let transform_cb = closure_from_bits(transform_bits.to_bits());
     let flush_cb = closure_from_bits(flush_bits.to_bits());
-    alloc_transform_stream(start_cb, transform_cb, flush_cb, None, hwm)
+    let writable = parse_strategy_value(writable_strategy);
+    let readable = parse_strategy_value(readable_strategy);
+    alloc_transform_stream_with_strategies(
+        start_cb,
+        transform_cb,
+        flush_cb,
+        None,
+        writable,
+        readable,
+    )
 }
 
-unsafe fn alloc_transform_stream(
+pub(super) unsafe fn alloc_transform_stream(
     start_cb: i64,
     transform_cb: i64,
     flush_cb: i64,
     native: Option<NativeTransformKind>,
     hwm: f64,
 ) -> f64 {
+    alloc_transform_stream_with_strategies(
+        start_cb,
+        transform_cb,
+        flush_cb,
+        native,
+        (hwm, 0),
+        (hwm, 0),
+    )
+}
+
+unsafe fn alloc_transform_stream_with_strategies(
+    start_cb: i64,
+    transform_cb: i64,
+    flush_cb: i64,
+    native: Option<NativeTransformKind>,
+    (w_hwm, w_size_cb): (f64, i64),
+    (r_hwm, r_size_cb): (f64, i64),
+) -> f64 {
     ensure_gc_registered();
 
     // Allocate the readable side empty (controller is its own handle).
-    let readable_id = alloc_readable(0, 0, 0, hwm);
+    let readable_id = alloc_readable_with_strategy(0, 0, 0, r_hwm, false, r_size_cb);
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&readable_id) {
@@ -56,9 +88,15 @@ unsafe fn alloc_transform_stream(
             write_cb: 0,
             close_cb: 0,
             abort_cb: 0,
+            strategy_size_cb: w_size_cb,
             write_queue: VecDeque::new(),
+            in_flight_size: 0.0,
             in_flight: false,
-            high_water_mark: if hwm.is_nan() || hwm <= 0.0 { 1.0 } else { hwm },
+            high_water_mark: if w_hwm.is_nan() || w_hwm <= 0.0 {
+                1.0
+            } else {
+                w_hwm
+            },
             writer_handle: None,
             error_value: 0,
             ready_promise: ready,
@@ -94,14 +132,16 @@ unsafe fn alloc_transform_stream(
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_new_from_transformer_object(
     transformer: f64,
-    hwm: f64,
+    writable_strategy: f64,
+    readable_strategy: f64,
 ) -> f64 {
     ensure_gc_registered();
     js_transform_stream_new(
         stream_object_field(transformer, b"start"),
         stream_object_field(transformer, b"transform"),
         stream_object_field(transformer, b"flush"),
-        hwm,
+        writable_strategy,
+        readable_strategy,
     )
 }
 
@@ -579,20 +619,5 @@ pub unsafe extern "C" fn js_stream_web_decompression_stream_new(format: f64) -> 
     )
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Stubs for deferred surface (issue #237 followups)
-// ─────────────────────────────────────────────────────────────────────
-
-#[no_mangle]
-pub unsafe extern "C" fn js_streams_throw_byob_not_implemented() -> f64 {
-    let err = make_error_with_message("BYOB readers are not yet implemented (issue #237 followup)");
-    perry_runtime::exception::js_throw(f64::from_bits(err));
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_streams_throw_byte_length_not_implemented() -> f64 {
-    let err = make_error_with_message(
-        "ByteLengthQueuingStrategy is not yet implemented (issue #237 followup)",
-    );
-    perry_runtime::exception::js_throw(f64::from_bits(err));
-}
+// BYOB readers and ByteLengthQueuingStrategy accounting are implemented
+// (#4915) — the old `js_streams_throw_*_not_implemented` stubs are gone.

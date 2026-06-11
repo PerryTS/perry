@@ -58,6 +58,8 @@ mod cycle;
 use cycle::*;
 mod verify;
 pub use verify::*;
+mod heap_snapshot;
+pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 
 pub fn gc_collect_minor() -> u64 {
     if defer_gc_request(DeferredGcRequest::DirectMinor) {

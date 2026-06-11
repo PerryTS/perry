@@ -67,6 +67,20 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
         Expr::Object(props_fields)
     };
 
+    // #4950: a module that default-imports the npm `react` package gets
+    // REACT element semantics — `React.createElement(type, props)` returns
+    // an element OBJECT and the reconciler calls the component later, with
+    // the hooks dispatcher installed. Perry's native `jsx` adapter calls
+    // function components eagerly (SSR-to-HTML, the hono path), which under
+    // ink/react-reconciler ran `<Text>`'s `useContext` outside any render
+    // and died on React's "Invalid hook call" null-dispatcher TypeError.
+    // (`createElement` reads `props.children` the same way the jsx-runtime
+    // does, so folding children into props is shared between both paths.)
+    if let Some(react_element_call) = react_create_element_call(ctx, type_expr.clone(), &props_expr)
+    {
+        return Ok(react_element_call);
+    }
+
     Ok(Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
             name: func_name.to_string(),
@@ -74,6 +88,38 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
             return_type: Type::Any,
         }),
         args: vec![type_expr, props_expr],
+        type_args: Vec::new(),
+    })
+}
+
+/// #4950: build `<ReactLocal>.createElement(type, props)` when the module
+/// default-imports the npm `react` package. Returns `None` when no react
+/// binding is in scope (Perry's native `js_jsx` semantics apply).
+fn react_create_element_call(
+    ctx: &mut LoweringContext,
+    type_expr: Expr,
+    props_expr: &Expr,
+) -> Option<Expr> {
+    let react_local = ctx.react_default_import_local.clone()?;
+    // Resolve the react binding the same way ordinary ident lowering would:
+    // a shadowing local wins, otherwise the imported-function registration.
+    let object = if let Some(id) = ctx.lookup_local(&react_local) {
+        Expr::LocalGet(id)
+    } else if let Some(orig) = ctx.lookup_imported_func(&react_local) {
+        Expr::ExternFuncRef {
+            name: orig.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }
+    } else {
+        return None;
+    };
+    Some(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(object),
+            property: "createElement".to_string(),
+        }),
+        args: vec![type_expr, props_expr.clone()],
         type_args: Vec::new(),
     })
 }
@@ -109,6 +155,29 @@ pub(crate) fn lower_jsx_fragment(
     } else {
         Expr::Object(props_fields)
     };
+
+    // #4950: react-mode fragments are `React.createElement(React.Fragment,
+    // props)` — see `react_create_element_call`.
+    if let Some(react_local) = ctx.react_default_import_local.clone() {
+        let fragment_type = Expr::PropertyGet {
+            object: Box::new(if let Some(id) = ctx.lookup_local(&react_local) {
+                Expr::LocalGet(id)
+            } else {
+                Expr::ExternFuncRef {
+                    name: ctx
+                        .lookup_imported_func(&react_local)
+                        .unwrap_or(&react_local)
+                        .to_string(),
+                    param_types: Vec::new(),
+                    return_type: Type::Any,
+                }
+            }),
+            property: "Fragment".to_string(),
+        };
+        if let Some(call) = react_create_element_call(ctx, fragment_type, &props_expr) {
+            return Ok(call);
+        }
+    }
 
     Ok(Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
@@ -303,4 +372,42 @@ pub(crate) fn normalize_jsx_text(text: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jsx_uses_react_create_element_when_react_default_import_present() {
+        // #4950: with `import React from 'react'` in scope, JSX must build
+        // elements via `React.createElement` (reconciler-controlled component
+        // invocation), never Perry's eager `js_jsx` adapter.
+        let mut ctx = LoweringContext::new("test.tsx");
+        ctx.react_default_import_local = Some("React".to_string());
+        ctx.register_imported_func("React".to_string(), "React".to_string());
+        let call =
+            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null)
+                .expect("react mode must produce a createElement call");
+        match call {
+            Expr::Call { callee, args, .. } => {
+                match *callee {
+                    Expr::PropertyGet { property, .. } => assert_eq!(property, "createElement"),
+                    other => panic!("expected PropertyGet callee, got {other:?}"),
+                }
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn jsx_keeps_native_adapter_without_react_import() {
+        let mut ctx = LoweringContext::new("test.tsx");
+        assert!(
+            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null)
+                .is_none(),
+            "without a react import the native js_jsx adapter must stay in effect"
+        );
+    }
 }

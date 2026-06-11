@@ -1,8 +1,15 @@
-//! Minimal `node:cluster` primary lifecycle support.
+//! `node:cluster` primary lifecycle + worker port sharing.
 //!
-//! This intentionally builds on the existing `child_process.fork()` IPC
-//! reactor. It tracks primary-side settings and Worker handles, but does not
-//! implement socket/listening handle distribution.
+//! Builds on the existing `child_process.fork()` IPC reactor. The primary
+//! tracks settings and Worker handles; workers share a listening port via
+//! SO_REUSEPORT (#4914): every TCP `listen()` site binds with
+//! `worker_reuseport_bind` when `NODE_UNIQUE_ID` marks the process as a
+//! cluster worker, and reports the bound address to the primary over the
+//! fork IPC channel (`{cmd:"NODE_CLUSTER", act:"listening"}`) so
+//! `cluster.on('listening')` fires Node-style. Kernel SO_REUSEPORT balancing
+//! is effectively `SCHED_NONE`; true round-robin fd-passing (`SCHED_RR`) and
+//! the primary-coordinated shared ephemeral port for `listen(0)` are tracked
+//! in #4962.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -53,13 +60,78 @@ fn empty_object_value() -> f64 {
     f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
 }
 
+/// True when this process was `cluster.fork()`ed — Node's convention is a
+/// non-empty `NODE_UNIQUE_ID` in the worker's environment.
+pub fn is_cluster_worker() -> bool {
+    std::env::var("NODE_UNIQUE_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some()
+}
+
+/// Bind a TCP listener with SO_REUSEPORT (+SO_REUSEADDR) so N cluster
+/// workers can share one port (#4914). Callers gate on
+/// [`is_cluster_worker`]; non-worker binds stay on the plain
+/// `TcpListener::bind` path.
+#[cfg(unix)]
+pub fn worker_reuseport_bind(addr: &str) -> std::io::Result<std::net::TcpListener> {
+    use std::net::ToSocketAddrs;
+    let sock_addr = addr.to_socket_addrs()?.next().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "could not resolve bind address",
+        )
+    })?;
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(sock_addr),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    socket.set_reuse_address(true)?;
+    socket.set_reuse_port(true)?;
+    socket.bind(&sock_addr.into())?;
+    // Node's default listen backlog.
+    socket.listen(511)?;
+    Ok(socket.into())
+}
+
+/// Worker-side: report a successful `server.listen()` bind to the primary
+/// over the fork IPC channel so it can emit `cluster.on('listening')`
+/// (#4914). No-op outside cluster workers or when the channel is gone.
+/// `#[no_mangle]` because the HTTP/HTTPS/HTTP2 listen sites live in
+/// `perry-ext-http-server`, which has no Cargo dep on perry-runtime — the
+/// symbol resolves at final link (same pattern as perry-ffi's helpers).
+#[no_mangle]
+pub extern "C" fn perry_cluster_worker_listening(
+    addr_ptr: *const u8,
+    addr_len: u32,
+    port: i32,
+    address_type: i32,
+) {
+    if !is_cluster_worker() {
+        return;
+    }
+    let address = if addr_ptr.is_null() || addr_len == 0 {
+        String::new()
+    } else {
+        unsafe {
+            String::from_utf8_lossy(std::slice::from_raw_parts(addr_ptr, addr_len as usize))
+                .into_owned()
+        }
+    };
+    let json = format!(
+        "{{\"cmd\":\"NODE_CLUSTER\",\"act\":\"listening\",\"address\":\"{}\",\"port\":{},\"addressType\":{}}}",
+        address.replace('\\', "\\\\").replace('"', "\\\""),
+        port,
+        address_type
+    );
+    crate::process::ipc::process_ipc_send_raw_json(&json);
+}
+
 pub fn cluster_property(property: &str) -> Option<f64> {
     ensure_cluster_runtime();
 
-    let is_worker = std::env::var("NODE_UNIQUE_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .is_some();
+    let is_worker = is_cluster_worker();
 
     if is_worker {
         match property {
@@ -435,12 +507,13 @@ fn cluster_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 }
 
 fn register_cluster_arities() {
-    let arities: [(*const u8, u32); 6] = [
+    let arities: [(*const u8, u32); 7] = [
         (worker_is_connected as *const u8, 0),
         (worker_is_dead as *const u8, 0),
         (worker_disconnect as *const u8, 0),
         (worker_destroy as *const u8, 0),
         (cluster_internal_online as *const u8, 0),
+        (cluster_internal_disconnect as *const u8, 0),
         (cluster_internal_exit as *const u8, 2),
     ];
     for (func, arity) in arities {
@@ -559,6 +632,23 @@ fn build_fork_options(settings: f64, env_arg: f64) -> *mut ObjectHeader {
     let opts = js_object_alloc(0, 10);
     let opts_val = box_ptr(opts as *const u8);
 
+    // #4914: the default `exec` is this compiled binary itself. A native
+    // executable can't be launched via `node <module>` (fork's default
+    // interpreter), so when exec is the running executable and no explicit
+    // execPath was configured, exec the binary directly. The module arg then
+    // doubles as argv[1], matching Node's worker argv convention.
+    if JSValue::from_bits(get_field(settings, b"execPath").to_bits()).is_undefined() {
+        if let Some(exec) = value_to_string(get_field(settings, b"exec")) {
+            let is_self = std::env::current_exe()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+                .is_some_and(|me| me == exec);
+            if is_self {
+                set_field(opts_val, b"execPath", box_string(&exec));
+            }
+        }
+    }
+
     copy_setting_to_option(settings, opts_val, b"cwd");
     copy_setting_to_option(settings, opts_val, b"execArgv");
     copy_setting_to_option(settings, opts_val, b"execPath");
@@ -628,6 +718,11 @@ fn decorate_worker(worker: f64, id: u32) {
     );
     register_listener(
         worker,
+        "disconnect",
+        closure_value(cluster_internal_disconnect as *const u8, worker),
+    );
+    register_listener(
+        worker,
         "exit",
         closure_value(cluster_internal_exit as *const u8, worker),
     );
@@ -647,11 +742,37 @@ pub(crate) fn consume_internal_message(worker: f64, message: f64) -> bool {
     }
 
     if let Some(act) = value_to_string(get_field(message, b"act")) {
-        if act == "online" {
-            set_field(worker, b"__clusterState", box_string("online"));
+        match act.as_str() {
+            "online" => mark_worker_online(worker),
+            "listening" => {
+                // Worker reported a successful SO_REUSEPORT bind (#4914).
+                // Mirror Node: `worker.on('listening', address)` and
+                // `cluster.on('listening', (worker, address))`.
+                let address = alloc_object_value(3);
+                set_field(address, b"address", get_field(message, b"address"));
+                set_field(address, b"port", get_field(message, b"port"));
+                set_field(address, b"addressType", get_field(message, b"addressType"));
+                set_field(worker, b"__clusterState", box_string("listening"));
+                emit(worker, "listening", &[address]);
+                cluster_emit_event("listening", &[worker, address]);
+            }
+            _ => {}
         }
     }
     true
+}
+
+/// Emit `online` exactly once per worker — both the child reactor's `spawn`
+/// event and the worker's own `{act:"online"}` internal message funnel here.
+fn mark_worker_online(worker: f64) {
+    let already = get_field(worker, b"__clusterOnlineEmitted");
+    if already.to_bits() == TAG_TRUE_F64.to_bits() {
+        return;
+    }
+    set_field(worker, b"__clusterOnlineEmitted", TAG_TRUE_F64);
+    set_field(worker, b"__clusterState", box_string("online"));
+    emit(worker, "online", &[]);
+    cluster_emit_event("online", &[worker]);
 }
 
 fn register_worker(id: u32, worker: f64) {
@@ -750,20 +871,34 @@ extern "C" fn worker_destroy(closure: *const ClosureHeader) -> f64 {
 }
 
 extern "C" fn cluster_internal_online(closure: *const ClosureHeader) -> f64 {
-    let worker = closure_this(closure);
-    set_field(worker, b"__clusterState", box_string("online"));
-    emit(worker, "online", &[]);
+    mark_worker_online(closure_this(closure));
     TAG_UNDEFINED_F64
 }
 
-extern "C" fn cluster_internal_exit(
-    closure: *const ClosureHeader,
-    _code: f64,
-    _signal: f64,
-) -> f64 {
+extern "C" fn cluster_internal_disconnect(closure: *const ClosureHeader) -> f64 {
+    mark_worker_disconnected(closure_this(closure));
+    TAG_UNDEFINED_F64
+}
+
+/// Emit `disconnect` once per worker on both the worker object and the
+/// cluster — fed by the child reactor's IPC-channel-close event, with an
+/// exit-time fallback so the Node-mandated disconnect→exit order holds even
+/// if the channel close races process exit.
+fn mark_worker_disconnected(worker: f64) {
+    let already = get_field(worker, b"__clusterDisconnectEmitted");
+    if already.to_bits() == TAG_TRUE_F64.to_bits() {
+        return;
+    }
+    set_field(worker, b"__clusterDisconnectEmitted", TAG_TRUE_F64);
+    cluster_emit_event("disconnect", &[worker]);
+}
+
+extern "C" fn cluster_internal_exit(closure: *const ClosureHeader, code: f64, signal: f64) -> f64 {
     let worker = closure_this(closure);
     set_field(worker, b"__clusterState", box_string("dead"));
+    mark_worker_disconnected(worker);
     remove_worker(worker);
+    cluster_emit_event("exit", &[worker, code, signal]);
     drain_disconnect_callbacks_if_idle();
     TAG_UNDEFINED_F64
 }

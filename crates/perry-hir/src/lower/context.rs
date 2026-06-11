@@ -105,6 +105,7 @@ impl LoweringContext {
             module_native_instances: Vec::new(),
             uses_fetch: false,
             uses_webassembly: false,
+            react_default_import_local: None,
             suppress_stdlib_dispatch_guard_once: false,
             lowering_call_callee: false,
             unresolved_ident_as_global: false,

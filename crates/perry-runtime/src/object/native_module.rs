@@ -1789,6 +1789,9 @@ const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setSourceMapsEnabled",
     b"send",
     b"sourceMapsEnabled",
+    b"stderr",
+    b"stdin",
+    b"stdout",
     b"title",
     b"unref",
     b"uptime",
@@ -1870,6 +1873,9 @@ const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"setSourceMapsEnabled",
     b"send",
     b"sourceMapsEnabled",
+    b"stderr",
+    b"stdin",
+    b"stdout",
     b"title",
     b"uptime",
     b"version",
@@ -7529,6 +7535,15 @@ pub(crate) unsafe fn get_native_module_constant(
                 b"WebSocket".as_ptr(),
                 "WebSocket".len(),
             )),
+            // #4974: `require('_http_server').kConnectionsCheckingInterval`
+            // (the module aliases to "http" in cjs_wrap). Node exports a
+            // Symbol used as `server[k]` to reach the connections-checking
+            // interval timer; Perry represents it as a sentinel string key
+            // the ext-http server handle dispatch recognizes, mirroring the
+            // `@@__perry_wk_*` well-known-symbol encoding.
+            "kConnectionsCheckingInterval" => {
+                Some(native_string_value("@@kConnectionsCheckingInterval"))
+            }
             _ => None,
         },
         "https" => match property {

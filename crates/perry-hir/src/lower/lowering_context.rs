@@ -313,6 +313,16 @@ pub struct LoweringContext {
     pub(crate) uses_fetch: bool,
     /// Issue #76 — set when any `WebAssembly.*` HIR variant is lowered.
     pub(crate) uses_webassembly: bool,
+    /// #4950: local binding name of a default import from the npm `react`
+    /// package (`import React from 'react'`). When set, JSX lowers to
+    /// `<local>.createElement(type, props)` so REACT controls when function
+    /// components run (the reconciler installs the hooks dispatcher first).
+    /// Perry's native `js_jsx` adapter calls function components EAGERLY
+    /// (SSR-to-HTML semantics, hono-style) — under a real React renderer
+    /// (ink, react-three-fiber, …) that ran `<Text>`'s `useContext` outside
+    /// any render and threw React's "Invalid hook call" / null-dispatcher
+    /// TypeError.
+    pub(crate) react_default_import_local: Option<String>,
     /// #1723 — one-shot flag set by an enclosing `ns[dynamicKey].staticMember`
     /// access to tell the *immediately-nested* computed-member lowering to skip
     /// the #503 dynamic-stdlib-dispatch refusal. The dynamic index there only

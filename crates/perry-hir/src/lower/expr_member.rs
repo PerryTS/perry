@@ -1464,7 +1464,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // Getter properties keep the 0-arg NativeMethodCall below
                     // (they really are getters); everything else here is a
                     // callable method.
-                    "locked" | "desiredSize" | "closed" | "ready" | "readable" | "writable"
+                    "locked"
+                        | "desiredSize"
+                        | "closed"
+                        | "ready"
+                        | "readable"
+                        | "writable"
+                        | "byobRequest"
                 ) {
                     // #1642: a value-read of a Web Streams *method* (not a
                     // getter) must yield a callable bound-method reference, not
@@ -2662,6 +2668,7 @@ fn is_stream_api_member(module: &str, prop: &str) -> bool {
                 | "close"
                 | "error"
                 | "desiredSize"
+                | "byobRequest"
         ),
         "readable_stream_reader" => {
             matches!(prop, "read" | "releaseLock" | "cancel" | "closed")

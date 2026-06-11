@@ -140,6 +140,12 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
 /// bad-args contract of `js_array_set_f64` / `js_object_set_field_by_name`.
 #[no_mangle]
 pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, value: f64) {
+    // `Object.prototype[i] = v` makes the index visible through every array's
+    // hole/OOB reads — flip the global flag (cheap compare; see
+    // `note_object_prototype_index_write`).
+    crate::array::note_object_prototype_index_write(
+        (obj_handle as u64 & 0x0000_FFFF_FFFF_FFFF) as usize,
+    );
     // Strip NaN-box tags defensively. Codegen calls this with the lower-48
     // bits already extracted via `unbox_to_i64`, but match the convention
     // of every other entry-point so a stray un-stripped caller (or a JIT
