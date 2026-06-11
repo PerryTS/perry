@@ -1087,10 +1087,14 @@ pub(super) fn try_native_module_methods(
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let key = it.next().unwrap_or(Expr::Undefined);
                             let value = it.next().unwrap_or(Expr::Undefined);
+                            // Optional `receiver` (4th arg): default `undefined`
+                            // and the runtime substitutes `target`.
+                            let receiver = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectSet {
                                 target: Box::new(target),
                                 key: Box::new(key),
                                 value: Box::new(value),
+                                receiver: Box::new(receiver),
                             }));
                         }
                         "has" => {

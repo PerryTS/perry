@@ -416,14 +416,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &r)],
             ))
         }
-        Expr::ReflectSet { target, key, value } => {
+        Expr::ReflectSet {
+            target,
+            key,
+            value,
+            receiver,
+        } => {
+            // Pass the optional receiver through; the runtime defaults an
+            // `undefined` receiver to the target. A receiver distinct from an
+            // Integer-Indexed target redirects the write to the receiver per
+            // OrdinarySet (test262 internals/Set/key-is-valid-index-reflect-set).
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
             let v = lower_expr(ctx, value)?;
+            let r = lower_expr(ctx, receiver)?;
             Ok(ctx.block().call(
                 DOUBLE,
                 "js_reflect_set",
-                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &v)],
+                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &v), (DOUBLE, &r)],
             ))
         }
         Expr::PutValueSet {

@@ -759,6 +759,22 @@ fn reflect_ordinary_set_property_key(target: f64, property_key: f64, value: f64)
     ))
 }
 
+/// `Reflect.set` with an explicit receiver: OrdinarySet(target, P, V,
+/// receiver), boolean result NaN-boxed.
+pub(crate) fn reflect_ordinary_set_with_receiver(
+    target: f64,
+    property_key: f64,
+    value: f64,
+    receiver: f64,
+) -> f64 {
+    nanbox_bool(ordinary_set_with_receiver(
+        target,
+        property_key,
+        value,
+        receiver,
+    ))
+}
+
 fn reflect_ordinary_set(target: f64, key: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
@@ -1093,6 +1109,58 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
 
     let mut current = target;
     for _ in 0..64 {
+        // Integer-Indexed exotic [[Set]] (§10.4.5.5): a typed array in the
+        // chain intercepts a canonical numeric index key — the prototype
+        // chain is NEVER consulted for it. `SameValue(O, Receiver)` writes
+        // the element; a different receiver with a valid index falls to the
+        // ordinary data-descriptor flow (create on receiver); an invalid
+        // canonical index is a silent no-op `true`.
+        let cur_addr = extract_pointer(current.to_bits()) as usize;
+        if crate::typedarray::lookup_typed_array_kind(cur_addr).is_some() {
+            if let Some(name) = property_key_to_rust_string(key) {
+                match crate::typedarray_props::typed_array_canonical_index_validity(cur_addr, &name)
+                {
+                    Some(valid) => {
+                        let recv_addr = extract_pointer(receiver.to_bits()) as usize;
+                        if recv_addr == cur_addr {
+                            return unsafe {
+                                crate::typedarray_props::typed_array_set_property_by_name(
+                                    cur_addr, &name, value,
+                                )
+                            };
+                        }
+                        if !valid {
+                            return true;
+                        }
+                        // The receiver may itself be a typed array: the
+                        // CreateDataProperty lands in ITS [[DefineOwnProperty]],
+                        // which rejects an index that is invalid FOR THE
+                        // RECEIVER (`Reflect.set(ta, "0", v, emptyTa)` → false).
+                        if crate::typedarray::lookup_typed_array_kind(recv_addr).is_some() {
+                            return match crate::typedarray_props::
+                                typed_array_canonical_index_validity(recv_addr, &name)
+                            {
+                                Some(true) => unsafe {
+                                    crate::typedarray_props::typed_array_set_property_by_name(
+                                        recv_addr, &name, value,
+                                    )
+                                },
+                                Some(false) => false,
+                                None => create_or_update_receiver_property(receiver, key, value),
+                            };
+                        }
+                        return create_or_update_receiver_property(receiver, key, value);
+                    }
+                    // Ordinary key on a TA in the chain: stop the walk (Perry's
+                    // TA prototype methods are served natively, not as data
+                    // descriptors visible to `own_set_descriptor`) and define
+                    // on the receiver.
+                    None => {
+                        return create_or_update_receiver_property(receiver, key, value);
+                    }
+                }
+            }
+        }
         if let Some(desc) = own_set_descriptor(current, key) {
             return match desc {
                 OwnSetDescriptor::Data { writable } => {

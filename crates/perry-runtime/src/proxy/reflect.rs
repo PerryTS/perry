@@ -2,7 +2,7 @@ use super::{
     closure_from, coerce_trap_bool, extract_pointer, handler_trap, is_callable_function,
     js_closure_call0, js_closure_call2, js_proxy_delete, js_proxy_get, js_proxy_has, js_proxy_set,
     lookup, nanbox_bool, reflect_non_object_typeerror, reflect_ordinary_delete_property_key,
-    reflect_ordinary_set_property_key, reflect_value_is_object, revoked_return,
+    reflect_ordinary_set_with_receiver, reflect_value_is_object, revoked_return,
     target_get_property_key, throw_type_error, PROXIES, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
@@ -75,11 +75,14 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
     result
 }
 
-/// `Reflect.set(target, key, value)` - returns the boolean result of the
-/// `[[Set]]` operation (#2756): `false` for a non-writable property or a new
-/// key on a non-extensible object, and the coerced trap result for a proxy.
+/// `Reflect.set(target, key, value, receiver?)` - returns the boolean result
+/// of the `[[Set]]` operation (#2756): `false` for a non-writable property or
+/// a new key on a non-extensible object, and the coerced trap result for a
+/// proxy. An absent/`undefined` `receiver` defaults to `target`; a distinct
+/// receiver redirects the eventual data write per OrdinarySet (observable for
+/// Integer-Indexed exotic targets — test262 internals/Set/*-reflect-set).
 #[no_mangle]
-pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64) -> f64 {
+pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f64) -> f64 {
     // Reflect.set on a non-object target must throw TypeError (spec step 1),
     // matching Reflect.has/get/etc. Pre-fix it silently returned false.
     if !reflect_value_is_object(target) {
@@ -89,15 +92,24 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64) -> f64 {
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
     let value_handle = scope.root_nanbox_f64(value);
+    let receiver_handle = scope.root_nanbox_f64(receiver);
     let property_key_handle = scope
         .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
     let target = target_handle.get_nanbox_f64();
     let property_key = property_key_handle.get_nanbox_f64();
     let value = value_handle.get_nanbox_f64();
+    let receiver = {
+        let r = receiver_handle.get_nanbox_f64();
+        if r.to_bits() == crate::value::TAG_UNDEFINED {
+            target
+        } else {
+            r
+        }
+    };
     if lookup(target).is_some() {
         return js_proxy_set(target, property_key, value);
     }
-    reflect_ordinary_set_property_key(target, property_key, value)
+    reflect_ordinary_set_with_receiver(target, property_key, value, receiver)
 }
 
 /// `Reflect.has(target, key)` (#2764) - `[[HasProperty]]` semantics:

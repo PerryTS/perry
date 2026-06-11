@@ -306,6 +306,13 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if !obj.is_null() && (obj as usize) > 0x10000 {
+            // Typed arrays: side table, NOT the GC header — small typed
+            // arrays are plain-`alloc`ed with no `GcHeader`, so the flag
+            // write below would corrupt allocator metadata.
+            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+                crate::typedarray_props::typed_array_mark_no_extend(obj as usize);
+                return obj_value;
+            }
             let gc = gc_header_for(obj);
             (*gc)._reserved |= crate::gc::OBJ_FLAG_NO_EXTEND;
         }
@@ -557,10 +564,14 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
         // objects are extensible by default; report that instead of reading a
         // header that may not exist.
         let raw = crate::value::js_nanbox_get_pointer(obj_value) as usize;
-        if raw > 0x10000
-            && (crate::typedarray::lookup_typed_array_kind(raw).is_some()
-                || crate::buffer::is_registered_buffer(raw))
-        {
+        if raw > 0x10000 && crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+            return if crate::typedarray_props::typed_array_owner_no_extend(raw) {
+                f64::from_bits(TAG_FALSE)
+            } else {
+                f64::from_bits(TAG_TRUE)
+            };
+        }
+        if raw > 0x10000 && crate::buffer::is_registered_buffer(raw) {
             return f64::from_bits(TAG_TRUE);
         }
         let gc = gc_header_for(obj);

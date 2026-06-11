@@ -2236,8 +2236,12 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             if key_val.is_any_string() {
                 let key_str =
                     crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+                // `in` is [[HasProperty]], not [[HasOwnProperty]] — ordinary
+                // keys consult the prototype chain (`"subarray" in ta`,
+                // inherited `Object.prototype` expandos), while canonical
+                // numeric indices stay bounds-only.
                 let present =
-                    unsafe { crate::typedarray_props::typed_array_has_own_property(ta, key_str) };
+                    unsafe { crate::typedarray_props::typed_array_has_property(ta, key_str) };
                 return if present { nanbox_true } else { nanbox_false };
             }
             if key_val.is_int32() {
@@ -2710,6 +2714,18 @@ pub extern "C" fn js_object_get_field_by_name(
                                     }
                                 }
                             }
+                            // A user patch on the per-kind prototype
+                            // (`Object.defineProperty(TA.prototype,
+                            // "constructor", { get })` or a data overwrite)
+                            // shadows the intrinsic — run the getter with
+                            // `this` = the view (observable; test262
+                            // speciesctor-get-ctor-inherited reads
+                            // `result.constructor` and counts calls).
+                            if let Some(v) =
+                                crate::typedarray::species::prototype_constructor_patch(kind, addr)
+                            {
+                                return JSValue::from_bits(v.to_bits());
+                            }
                             let name = crate::typedarray::name_for_kind(kind);
                             let ctor =
                                 super::js_get_global_this_builtin_value(name.as_ptr(), name.len());
@@ -2735,8 +2751,21 @@ pub extern "C" fn js_object_get_field_by_name(
                         }
                         b"BYTES_PER_ELEMENT" => return JSValue::number(1.0),
                         b"constructor" => {
+                            // An ArrayBuffer / SharedArrayBuffer cell answers
+                            // with ITS constructor — only the Uint8Array
+                            // (Buffer-backed view) representation reports
+                            // `Uint8Array` (`ta.buffer.constructor ===
+                            // ArrayBuffer`, test262 ctors/buffer-arg/
+                            // typedarray-backed-by-sharedarraybuffer).
+                            let name: &[u8] = if crate::buffer::is_shared_array_buffer(addr) {
+                                b"SharedArrayBuffer"
+                            } else if crate::buffer::is_any_array_buffer(addr) {
+                                b"ArrayBuffer"
+                            } else {
+                                b"Uint8Array"
+                            };
                             let ctor =
-                                super::js_get_global_this_builtin_value(b"Uint8Array".as_ptr(), 10);
+                                super::js_get_global_this_builtin_value(name.as_ptr(), name.len());
                             return JSValue::from_bits(ctor.to_bits());
                         }
                         _ => {}
@@ -3587,6 +3616,22 @@ pub extern "C" fn js_object_get_field_by_name(
                     // registered buffer.
                     if crate::buffer::is_data_view(obj as usize) {
                         let ctor = super::js_get_global_this_builtin_value(b"DataView".as_ptr(), 8);
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
+                    // An ArrayBuffer / SharedArrayBuffer answers with ITS
+                    // constructor (`ta.buffer.constructor === ArrayBuffer`,
+                    // test262 ctors/buffer-arg/typedarray-backed-by-
+                    // sharedarraybuffer).
+                    if crate::buffer::is_shared_array_buffer(obj as usize) {
+                        let ctor = super::js_get_global_this_builtin_value(
+                            b"SharedArrayBuffer".as_ptr(),
+                            17,
+                        );
+                        return JSValue::from_bits(ctor.to_bits());
+                    }
+                    if crate::buffer::is_any_array_buffer(obj as usize) {
+                        let ctor =
+                            super::js_get_global_this_builtin_value(b"ArrayBuffer".as_ptr(), 11);
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     if crate::buffer::is_uint8array_buffer(obj as usize) {

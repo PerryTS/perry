@@ -119,14 +119,24 @@ pub extern "C" fn js_array_indexOf_jsvalue(
     if arr.is_null() {
         return -1;
     }
-    // TypedArray: strict-equality numeric search over the typed store.
+    // TypedArray: strict-equality search over the typed store. `len == 0`
+    // returns BEFORE ToIntegerOrInfinity(fromIndex) per spec (an observable /
+    // throwing coercion never runs on an empty array). `js_jsvalue_equals`
+    // (not `==`) so BigInt elements compare by value — `js_typed_array_get`
+    // on a BigInt64Array returns a freshly boxed BigInt whose bit pattern
+    // never raw-equals the search value.
     if let Some((ta, len)) = as_typed_array(arr) {
+        if len == 0 {
+            return -1;
+        }
         let start = match forward_start_index(len as i64, from_index, has_from) {
             Some(s) => s as i32,
             None => return -1,
         };
         for i in start..len {
-            if crate::typedarray::js_typed_array_get(ta, i) == value {
+            if crate::value::js_jsvalue_equals(crate::typedarray::js_typed_array_get(ta, i), value)
+                == 1
+            {
                 return i;
             }
         }
@@ -206,7 +216,11 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
         };
         let mut i = start;
         while i >= 0 {
-            if crate::typedarray::js_typed_array_get(ta, i as i32) == value {
+            if crate::value::js_jsvalue_equals(
+                crate::typedarray::js_typed_array_get(ta, i as i32),
+                value,
+            ) == 1
+            {
                 return i as i32;
             }
             i -= 1;
@@ -295,6 +309,9 @@ pub extern "C" fn js_array_includes_jsvalue(
     // TypedArray: SameValueZero numeric search (so includes(NaN) is true for
     // float typed arrays).
     if let Some((ta, len)) = as_typed_array(arr) {
+        if len == 0 {
+            return 0;
+        }
         let start = match forward_start_index(len as i64, from_index, has_from) {
             Some(s) => s as i32,
             None => return 0,
@@ -309,6 +326,11 @@ pub extern "C" fn js_array_includes_jsvalue(
     }
     unsafe {
         let length = (*arr).length as i64;
+        // §23.1.3.16 step 3: `len == 0 → false` BEFORE ToIntegerOrInfinity
+        // (fromIndex), mirroring `indexOf`.
+        if length == 0 {
+            return 0;
+        }
         let start = match forward_start_index(length, from_index, has_from) {
             Some(s) => s,
             None => return 0,

@@ -51,15 +51,68 @@ pub(crate) unsafe fn species_constructor(owner: usize, kind: u8) -> SpeciesChoic
 }
 
 /// `Get(O, "constructor")` — an own expando (data or accessor, the latter
-/// runs its getter) wins; otherwise resolves to the intrinsic constructor for
-/// this element kind (the default `%Int8Array%` … `%Float64Array%`).
+/// runs its getter) wins; next the *prototype object* is consulted, so a
+/// user `Object.defineProperty(TA.prototype, "constructor", { get })` runs
+/// its getter (observable — test262 speciesctor-get-ctor-inherited counts the
+/// calls) and a data overwrite is honored; otherwise resolves to the intrinsic
+/// constructor for this element kind (`%Int8Array%` … `%Float64Array%`).
 unsafe fn read_constructor(owner: usize, kind: u8) -> f64 {
     if let Some(v) =
         crate::typedarray_props::typed_array_get_property_value_by_name(owner, "constructor")
     {
         return v;
     }
+    if let Some(v) = prototype_constructor_patch(kind, owner) {
+        return v;
+    }
     intrinsic_constructor(kind)
+}
+
+/// A user-patched `constructor` on this kind's prototype object
+/// (`Float64Array.prototype` etc.). `js_object_get_field_by_name` runs any
+/// accessor getter stored for the prototype object; an explicitly-patched
+/// `undefined` result is meaningful (spec: `C === undefined` → default
+/// constructor), so we distinguish "patched" by whether a descriptor or data
+/// field for the key exists at all.
+pub(crate) unsafe fn prototype_constructor_patch(kind: u8, owner: usize) -> Option<f64> {
+    let name = name_for_kind(kind);
+    let ctor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    let cv = JSValue::from_bits(ctor.to_bits());
+    if !cv.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let pv = JSValue::from_bits(proto.to_bits());
+    if !pv.is_pointer() {
+        return None;
+    }
+    let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut crate::object::ObjectHeader;
+    if proto_ptr.is_null() {
+        return None;
+    }
+    // Accessor descriptor on the prototype: run the getter with
+    // `this = owner` (observable; its return value — even `undefined` — is
+    // the spec's `C`). A get-less accessor reads as `undefined`.
+    if let Some(desc) = crate::object::get_accessor_descriptor(proto_ptr as usize, "constructor") {
+        if desc.get == 0 {
+            return Some(f64::from_bits(TAG_UNDEFINED));
+        }
+        let owner_value = f64::from_bits(JSValue::pointer(owner as *const u8).bits());
+        let bound = crate::closure::clone_closure_rebind_this(desc.get, owner_value);
+        return Some(crate::closure::js_native_call_value(
+            f64::from_bits(bound),
+            std::ptr::null(),
+            0,
+        ));
+    }
+    // Plain data overwrite (`TA.prototype.constructor = X`).
+    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    let v = crate::object::js_object_get_field_by_name(proto_ptr, key);
+    if v.is_undefined() {
+        return None;
+    }
+    Some(f64::from_bits(v.bits()))
 }
 
 /// The intrinsic constructor value for an element kind (`Uint8Array`, …).

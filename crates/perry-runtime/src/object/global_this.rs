@@ -5401,17 +5401,64 @@ extern "C" fn typed_array_from_thunk(
     if kind_opt.is_none() {
         require_typed_array_from_of_constructor();
     }
-    // Past the constructor check, the source is read — its `@@iterator` invoked,
-    // or its `length` getter + indexed elements evaluated — and any throwing
-    // user iterator/getter propagates. The map callback is validated up front by
-    // `js_array_from_mapped`.
+    // Spec order: validate the map callback BEFORE the source is read.
     let mapped = map_fn.to_bits() != crate::value::TAG_UNDEFINED;
-    let arr = if mapped {
-        crate::array::js_array_from_mapped(source, map_fn, this_arg)
+    let map_closure = if mapped {
+        crate::array::js_validate_array_callback(map_fn) as *const crate::closure::ClosureHeader
     } else {
-        crate::array::js_array_from_value(source)
+        std::ptr::null()
     };
-    typed_array_create_from_values(kind_opt, arr)
+    // Read the source's RAW kValues — its `@@iterator` invoked, or its
+    // `ToLength(length)` + indexed elements evaluated — any throwing user
+    // iterator/getter propagates (test262 from/arylk-*-error).
+    let raw = unsafe { crate::typedarray::typed_array_from_source_raw_values(source) };
+    // Per-element `mappedValue = Call(mapfn, T, «kValue, k»)` then
+    // `Set(target, k, mappedValue)` — the map call and the (observable,
+    // possibly throwing) element coercion INTERLEAVE per spec, so an abrupt
+    // coercion at element k means the map callback never ran for k+1
+    // (test262 from/set-value-abrupt-completion).
+    let map_at = |k: usize, v: f64| -> f64 {
+        if map_closure.is_null() {
+            return v;
+        }
+        let prev = crate::object::js_implicit_this_set(this_arg);
+        let r = crate::closure::js_closure_call2(map_closure, v, k as f64);
+        crate::object::js_implicit_this_set(prev);
+        r
+    };
+    if let Some(kind) = kind_opt {
+        let out = crate::typedarray::typed_array_alloc(kind, raw.len() as u32);
+        for (k, &v) in raw.iter().enumerate() {
+            let m = map_at(k, v);
+            unsafe { crate::typedarray_props::species_result_store(out as usize, k, m) };
+        }
+        return crate::value::js_nanbox_pointer(out as i64);
+    }
+    // Custom `this` constructor: TypedArrayCreate(C, «len») then per-element
+    // [[Set]] (same interleave).
+    let len = raw.len();
+    let len_arg = [f64::from_bits(
+        crate::value::JSValue::number(len as f64).bits(),
+    )];
+    let ctor = crate::object::js_implicit_this_get();
+    let target = unsafe { super::js_new_function_construct(ctor, len_arg.as_ptr(), 1) };
+    let addr = crate::typedarray_props::typed_array_addr_from_value(target).unwrap_or_else(|| {
+        super::object_ops::throw_object_type_error(
+            b"TypedArray.from/of constructor did not return a TypedArray",
+        )
+    });
+    let ta_ptr = addr as *mut crate::typedarray::TypedArrayHeader;
+    let target_len = unsafe { crate::typedarray::js_typed_array_length(ta_ptr) } as usize;
+    if target_len < len {
+        super::object_ops::throw_object_type_error(
+            b"Derived TypedArray constructor created an array which was too small",
+        );
+    }
+    for (k, &v) in raw.iter().enumerate() {
+        let m = map_at(k, v);
+        unsafe { crate::typedarray_props::species_result_store(addr, k, m) };
+    }
+    target
 }
 
 /// `%TypedArray%.from`/`.of` step "If IsConstructor(`this`) is false, throw a

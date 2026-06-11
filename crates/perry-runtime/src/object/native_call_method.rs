@@ -74,6 +74,45 @@ unsafe fn call_primitive_builtin_prototype_method(
     call_primitive_closure_value(receiver, value, args_ptr, args_len)
 }
 
+/// A *user-installed* method on a builtin's prototype object (e.g.
+/// `Number.prototype.toLocaleString = function () { … }`). Returns the patched
+/// closure value, or `None` when the property is absent / not a real closure /
+/// the no-op-backed builtin placeholder — i.e. `None` means "the native
+/// builtin behavior is still in effect".
+unsafe fn builtin_proto_user_method(builtin_name: &[u8], method_name: &str) -> Option<JSValue> {
+    let ctor =
+        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
+    let ctor_value = JSValue::from_bits(ctor.to_bits());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
+    if proto_ptr.is_null() {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let value = js_object_get_field_by_name(proto_ptr, key);
+    if (value.bits() & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let ptr = (value.bits() & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    if (*(ptr as *const crate::closure::ClosureHeader)).func_ptr
+        == super::global_this::global_this_builtin_noop_thunk as *const u8
+    {
+        return None;
+    }
+    Some(value)
+}
+
 /// Call a method on an object with dynamic dispatch
 /// This is used for runtime method calls when the method cannot be resolved statically.
 /// object: NaN-boxed f64 containing an object pointer
@@ -704,6 +743,23 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
             0,
         );
     }
+    // An own `toLocaleString` closure wins over the default rendering —
+    // notably `%TypedArray%.prototype.toLocaleString()` invoked as a method ON
+    // the prototype object itself must run the installed brand-check thunk
+    // (which throws for the non-TypedArray receiver, test262
+    // toLocaleString/invoked-as-method).
+    {
+        let own = crate::object::js_object_get_own_field_or_undef(
+            receiver,
+            b"toLocaleString".as_ptr(),
+            14,
+        );
+        let own_value = JSValue::from_bits(own.to_bits());
+        if let Some(result) = call_primitive_closure_value(receiver, own_value, std::ptr::null(), 0)
+        {
+            return result;
+        }
+    }
     if let Some(result) = call_object_to_string_method(receiver) {
         return result;
     }
@@ -923,7 +979,7 @@ pub(super) unsafe fn dispatch_typed_array_method(
             } else {
                 crate::typedarray::js_typed_array_sort_with_comparator(ta, cmp)
             };
-            f64::from_bits(result as u64)
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "toSorted" => {
             let cmp = if args_len >= 1 && !args_ptr.is_null() {
@@ -937,9 +993,11 @@ pub(super) unsafe fn dispatch_typed_array_method(
             } else {
                 crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, cmp)
             };
-            f64::from_bits(result as u64)
+            f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
-        "toReversed" => f64::from_bits(crate::typedarray::js_typed_array_to_reversed(ta) as u64),
+        "toReversed" => f64::from_bits(
+            JSValue::pointer(crate::typedarray::js_typed_array_to_reversed(ta) as *mut u8).bits(),
+        ),
         // #2879: bulk `set(source, offset?)` and `copyWithin`.
         "set" => {
             let source = arg0();
@@ -963,7 +1021,10 @@ pub(super) unsafe fn dispatch_typed_array_method(
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
             f64::from_bits(
-                crate::typedarray::js_typed_array_copy_within(ta, target, start, end) as u64,
+                JSValue::pointer(crate::typedarray::js_typed_array_copy_within(
+                    ta, target, start, end,
+                ) as *mut u8)
+                .bits(),
             )
         }
         "with" => {
@@ -973,7 +1034,10 @@ pub(super) unsafe fn dispatch_typed_array_method(
             } else {
                 f64::NAN
             };
-            f64::from_bits(crate::typedarray::js_typed_array_with(ta, idx, val) as u64)
+            f64::from_bits(
+                JSValue::pointer(crate::typedarray::js_typed_array_with(ta, idx, val) as *mut u8)
+                    .bits(),
+            )
         }
         "findLast" => crate::typedarray::js_typed_array_find_last(ta, validate_cb(false)),
         "findLastIndex" => {
@@ -1044,7 +1108,14 @@ pub(super) unsafe fn dispatch_typed_array_method(
         // detect a registered TypedArray receiver and read its typed store, so a
         // `TypedArrayHeader*` cast to `ArrayHeader*` is sound here.
         "indexOf" | "lastIndexOf" | "includes" => {
-            let value = arg0();
+            // Absent searchElement is `undefined`, NOT the NaN sentinel —
+            // `new Float64Array([NaN]).includes()` must be false (SameValueZero
+            // against undefined), and NaN never `===`-matches for indexOf.
+            let value = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
             let (has_from, from) = if args_len >= 2 && !args_ptr.is_null() {
                 (1, *args_ptr.add(1))
             } else {
@@ -1071,16 +1142,49 @@ pub(super) unsafe fn dispatch_typed_array_method(
             let s = crate::typedarray::js_typed_array_join_value(ta, sep);
             f64::from_bits(JSValue::string_ptr(s).bits())
         }
-        // `%TypedArray%.prototype.toLocaleString` defaults to a comma-separated
-        // join (spec: each element's `toLocaleString`, joined by ","). Perry's
-        // numbers stringify identically here, so a default `join` matches Node
-        // for the common numeric cases the brand-check tests exercise.
+        // `%TypedArray%.prototype.toLocaleString` (§23.2.3.32): for each
+        // element, `? ToString(? Invoke(element, "toLocaleString"))`, joined by
+        // ",". When the user has NOT replaced `Number.prototype.toLocaleString`
+        // (or `BigInt.prototype...` for the bigint kinds) the result is the
+        // default comma-separated join, which Perry's plain `join` matches —
+        // keep that fast path. With a patch installed, run the spec loop so
+        // the user function is invoked per element (its result then goes
+        // through ordinary ToString, running `toString`/`valueOf` and
+        // propagating abrupt completions).
         "toLocaleString" => {
-            let s = crate::typedarray::js_typed_array_join_value(
-                ta,
-                f64::from_bits(crate::value::TAG_UNDEFINED),
+            let kind = crate::typedarray::lookup_typed_array_kind(ta as usize);
+            let is_bigint = matches!(
+                kind,
+                Some(crate::typedarray::KIND_BIGINT64) | Some(crate::typedarray::KIND_BIGUINT64)
             );
-            f64::from_bits(JSValue::string_ptr(s).bits())
+            let builtin: &[u8] = if is_bigint { b"BigInt" } else { b"Number" };
+            match builtin_proto_user_method(builtin, "toLocaleString") {
+                None => {
+                    let s = crate::typedarray::js_typed_array_join_value(
+                        ta,
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
+                    );
+                    f64::from_bits(JSValue::string_ptr(s).bits())
+                }
+                Some(patched) => {
+                    let len = crate::typedarray::js_typed_array_length(ta);
+                    let mut out = String::new();
+                    for k in 0..len {
+                        if k > 0 {
+                            out.push(',');
+                        }
+                        let elem = crate::typedarray::js_typed_array_get(ta, k);
+                        let r = call_primitive_closure_value(elem, patched, std::ptr::null(), 0)
+                            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                        let s_hdr = crate::builtins::js_string_coerce(r);
+                        out.push_str(
+                            super::has_own_helpers::str_from_string_header(s_hdr).unwrap_or(""),
+                        );
+                    }
+                    let s = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
+                    f64::from_bits(JSValue::string_ptr(s).bits())
+                }
+            }
         }
         "slice" => {
             // `ToIntegerOrInfinity` each index (runs `valueOf`/`Symbol.toPrimitive`,
