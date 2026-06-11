@@ -1,3 +1,39 @@
+## v0.5.1161 — fix(http): `server.ref()`/`server.unref()` return `this` instead of a raw number (#5011)
+
+Fixes #5011 — `server.ref()` and `server.unref()` on a `node:http`/`node:https`
+server returned the receiver **handle as a raw number** instead of the server
+object. Node returns `this`, so `http.createServer(cb).unref().listen(...)` broke
+under Perry with `TypeError: (number).listen is not a function`
+(`test-http-request-method-delete-payload.js` and friends).
+
+Root cause: `crates/perry-codegen/src/lower_call/native_table/http_server.rs` had
+no `ref`/`unref` rows for the `HttpServer`/`HttpsServer` class filters, so the
+calls fell through to a generic handler that yielded the handle as a number —
+the same shape `listen` had before #2129.
+
+Fix:
+- Added `ref`/`unref` `NativeModSig` rows (`ret: NR_PTR`) for both the http and
+  https server tables, routing to new runtime entry points.
+- New `js_node_http_server_ref`/`_unref` and `js_node_https_server_ref`/`_unref`
+  return the receiver handle (so `s.ref() === s`) and toggle a new `refed` flag
+  on `HttpServer`. `server_is_active` now ignores a listening-but-`unref()`ed
+  server, so the event loop can exit while the server is still bound (Node
+  semantics) — pending listen callbacks and queued requests still keep the loop
+  alive long enough to flush in-flight work.
+- Mirrored the methods in the `server: any` dynamic dispatcher
+  (`handle_dispatch.rs`) and registered the externs in `ext_registry.rs`,
+  `runtime_decls/stdlib_ffi.rs`, and the `force_link_http_server` anchor table.
+
+Verified: `typeof s.unref()` → `object`, `s.unref() === s` → `true`,
+`s.ref() === s` → `true`, `createServer(cb).unref().listen(...)` works, and a
+listening unref'd server lets the process exit (exit 0, no hang). 0 regressions
+in the http/https server surface.
+
+Not in scope (separate `(number).<method>` cases tracked under #4975):
+`new http.Agent().createConnection(...)` returning a number
+(`test-http-socket-encoding-error`) and `server.ALPNProtocols` not being a
+Buffer (`test-https-argument-of-creating`).
+
 ## v0.5.1160 — fix(hir): `queueMicrotask`/`structuredClone`/`atob`/`btoa` as first-class function values (#5015)
 
 Fixes #5015 — react-reconciler 0.33 production build threw `TypeError: value is

@@ -546,6 +546,27 @@ pub extern "C" fn js_node_https_server_close_idle_connections(handle: i64) {
     signal_connections_close(handle, true);
 }
 
+/// `httpsServer.ref()` — keep the loop alive (default) and return the
+/// receiver handle so chains work. Sets the flag on the wrapped base
+/// `HttpServer`, which `server_is_active` reads for HTTPS too. #5011.
+#[no_mangle]
+pub extern "C" fn js_node_https_server_ref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.refed = true;
+    }
+    handle
+}
+
+/// `httpsServer.unref()` — stop keeping the process alive and return the
+/// receiver handle (Node returns `this`). #5011.
+#[no_mangle]
+pub extern "C" fn js_node_https_server_unref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.refed = false;
+    }
+    handle
+}
+
 macro_rules! https_server_getter {
     ($name:ident, $field:ident) => {
         #[no_mangle]

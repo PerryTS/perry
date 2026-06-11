@@ -57,6 +57,8 @@ extern "C" {
         callback: i64,
     ) -> f64;
     fn js_node_http_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
+    fn js_node_http_server_ref(handle: i64) -> i64;
+    fn js_node_http_server_unref(handle: i64) -> i64;
     fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64;
     fn js_node_https_server_close(server_handle: i64, callback: i64);
     fn js_node_https_server_close_all_connections(handle: i64);
@@ -68,6 +70,8 @@ extern "C" {
         callback: i64,
     ) -> f64;
     fn js_node_https_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
+    fn js_node_https_server_ref(handle: i64) -> i64;
+    fn js_node_https_server_unref(handle: i64) -> i64;
     fn js_node_http2_server_listen(server_handle: i64, args_array: i64) -> i64;
     fn js_node_http2_server_close(server_handle: i64, callback: i64);
     fn js_node_http2_server_address_json(handle: i64) -> *mut StringHeader;
@@ -211,6 +215,8 @@ pub const HTTP_SERVER_METHODS: &[&str] = &[
     "removeListener",
     "off",
     "setTimeout",
+    "ref",
+    "unref",
     "@@__perry_wk_asyncDispose",
 ];
 
@@ -227,6 +233,8 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
         "removeListener" => Some(b"removeListener"),
         "off" => Some(b"off"),
         "setTimeout" => Some(b"setTimeout"),
+        "ref" => Some(b"ref"),
+        "unref" => Some(b"unref"),
         "@@__perry_wk_asyncDispose" => Some(b"@@__perry_wk_asyncDispose"),
         _ => None,
     }
@@ -396,6 +404,26 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 js_node_https_server_set_timeout_method(handle, msecs, cb);
             } else {
                 js_node_http_server_set_timeout_method(handle, msecs, cb);
+            }
+            self_ref
+        }
+        // #5011 — `server.ref()` / `server.unref()` return `this` (the
+        // server) for chaining; `unref()` drops the server out of the
+        // event-loop keepalive set. h2's keepalive is tracked separately
+        // (`has_active_h2_clients`), so for h2 we just return the receiver.
+        "ref" => {
+            if is_https {
+                js_node_https_server_ref(handle);
+            } else if !is_h2 {
+                js_node_http_server_ref(handle);
+            }
+            self_ref
+        }
+        "unref" => {
+            if is_https {
+                js_node_https_server_unref(handle);
+            } else if !is_h2 {
+                js_node_http_server_unref(handle);
             }
             self_ref
         }

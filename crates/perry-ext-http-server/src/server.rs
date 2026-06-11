@@ -118,6 +118,12 @@ pub struct HttpServer {
     /// so we track just the flag the `_http_server` introspection key
     /// exposes.
     pub connections_checking_interval_destroyed: bool,
+    /// #5011 — mirrors Node's `server.unref()` / `server.ref()`. When
+    /// `unref()`ed, a listening server no longer keeps the event loop
+    /// alive, so the process can exit even while it's still bound. Starts
+    /// `true` (refed), matching Node where a fresh server holds the loop
+    /// open once it's listening.
+    pub refed: bool,
 }
 
 impl HttpServer {
@@ -148,6 +154,7 @@ impl HttpServer {
             keep_alive: false,
             keep_alive_initial_delay: 0.0,
             connections_checking_interval_destroyed: false,
+            refed: true,
         }
     }
 }
@@ -488,6 +495,31 @@ pub extern "C" fn js_node_http_server_set_timeout_method(
                 .or_default()
                 .push(callback);
         }
+    }
+    handle
+}
+
+/// `server.ref()` — mark the server as keeping the event loop alive
+/// (the default) and return the receiver handle so chains like
+/// `server.ref().listen(...)` work. #5011 — without this row the call
+/// fell through to a generic handler that returned the handle as a raw
+/// number, so `s.ref() === s` was false and chaining broke.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_ref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        s.refed = true;
+    }
+    handle
+}
+
+/// `server.unref()` — stop the server from keeping the process alive and
+/// return the receiver handle (Node returns `this`). Clearing `refed`
+/// drops the server out of `server_is_active`, so the event loop can
+/// exit even while the server is still bound. #5011.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_unref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        s.refed = false;
     }
     handle
 }
@@ -1539,7 +1571,12 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
 }
 
 fn server_is_active(s: &HttpServer) -> bool {
-    if s.listening {
+    // #5011 — an `unref()`ed server no longer keeps the event loop alive
+    // just by being bound, so a quietly-listening unref'd server lets the
+    // process exit (Node semantics). Pending listen callbacks and queued
+    // requests below still keep the loop alive long enough to flush any
+    // in-flight work.
+    if s.listening && s.refed {
         return true;
     }
     // #4903 — a queued `'listening'` emit / listen callback must keep the

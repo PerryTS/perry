@@ -1734,6 +1734,8 @@ mod force_link_http_server {
         pub fn js_node_http_server_max_requests_per_socket();
         pub fn js_node_http_server_set_max_requests_per_socket();
         pub fn js_node_http_server_set_timeout_method();
+        pub fn js_node_http_server_ref();
+        pub fn js_node_http_server_unref();
         pub fn js_node_http_res_end();
         pub fn js_node_http_res_write();
         pub fn js_node_http_res_write_head();
@@ -1812,6 +1814,8 @@ mod force_link_http_server {
         pub fn js_node_https_server_max_requests_per_socket();
         pub fn js_node_https_server_set_max_requests_per_socket();
         pub fn js_node_https_server_set_timeout_method();
+        pub fn js_node_https_server_ref();
+        pub fn js_node_https_server_unref();
         // http2 secure server.
         pub fn js_node_http2_create_secure_server();
         pub fn js_node_http2_server_listen();
@@ -1860,6 +1864,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http_server_max_requests_per_socket,
         js_node_http_server_set_max_requests_per_socket,
         js_node_http_server_set_timeout_method,
+        js_node_http_server_ref,
+        js_node_http_server_unref,
         js_node_http_res_end,
         js_node_http_res_write,
         js_node_http_res_write_head,
@@ -1937,6 +1943,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_https_server_max_requests_per_socket,
         js_node_https_server_set_max_requests_per_socket,
         js_node_https_server_set_timeout_method,
+        js_node_https_server_ref,
+        js_node_https_server_unref,
         js_node_http2_create_secure_server,
         js_node_http2_server_listen,
         js_node_http2_server_close,

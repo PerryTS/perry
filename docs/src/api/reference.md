@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2782 entries across 114 modules.
+Total: 2786 entries across 114 modules.
 
 ## Modules
 
@@ -1564,6 +1564,7 @@ Total: 2782 entries across 114 modules.
 - `pause` — instance *(class: `IncomingMessage`)*
 - `protocol` — instance *(class: `Agent`)*
 - `read` — instance *(class: `IncomingMessage`)*
+- `ref` — instance *(class: `HttpServer`)*
 - `removeHeader` — instance *(class: `ClientRequest`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
@@ -1591,6 +1592,7 @@ Total: 2782 entries across 114 modules.
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `uncork` — instance *(class: `ClientRequest`)*
 - `uncork` — instance *(class: `ServerResponse`)*
+- `unref` — instance *(class: `HttpServer`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `validateHeaderName` — module
 - `validateHeaderValue` — module
@@ -1674,10 +1676,12 @@ Total: 2782 entries across 114 modules.
 - `maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `on` — instance *(class: `HttpsServer`)*
+- `ref` — instance *(class: `HttpsServer`)*
 - `request` — module
 - `requestTimeout` — instance *(class: `HttpsServer`)*
 - `setTimeout` — instance *(class: `HttpsServer`)*
 - `timeout` — instance *(class: `HttpsServer`)*
+- `unref` — instance *(class: `HttpsServer`)*
 
 ### Properties
 

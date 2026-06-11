@@ -5238,6 +5238,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     method("http", "maxRequestsPerSocket", true, Some("HttpServer")),
     method("http", "setTimeout", true, Some("HttpServer")),
+    // #5011 — `server.ref()` / `server.unref()` return the server (`this`)
+    // for chaining; `unref()` also drops the server out of the event-loop
+    // keepalive set so the process can exit while still bound.
+    method("http", "ref", true, Some("HttpServer")),
+    method("http", "unref", true, Some("HttpServer")),
     method("http", "on", true, Some("IncomingMessage")),
     method("http", "addListener", true, Some("IncomingMessage")),
     method("http", "pause", true, Some("IncomingMessage")),
@@ -5399,6 +5404,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     method("https", "maxRequestsPerSocket", true, Some("HttpsServer")),
     method("https", "setTimeout", true, Some("HttpsServer")),
+    // #5011 — see the http HttpServer `ref`/`unref` rows.
+    method("https", "ref", true, Some("HttpsServer")),
+    method("https", "unref", true, Some("HttpsServer")),
     class("https", "Server"),
     // --- node:http2 server (issue #577 Phase 3) ---
     method("http2", "createSecureServer", false, None),

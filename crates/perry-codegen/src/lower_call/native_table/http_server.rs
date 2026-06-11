@@ -337,6 +337,32 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_PTR],
         ret: NR_PTR,
     },
+    // `server.ref()` / `server.unref()` — EventEmitter chainables that
+    // return `this`. Without these rows they fell through to a generic
+    // handler that yielded the receiver *handle* as a raw number, so
+    // `createServer(cb).unref().listen(...)` broke with `(number).listen
+    // is not a function` (#5011). Mirrors the `listen` NR_PTR fix (#2129):
+    // the runtime returns the server handle so chaining works. `unref()`
+    // also clears the loop-keepalive flag so the process can exit (Node
+    // semantics); `ref()` restores it.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "ref",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_ref",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "unref",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_unref",
+        args: &[],
+        ret: NR_PTR,
+    },
     // IncomingMessage instance methods
     NativeModSig {
         module: "http",
@@ -973,6 +999,26 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         runtime: "js_node_https_server_close_idle_connections",
         args: &[],
         ret: NR_VOID,
+    },
+    // `server.ref()` / `server.unref()` for the https server — return
+    // `this` (NR_PTR) so chaining works, matching the http rows. #5011.
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "ref",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_ref",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "unref",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_unref",
+        args: &[],
+        ret: NR_PTR,
     },
     NativeModSig {
         module: "https",
