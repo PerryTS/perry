@@ -110,6 +110,13 @@ pub extern "C" fn js_try_end() {
     });
 }
 
+/// Current `try` nesting depth on this thread. Async-context scopes
+/// (`AsyncLocalStorage#run` etc.) record this at entry so the unwind path
+/// can tell which scopes a throw is about to longjmp past (#788).
+pub(crate) fn current_try_depth() -> usize {
+    with_exception_state(|s| unsafe { (*s).try_depth })
+}
+
 /// Throw an exception with the given value
 #[no_mangle]
 pub extern "C" fn js_throw(value: f64) -> ! {
@@ -145,6 +152,11 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         crate::closure::reset_throw_not_callable_counter();
 
         let depth = (*s).try_depth - 1;
+        // Apply the deferred context restores of async-context scopes
+        // (`AsyncLocalStorage#run`/`#exit`, `runInAsyncScope`) whose normal
+        // restore code this longjmp skips (#788). Pure thread-local state
+        // swaps — no JS runs and nothing allocates.
+        crate::async_context::unwind_context_guards(depth);
         // Drop the shadow-stack frames of the functions we are about to
         // unwind past. `longjmp` skips their epilogues (and therefore their
         // `js_shadow_frame_pop` calls), so without this the next GC would

@@ -31,6 +31,58 @@ unsafe fn pack_args_array(args: &[f64]) -> *mut perry_runtime::ArrayHeader {
     arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>()
 }
 
+/// Dynamic dispatch for `AsyncLocalStorage` receivers whose static type the
+/// codegen lost (`any`-typed bindings, closure captures). Gated on registry
+/// type membership so no other subsystem's handle is claimed (#788).
+unsafe fn dispatch_async_local_storage_method(
+    handle: i64,
+    method: &str,
+    args: &[f64],
+) -> Option<f64> {
+    if !matches!(
+        method,
+        "run" | "getStore" | "enterWith" | "exit" | "disable"
+    ) {
+        return None;
+    }
+    if get_handle_mut::<crate::async_local_storage::AsyncLocalStorageHandle>(handle).is_none() {
+        return None;
+    }
+    Some(match method {
+        "getStore" => crate::async_local_storage::js_async_local_storage_get_store(handle),
+        "run" if args.len() >= 2 => {
+            let rest = if args.len() > 2 { &args[2..] } else { &[] };
+            let rest_array = if rest.is_empty() {
+                0
+            } else {
+                pack_args_array(rest) as i64
+            };
+            crate::async_local_storage::js_async_local_storage_run(
+                handle, args[0], args[1], rest_array,
+            )
+        }
+        "enterWith" => {
+            let store = args.first().copied().unwrap_or(TAG_UNDEFINED_F64);
+            crate::async_local_storage::js_async_local_storage_enter_with(handle, store);
+            TAG_UNDEFINED_F64
+        }
+        "exit" if !args.is_empty() => {
+            let rest = if args.len() > 1 { &args[1..] } else { &[] };
+            let rest_array = if rest.is_empty() {
+                0
+            } else {
+                pack_args_array(rest) as i64
+            };
+            crate::async_local_storage::js_async_local_storage_exit(handle, args[0], rest_array)
+        }
+        "disable" => {
+            crate::async_local_storage::js_async_local_storage_disable(handle);
+            TAG_UNDEFINED_F64
+        }
+        _ => return None,
+    })
+}
+
 #[cfg(feature = "bundled-events")]
 unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
     if !crate::events::is_event_emitter_handle(handle) {
@@ -225,6 +277,10 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     #[cfg(feature = "bundled-events")]
     if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
+        return value;
+    }
+
+    if let Some(value) = dispatch_async_local_storage_method(handle, method_name, &args) {
         return value;
     }
 

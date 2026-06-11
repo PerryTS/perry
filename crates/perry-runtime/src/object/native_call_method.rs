@@ -4579,6 +4579,21 @@ pub unsafe extern "C" fn js_native_call_method(
         if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
             return 0.0;
         }
+
+        // AsyncResource handles are raw Box pointers under POINTER_TAG, not
+        // GC heap objects — recognize them by registry membership BEFORE the
+        // gc_header read below (which would read foreign allocator memory).
+        // Covers receivers whose static type the codegen lost, e.g. a
+        // closure-captured `let resource: AsyncResource` (#789).
+        if let Some(r) = crate::async_hooks::try_async_resource_method_dispatch(
+            obj as i64,
+            method_name,
+            args_ptr,
+            args_len,
+        ) {
+            return r;
+        }
+
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;

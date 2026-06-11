@@ -631,6 +631,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // branch so `await thenable` enters the polling path.
     module.declare_function("js_assimilate_thenable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_run_microtasks", I32, &[]);
+    // ESM entry marker: first microtask drain finishes promise jobs before
+    // the nextTick queue (Node module-evaluation checkpoint ordering, #788).
+    module.declare_function("js_mark_entry_module_esm", VOID, &[]);
+    // Promise/queueMicrotask jobs only — no nextTick drain, no timers.
+    // Used by the await lowering's drain_once block (#788).
+    module.declare_function("js_promise_run_promise_jobs", I32, &[]);
     // Drain stdlib's tokio async queue (fetch, DB, etc.). Lives in
     // perry-runtime as a thin function-pointer trampoline so it's
     // safe to call even when perry-stdlib is not linked (no-op).
