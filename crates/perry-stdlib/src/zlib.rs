@@ -1442,7 +1442,7 @@ mod stream_tests {
     /// Drive the streaming codec like the FFI ops do: write + drain, flush +
     /// drain between chunks, then finish — reassembling the full stream.
     fn stream_compress(codec: Codec, chunks: &[&[u8]]) -> Vec<u8> {
-        let mut cs = make_codec_state(codec).expect("streaming codec");
+        let mut cs = make_codec_state(codec, Compression::default()).expect("streaming codec");
         let mut out = Vec::new();
         for c in chunks {
             cs.write_chunk(c).unwrap();
@@ -1492,8 +1492,8 @@ mod stream_tests {
 
     #[test]
     fn zstd_buffer_until_end_stream_roundtrips() {
-        assert!(make_codec_state(Codec::ZstdCompress).is_none());
-        assert!(make_codec_state(Codec::ZstdDecompress).is_none());
+        assert!(make_codec_state(Codec::ZstdCompress, Compression::default()).is_none());
+        assert!(make_codec_state(Codec::ZstdDecompress, Compression::default()).is_none());
 
         let c = run_codec(Codec::ZstdCompress, b"zstd stream test").unwrap();
         assert!(!c.is_empty());
