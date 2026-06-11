@@ -50,6 +50,7 @@ pub(self) use extract_exports::{
 };
 pub(self) use extract_requires::{
     extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
+    identifier_is_reassigned,
 };
 pub(self) use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,
@@ -282,6 +283,62 @@ module.exports = inner;
             "expected require dispatch through aliased import, got:\n{}",
             wrapped
         );
+    }
+
+    #[test]
+    fn wrap_keeps_reassigned_require_alias_as_mutable_local() {
+        // Issue #5006: a `require()`-initialized alias that is later
+        // *reassigned* (the signal-exit `signals = signals.filter(...)` shape)
+        // must NOT be hoisted into an immutable `import s from '...'` with its
+        // declaration blanked — that makes the reassignment unresolvable
+        // (`ReferenceError: s is not defined`). It must stay a real mutable
+        // local fed by the `_req_N` import.
+        let src = "var s = require('./data.js');\ns = s.filter(function () { return true; });\nmodule.exports = s;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+        // Falls back to the placeholder import name (alias not adopted)...
+        assert!(
+            wrapped.contains("import _req_0 from './data.js';"),
+            "expected non-adopted _req_0 import, got:\n{}",
+            wrapped
+        );
+        // ...the require dispatches through it...
+        assert!(
+            wrapped.contains("if (specifier === './data.js') return _req_0;"),
+            "expected require dispatch through _req_0, got:\n{}",
+            wrapped
+        );
+        // ...and the original `var s = require('./data.js')` declaration stays
+        // in the IIFE body (not blanked) so `s` is a mutable local.
+        assert!(
+            wrapped.contains("var s = require('./data.js');"),
+            "expected the alias declaration to survive as a mutable local, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn identifier_is_reassigned_distinguishes_declaration_from_write() {
+        use super::extract_requires::identifier_is_reassigned;
+        // Pure read-only alias: declaration + member reads only.
+        assert!(!identifier_is_reassigned(
+            "var dep = require('./dep'); module.exports = dep.value;",
+            "dep"
+        ));
+        // Reassignment.
+        assert!(identifier_is_reassigned(
+            "var s = require('./d'); s = s.filter(() => true);",
+            "s"
+        ));
+        // Compound assignment.
+        assert!(identifier_is_reassigned(
+            "var n = require('./n'); n += 1;",
+            "n"
+        ));
+        // Comparisons / arrows / member writes must not count as reassignment.
+        assert!(!identifier_is_reassigned(
+            "var s = require('./d'); if (s === other) {} obj.s = 1; cb(() => s);",
+            "s"
+        ));
     }
 
     #[test]

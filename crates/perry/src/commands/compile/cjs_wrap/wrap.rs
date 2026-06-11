@@ -109,6 +109,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         if hoisted_class_names.iter().any(|c| c == alias) {
             return false;
         }
+        // #5006: a reassigned alias (`s = s.filter(...)`) must stay a real
+        // mutable local — adopting it into an immutable `import s from '...'`
+        // and blanking the declaration makes the reassignment unresolvable
+        // (`ReferenceError: s is not defined`, the signal-exit → ink wall).
+        if identifier_is_reassigned(source, alias) {
+            return false;
+        }
         true
     };
     let mut import_local_names: Vec<String> = require_specs
@@ -351,6 +358,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         let aliases = extract_require_aliases_with_ranges(source);
         let lines = aliases
             .iter()
+            // #5006: a reassigned alias must keep its mutable `var alias =
+            // require(...)` local in the IIFE body — never surface it as an
+            // immutable module-scope `const alias = _req_N;` (the const write
+            // would throw) nor strip its declaration below.
+            .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
             .filter_map(|(alias, spec, _range)| {
                 let idx = require_specs.iter().position(|s| s == spec)?;
                 // When the alias is already the spec's import local name
@@ -369,6 +381,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         let ranges = aliases
             .into_iter()
             .filter(|(_, spec, _)| require_specs.iter().any(|s| s == spec))
+            .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
             .map(|(_, _, range)| range)
             .collect::<Vec<_>>();
         (lines, ranges)
