@@ -1224,12 +1224,17 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("tls", "rootCertificates"),
     property("tls", "CLIENT_RENEG_LIMIT"),
     property("tls", "CLIENT_RENEG_WINDOW"),
+    // #4971 — all-any params: the runtime resolves Node's overloads
+    // (`connect(options[, cb])`, `connect(port[, host][, options][, cb])`)
+    // plus the legacy positional `(host, port, servername?, verify?)` from
+    // the raw NaN-boxed args; the old `(string, any, string, any)` shape
+    // string-coerced an options-object first arg.
     method_sig(
         "tls",
         "connect",
         false,
         None,
-        &[p_str("p0"), p_any("p1"), p_str("p2"), p_any("p3")],
+        &[p_any("p0"), p_any("p1"), p_any("p2"), p_any("p3")],
         TypeSpec::Any,
     ),
     class("tls", "SecureContext"),

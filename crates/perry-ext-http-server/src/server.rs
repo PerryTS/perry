@@ -6,8 +6,10 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
@@ -18,6 +20,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -171,19 +174,83 @@ pub struct HttpPendingUpgrade {
 /// Live HTTP/1.1 connection tracked so `server.closeAllConnections()` /
 /// `server.closeIdleConnections()` can reach into the per-connection
 /// tokio task. `busy` counts in-flight requests on the connection (0
-/// between keep-alive requests); `close` wakes the connection task's
-/// `select!`, which drops the hyper connection and closes the socket.
-struct TrackedConnection {
-    server_handle: i64,
-    close: Arc<tokio::sync::Notify>,
-    busy: Arc<AtomicUsize>,
+/// between keep-alive requests); `read_active` flags request bytes
+/// received since the last dispatched request (a half-sent request head
+/// is "currently sending a request" in Node's idleness terms even
+/// though nothing has reached the service yet — #4971); `close` wakes
+/// the connection task's `select!`, which drops the hyper connection
+/// and closes the socket. Shared with the HTTPS accept loop in
+/// `https_server.rs`.
+pub(crate) struct TrackedConnection {
+    pub(crate) server_handle: i64,
+    pub(crate) close: Arc<tokio::sync::Notify>,
+    pub(crate) busy: Arc<AtomicUsize>,
+    pub(crate) read_active: Arc<AtomicBool>,
 }
 
 lazy_static! {
-    static ref CONNECTIONS: Mutex<HashMap<u64, TrackedConnection>> = Mutex::new(HashMap::new());
+    pub(crate) static ref CONNECTIONS: Mutex<HashMap<u64, TrackedConnection>> =
+        Mutex::new(HashMap::new());
 }
 
-static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+pub(crate) static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// AsyncRead/AsyncWrite passthrough that flips `saw_bytes` on every
+/// read that produces data. Wrapped around the server-side stream (the
+/// decrypted one, for HTTPS — handshake traffic must not count) so
+/// idleness can see "client started sending a request whose head hasn't
+/// parsed yet": hyper only invokes the service (and bumps `busy`) once
+/// a complete head arrives. The flag resets at service entry; while a
+/// request is in flight `busy > 0` covers activity, and a quiet
+/// keep-alive socket after the response reads as idle again. #4971.
+pub(crate) struct ReadActivity<S> {
+    inner: S,
+    saw_bytes: Arc<AtomicBool>,
+}
+
+impl<S> ReadActivity<S> {
+    pub(crate) fn new(inner: S, saw_bytes: Arc<AtomicBool>) -> Self {
+        Self { inner, saw_bytes }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for ReadActivity<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let poll = Pin::new(&mut this.inner).poll_read(cx, buf);
+        if matches!(poll, Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            this.saw_bytes.store(true, Ordering::SeqCst);
+        }
+        poll
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
 
 /// Server handles whose accept loop saw a new connection since the last
 /// pump tick. Drained by `js_node_http_server_process_pending` to fire
@@ -191,17 +258,20 @@ static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 /// socket as the listener argument; we don't model a net.Socket for
 /// hyper connections yet, so listeners fire with no args — enough for
 /// the canonical connection-counting idiom.
-static PENDING_CONNECTION_EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+pub(crate) static PENDING_CONNECTION_EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 
 /// Signal tracked connections of `server_handle` to close. With
-/// `only_idle`, connections currently processing a request are left
-/// alone (Node's `closeIdleConnections` semantics; `server.close()`
-/// also closes idle keep-alive sockets since Node 19).
-fn signal_connections_close(server_handle: i64, only_idle: bool) {
+/// `only_idle`, connections currently processing a request — or mid-way
+/// through sending one (`read_active`, #4971) — are left alone (Node's
+/// `closeIdleConnections` semantics; `server.close()` also closes idle
+/// keep-alive sockets since Node 19).
+pub(crate) fn signal_connections_close(server_handle: i64, only_idle: bool) {
     let conns = CONNECTIONS.lock().unwrap();
     for entry in conns.values() {
         if entry.server_handle == server_handle
-            && (!only_idle || entry.busy.load(Ordering::SeqCst) == 0)
+            && (!only_idle
+                || (entry.busy.load(Ordering::SeqCst) == 0
+                    && !entry.read_active.load(Ordering::SeqCst)))
         {
             entry.close.notify_one();
         }
@@ -507,7 +577,6 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, peer)) => {
-                                let io = TokioIo::new(stream);
                                 let request_tx = request_tx_for_spawn.clone();
                                 let upgrade_tx = upgrade_tx_for_spawn.clone();
                                 let server_handle = server_handle;
@@ -516,13 +585,16 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                                 // reach this task from the main thread.
                                 let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
                                 let busy = Arc::new(AtomicUsize::new(0));
+                                let read_active = Arc::new(AtomicBool::new(false));
                                 let close = Arc::new(tokio::sync::Notify::new());
+                                let io = TokioIo::new(ReadActivity::new(stream, read_active.clone()));
                                 CONNECTIONS.lock().unwrap().insert(
                                     conn_id,
                                     TrackedConnection {
                                         server_handle,
                                         close: close.clone(),
                                         busy: busy.clone(),
+                                        read_active: read_active.clone(),
                                     },
                                 );
                                 if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
@@ -533,8 +605,13 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                                         let request_tx = request_tx.clone();
                                         let upgrade_tx = upgrade_tx.clone();
                                         let busy = busy.clone();
+                                        let read_active = read_active.clone();
                                         async move {
                                             busy.fetch_add(1, Ordering::SeqCst);
+                                            // The pending head is now an in-flight
+                                            // request; `busy` covers activity until
+                                            // the response ships (#4971).
+                                            read_active.store(false, Ordering::SeqCst);
                                             let res = handle_request(server_handle, peer, req, request_tx, upgrade_tx).await;
                                             busy.fetch_sub(1, Ordering::SeqCst);
                                             res
@@ -1240,8 +1317,14 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         .map(|mut q| q.drain(..).collect())
         .unwrap_or_default();
     for server_handle in connection_events {
+        // The handle may back an HttpServer or an HttpsServer (whose
+        // accept loop pushes here too since #4971) — probe both.
         let listeners = get_handle::<HttpServer>(server_handle)
             .and_then(|s| s.listeners.get("connection").cloned())
+            .or_else(|| {
+                get_handle::<crate::https_server::HttpsServer>(server_handle)
+                    .and_then(|s| s.base.listeners.get("connection").cloned())
+            })
             .unwrap_or_default();
         if listeners.is_empty() {
             continue;

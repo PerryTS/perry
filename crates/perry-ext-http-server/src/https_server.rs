@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -28,7 +29,10 @@ use crate::request::{
     IncomingMessage,
 };
 use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
-use crate::server::{HttpPendingRequest, HttpServer};
+use crate::server::{
+    signal_connections_close, HttpPendingRequest, HttpServer, ReadActivity, TrackedConnection,
+    CONNECTIONS, NEXT_CONNECTION_ID, PENDING_CONNECTION_EVENTS,
+};
 use crate::tls::{
     build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
     parse_private_key,
@@ -216,28 +220,74 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                             Ok((stream, peer)) => {
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
+                                // #4905/#4971 — register the connection so
+                                // close()/closeAllConnections/
+                                // closeIdleConnections can reach this task
+                                // from the main thread, and queue the
+                                // 'connection' emit (Node fires it on the raw
+                                // TCP connection, before the TLS handshake).
+                                let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
+                                let busy = Arc::new(AtomicUsize::new(0));
+                                let read_active = Arc::new(AtomicBool::new(false));
+                                let close = Arc::new(tokio::sync::Notify::new());
+                                CONNECTIONS.lock().unwrap().insert(
+                                    conn_id,
+                                    TrackedConnection {
+                                        server_handle,
+                                        close: close.clone(),
+                                        busy: busy.clone(),
+                                        read_active: read_active.clone(),
+                                    },
+                                );
+                                if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
+                                    q.push(server_handle);
+                                }
                                 tokio::spawn(async move {
                                     let tls_stream = match acceptor.accept(stream).await {
                                         Ok(s) => s,
                                         Err(e) => {
                                             eprintln!("[node:https] tls handshake: {}", e);
+                                            CONNECTIONS.lock().unwrap().remove(&conn_id);
                                             return;
                                         }
                                     };
-                                    let io = TokioIo::new(tls_stream);
+                                    // Track read activity on the DECRYPTED
+                                    // stream — handshake bytes must not mark
+                                    // a request-less socket non-idle (#4971).
+                                    let io = TokioIo::new(ReadActivity::new(
+                                        tls_stream,
+                                        read_active.clone(),
+                                    ));
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
+                                        let busy = busy.clone();
+                                        let read_active = read_active.clone();
                                         async move {
-                                            handle_https_request(server_handle, peer, req, request_tx).await
+                                            busy.fetch_add(1, Ordering::SeqCst);
+                                            read_active.store(false, Ordering::SeqCst);
+                                            let res = handle_https_request(server_handle, peer, req, request_tx).await;
+                                            busy.fetch_sub(1, Ordering::SeqCst);
+                                            res
                                         }
                                     });
-                                    if let Err(e) = http1::Builder::new()
+                                    let conn = http1::Builder::new()
                                         .serve_connection(io, service)
-                                        .with_upgrades()
-                                        .await
-                                    {
-                                        let _ = e;
+                                        .with_upgrades();
+                                    tokio::pin!(conn);
+                                    tokio::select! {
+                                        result = &mut conn => {
+                                            // Common when the client closes
+                                            // mid-request — silenced.
+                                            let _ = result;
+                                        }
+                                        _ = close.notified() => {
+                                            // close()/closeAllConnections/
+                                            // closeIdleConnections: dropping
+                                            // the pinned connection closes the
+                                            // socket immediately.
+                                        }
                                     }
+                                    CONNECTIONS.lock().unwrap().remove(&conn_id);
                                 });
                             }
                             Err(e) => eprintln!("[node:https] accept error: {}", e),
@@ -438,6 +488,9 @@ pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) 
     } else {
         close_listeners = Vec::new();
     }
+    // Node 19+: `server.close()` destroys idle keep-alive connections
+    // (active requests are allowed to finish) (#4905/#4971).
+    signal_connections_close(handle, true);
     emit_no_arg_to_listeners(&close_listeners);
     if callback != 0 {
         let raw = callback as *const RawClosureHeader;
@@ -462,11 +515,25 @@ pub unsafe extern "C" fn js_node_https_server_on(
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
 }
 
+/// `httpsServer.closeAllConnections()` — destroy every tracked
+/// connection of this server, including ones with an in-flight request.
+/// Was a no-op stub pre-#4971; the HTTPS accept loop now registers each
+/// connection in the shared `CONNECTIONS` registry (#4905 machinery).
 #[no_mangle]
-pub extern "C" fn js_node_https_server_close_all_connections(_handle: i64) {}
+pub extern "C" fn js_node_https_server_close_all_connections(handle: i64) {
+    // Delegate to the HTTP variant: the CONNECTIONS and IN_FLIGHT
+    // registries are shared and keyed by server handle, and the HTTP
+    // path also finalizes parked async requests whose connection task
+    // just died.
+    crate::server::js_node_http_server_close_all_connections(handle);
+}
 
+/// `httpsServer.closeIdleConnections()` — destroy connections with no
+/// in-flight request and no half-received one (#4971).
 #[no_mangle]
-pub extern "C" fn js_node_https_server_close_idle_connections(_handle: i64) {}
+pub extern "C" fn js_node_https_server_close_idle_connections(handle: i64) {
+    signal_connections_close(handle, true);
+}
 
 macro_rules! https_server_getter {
     ($name:ident, $field:ident) => {

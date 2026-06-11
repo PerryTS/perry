@@ -3709,7 +3709,7 @@ declare module "tls" {
   /** stdlib */
   export function checkServerIdentity(hostname: any, cert: any): any;
   /** stdlib */
-  export function connect(p0: string, p1: any, p2: string, p3: any): any;
+  export function connect(p0: any, p1: any, p2: any, p3: any): any;
   /** stdlib */
   export function createSecureContext(options: any): any;
   /** stdlib */
