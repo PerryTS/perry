@@ -243,10 +243,10 @@ pub use value::{
 pub use value::{
     js_set_handle_array_get, js_set_handle_array_length, js_set_handle_call_method,
     js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_typeof,
-    js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_http_dispatch,
-    js_set_native_module_js_loader, js_set_native_querystring_dispatch,
-    js_set_native_sqlite_dispatch, js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch,
-    js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
+    js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_events_construct,
+    js_set_native_http_dispatch, js_set_native_module_js_loader,
+    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_tls_dispatch,
+    js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions

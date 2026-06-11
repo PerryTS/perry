@@ -141,6 +141,13 @@ extern "C" {
     fn js_register_event_emitter_get_domain(f: unsafe extern "C" fn(i64) -> i64);
     fn js_register_event_emitter_set_domain(f: unsafe extern "C" fn(i64, i64) -> i32);
     fn js_register_event_emitter_on(f: unsafe extern "C" fn(i64, i64, i64) -> i64);
+    // #4995: serve dynamic `new` on the bound `events.EventEmitter` export
+    // value (`require('events')`, default import, namespace property read)
+    // so the runtime's `js_dynamic_new` constructs a real emitter instead of
+    // falling through to the generic empty-object path.
+    fn js_set_native_events_construct(
+        f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
+    );
     // #3072: shared listener validator. Takes the raw NaN-box bits of the
     // listener arg (codegen routes these methods through NA_JSV) and the arg
     // name; returns the closure pointer when callable, else throws
@@ -436,12 +443,35 @@ unsafe extern "C" fn event_emitter_on_hook(
     js_event_emitter_on(handle, event_bits, listener_bits)
 }
 
+/// #4995: construct `new events.EventEmitter(...)` reached through a
+/// value-aliasing path (`require('events')`, default import, namespace
+/// property read). Registered with the runtime's `js_dynamic_new` so the
+/// instance is a real emitter handle instead of an empty object.
+unsafe extern "C" fn events_native_construct(
+    class_name_ptr: *const u8,
+    class_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let class_name = std::slice::from_raw_parts(class_name_ptr, class_name_len);
+    if class_name != b"EventEmitter" {
+        return f64::from_bits(TAG_UNDEFINED_F64_BITS);
+    }
+    let options = if !args_ptr.is_null() && args_len > 0 {
+        *args_ptr
+    } else {
+        f64::from_bits(TAG_UNDEFINED_F64_BITS)
+    };
+    nanbox_pointer_bits(js_event_emitter_new_with_options(options))
+}
+
 fn ensure_runtime_hooks_registered() {
     EVENTS_RUNTIME_HOOKS_REGISTERED.call_once(|| unsafe {
         js_register_event_emitter_handle_probe(event_emitter_handle_probe);
         js_register_event_emitter_get_domain(js_event_emitter_get_domain);
         js_register_event_emitter_set_domain(js_event_emitter_set_domain);
         js_register_event_emitter_on(event_emitter_on_hook);
+        js_set_native_events_construct(events_native_construct);
     });
 }
 

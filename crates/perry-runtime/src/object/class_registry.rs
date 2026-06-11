@@ -1712,6 +1712,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 );
             }
         }
+        // #4995: `new EE()` where `EE = require('events')` or came in as a
+        // default / namespace import (`import EE from 'events'`, `import * as
+        // ev from 'events'; new ev.EventEmitter()`). The callee is the bound
+        // `events.EventEmitter` export value; without this arm construction
+        // fell through to the generic empty-object path, so the instance had
+        // no `.on`/`.emit`/`.setMaxListeners` (signal-exit's init throws).
+        // Route to the linked emitter impl (perry-stdlib `bundled-events` or
+        // perry-ext-events) via the construct dispatcher registered at
+        // startup — this crate can't call the constructors directly.
+        if module == "events"
+            && matches!(
+                method.as_str(),
+                "EventEmitter" | "EventEmitterAsyncResource"
+            )
+        {
+            let ptr =
+                crate::value::JS_NATIVE_EVENTS_CONSTRUCT.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeEventsConstructFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
+            }
+        }
         if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
             let ptr =
                 crate::value::JS_NATIVE_ZLIB_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);

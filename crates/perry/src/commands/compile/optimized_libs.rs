@@ -496,6 +496,17 @@ pub(super) fn build_optimized_libs(
             if matches!(module_normalized, "http" | "https") {
                 features.insert("external-http-client-pump");
             }
+            // Issue #4995 — when `node:events` routes to perry-ext-events,
+            // have js_stdlib_init_dispatch eagerly register the ext crate's
+            // EventEmitter constructor as the runtime's events construct
+            // dispatcher. Without this, a dynamic `new` on the bound
+            // `events.EventEmitter` export value (`require('events')`,
+            // default import, aliased ctor) falls through to the
+            // empty-object path until the first static construction has
+            // lazily registered the hooks.
+            if module_normalized == "events" {
+                features.insert("external-events-construct");
+            }
         }
     }
 
