@@ -139,6 +139,8 @@ pub(super) struct CpExecPending {
     mode: CpOutput,
     /// Human-readable command, for the error `.cmd` field.
     cmd: String,
+    /// Program actually launched, for the spawn-failure `syscall`/`path`.
+    file: String,
     /// Set once accumulated output passed `maxBuffer` (the child is then killed).
     exceeded: bool,
     /// Set when the `timeout` fired and the child was killed.
@@ -662,16 +664,30 @@ pub extern "C" fn js_child_process_spawn_streams(
         Err(e) => {
             // Spawn failure (e.g. ENOENT): Node emits a single `error` event and
             // never `spawn`/`exit`. Defer it so a synchronously-registered
-            // handler is present.
+            // handler is present. The error carries Node's errno shape:
+            // `code`/`errno`/`syscall`/`path`/`spawnargs`, message
+            // `spawn <cmd> <CODE>`.
             cp_set_field(cp, b"pid", cp_undefined());
-            let msg = e.to_string();
-            let mp = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_error_new_with_message(mp);
-            cp_set_field(
-                cp,
-                b"__cpError",
-                crate::value::js_nanbox_pointer(err as i64),
+            let code = super::cp_io_error_code(&e);
+            let syscall = format!("spawn {cmd_str}");
+            let message = format!("{syscall} {code}");
+            // Node's error `spawnargs` excludes argv0 (internally `slice(1)`
+            // of the handle's spawnargs), unlike `child.spawnargs`.
+            let mut err_args = crate::array::js_array_alloc(arg_strs.len() as u32);
+            for a in &arg_strs {
+                err_args = crate::array::js_array_push_f64(err_args, cp_box_string(a));
+            }
+            let err = super::cp_make_error(
+                &message,
+                &[
+                    ("errno", super::cp_errno_number(code)),
+                    ("code", cp_box_string(code)),
+                    ("syscall", cp_box_string(&syscall)),
+                    ("path", cp_box_string(&cmd_str)),
+                    ("spawnargs", cp_box_ptr(err_args as *const u8)),
+                ],
             );
+            cp_set_field(cp, b"__cpError", err);
             let emit_closure =
                 crate::closure::js_closure_alloc(cp_emit_spawn_error as *const u8, 1);
             crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
@@ -720,6 +736,11 @@ pub(super) fn cp_exec_async(
     cp_register_arities();
     cp_register_reactor_arities();
 
+    // The program actually launched (`sh` for exec, the file for execFile) —
+    // Node's spawn-failure error keys `syscall`/`path`/message off this, not
+    // off the display command string.
+    let file = command.get_program().to_string_lossy().into_owned();
+
     // exec/execFile capture stdout+stderr and never feed stdin.
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
@@ -744,6 +765,7 @@ pub(super) fn cp_exec_async(
                 run_options,
                 mode,
                 cmd: cmd_str,
+                file,
                 exceeded: false,
                 timed_out: false,
             });
@@ -801,7 +823,7 @@ pub(super) fn cp_exec_async(
                 run_error: None,
             };
             let (err, out, errout) =
-                super::cp_exec_callback_args(&run, &run_options, &cmd_str, &mode);
+                super::cp_exec_callback_args(&run, &run_options, &cmd_str, &file, &mode);
             cp_defer_exec_callback(cb_val, err, out, errout);
         }
     }
@@ -861,7 +883,7 @@ fn cp_exec_fire_close(exec: Box<CpExecPending>, code: Option<i32>, signal: Optio
         run_error,
     };
     let (err, out, errout) =
-        super::cp_exec_callback_args(&run, &exec.run_options, &exec.cmd, &exec.mode);
+        super::cp_exec_callback_args(&run, &exec.run_options, &exec.cmd, &exec.file, &exec.mode);
     let cb = crate::fs::extract_closure_ptr(f64::from_bits(exec.cb_bits));
     if !cb.is_null() {
         crate::closure::js_closure_call3(cb, err, out, errout);
@@ -1250,13 +1272,21 @@ fn cp_parse_signal(signal: f64) -> i32 {
     if JSValue::from_bits(signal.to_bits()).is_undefined() {
         return SIGTERM;
     }
-    if let Some(name) = cp_value_to_string(signal) {
-        return cp_signal_number(&name).unwrap_or(SIGTERM);
+    // Numeric forms BEFORE the string lookup: the unified string accessor
+    // coerces numbers to "9"-style strings, which are not signal names; an
+    // int32 can also arrive NaN-boxed, which `is_finite()` alone misses.
+    let js = JSValue::from_bits(signal.to_bits());
+    if js.is_int32() {
+        let n = js.as_int32();
+        return if n == 0 { SIGTERM } else { n };
     }
     if signal.is_finite() {
         let n = signal as i32;
         // 0 is the "no-arg" padding sentinel — treat as the default SIGTERM.
         return if n == 0 { SIGTERM } else { n };
+    }
+    if let Some(name) = cp_value_to_string(signal) {
+        return cp_signal_number(&name).unwrap_or(SIGTERM);
     }
     SIGTERM
 }

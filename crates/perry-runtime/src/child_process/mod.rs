@@ -901,12 +901,20 @@ pub(super) fn cp_signal_from_value(signal: f64) -> i32 {
     if js.is_undefined() || js.is_null() {
         return CP_SIGTERM;
     }
-    if let Some(name) = cp_value_to_string(signal) {
-        return cp_signal_number(&name).unwrap_or(CP_SIGTERM);
+    // `kill(9)` — numeric forms must be checked BEFORE the string lookup:
+    // `cp_value_to_string` routes through the unified accessor, which coerces
+    // numbers to their string form ("9"), and "9" is not a signal name. An
+    // int32 can also arrive NaN-boxed, which a raw `is_finite()` misses.
+    if js.is_int32() {
+        let n = js.as_int32();
+        return if n == 0 { CP_SIGTERM } else { n };
     }
     if signal.is_finite() {
         let n = signal as i32;
         return if n == 0 { CP_SIGTERM } else { n };
+    }
+    if let Some(name) = cp_value_to_string(signal) {
+        return cp_signal_number(&name).unwrap_or(CP_SIGTERM);
     }
     CP_SIGTERM
 }
@@ -1041,8 +1049,66 @@ extern "C" fn cp_method_remove_all_listeners(closure: *const ClosureHeader, even
 extern "C" fn cp_method_read(_closure: *const ClosureHeader, _n: f64) -> f64 {
     TAG_NULL_F64
 }
-extern "C" fn cp_method_pipe(_closure: *const ClosureHeader, dest: f64) -> f64 {
+
+/// `child.stdout.pipe(dest)` — forward every `data` chunk to `dest.write(chunk)`
+/// and call `dest.end()` at source EOF. Node skips the end-call for
+/// `process.stdout`/`process.stderr`; those stream objects expose no `end`
+/// method, so the lookup-miss skip below matches that naturally. Returns
+/// `dest` (Node returns the destination for chaining).
+extern "C" fn cp_method_pipe(closure: *const ClosureHeader, dest: f64) -> f64 {
+    let this = cp_this(closure);
+    js_register_closure_arity(cp_pipe_data_thunk as *const u8, 1);
+    js_register_closure_arity(cp_pipe_end_thunk as *const u8, 0);
+
+    let data_thunk = js_closure_alloc(cp_pipe_data_thunk as *const u8, 1);
+    js_closure_set_capture_ptr(data_thunk, 0, dest.to_bits() as i64);
+    cp_register(
+        this,
+        cp_box_string("data"),
+        cp_box_ptr(data_thunk as *const u8),
+    );
+
+    let end_thunk = js_closure_alloc(cp_pipe_end_thunk as *const u8, 1);
+    js_closure_set_capture_ptr(end_thunk, 0, dest.to_bits() as i64);
+    cp_register(
+        this,
+        cp_box_string("end"),
+        cp_box_ptr(end_thunk as *const u8),
+    );
+
     dest
+}
+
+/// Pipe `data` forwarder: slot 0 = the destination; call `dest.write(chunk)`.
+extern "C" fn cp_pipe_data_thunk(closure: *const ClosureHeader, chunk: f64) -> f64 {
+    let dest = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let write = cp_get_field(dest, b"write");
+    if !crate::fs::extract_closure_ptr(write).is_null() {
+        let prev = js_implicit_this_set(dest);
+        let args = [chunk];
+        unsafe {
+            let _ = js_native_call_value(write, args.as_ptr(), args.len());
+        }
+        js_implicit_this_set(prev);
+    }
+    cp_undefined()
+}
+
+/// Pipe `end` forwarder: slot 0 = the destination; call `dest.end()` when the
+/// destination has one (`process.stdout`/`process.stderr` do not — matching
+/// Node's doEnd exclusion for them).
+extern "C" fn cp_pipe_end_thunk(closure: *const ClosureHeader) -> f64 {
+    let dest = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let end = cp_get_field(dest, b"end");
+    if !crate::fs::extract_closure_ptr(end).is_null() {
+        let prev = js_implicit_this_set(dest);
+        let args = [cp_undefined()];
+        unsafe {
+            let _ = js_native_call_value(end, args.as_ptr(), 0);
+        }
+        js_implicit_this_set(prev);
+    }
+    cp_undefined()
 }
 /// `child.stdin.write(chunk[, encoding][, callback])` — #1934. The `this` is
 /// the stdin Writable; route the bytes to the live child's stdin via the
@@ -2024,10 +2090,13 @@ fn cp_error_code_signal(run: &CpRun) -> (f64, f64, f64) {
 
 /// Build the `(err, stdout, stderr)` callback error for a failed exec/execFile
 /// run — Node attaches `code`/`signal`/`killed`/`cmd` (plus `errno`/`syscall`/
-/// `path` on spawn failure). `cmd` is the human-readable command string. #1935.
-fn cp_exec_callback_error(run: &CpRun, options: &CpRunOptions, cmd: &str) -> f64 {
+/// `path` on spawn failure). `cmd` is the human-readable command string;
+/// `file` is the program actually launched (Node's spawn-failure `syscall`/
+/// `path`/message use the file alone, while `.cmd` keeps the display string —
+/// `execFile("x", ["a"])` ENOENT reads `syscall: "spawn x"`, `cmd: "x a"`). #1935.
+fn cp_exec_callback_error(run: &CpRun, options: &CpRunOptions, cmd: &str, file: &str) -> f64 {
     if let Some((errno_code, _)) = run.spawn_error {
-        let syscall = format!("spawn {cmd}");
+        let syscall = format!("spawn {file}");
         let message = format!("{syscall} {errno_code}");
         return cp_make_error(
             &message,
@@ -2035,7 +2104,7 @@ fn cp_exec_callback_error(run: &CpRun, options: &CpRunOptions, cmd: &str) -> f64
                 ("code", cp_box_string(errno_code)),
                 ("errno", cp_errno_number(errno_code)),
                 ("syscall", cp_box_string(&syscall)),
-                ("path", cp_box_string(cmd)),
+                ("path", cp_box_string(file)),
                 ("cmd", cp_box_string(cmd)),
                 ("killed", TAG_FALSE_F64),
                 ("signal", TAG_NULL_F64),
@@ -2120,6 +2189,7 @@ pub(super) fn cp_exec_callback_args(
     run: &CpRun,
     options: &CpRunOptions,
     cmd: &str,
+    file: &str,
     mode: &CpOutput,
 ) -> (f64, f64, f64) {
     let (stdout_bytes, stderr_bytes) = cp_exec_callback_output_bytes(run, options);
@@ -2128,7 +2198,7 @@ pub(super) fn cp_exec_callback_args(
     let err_val = if run.success() {
         TAG_NULL_F64
     } else {
-        cp_exec_callback_error(run, options, cmd)
+        cp_exec_callback_error(run, options, cmd, file)
     };
     (err_val, stdout_box, stderr_box)
 }
