@@ -28,12 +28,23 @@
 use perry_runtime::{
     js_array_alloc, js_array_push, js_closure_call0, js_closure_call1, js_closure_call2,
     js_nanbox_get_pointer, js_object_alloc, js_object_get_field_by_name, js_object_set_field,
-    js_object_set_field_by_name, js_object_set_keys, js_promise_new, js_promise_reject,
-    js_promise_resolve, js_string_from_bytes, ClosureHeader, JSValue, ObjectHeader, Promise,
+    js_object_set_field_by_name, js_object_set_keys, js_promise_mark_internally_handled,
+    js_promise_new, js_promise_reject, js_promise_resolve, js_string_from_bytes, ClosureHeader,
+    JSValue, ObjectHeader, Promise,
 };
 use std::collections::{HashMap, VecDeque};
 use std::os::raw::c_int;
 use std::sync::Mutex;
+
+/// Allocate a promise the stream machinery owns and observes internally — the
+/// reader/writer `closed`, writer `ready`, and `[[closeRequest]]` promises.
+/// Node marks these `markPromiseAsHandled` so that an abort / error / cancel
+/// that rejects them is never surfaced as an unhandled rejection (#1545).
+pub(crate) fn internal_promise() -> *mut Promise {
+    let p = js_promise_new();
+    js_promise_mark_internally_handled(p);
+    p
+}
 
 mod byob;
 mod pipe;
@@ -604,8 +615,8 @@ fn alloc_writable_with_strategy(
     strategy_size_cb: i64,
 ) -> usize {
     let id = next_id(&NEXT_STREAM_ID);
-    let ready = js_promise_new();
-    let closed = js_promise_new();
+    let ready = internal_promise();
+    let closed = internal_promise();
     js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
     WRITABLE_STREAMS.lock().unwrap().insert(
         id,
@@ -935,7 +946,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
             true
         } else {
             let reader_id = next_id(&NEXT_STREAM_ID);
-            let closed_p = js_promise_new();
+            let closed_p = internal_promise();
             if s.state == ReadableState::Closed {
                 js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
             } else if s.state == ReadableState::Errored {

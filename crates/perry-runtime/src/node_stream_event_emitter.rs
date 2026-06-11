@@ -690,6 +690,19 @@ fn capture_rejections_enabled(stream: f64) -> bool {
     super::has_truthy_hidden(stream, super::hidden_capture_rejections_key())
 }
 
+/// Mark an async listener's returned promise handled when its rejection is to
+/// be swallowed (Node's Readable `data` path), so it is not reported as an
+/// unhandled rejection at program end (#1545).
+fn swallow_listener_rejection(result: f64) {
+    if crate::promise::js_value_is_promise(result) == 0 {
+        return;
+    }
+    let promise = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
+    if !promise.is_null() {
+        crate::promise::mark_rejection_handled(promise);
+    }
+}
+
 fn capture_listener_rejection(stream: f64, result: f64) {
     if crate::promise::js_value_is_promise(result) == 0 {
         return;
@@ -755,13 +768,18 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     }
     // Node's Readable data delivery path does not route async `data` listener
     // rejections through captureRejections; custom EventEmitter-style events do.
-    let capture_rejections = capture_rejections_enabled(stream)
-        && !super::string_value_eq(event, b"error")
-        && !super::string_value_eq(event, b"data");
+    let is_data = super::string_value_eq(event, b"data");
+    let capture_rejections =
+        capture_rejections_enabled(stream) && !super::string_value_eq(event, b"error") && !is_data;
     for (listener, _) in snapshot {
         let result = call_listener_args(stream, listener, args);
         if capture_rejections {
             capture_listener_rejection(stream, result);
+        } else if is_data {
+            // Node's Readable swallows a rejection returned by an async `data`
+            // listener — it is neither captured to `error` nor surfaced as an
+            // unhandled rejection. Mark it handled so it stays silent (#1545).
+            swallow_listener_rejection(result);
         }
     }
     f64::from_bits(super::TAG_TRUE)

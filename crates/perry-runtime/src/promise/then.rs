@@ -48,6 +48,45 @@ unsafe fn store_promise_next_slot(
 
 thread_local! {
     static UNHANDLED_REJECTIONS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// Promises the runtime owns and observes through internal channels — a
+    /// WHATWG reader/writer `closed` promise, a `[[closeRequest]]`, etc. Node
+    /// marks these `markPromiseAsHandled` at creation so that an abort / error
+    /// / cancel that later rejects them is never surfaced as an unhandled
+    /// rejection. We mirror that with a persistent membership set consulted at
+    /// rejection-track time. Stays empty for non-stream programs, so the hot
+    /// reject path pays nothing (#1545).
+    static INTERNALLY_HANDLED: RefCell<std::collections::HashSet<usize>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// Mark a promise as internally handled (Node's `markPromiseAsHandled`): a
+/// later rejection of it is never reported as unhandled. Used by the WHATWG
+/// stream implementation for the internal `closed` / `closeRequest` promises it
+/// settles on abort/error/cancel without a user-attached reaction (#1545).
+#[no_mangle]
+pub extern "C" fn js_promise_mark_internally_handled(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    INTERNALLY_HANDLED.with(|s| {
+        s.borrow_mut().insert(promise as usize);
+    });
+    // If it already rejected before being marked, drop it from the set now.
+    mark_rejection_handled(promise);
+}
+
+/// Keep the stdlib-facing marker alive through the dead-strip pass on the
+/// PERRY_NO_AUTO_OPTIMIZE prebuilt-lib link (same pattern as the program-end
+/// hook anchor below).
+#[used]
+static KEEP_PROMISE_MARK_INTERNALLY_HANDLED: extern "C" fn(*mut Promise) =
+    js_promise_mark_internally_handled;
+
+fn is_internally_handled(promise: *mut Promise) -> bool {
+    INTERNALLY_HANDLED.with(|s| {
+        let s = s.borrow();
+        !s.is_empty() && s.contains(&(promise as usize))
+    })
 }
 
 /// Record a rejection that has no reaction attached yet.
@@ -691,7 +730,11 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
             // is non-null so `has_normal_handler` is true here and the
             // rejection propagates to `next`, whose own settlement re-runs
             // this check — the leaf unhandled promise is the one tracked.
-            track_unhandled_rejection(promise);
+            // Promises the runtime marked internally handled (stream `closed`
+            // promises, etc.) are never reported (#1545).
+            if !is_internally_handled(promise) {
+                track_unhandled_rejection(promise);
+            }
         }
         if has_settle_listeners
             || !promise_all_states.is_empty()

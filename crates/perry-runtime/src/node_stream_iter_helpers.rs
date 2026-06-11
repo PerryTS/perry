@@ -265,7 +265,14 @@ pub(super) fn settle_result(value: f64) -> Result<f64, f64> {
         unsafe {
             match (*p).state {
                 crate::promise::PromiseState::Fulfilled => return Ok((*p).value),
-                crate::promise::PromiseState::Rejected => return Err((*p).reason),
+                crate::promise::PromiseState::Rejected => {
+                    // We consumed the rejection by reading `reason` directly
+                    // (no `.then`/`.catch` was attached), so clear it from the
+                    // unhandled-rejection set — Node treats a helper-observed
+                    // callback rejection as handled (#1545).
+                    crate::promise::mark_rejection_handled(p);
+                    return Err((*p).reason);
+                }
                 crate::promise::PromiseState::Pending => {}
             }
         }
@@ -288,7 +295,10 @@ pub(super) fn settle_result(value: f64) -> Result<f64, f64> {
     unsafe {
         match (*p).state {
             crate::promise::PromiseState::Fulfilled => Ok((*p).value),
-            crate::promise::PromiseState::Rejected => Err((*p).reason),
+            crate::promise::PromiseState::Rejected => {
+                crate::promise::mark_rejection_handled(p);
+                Err((*p).reason)
+            }
             crate::promise::PromiseState::Pending => Ok(current),
         }
     }

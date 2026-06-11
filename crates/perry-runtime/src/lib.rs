@@ -234,7 +234,8 @@ pub use object::{
 };
 pub use promise::{js_is_promise, js_promise_run_microtasks, js_promise_state, js_promise_value};
 pub use promise::{
-    js_promise_new, js_promise_reject, js_promise_rejected, js_promise_resolve, js_promise_resolved,
+    js_promise_mark_internally_handled, js_promise_new, js_promise_reject, js_promise_rejected,
+    js_promise_resolve, js_promise_resolved,
 };
 pub use string::js_string_from_bytes;
 pub use value::{
