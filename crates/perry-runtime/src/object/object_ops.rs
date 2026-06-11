@@ -1034,7 +1034,9 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             }
             let enumerable = super::get_property_attrs(addr, key_name)
                 .map(|a| a.enumerable())
-                .unwrap_or(true);
+                .unwrap_or_else(|| {
+                    super::exotic_expando::exotic_default_enumerable(kind, key_name)
+                });
             return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
         }
 
