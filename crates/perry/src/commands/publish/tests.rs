@@ -445,7 +445,10 @@ fn test_validate_passes_when_all_present() {
 #[test]
 fn test_sanitize_artifact_name_accepts_plain_names() {
     assert_eq!(sanitize_artifact_name("app.zip").unwrap(), "app.zip");
-    assert_eq!(sanitize_artifact_name("MyGame-1.2.3.dmg").unwrap(), "MyGame-1.2.3.dmg");
+    assert_eq!(
+        sanitize_artifact_name("MyGame-1.2.3.dmg").unwrap(),
+        "MyGame-1.2.3.dmg"
+    );
     // Surrounding whitespace is trimmed, not treated as part of the name.
     assert_eq!(sanitize_artifact_name("  app.ipa  ").unwrap(), "app.ipa");
 }
