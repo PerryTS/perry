@@ -517,6 +517,14 @@ extern "C" fn global_this_eval_thunk(
     _closure: *const crate::closure::ClosureHeader,
     source: f64,
 ) -> f64 {
+    // PerformEval step: "If Type(x) is not String, return x." A non-string
+    // argument (number, boolean, null, undefined, or a String/Number/Boolean
+    // *wrapper object*) is returned unchanged — eval does not evaluate it. This
+    // must run before any ToString coercion. (test262
+    // language/eval-code/indirect/non-string-{object,primitive})
+    if !crate::value::JSValue::from_bits(source.to_bits()).is_string() {
+        return source;
+    }
     let source = crate::builtins::js_string_coerce(source);
     let Some(body) = (unsafe { super::has_own_helpers::str_from_string_header(source) }) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
