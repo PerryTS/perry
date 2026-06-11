@@ -117,13 +117,35 @@ fn put_value_static_property_fast_path(
                 .scalar_replaced
                 .get(id)
                 .is_some_and(|fields| fields.contains_key(property));
-            (pod_field || scalar_field).then(|| property.clone())
+            if pod_field || scalar_field {
+                return Some(property.clone());
+            }
+            receiver_class_name(ctx, target)
+                .and_then(|class_name| {
+                    crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                })
+                .map(|_| property.clone())
         }
-        (Expr::This, Expr::This) => ctx
-            .scalar_ctor_target
-            .last()
-            .and_then(|tid| ctx.scalar_replaced.get(tid))
-            .and_then(|fields| fields.contains_key(property).then(|| property.clone())),
+        (Expr::This, Expr::This) => {
+            if ctx
+                .scalar_ctor_target
+                .last()
+                .and_then(|tid| ctx.scalar_replaced.get(tid))
+                .is_some_and(|fields| fields.contains_key(property))
+            {
+                return Some(property.clone());
+            }
+            receiver_class_name(ctx, target)
+                .and_then(|class_name| {
+                    crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                })
+                .map(|_| property.clone())
+        }
+        _ if same_side_effect_free_receiver(target, receiver) => {
+            let class_name = receiver_class_name(ctx, target)?;
+            crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                .map(|_| property.clone())
+        }
         _ => None,
     }
 }

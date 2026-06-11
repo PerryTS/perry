@@ -62,6 +62,24 @@ fn is_inherited_object_prototype_method(name: &str) -> bool {
     )
 }
 
+fn class_chain_has_field_named(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        let Some(class) = ctx.classes.get(&name) else {
+            return true;
+        };
+        if class
+            .fields
+            .iter()
+            .any(|field| field.key_expr.is_some() || (!field.is_private && field.name == property))
+        {
+            return true;
+        }
+        current = class.extends_name.clone();
+    }
+    false
+}
+
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
 pub fn try_lower_property_get_method_call(
@@ -1906,6 +1924,8 @@ pub fn try_lower_property_get_method_call(
                 lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             if !method_has_rest {
+                let shape_only_guard =
+                    !class_chain_has_field_named(ctx, &class_name, property.as_str());
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
@@ -1914,6 +1934,7 @@ pub fn try_lower_property_get_method_call(
                     &fallback_fn,
                     &arg_slices,
                     &fallback_user_args,
+                    shape_only_guard,
                 ) {
                     return Ok(Some(guarded));
                 }

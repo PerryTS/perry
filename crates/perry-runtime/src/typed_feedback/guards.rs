@@ -281,6 +281,39 @@ fn class_field_get_contract(
     }
 }
 
+fn class_field_fast_contract(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    expected_field_index: u32,
+    require_raw_f64: bool,
+) -> bool {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+        return false;
+    }
+    let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+        return false;
+    };
+    unsafe {
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+            || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return false;
+        }
+        let obj = object_addr as *const ObjectHeader;
+        (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
+            && (*obj).class_id == expected_class_id
+            && std::ptr::eq((*obj).keys_array as *const ArrayHeader, expected_keys)
+            && expected_field_index < (*obj).field_count
+            && (!require_raw_f64
+                || crate::gc::layout_typed_raw_f64_slot_for_user(
+                    object_addr,
+                    expected_field_index as usize,
+                ))
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_class_field_get_guard(
     site_id: u64,
@@ -291,6 +324,15 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     expected_field_index: u32,
     require_raw_f64: i32,
 ) -> i32 {
+    if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
+        return class_field_fast_contract(
+            receiver,
+            expected_class_id,
+            expected_keys,
+            expected_field_index,
+            require_raw_f64 != 0,
+        ) as i32;
+    }
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_get_contract(
         receiver,
         expected_class_id,
@@ -320,6 +362,35 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     } else {
         0
     }
+}
+
+fn class_field_set_fast_contract(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    expected_field_index: u32,
+    require_raw_f64: bool,
+    value_bits: u64,
+) -> bool {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !class_field_fast_contract(
+        receiver,
+        expected_class_id,
+        expected_keys,
+        expected_field_index,
+        require_raw_f64,
+    ) {
+        return false;
+    }
+    unsafe {
+        let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+            return false;
+        };
+        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            return false;
+        }
+    }
+    !require_raw_f64 || is_plain_number_bits(value_bits)
 }
 
 fn descriptor_blocks_class_field_set(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
@@ -425,6 +496,16 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     require_raw_f64: i32,
 ) -> i32 {
     let value_bits = value.to_bits();
+    if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
+        return class_field_set_fast_contract(
+            receiver,
+            expected_class_id,
+            expected_keys,
+            expected_field_index,
+            require_raw_f64 != 0,
+            value_bits,
+        ) as i32;
+    }
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_set_contract(
         receiver,
         expected_class_id,
@@ -599,6 +680,34 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
     } else {
         0
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_method_direct_shape_guard(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+) -> i32 {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+        return 0;
+    }
+    let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+        return 0;
+    };
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+        || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || crate::object::descriptors_in_use()
+        || crate::object::class_prototype_fast_guards_invalidated()
+    {
+        return 0;
+    }
+    let obj = object_addr as *const ObjectHeader;
+    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+        return 0;
+    }
+    ((*obj).class_id == expected_class_id && (*obj).keys_array as usize == expected_keys as usize)
+        as i32
 }
 
 #[no_mangle]
