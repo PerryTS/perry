@@ -17,6 +17,19 @@ use crate::ir::Expr;
 
 use super::{lower_expr, LoweringContext};
 
+/// #5009: resolve a build-time `perry.define` of `process.env.<name>` to the
+/// HIR literal it should fold to, if one is configured for this build. Returns
+/// `None` when there is no define for `name` (the caller then emits the normal
+/// runtime `EnvGet`).
+fn env_define_literal(name: &str) -> Option<Expr> {
+    crate::ir::env_define_lookup(name).map(|d| match d {
+        crate::ir::EnvDefine::Str(s) => Expr::String(s),
+        crate::ir::EnvDefine::Bool(b) => Expr::Bool(b),
+        crate::ir::EnvDefine::Num(n) => Expr::Number(n),
+        crate::ir::EnvDefine::Null => Expr::Null,
+    })
+}
+
 pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
     // #1723: when THIS access is the auditable `ns[dynamicKey].staticMember`
     // shape — a dynamic stdlib SUB-namespace selection (`path.win32` /
@@ -748,6 +761,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             ast::MemberProp::Ident(var_ident) => {
                                 // process.env.VARNAME (static key)
                                 let var_name = var_ident.sym.to_string();
+                                // #5009: honor a build-time `perry.define` of
+                                // `process.env.<NAME>` by substituting the
+                                // literal here — before `EnvGet` (a live
+                                // runtime env lookup) is emitted. esbuild-style
+                                // define semantics: the define wins over the
+                                // runtime environment, in every context and
+                                // regardless of tree-shaking.
+                                if let Some(lit) = env_define_literal(&var_name) {
+                                    return Ok(lit);
+                                }
                                 return Ok(Expr::EnvGet(var_name));
                             }
                             ast::MemberProp::Computed(computed) => {
@@ -758,6 +781,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 // dynamic.
                                 if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
                                     if let Some(name) = s.value.as_str() {
+                                        // #5009: same define substitution as the
+                                        // dot form above.
+                                        if let Some(lit) = env_define_literal(name) {
+                                            return Ok(lit);
+                                        }
                                         return Ok(Expr::EnvGet(name.to_string()));
                                     }
                                 }

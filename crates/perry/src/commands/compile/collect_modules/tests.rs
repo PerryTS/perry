@@ -1,11 +1,48 @@
 //! Tests for the dynamic-import glob expansion + module collection driver.
 //! Split out of `collect_modules.rs` to keep that file under the file-size gate.
 
-use super::{collect_modules, expand_dynamic_import_glob};
-use crate::commands::compile::CompilationContext;
+use super::{collect_modules, env_defines_for_lowering, expand_dynamic_import_glob};
+use crate::commands::compile::{CompilationContext, DefineValue};
 use crate::commands::progress::VerboseProgress;
 use crate::OutputFormat;
 use std::collections::HashSet;
+
+#[test]
+fn env_defines_for_lowering_strips_prefix_and_maps_kinds() {
+    // #5009: only `process.env.*` define keys are honored, the prefix is
+    // stripped to the bare env var name, and each DefineValue kind maps to the
+    // matching perry_hir::EnvDefine.
+    let mut define = std::collections::HashMap::new();
+    define.insert(
+        "process.env.NODE_ENV".to_string(),
+        DefineValue::Str("production".into()),
+    );
+    define.insert("process.env.DEBUG".to_string(), DefineValue::Bool(false));
+    define.insert("process.env.LEVEL".to_string(), DefineValue::Number(3.0));
+    define.insert("process.env.MISSING".to_string(), DefineValue::Null);
+    // A non-`process.env.*` key is ignored (no other define namespace today).
+    define.insert("__DEV__".to_string(), DefineValue::Bool(true));
+
+    let mapped = env_defines_for_lowering(&define);
+    assert_eq!(mapped.len(), 4, "the non-process.env key is dropped");
+    assert!(!mapped.contains_key("__DEV__"));
+    assert!(matches!(
+        mapped.get("NODE_ENV"),
+        Some(perry_hir::EnvDefine::Str(s)) if s == "production"
+    ));
+    assert!(matches!(
+        mapped.get("DEBUG"),
+        Some(perry_hir::EnvDefine::Bool(false))
+    ));
+    assert!(matches!(
+        mapped.get("LEVEL"),
+        Some(perry_hir::EnvDefine::Num(n)) if *n == 3.0
+    ));
+    assert!(matches!(
+        mapped.get("MISSING"),
+        Some(perry_hir::EnvDefine::Null)
+    ));
+}
 
 #[test]
 fn expands_directory_files_matching_suffix() {

@@ -77,6 +77,58 @@ pub fn clear_compile_packages_override() {
     COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow_mut().clear());
 }
 
+// ---- #5009 build-time `process.env` define substitution ----
+
+/// #5009: a build-time `process.env.<NAME>` substitution value, esbuild
+/// `define`-style. Mirrors the perry-crate `DefineValue` but lives here so HIR
+/// lowering can fold a defined `process.env.X` read into a literal at the
+/// single point it would otherwise emit `Expr::EnvGet`.
+#[derive(Clone, Debug)]
+pub enum EnvDefine {
+    Str(String),
+    Bool(bool),
+    Num(f64),
+    Null,
+}
+
+thread_local! {
+    /// #5009: per-thread map of `process.env.<NAME>` build-time substitutions
+    /// (`perry.define`). Keyed by the bare env var NAME (e.g. `NODE_ENV`, not
+    /// the full `process.env.NODE_ENV`). When a static `process.env.<NAME>`
+    /// read is lowered and `NAME` is present here, lowering emits the defined
+    /// literal instead of `Expr::EnvGet` — so the define is honored in every
+    /// context (branch conditions, ternaries, closures) and regardless of
+    /// whether tree-shaking is enabled.
+    ///
+    /// Before #5009 the define was only consulted by the tree-shake-gated
+    /// `env_fold` branch pruner, so a `process.env.NODE_ENV` read produced a
+    /// live runtime env lookup (`undefined` when unset) in every default
+    /// build — React/Preact/etc. then selected their development builds.
+    /// Folding at the lowering source restores esbuild-style `define`
+    /// semantics: the define wins over the runtime environment.
+    ///
+    /// The driver installs this before each `lower_module_full` and clears it
+    /// after (rayon-safe — each worker thread has its own copy).
+    static ENV_DEFINES: std::cell::RefCell<std::collections::HashMap<String, EnvDefine>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// #5009: install the per-thread `process.env.<NAME>` define map. Keys are the
+/// bare env var names (the `process.env.` prefix already stripped).
+pub fn set_env_defines(map: std::collections::HashMap<String, EnvDefine>) {
+    ENV_DEFINES.with(|cell| *cell.borrow_mut() = map);
+}
+
+/// #5009: clear the per-thread define map (symmetry with the other resets).
+pub fn clear_env_defines() {
+    ENV_DEFINES.with(|cell| cell.borrow_mut().clear());
+}
+
+/// #5009: look up a build-time `process.env.<name>` substitution, if defined.
+pub fn env_define_lookup(name: &str) -> Option<EnvDefine> {
+    ENV_DEFINES.with(|cell| cell.borrow().get(name).cloned())
+}
+
 // ---- #503 dynamic-stdlib-dispatch refusal config ----
 
 thread_local! {

@@ -44,6 +44,29 @@ use parse_error::annotate_parse_error;
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
+/// #5009: build the bare-name → literal map perry-hir lowering consults to fold
+/// `process.env.<NAME>` reads (`perry_hir::env_define_lookup`). Strips the
+/// `process.env.` prefix the `perry.define` keys carry and converts each
+/// [`super::DefineValue`] to the matching [`perry_hir::EnvDefine`]. Keys that
+/// aren't `process.env.*` are skipped (only env defines are honored today).
+fn env_defines_for_lowering(
+    define: &HashMap<String, super::DefineValue>,
+) -> HashMap<String, perry_hir::EnvDefine> {
+    define
+        .iter()
+        .filter_map(|(key, val)| {
+            let name = key.strip_prefix("process.env.")?;
+            let ev = match val {
+                super::DefineValue::Str(s) => perry_hir::EnvDefine::Str(s.clone()),
+                super::DefineValue::Bool(b) => perry_hir::EnvDefine::Bool(*b),
+                super::DefineValue::Number(n) => perry_hir::EnvDefine::Num(*n),
+                super::DefineValue::Null => perry_hir::EnvDefine::Null,
+            };
+            Some((name.to_string(), ev))
+        })
+        .collect()
+}
+
 /// Issue #818: scan a JS module's source for static ESM imports /
 /// re-exports / string-literal dynamic imports, resolve each one
 /// against the module's directory (with `resolve_with_extensions` so
@@ -595,6 +618,14 @@ fn collect_module_one(
     // immediately after the lower call so it can't leak to subsequent
     // unrelated work on the same thread.
     perry_hir::set_compile_packages_override(ctx.compile_packages.clone());
+    // #5009: install the `process.env.<NAME>` build-time defines so a static
+    // `process.env.X` read folds to its `perry.define` literal at lowering —
+    // esbuild-style, in every context and independent of tree-shaking. Keyed
+    // by the bare env var name (the `process.env.` prefix stripped). Cleared
+    // after the lower below (rayon-safe). The runtime-env default
+    // (`NODE_ENV → "production"` for node_modules) stays in the tree-shake
+    // `env_fold` pass; only explicit defines are folded here.
+    perry_hir::set_env_defines(env_defines_for_lowering(&ctx.define));
     // #503: re-install the dynamic-stdlib-dispatch config on the current
     // thread before each lower. Driver may be a rayon worker that didn't
     // inherit the thread-local set on the main thread by `compile.rs`.
@@ -651,6 +682,7 @@ fn collect_module_one(
     perry_hir::clear_compile_packages_override();
     perry_hir::clear_current_module_source();
     perry_hir::clear_precompile_state();
+    perry_hir::clear_env_defines();
     // #2309: drain refusals deferred during this lower and tag them with the
     // canonical module path so the post-collection prune can decide whether
     // they survive. Done before the `?` below so a non-deferrable error can't
