@@ -245,11 +245,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     );
     module.declare_function("js_node_http_res_add_trailers", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_end", VOID, &[I64, DOUBLE]);
-    module.declare_function(
-        "js_node_http_res_end_full",
-        VOID,
-        &[I64, DOUBLE, I64, I64],
-    );
+    module.declare_function("js_node_http_res_end_full", VOID, &[I64, DOUBLE, I64, I64]);
     module.declare_function("js_node_http_res_flush_headers", VOID, &[I64]);
     module.declare_function("js_node_http_res_cork", VOID, &[I64]);
     module.declare_function("js_node_http_res_uncork", VOID, &[I64]);

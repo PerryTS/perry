@@ -921,12 +921,7 @@ pub extern "C" fn js_node_http_res_write_full(
 /// # Safety
 /// FFI entry; `handle` must be a live `ServerResponse` handle (or absent).
 #[no_mangle]
-pub unsafe extern "C" fn js_node_http_res_end_full(
-    handle: i64,
-    chunk: f64,
-    arg2: i64,
-    arg3: i64,
-) {
+pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2: i64, arg3: i64) {
     // `end(cb)` passes the callback as the first arg; otherwise it trails.
     let first_cb = callback_from_bits(chunk.to_bits() as i64);
     let (real_chunk, callback) = if first_cb != 0 {
