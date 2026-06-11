@@ -1713,6 +1713,23 @@ fn process_allowed_flags_value() -> f64 {
 
 pub fn process_metadata_property(property: &str) -> Option<f64> {
     Some(match property {
+        // #4987: core value-properties. The bare `process` identifier lowers
+        // these to codegen intrinsics, but `import process from
+        // 'node:process'` and `globalThis.process` resolve through the
+        // native-module runtime dispatcher, which lands here. Serve them from
+        // the same runtime constructors the intrinsics call so all three
+        // forms observe the same values (env/stdout are live singletons).
+        "env" => js_process_env(),
+        "argv" => f64::from_bits(JSValue::array_ptr(crate::os::js_process_argv()).bits()),
+        "platform" => f64::from_bits(JSValue::string_ptr(crate::os::js_os_platform()).bits()),
+        "arch" => f64::from_bits(JSValue::string_ptr(crate::os::js_os_arch()).bits()),
+        "pid" => crate::os::js_process_pid(),
+        "ppid" => crate::os::js_process_ppid(),
+        "version" => f64::from_bits(JSValue::string_ptr(crate::os::js_process_version()).bits()),
+        "versions" => crate::os::js_process_versions(),
+        "stdin" => crate::os::js_process_stdin(),
+        "stdout" => crate::os::js_process_stdout(),
+        "stderr" => crate::os::js_process_stderr(),
         "allowedNodeEnvironmentFlags" => process_allowed_flags_value(),
         "argv0" | "execPath" => module_string_value(&process_argv0_string()),
         "config" => process_config_value(),
