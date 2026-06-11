@@ -25,6 +25,7 @@ pub fn synthesize_class_captures(
     ctx: &mut LoweringContext,
     name: &str,
     extends_name: Option<&str>,
+    has_heritage: bool,
     fields: &mut Vec<ClassField>,
     methods: &mut Vec<Function>,
     getters: &mut Vec<(String, Function)>,
@@ -259,13 +260,30 @@ pub fn synthesize_class_captures(
     }
 
     // 3. Constructor.
+    //
+    // Issue #4972: when the class has heritage and NO user-written ctor,
+    // the synthesized capture-stashing ctor must open with `super()` —
+    // mirroring the spec default ctor `constructor(...args) {
+    // super(...args) }`. Without it, codegen's static derived-ctor
+    // TDZ check (`new.rs`: own ctor + heritage + no `super()` call ⇒
+    // unconditional "Must call super constructor" throw) fires for a
+    // class the user never wrote a ctor for — `class FakeAgent extends
+    // http.Agent { createConnection() { new Duplex() } }` threw at
+    // `new FakeAgent()` purely because the captured `Duplex` binding
+    // forced a ctor into existence. The SuperCall also routes known
+    // user-class parents through the inline-parent-ctor arm so the
+    // parent body runs, matching the no-own-ctor `new` path.
     let mut ctor = constructor.take().unwrap_or_else(|| Function {
         id: ctx.fresh_func(),
         name: format!("{}::constructor", name),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Void,
-        body: Vec::new(),
+        body: if has_heritage {
+            vec![Stmt::Expr(Expr::SuperCall(Vec::new()))]
+        } else {
+            Vec::new()
+        },
         is_async: false,
         is_generator: false,
         is_strict: true,

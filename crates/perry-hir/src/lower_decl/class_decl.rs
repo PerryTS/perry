@@ -1053,6 +1053,10 @@ pub fn lower_class_decl(
         ctx,
         &name,
         extends_name.as_deref(),
+        extends.is_some()
+            || extends_name.is_some()
+            || native_extends.is_some()
+            || extends_expr.is_some(),
         &mut fields,
         &mut methods,
         &mut getters,
@@ -1508,6 +1512,10 @@ pub fn lower_class_from_ast(
         ctx,
         name,
         extends_name.as_deref(),
+        extends.is_some()
+            || extends_name.is_some()
+            || native_extends.is_some()
+            || extends_expr.is_some(),
         &mut fields,
         &mut methods,
         &mut getters,
