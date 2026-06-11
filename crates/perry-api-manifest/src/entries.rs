@@ -428,7 +428,19 @@ const ZLIB_OPTIONS_PARAM: ParamSpec = ParamSpec::Named {
 };
 const fn zlib_stream_factory(name: &'static str) -> ApiEntry {
     method_sig("zlib", name, false, None, ZLIB_STREAM_OPTS, TypeSpec::Any)
-        .stub_note("options (level/chunkSize/dictionary/...) accepted but ignored (#4917)")
+}
+/// Deflate-family compressor factory: `level` is honored (#4917);
+/// `strategy`/`memLevel` are validated but not applied, and a supplied
+/// `dictionary` warns once instead of silently mis-compressing.
+const fn zlib_compressor_factory(name: &'static str) -> ApiEntry {
+    zlib_stream_factory(name)
+        .stub_note("level honored; strategy/memLevel validated but not applied (#4917)")
+}
+/// Brotli/zstd factory: their `params` option shape is not wired up; a
+/// passed options object warns once (#4917).
+const fn zlib_params_factory(name: &'static str) -> ApiEntry {
+    zlib_stream_factory(name)
+        .stub_note("params/quality options accepted but ignored, warns once (#4917)")
 }
 
 /// Source-of-truth manifest. See module-level docs for what feeds it.
@@ -590,8 +602,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("mongodb", "insertOne", true, None),
     method("mongodb", "insertMany", true, None),
     method("mongodb", "find", true, None),
-    method("mongodb", "findOne", true, None)
-        .stub_note("resolves a JSON string, not a document object (#4917)"),
+    // #4917 — resolves a parsed document object (BSON-specific types in
+    // relaxed extended-JSON shape, e.g. `_id.$oid`), or null.
+    method("mongodb", "findOne", true, None),
     method("mongodb", "updateOne", true, None),
     method("mongodb", "updateMany", true, None),
     method("mongodb", "deleteOne", true, None),
@@ -1632,6 +1645,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         }],
         TypeSpec::Bool,
     ),
+    // #4917 — real retry semantics: options (numOfAttempts/startingDelay/
+    // timeMultiple/maxDelay/delayFirstAttempt/jitter/retry) honored;
+    // Promise-returning tasks retry on rejection via promise reactions.
     method_sig(
         "exponential-backoff",
         "backOff",
@@ -1639,8 +1655,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         None,
         &[p_any("p0"), p_any("p1")],
         TypeSpec::Any,
-    )
-    .stub_note("retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917)"),
+    ),
     method_sig(
         "argon2",
         "hash",
@@ -2223,19 +2238,22 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     // #1843 — Transform-stream factories. Each returns a stream handle
     // supporting `.write`/`.end`/`.on('data'|'end'|'error')`/`.pipe`.
-    zlib_stream_factory("createGzip"),
+    // #4917 — deflate-family factories honor `options.level`; a supplied
+    // `dictionary` warns once (decompressors fail loudly without it, so
+    // the plain factories are no longer flagged).
+    zlib_compressor_factory("createGzip"),
     zlib_stream_factory("createGunzip"),
-    zlib_stream_factory("createDeflate"),
+    zlib_compressor_factory("createDeflate"),
     zlib_stream_factory("createInflate"),
-    zlib_stream_factory("createDeflateRaw"),
+    zlib_compressor_factory("createDeflateRaw"),
     zlib_stream_factory("createInflateRaw"),
     zlib_stream_factory("createUnzip"),
-    zlib_stream_factory("createBrotliCompress"),
+    zlib_params_factory("createBrotliCompress"),
     // `zlib.createBrotliDecompress(options?)` — now a real Transform stream
     // (still passes axios's `typeof === 'function'` module-init gate).
-    zlib_stream_factory("createBrotliDecompress"),
-    zlib_stream_factory("createZstdCompress"),
-    zlib_stream_factory("createZstdDecompress"),
+    zlib_params_factory("createBrotliDecompress"),
+    zlib_params_factory("createZstdCompress"),
+    zlib_params_factory("createZstdDecompress"),
     method_sig(
         "cron",
         "validate",
@@ -2797,10 +2815,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("worker_threads", "once", true, Some("Worker")),
     method("worker_threads", "off", true, Some("Worker")),
     method("worker_threads", "terminate", true, Some("Worker")),
-    method("worker_threads", "ref", true, Some("Worker"))
-        .stub_note("no-op; does not affect process event-loop ref-count (#4917)"),
-    method("worker_threads", "unref", true, Some("Worker"))
-        .stub_note("no-op; does not affect process event-loop ref-count (#4917)"),
+    // #4917 — real: `ref()`/`unref()` flip `WorkerRecord.refed`, which
+    // `js_worker_threads_has_pending` checks to keep the event loop alive
+    // (a live refed worker holds the process; `unref()` releases it).
+    method("worker_threads", "ref", true, Some("Worker")),
+    method("worker_threads", "unref", true, Some("Worker")),
     method("worker_threads", "getHeapStatistics", true, Some("Worker")),
     method("worker_threads", "cpuUsage", true, Some("Worker")),
     method("worker_threads", "getHeapSnapshot", true, Some("Worker")),
@@ -4670,13 +4689,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     class("http", "Agent"),
     method("http", "Agent", false, None),
     method("http", "getName", true, Some("Agent")),
-    method("http", "destroy", true, Some("Agent"))
-        .stub_note("real Agent object, but Perry does not pool sockets; this is a no-op (#4917)"),
+    // #4917 — `destroy()` really drops the per-agent reqwest client (=
+    // releases its keep-alive pool) and flips `destroyed`; not a stub.
+    method("http", "destroy", true, Some("Agent")),
     method("http", "close", true, Some("Agent")),
     method("http", "keepSocketAlive", true, Some("Agent"))
-        .stub_note("real Agent object, but Perry does not pool sockets; this is a no-op (#4917)"),
+        .stub_note("reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)"),
     method("http", "reuseSocket", true, Some("Agent"))
-        .stub_note("real Agent object, but Perry does not pool sockets; this is a no-op (#4917)"),
+        .stub_note("reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)"),
     // Synthetic `__get_<name>` / `__set_<name>` accessor methods (HIR
     // rewrites bare `agent.maxSockets` reads to `__get_maxSockets()`
     // when the receiver is class-tagged) + their bare-name twins for

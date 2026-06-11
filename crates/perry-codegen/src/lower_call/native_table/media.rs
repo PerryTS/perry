@@ -382,7 +382,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "deflateRawSync",
         class_filter: None,
         runtime: "js_zlib_deflate_raw_sync",
-        args: &[NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {

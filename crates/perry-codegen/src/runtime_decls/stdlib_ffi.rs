@@ -596,7 +596,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_raw_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE]);

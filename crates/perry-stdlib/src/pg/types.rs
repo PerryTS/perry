@@ -1,8 +1,8 @@
 //! Type conversions between PostgreSQL types and JSValue
 
 use perry_runtime::{
-    js_object_alloc, js_object_get_field, js_object_set_field, js_string_from_bytes, JSValue,
-    ObjectHeader, StringHeader,
+    js_array_alloc, js_array_push, js_object_alloc, js_object_get_field, js_object_set_field,
+    js_object_set_keys, js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{Column, Row, TypeInfo};
@@ -189,26 +189,45 @@ fn column_value_to_jsvalue(row: &PgRow, index: usize) -> JSValue {
     }
 }
 
-/// Create a FieldDef object for a column
+/// Create a FieldDef object for a column, shaped like node-pg's
+/// `result.fields[i]` (#4917): `dataTypeID` is the numeric type OID (what
+/// `pg-types`-style custom parsers key on), `tableID`/`columnID` come from
+/// the RowDescription via sqlx's `relation_id()`/`relation_attribute_no()`
+/// (0 for expression columns, like Node). `dataTypeSize`/`dataTypeModifier`
+/// are not exposed by sqlx 0.8 and report the "unknown/variable" sentinel -1.
 pub fn column_to_field_def(col: &sqlx::postgres::PgColumn) -> *mut ObjectHeader {
-    // FieldDef has these fields:
-    // 0: name (string)
-    // 1: dataTypeID (number - PostgreSQL OID)
-    // 2: tableID (number)
-    let obj = js_object_alloc(0, 3);
+    let obj = js_object_alloc(0, 7);
+    let mut keys_array = js_array_alloc(7);
+    let mut set = |obj: *mut ObjectHeader, idx: u32, key: &str, value: JSValue| {
+        js_object_set_field(obj, idx, value);
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        keys_array = js_array_push(keys_array, JSValue::string_ptr(key_ptr));
+    };
 
-    // Set name
     let name = col.name();
     let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field(obj, 0, JSValue::string_ptr(name_ptr));
+    set(obj, 0, "name", JSValue::string_ptr(name_ptr));
 
-    // Set dataTypeID (as string type name for now)
-    let type_name = col.type_info().name();
-    let type_ptr = js_string_from_bytes(type_name.as_ptr(), type_name.len() as u32);
-    js_object_set_field(obj, 1, JSValue::string_ptr(type_ptr));
+    let table_id = col.relation_id().map(|oid| oid.0 as f64).unwrap_or(0.0);
+    set(obj, 1, "tableID", JSValue::number(table_id));
 
-    // Set tableID (0 for now)
-    js_object_set_field(obj, 2, JSValue::number(0.0));
+    let column_id = col
+        .relation_attribute_no()
+        .map(|attno| attno as f64)
+        .unwrap_or(0.0);
+    set(obj, 2, "columnID", JSValue::number(column_id));
 
+    // `oid()` is None only for custom types sqlx has not resolved against
+    // the catalog; report 0 (the `InvalidOid` sentinel) in that case.
+    let data_type_id = col.type_info().oid().map(|oid| oid.0 as f64).unwrap_or(0.0);
+    set(obj, 3, "dataTypeID", JSValue::number(data_type_id));
+
+    set(obj, 4, "dataTypeSize", JSValue::number(-1.0));
+    set(obj, 5, "dataTypeModifier", JSValue::number(-1.0));
+
+    let format_ptr = js_string_from_bytes("text".as_ptr(), 4);
+    set(obj, 6, "format", JSValue::string_ptr(format_ptr));
+
+    js_object_set_keys(obj, keys_array);
     obj
 }

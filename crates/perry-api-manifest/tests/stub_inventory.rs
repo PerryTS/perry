@@ -82,7 +82,17 @@ fn stub_inventory_matches_known_clusters() {
         // open/url/waitForDebugger/Session.post(4) + repl
         // start/REPLServer no-eval-loop(2).
         ("#4916", 10),
-        ("#4917", 18), // stdlib adapters: zlib(11) + http.Agent(3) + worker ref/unref(2) + mongodb(1) + backoff(1)
+        // #4917 (stdlib-adapter no-ops) — what remains after the real
+        // semantics landed: zlib deflate-family compressor factories
+        // honor `level` but still drop strategy/memLevel (3) +
+        // Brotli/zstd factories ignore `params`, warn once (4) +
+        // http.Agent per-socket keepSocketAlive/reuseSocket hooks (2).
+        // Intentionally absent now: zlib decompressor factories (level
+        // honored; a missing dictionary fails loudly), Agent.destroy
+        // (drops the per-agent reqwest pool), worker ref/unref (real
+        // event-loop refcount), mongodb.findOne (parsed document),
+        // exponential-backoff options (honored, incl. retry predicate).
+        ("#4917", 9),
     ];
     let expected_map: BTreeMap<String, usize> =
         expected.iter().map(|(k, v)| (k.to_string(), *v)).collect();
@@ -127,8 +137,10 @@ fn keystone_apis_are_flagged() {
     let must_be_stub: &[(&str, &str)] = &[
         ("repl", "start"),
         ("inspector", "post"),
+        // still partial after #4917: level honored, strategy/memLevel dropped
         ("zlib", "createGzip"),
-        ("mongodb", "findOne"),
+        ("zlib", "createBrotliCompress"),
+        ("http", "keepSocketAlive"),
     ];
     for (module, name) in must_be_stub {
         let found = iter_entries().any(|e| e.module == *module && e.name == *name && e.stub);
@@ -137,8 +149,18 @@ fn keystone_apis_are_flagged() {
 
     // The inverse: APIs implemented for real must NOT stay flagged.
     // v8 heap snapshots emit a real GC-walk object graph since #4916.
-    let must_not_be_stub: &[(&str, &str)] =
-        &[("v8", "getHeapSnapshot"), ("v8", "writeHeapSnapshot")];
+    // mongodb.findOne resolves a parsed document, backOff honors its
+    // options, and worker ref/unref drive the event-loop refcount since
+    // #4917.
+    let must_not_be_stub: &[(&str, &str)] = &[
+        ("v8", "getHeapSnapshot"),
+        ("v8", "writeHeapSnapshot"),
+        ("mongodb", "findOne"),
+        ("exponential-backoff", "backOff"),
+        ("worker_threads", "ref"),
+        ("worker_threads", "unref"),
+        ("http", "destroy"),
+    ];
     for (module, name) in must_not_be_stub {
         let flagged = iter_entries().any(|e| e.module == *module && e.name == *name && e.stub);
         assert!(
