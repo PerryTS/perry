@@ -1960,6 +1960,7 @@ pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) 
     let close_listeners;
     if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
         s.base.listening = false;
+        s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();
         close_listeners = s.base.listeners.get("close").cloned().unwrap_or_default();
     } else {

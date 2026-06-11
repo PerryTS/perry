@@ -4649,6 +4649,11 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     // helpers validate header tokens/values or are deterministic no-ops.
     property("http", "maxHeaderSize"),
     property("http", "globalAgent"),
+    // #4974 — `require('_http_server').kConnectionsCheckingInterval`
+    // (Perry aliases `_http_server` to `http`). Node exports a Symbol
+    // tests use as `server[k]._destroyed`; Perry resolves it to the
+    // sentinel key the server handle dispatch recognizes.
+    property("http", "kConnectionsCheckingInterval"),
     method("http", "validateHeaderName", false, None),
     method("http", "validateHeaderValue", false, None),
     method("http", "setMaxIdleHTTPParsers", false, None),

@@ -79,6 +79,38 @@ pub fn parse_private_key(pem_bytes: &[u8]) -> Option<PrivateKeyDer<'static>> {
     None
 }
 
+/// Build a `ServerConfig` for an `https.Server` constructed without
+/// key/cert material — `https.createServer()` with empty (or omitted)
+/// options. Node constructs and `listen()`s such a server fine; the
+/// missing credentials only surface per-connection, as a TLS alert
+/// during the handshake. The always-`None` cert resolver reproduces
+/// that: rustls accepts the TCP connection, then aborts the handshake
+/// with a fatal alert when no certificate resolves (#4974).
+pub fn build_certless_server_config(enable_http2: bool) -> Arc<ServerConfig> {
+    ensure_crypto_provider_installed();
+
+    #[derive(Debug)]
+    struct NoCert;
+    impl rustls::server::ResolvesServerCert for NoCert {
+        fn resolve(
+            &self,
+            _client_hello: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            None
+        }
+    }
+
+    let mut config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(NoCert));
+    if enable_http2 {
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    } else {
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    }
+    Arc::new(config)
+}
+
 /// rustls 0.23 requires explicit selection of a CryptoProvider when
 /// multiple providers are linked into the binary (perry transitively
 /// pulls in both `ring` via our direct dep and `aws-lc-rs` via

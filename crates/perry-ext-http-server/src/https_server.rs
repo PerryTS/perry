@@ -34,8 +34,8 @@ use crate::server::{
     CONNECTIONS, NEXT_CONNECTION_ID, PENDING_CONNECTION_EVENTS,
 };
 use crate::tls::{
-    build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
-    parse_private_key,
+    build_certless_server_config, build_server_config, has_pem_material, json_value_to_pem_bytes,
+    parse_cert_chain, parse_private_key,
 };
 
 /// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
@@ -97,12 +97,22 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
 
     let cert_chain = parse_cert_chain(&cert_pem);
     let has_tls_material = has_pem_material(&key_pem, &cert_pem);
+    if !has_tls_material {
+        // `https.createServer()` with no key/cert — Node constructs and
+        // listens fine; the handshake fails per-connection instead. A
+        // `None` config here used to make `listen()` refuse outright
+        // ("tls config unavailable"), so the 'listening' callback never
+        // fired (#4974).
+        return register_handle(HttpsServer {
+            handler,
+            tls_config: Some(build_certless_server_config(enable_http2_alpn)),
+            base,
+        });
+    }
     let private_key = match parse_private_key(&key_pem) {
         Some(k) => k,
         None => {
-            if has_tls_material {
-                eprintln!("[node:https] no recognized PEM private key");
-            }
+            eprintln!("[node:https] no recognized PEM private key");
             // Still register the handle so the user gets a `.listen`
             // call that fails with a clear bind error rather than a
             // silent zero-handle.
@@ -483,6 +493,7 @@ pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) 
     let close_listeners;
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
         s.base.listening = false;
+        s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();
         close_listeners = s.base.listeners.get("close").cloned().unwrap_or_default();
     } else {

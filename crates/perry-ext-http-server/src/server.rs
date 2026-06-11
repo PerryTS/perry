@@ -110,6 +110,14 @@ pub struct HttpServer {
     pub no_delay: bool,
     pub keep_alive: bool,
     pub keep_alive_initial_delay: f64,
+    /// #4974 — mirrors Node's `server[kConnectionsCheckingInterval]`
+    /// timer state: Node creates the interval in the `Server`
+    /// constructor and `clearInterval`s it in `close()`, so the timer's
+    /// `_destroyed` flips to `true` once the server closes. Perry has
+    /// no such timer (the hyper accept loop owns connection lifecycle),
+    /// so we track just the flag the `_http_server` introspection key
+    /// exposes.
+    pub connections_checking_interval_destroyed: bool,
 }
 
 impl HttpServer {
@@ -139,6 +147,7 @@ impl HttpServer {
             no_delay: true,
             keep_alive: false,
             keep_alive_initial_delay: 0.0,
+            connections_checking_interval_destroyed: false,
         }
     }
 }
@@ -678,6 +687,7 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
     let close_listeners;
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.listening = false;
+        s.connections_checking_interval_destroyed = true;
         s.shutdown_tx.take();
         close_listeners = s.listeners.get("close").cloned().unwrap_or_default();
     } else {

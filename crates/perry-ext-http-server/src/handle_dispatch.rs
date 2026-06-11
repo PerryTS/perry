@@ -401,6 +401,29 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_property(
     let is_h2 = get_handle::<Http2SecureServer>(handle).is_some();
     match property.as_str() {
         "listening" => bool_value(server_is_listening(handle, is_https, is_h2)),
+        // #4974: `server[kConnectionsCheckingInterval]` — the
+        // `_http_server` introspection key resolves to Node's
+        // connections-checking interval timer; tests assert on its
+        // `_destroyed` flag after `close()`. Perry has no such timer,
+        // so synthesize the minimal Timeout shape from the tracked flag.
+        "@@kConnectionsCheckingInterval" => {
+            let destroyed = if is_h2 {
+                get_handle::<Http2SecureServer>(handle)
+                    .map(|s| s.base.connections_checking_interval_destroyed)
+            } else if is_https {
+                get_handle::<HttpsServer>(handle)
+                    .map(|s| s.base.connections_checking_interval_destroyed)
+            } else {
+                get_handle::<HttpServer>(handle).map(|s| s.connections_checking_interval_destroyed)
+            };
+            match destroyed {
+                Some(d) => {
+                    let json = format!("{{\"_destroyed\":{}}}", d);
+                    json_string_value(alloc_string(&json).as_raw())
+                }
+                None => undef,
+            }
+        }
         "headersTimeout" => {
             server_base_property(handle, is_https, is_h2, |s| s.headers_timeout).unwrap_or(undef)
         }

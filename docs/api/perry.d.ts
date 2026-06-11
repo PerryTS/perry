@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1924 entries across 111 modules
+// Coverage: 1925 entries across 111 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -1745,6 +1745,8 @@ declare module "http" {
   export const STATUS_CODES: any;
   /** stdlib */
   export const globalAgent: any;
+  /** stdlib */
+  export const kConnectionsCheckingInterval: any;
   /** stdlib */
   export const maxHeaderSize: any;
   /** stdlib */
