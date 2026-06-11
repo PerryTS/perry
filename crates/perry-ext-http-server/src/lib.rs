@@ -52,6 +52,7 @@ use std::sync::Once;
 
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
+mod cluster_bind;
 mod handle_dispatch;
 mod http2_server;
 mod http2_session_settings;

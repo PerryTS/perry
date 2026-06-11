@@ -53,12 +53,12 @@ pub struct ApiEntry {
     /// them — the runtime first-call warning from #464 surfaces those.
     ///
     /// As of the stub-elimination epic (#4919) this is also set for the
-    /// known "registered but fake/no-op/partial" clusters — dns/dgram
-    /// loopback fakes (#4911), `child_process.spawn` (#4912), cluster
-    /// socket distribution (#4914), BYOB streams (#4915), v8 heap
-    /// snapshots (#4916), and the stdlib-adapter no-ops (#4917) — so
-    /// the manifest is the single source of truth for "this API lies".
-    /// CI drift-guards the exact set (`tests/stub_inventory.rs`).
+    /// known "registered but fake/no-op/partial" clusters — BYOB streams
+    /// (#4915), v8 heap snapshots (#4916), and the stdlib-adapter no-ops
+    /// (#4917) — so the manifest is the single source of truth for "this
+    /// API lies". (dns/dgram #4911, spawn #4912, and cluster port
+    /// sharing #4914 have since been implemented for real.) CI
+    /// drift-guards the exact set (`tests/stub_inventory.rs`).
     pub stub: bool,
     /// Short human-readable reason this entry is a stub/partial, with an
     /// issue tag — surfaced verbatim in the generated `.d.ts` and

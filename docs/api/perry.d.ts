@@ -316,11 +316,11 @@ declare module "cluster" {
   export const workers: any;
   /** stdlib */
   export function disconnect(...args: any[]): any;
-  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
+  /** stdlib */
   export function fork(...args: any[]): any;
-  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
+  /** stdlib */
   export function setupMaster(...args: any[]): any;
-  /** stdlib @perryStub no socket/listening-handle distribution; workers cannot share a port (#4914) */
+  /** stdlib */
   export function setupPrimary(...args: any[]): any;
 }
 

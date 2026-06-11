@@ -29,6 +29,10 @@ serde_json = "1"
 lazy_static = "1.5"
 tokio-tungstenite = { workspace = true }
 
+# #4914: SO_REUSEPORT binds for cluster-worker port sharing (unix-only API).
+[target.'cfg(unix)'.dependencies]
+socket2 = "0.6"
+
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
 perry-runtime = { workspace = true, features = ["external-ws-symbols"] }

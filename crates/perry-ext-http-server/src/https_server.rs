@@ -159,7 +159,8 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         Ok(a) => a,
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
-    let std_listener = match std::net::TcpListener::bind(addr) {
+    // #4914 — SO_REUSEPORT in cluster workers; plain bind otherwise.
+    let std_listener = match crate::cluster_bind::bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("[node:https] bind {}:{} failed: {}", host, port, e);
@@ -171,6 +172,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         eprintln!("[node:https] set_nonblocking failed: {}", e);
         return server_handle;
     }
+    crate::cluster_bind::notify_listening(&host, actual_port);
 
     let tls_config = if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
         s.base.bound_port = actual_port;

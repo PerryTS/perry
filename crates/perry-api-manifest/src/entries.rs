@@ -3643,19 +3643,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("querystring", "encode", false, None),
     // node:cluster — primary lifecycle surface. `setupPrimary` /
     // `setupMaster`, `fork`, and `disconnect` route through the native
-    // module bound-method path; handle sharing/listening distribution is
-    // outside this manifest entry.
+    // module bound-method path. Workers share a listening port via
+    // SO_REUSEPORT binds + a fork-IPC 'listening' round-trip (#4914);
+    // `SCHED_RR` fd-passing and the shared ephemeral port for `listen(0)`
+    // remain tracked in #4962.
     // #3687: default import (`import cluster from "node:cluster"`) is the
     // EventEmitter-shaped `cluster.default` namespace; the `import * as`
     // namespace keeps the shape-only surface.
     property("cluster", "default"),
-    method("cluster", "fork", false, None)
-        .stub_note("no socket/listening-handle distribution; workers cannot share a port (#4914)"),
+    method("cluster", "fork", false, None),
     method("cluster", "disconnect", false, None),
-    method("cluster", "setupPrimary", false, None)
-        .stub_note("no socket/listening-handle distribution; workers cannot share a port (#4914)"),
-    method("cluster", "setupMaster", false, None)
-        .stub_note("no socket/listening-handle distribution; workers cannot share a port (#4914)"),
+    method("cluster", "setupPrimary", false, None),
+    method("cluster", "setupMaster", false, None),
     class("cluster", "Worker"),
     property("cluster", "isPrimary"),
     property("cluster", "isMaster"),

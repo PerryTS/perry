@@ -372,9 +372,9 @@ Total: 2781 entries across 114 modules.
 ### Methods
 
 - `disconnect` — module
-- `fork` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
-- `setupMaster` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
-- `setupPrimary` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
+- `fork` — module
+- `setupMaster` — module
+- `setupPrimary` — module
 
 ### Properties
 

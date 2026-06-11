@@ -339,6 +339,33 @@ fn process_ipc_send_message(message: f64) -> bool {
     }
 }
 
+/// Write an already-serialized JSON object as one newline-delimited frame on
+/// the child IPC channel. Used by `node:cluster` internal messages
+/// (`{cmd:"NODE_CLUSTER", ...}`, #4914) where the payload is built in Rust and
+/// never exists as a JS value.
+pub(crate) fn process_ipc_send_raw_json(json: &str) -> bool {
+    process_ipc_ensure_initialized();
+    #[cfg(not(unix))]
+    {
+        let _ = json;
+        false
+    }
+    #[cfg(unix)]
+    {
+        let mut frame = Vec::with_capacity(json.len() + 1);
+        frame.extend_from_slice(json.as_bytes());
+        frame.push(b'\n');
+        let mut state = ipc_lock();
+        if !state.available || !state.connected {
+            return false;
+        }
+        state
+            .send
+            .as_mut()
+            .is_some_and(|sock| sock.write_all(&frame).is_ok())
+    }
+}
+
 #[cfg(unix)]
 fn json_frame(message: f64) -> Option<Vec<u8>> {
     let sh = unsafe { crate::json::js_json_stringify(message, 0) };

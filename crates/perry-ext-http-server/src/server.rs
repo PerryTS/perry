@@ -449,7 +449,9 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         Ok(a) => a,
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
-    let std_listener = match std::net::TcpListener::bind(addr) {
+    // #4914 — cluster workers bind with SO_REUSEPORT so N workers share
+    // the port; `bind_listener` falls through to a plain bind otherwise.
+    let std_listener = match crate::cluster_bind::bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("[node:http] bind {}:{} failed: {}", host, port, e);
@@ -461,6 +463,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         eprintln!("[node:http] set_nonblocking failed: {}", e);
         return server_handle;
     }
+    crate::cluster_bind::notify_listening(&host, actual_port);
 
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.bound_port = actual_port;
