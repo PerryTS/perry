@@ -905,9 +905,26 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     // Lower initializer expression if present. Mark the field-initializer
     // context so a direct `eval` in the initializer rejects `arguments`
     // (PerformEval early error — field initializers have no arguments object).
+    // NamedEvaluation: an anonymous function/arrow/class initializer takes
+    // the field's name (`static fromArgs = function(){}` → `.name ===
+    // "fromArgs"`, test262 elements/static-field-anonymous-function-name).
+    // Computed keys (key_expr) have no compile-time name to confer.
     let saved_field_init = ctx.in_class_field_init;
     ctx.in_class_field_init = true;
-    let init = prop.value.as_ref().map(|e| lower_expr(ctx, e)).transpose();
+    let init = prop
+        .value
+        .as_ref()
+        .map(|e| {
+            if key_expr.is_none() && crate::lower::expr_assign::rhs_accepts_assignment_name(e) {
+                let old = ctx.assignment_inferred_name.replace(name.clone());
+                let result = lower_expr(ctx, e);
+                ctx.assignment_inferred_name = old;
+                result
+            } else {
+                lower_expr(ctx, e)
+            }
+        })
+        .transpose();
     ctx.in_class_field_init = saved_field_init;
     let init = init?;
 

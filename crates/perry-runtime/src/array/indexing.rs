@@ -83,7 +83,32 @@ pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
     addr != 0 && addr == object_prototype_addr()
 }
 
-fn array_prototype_addr() -> usize {
+/// Sticky flag: user code replaced or deleted `Array.prototype[Symbol.iterator]`.
+/// `js_get_iterator`'s array short-circuit assumes the builtin values iterator;
+/// once this flips, GetIterator on an array must consult the (patched) method
+/// per spec — or throw TypeError when it was deleted. Same single-relaxed-load
+/// hot-path shape as `ARRAY_PROTO_HAS_INDEX` above.
+static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(false);
+
+/// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known
+/// `Symbol.iterator`) that the array iteration protocol has been tampered
+/// with. Called from the symbol-property set/delete paths.
+pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
+    if ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed) || obj == 0 || sym_key == 0 {
+        return;
+    }
+    if obj == array_prototype_addr()
+        && sym_key == crate::symbol::well_known_symbol("iterator") as usize
+    {
+        ARRAY_PROTO_ITERATOR_MODIFIED.store(true, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn array_proto_iterator_modified() -> bool {
+    ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn array_prototype_addr() -> usize {
     let cached = ARRAY_PROTO_ADDR.load(Ordering::Relaxed);
     if cached != usize::MAX {
         return cached;
@@ -102,7 +127,13 @@ fn array_prototype_addr() -> usize {
     } else {
         0
     };
-    ARRAY_PROTO_ADDR.store(addr, Ordering::Relaxed);
+    // Don't poison the cache with 0: during runtime init the global `Array`
+    // constructor may not be materialized yet (symbol writes on other builtin
+    // prototypes call into here via `note_array_proto_iterator_write`).
+    // Re-derive until it resolves.
+    if addr != 0 {
+        ARRAY_PROTO_ADDR.store(addr, Ordering::Relaxed);
+    }
     addr
 }
 

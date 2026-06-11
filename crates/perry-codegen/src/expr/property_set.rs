@@ -260,15 +260,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return lower_runtime_property_set_by_name(ctx, object, property, value);
                 }
                 let setter_key = (class_name.clone(), format!("__set_{}", property));
-                if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let val_double = lower_expr(ctx, value)?;
-                    let _ = ctx.block().call(
-                        DOUBLE,
-                        &fn_name,
-                        &[(DOUBLE, &recv_box), (DOUBLE, &val_double)],
-                    );
-                    return Ok(val_double);
+                // STATIC accessors compile under the static (no-`this`)
+                // convention — see the matching gate in property_get.rs.
+                let is_static_accessor = ctx
+                    .classes
+                    .get(&class_name)
+                    .map(|c| c.static_accessor_names.iter().any(|n| n == property))
+                    .unwrap_or(false);
+                if !is_static_accessor {
+                    if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
+                        let recv_box = lower_expr(ctx, object)?;
+                        let val_double = lower_expr(ctx, value)?;
+                        let _ = ctx.block().call(
+                            DOUBLE,
+                            &fn_name,
+                            &[(DOUBLE, &recv_box), (DOUBLE, &val_double)],
+                        );
+                        return Ok(val_double);
+                    }
                 }
                 // Fast path: known class instance + plain instance field.
                 // The runtime guard checks the receiver's class/shape and

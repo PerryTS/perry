@@ -709,17 +709,26 @@ pub(crate) fn lower_stmt(
                                         .iter()
                                         .filter_map(|sf| {
                                             sf.init.as_ref().map(|init| {
+                                                // `this` in a static initializer is
+                                                // the class constructor — see the
+                                                // matching substitution in the
+                                                // `Decl::Class` arm.
+                                                let mut init_value = init.clone();
+                                                crate::analysis::substitute_lexical_this_in_expr(
+                                                    &mut init_value,
+                                                    &Expr::ClassRef(bind_name.clone()),
+                                                );
                                                 if let Some(key) = sf.key_expr.as_ref() {
                                                     Stmt::Expr(Expr::ClassStaticSymbolSet {
                                                         class_name: bind_name.clone(),
                                                         key: Box::new(key.clone()),
-                                                        value: Box::new(init.clone()),
+                                                        value: Box::new(init_value),
                                                     })
                                                 } else {
                                                     Stmt::Expr(Expr::StaticFieldSet {
                                                         class_name: bind_name.clone(),
                                                         field_name: sf.name.clone(),
-                                                        value: Box::new(init.clone()),
+                                                        value: Box::new(init_value),
                                                     })
                                                 }
                                             })
@@ -1060,17 +1069,27 @@ pub(crate) fn lower_stmt(
                     // point in source order.
                     for sf in &class.static_fields {
                         if let Some(init) = &sf.init {
+                            // Per ClassDefinitionEvaluation the initializer
+                            // runs with `this` bound to the class constructor;
+                            // these stmts evaluate in module-init context
+                            // (empty this_stack), so substitute lexical `this`
+                            // — including inside arrows — with the class ref.
+                            let mut init_value = init.clone();
+                            crate::analysis::substitute_lexical_this_in_expr(
+                                &mut init_value,
+                                &Expr::ClassRef(class.name.clone()),
+                            );
                             if let Some(key) = sf.key_expr.as_ref() {
                                 module.init.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
                                     class_name: class.name.clone(),
                                     key: Box::new(key.clone()),
-                                    value: Box::new(init.clone()),
+                                    value: Box::new(init_value),
                                 }));
                             } else {
                                 module.init.push(Stmt::Expr(Expr::StaticFieldSet {
                                     class_name: class.name.clone(),
                                     field_name: sf.name.clone(),
-                                    value: Box::new(init.clone()),
+                                    value: Box::new(init_value),
                                 }));
                             }
                         }

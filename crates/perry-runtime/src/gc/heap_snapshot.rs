@@ -229,17 +229,10 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
     // Approximate the live set: collect first so unreachable malloc
     // objects are freed and fully-dead nursery blocks are reset before
     // the walk picks the population (Node's writeHeapSnapshot also
-    // forces a full GC). Force the conservative native-stack scan for
-    // this collection: in the default `auto` mode a full collect can
-    // miss top-level locals held only on the native stack and reclaim
-    // live objects (pre-existing explicit-`gc()` bug, see #4977 —
-    // repro: `const k = {nested:{deep:"s"}}; gc();` corrupts
-    // `k.nested.deep`). A diagnostics API must never make that worse.
-    let prev = super::roots::set_conservative_stack_scan_override(Some(
-        super::roots::ConservativeStackScanMode::Full,
-    ));
+    // forces a full GC). `js_gc_collect` forces the conservative
+    // native-stack scan when no per-thread override is pinned (#4977),
+    // so top-level locals held only on the native stack survive.
     js_gc_collect();
-    super::roots::set_conservative_stack_scan_override(prev);
 
     // Free-list slots are dead-but-unreclaimed space inside live
     // blocks; exclude them from the dump.

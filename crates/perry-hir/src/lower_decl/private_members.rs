@@ -368,9 +368,25 @@ pub fn lower_private_prop(
 
     // Lower initializer expression if present — field-initializer context for
     // the direct-eval `arguments` early error (see `lower_class_prop`).
+    // NamedEvaluation: an anonymous function initializer takes the private
+    // field's name including the `#` (`static #field = function(){}` →
+    // `.name === "#field"`, test262 static-field-anonymous-function-name).
     let saved_field_init = ctx.in_class_field_init;
     ctx.in_class_field_init = true;
-    let init = prop.value.as_ref().map(|e| lower_expr(ctx, e)).transpose();
+    let init = prop
+        .value
+        .as_ref()
+        .map(|e| {
+            if crate::lower::expr_assign::rhs_accepts_assignment_name(e) {
+                let old = ctx.assignment_inferred_name.replace(name.clone());
+                let result = lower_expr(ctx, e);
+                ctx.assignment_inferred_name = old;
+                result
+            } else {
+                lower_expr(ctx, e)
+            }
+        })
+        .transpose();
     ctx.in_class_field_init = saved_field_init;
     let init = init?;
 

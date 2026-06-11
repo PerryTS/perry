@@ -4375,7 +4375,17 @@ pub unsafe extern "C" fn js_native_call_method(
                 };
                 let rest_len = if args_len > 1 { args_len - 1 } else { 0 };
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+                // Static bound-method value (`C.m.call(x)`): arm the one-shot
+                // static-`this` override so the method body sees `x` instead
+                // of the lexical class-ref (static private brand checks).
+                let static_target = super::native_module::is_static_bound_method_value(object);
+                if static_target {
+                    super::static_this_arm(this_arg);
+                }
                 let result = crate::closure::js_native_call_value(object, rest_ptr, rest_len);
+                if static_target {
+                    super::static_this_disarm();
+                }
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
@@ -4467,8 +4477,16 @@ pub unsafe extern "C" fn js_native_call_method(
                     (buf.as_ptr(), buf.len())
                 };
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
+                // Static bound-method value — see the matching `call` arm.
+                let static_target = super::native_module::is_static_bound_method_value(object);
+                if static_target {
+                    super::static_this_arm(this_arg);
+                }
                 let result =
                     crate::closure::js_native_call_value(object, call_args_ptr, call_args_len);
+                if static_target {
+                    super::static_this_disarm();
+                }
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }

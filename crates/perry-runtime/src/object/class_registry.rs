@@ -79,6 +79,19 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: 
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
 }
 
+/// Own static-field value for a class (no parent-chain walk) — the
+/// CLASS_DYNAMIC_PROPS entry codegen registers at module init for every
+/// declared static field. Consulted by `getOwnPropertyDescriptor` on a class
+/// constructor ref so `verifyProperty(C, "field", …)` sees a real data
+/// descriptor (test262 class/elements static-field-declaration & friends).
+pub(crate) fn class_own_static_field_value(class_id: u32, name: &str) -> Option<f64> {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .and_then(|props| props.get(name).copied())
+    })
+}
+
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     CLASS_DYNAMIC_PROPS.with(|m| {
         if let Some(props) = m.borrow_mut().get_mut(&class_id) {
@@ -5101,6 +5114,11 @@ pub unsafe extern "C" fn js_class_static_method_call(
     }
     if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
         let prev_this = crate::object::js_implicit_this_set(receiver);
+        // Receiver-sensitive static `this`: arm the one-shot override so the
+        // method prologue (`js_static_this_resolve`) sees the DYNAMIC receiver
+        // (e.g. subclass `D` for an inherited `D.f()`). If an outer
+        // call/apply already armed an explicit thisArg, that wins.
+        crate::object::static_this_arm_if_unarmed(receiver);
         let result = if has_rest {
             // `static foo(a, b, ...rest)` / `static pipe(...args)` (effect's
             // `pipe`/`dual`): pass the first `param_count-1` positional args
@@ -5130,6 +5148,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
         } else {
             call_static_method(func_ptr, args_ptr, args_len, param_count)
         };
+        crate::object::static_this_disarm();
         crate::object::js_implicit_this_set(prev_this);
         return result;
     }

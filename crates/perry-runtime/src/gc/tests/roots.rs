@@ -805,3 +805,38 @@ fn test_shadow_stack_restore_drops_orphaned_bound_slots() {
     js_shadow_frame_pop(run_frame);
     assert_eq!(shadow_stack_depth(), 0);
 }
+
+#[test]
+fn manual_gc_scan_guard_forces_full_scan_only_when_unpinned() {
+    use crate::gc::roots::{ManualGcScanGuard, CONSERVATIVE_STACK_SCAN_OVERRIDE};
+
+    let prev = set_conservative_stack_scan_override(None);
+
+    // Unpinned: the guard engages a Full override for its lifetime (#4977 —
+    // explicit gc() must see top-level locals held only on the native stack).
+    {
+        let _scan = ManualGcScanGuard::force_full_scan();
+        assert_eq!(
+            CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()),
+            Some(ConservativeStackScanMode::Full)
+        );
+    }
+    assert_eq!(CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()), None);
+
+    // Pinned (the GC unit-test guards pin Auto so forced collections still
+    // reclaim native-stack locals): the guard must not replace the override.
+    set_conservative_stack_scan_override(Some(ConservativeStackScanMode::Auto));
+    {
+        let _scan = ManualGcScanGuard::force_full_scan();
+        assert_eq!(
+            CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()),
+            Some(ConservativeStackScanMode::Auto)
+        );
+    }
+    assert_eq!(
+        CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()),
+        Some(ConservativeStackScanMode::Auto)
+    );
+
+    set_conservative_stack_scan_override(prev);
+}

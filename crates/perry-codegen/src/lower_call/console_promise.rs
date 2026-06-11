@@ -717,6 +717,14 @@ pub fn try_lower_native_method_str_dispatch(
                 | "isPrototypeOf"
                 | "toLocaleString"
                 | "valueOf"
+                // Annex B §B.2.2 Object.prototype accessor helpers — handled
+                // by `js_native_call_method`; the static class-dispatch tower
+                // would read them as a non-callable property and throw
+                // (test262 elements/private-getter-is-not-a-own-property).
+                | "__lookupGetter__"
+                | "__lookupSetter__"
+                | "__defineGetter__"
+                | "__defineSetter__"
                 // #4795: the `using`-declaration disposability validator is not
                 // a class method — it must reach the runtime `js_native_call_method`
                 // handler (which checks symbol keys + the class vtable) rather

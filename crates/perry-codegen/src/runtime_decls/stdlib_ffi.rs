@@ -1882,6 +1882,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
     module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
+    // Static-method prologue `this`: takes the one-shot receiver override
+    // armed by dynamic static dispatch / call/apply, else returns the
+    // lexical class-ref argument.
+    module.declare_function("js_static_this_resolve", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_static_this_arm_classref", VOID, &[I32]);
+    module.declare_function("js_static_this_arm_value", VOID, &[DOUBLE]);
     module.declare_function("js_ctor_return_override", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_new_target_get", DOUBLE, &[]);
     module.declare_function("js_new_target_set", DOUBLE, &[DOUBLE]);

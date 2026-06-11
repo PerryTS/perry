@@ -178,7 +178,7 @@ thread_local! {
     /// set this to `Auto` (skip) inside their controlled-root scopes so a forced
     /// collection still reclaims the objects they hold only as native-stack
     /// locals; see `ScopedRootScannerRegistryGuard`.
-    static CONSERVATIVE_STACK_SCAN_OVERRIDE: std::cell::Cell<Option<ConservativeStackScanMode>> =
+    pub(super) static CONSERVATIVE_STACK_SCAN_OVERRIDE: std::cell::Cell<Option<ConservativeStackScanMode>> =
         const { std::cell::Cell::new(None) };
 }
 
@@ -188,6 +188,42 @@ pub(crate) fn set_conservative_stack_scan_override(
     mode: Option<ConservativeStackScanMode>,
 ) -> Option<ConservativeStackScanMode> {
     CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.replace(mode))
+}
+
+/// Scoped guard forcing the conservative native-stack scan for an explicit
+/// `gc()` collection (#4977). In the default `Auto` mode a full collection
+/// skips the native scan, but at a `gc()` callsite live module-init/top-level
+/// locals may be held only on the native stack — neither the precise
+/// shadow-stack roots nor the module-var scanners cover them — so the
+/// collector reclaimed live object graphs and later field reads returned
+/// dangling-pointer garbage. An already-pinned per-thread override wins (the
+/// GC unit tests pin `Auto` so a forced collection still reclaims objects they
+/// hold only as native-stack locals), and an explicit
+/// `PERRY_CONSERVATIVE_STACK_SCAN` env value beats any override either way,
+/// so the bisection escape hatch keeps working.
+pub(super) struct ManualGcScanGuard {
+    engaged: bool,
+}
+
+impl ManualGcScanGuard {
+    pub(super) fn force_full_scan() -> Self {
+        let engaged = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| {
+            if c.get().is_some() {
+                return false;
+            }
+            c.set(Some(ConservativeStackScanMode::Full));
+            true
+        });
+        Self { engaged }
+    }
+}
+
+impl Drop for ManualGcScanGuard {
+    fn drop(&mut self) {
+        if self.engaged {
+            CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.set(None));
+        }
+    }
 }
 
 pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
