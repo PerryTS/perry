@@ -1081,6 +1081,13 @@ fn reverse_records_result(name: &str, servers: &[SocketAddr]) -> Result<f64, f64
         Ok(ip) => ip,
         Err(_) => return Err(invalid_address_error(str_value(name))),
     };
+    // c-ares checks the hosts file before DNS ("fb" lookup order) and Node's
+    // HostentToNames reports only h_aliases — every merged-entry name except
+    // the canonical first one. Match that before falling through to PTR.
+    if let Some(names) = dns_resolver::hosts_file_names(ip) {
+        let aliases: Vec<&str> = names.iter().skip(1).map(String::as_str).collect();
+        return Ok(string_array_value(&aliases));
+    }
     match dns_resolver::reverse(ip, servers) {
         Ok(names) => {
             let refs: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -1322,9 +1329,13 @@ fn lookup_service_result(address: &str, port: u16) -> Result<(String, String), f
     // getnameinfo-style: reverse-resolve the host (numeric address when there
     // is no PTR record), and map the port to a service name. Loopback resolves
     // to "localhost" like getnameinfo does via /etc/hosts (a PTR query to the
-    // upstream resolver would not know the loopback zone).
+    // upstream resolver would not know the loopback zone). Non-loopback
+    // addresses with a hosts-file entry get the canonical (first) name.
     let hostname = if ip.is_loopback() {
         "localhost".to_string()
+    } else if let Some(name) = dns_resolver::hosts_file_names(ip).and_then(|n| n.into_iter().next())
+    {
+        name
     } else {
         dns_resolver::reverse(ip, &configured_servers())
             .ok()
