@@ -239,7 +239,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
     ),
     cr(
         "flushHeaders",
-        "js_http_client_request_noop_undefined",
+        "js_http_client_request_flush_headers",
         &[NA_F64, NA_F64],
         NR_F64,
     ),

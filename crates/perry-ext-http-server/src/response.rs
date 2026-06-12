@@ -92,6 +92,66 @@ struct TrailerBody {
     trailers: Option<HeaderMap>,
 }
 
+/// One frame of a streaming response body: a data chunk from
+/// `res.write(...)`, or the trailer block from `res.addTrailers` delivered
+/// after the final chunk.
+pub enum StreamFrame {
+    Data(Bytes),
+    Trailers(HeaderMap),
+}
+
+/// Streaming response body — frames flow from the JS thread
+/// (`res.write`/`res.end`) through an unbounded channel into hyper. The
+/// channel closing (sender dropped at `.end()`) ends the body. Size hint
+/// stays unknown so hyper uses chunked transfer-encoding, matching Node's
+/// wire behavior for a response whose headers flush before the body is
+/// complete. `in_flight` tracks bytes queued but not yet handed to hyper —
+/// the JS side reads it for the `res.write()` backpressure return and the
+/// `'drain'` edge.
+pub struct ChannelBody {
+    rx: tokio::sync::mpsc::UnboundedReceiver<StreamFrame>,
+    in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Body for ChannelBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        match self.rx.poll_recv(cx) {
+            Poll::Ready(Some(StreamFrame::Data(b))) => {
+                self.in_flight
+                    .fetch_sub(b.len(), std::sync::atomic::Ordering::AcqRel);
+                Poll::Ready(Some(Ok(Frame::data(b))))
+            }
+            Poll::Ready(Some(StreamFrame::Trailers(t))) => {
+                Poll::Ready(Some(Ok(Frame::trailers(t))))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::new()
+    }
+}
+
+/// The body half of a [`HyperResponseShape`]: fully buffered (the classic
+/// single-shot `res.end(body)` path, which keeps Content-Length semantics)
+/// or streaming (headers flushed early by `res.flushHeaders()` /
+/// `res.write(...)`, body frames following over a channel).
+pub enum ShapeBody {
+    Full(Vec<u8>),
+    Stream {
+        rx: tokio::sync::mpsc::UnboundedReceiver<StreamFrame>,
+        in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    },
+}
+
 impl Body for TrailerBody {
     type Data = Bytes;
     type Error = Infallible;
@@ -149,8 +209,21 @@ pub struct ServerResponse {
     /// Body chunks accumulated by `.write(chunk)` calls. Assembled
     /// + flushed when `.end()` is called.
     pub buffered_body: Vec<u8>,
-    /// One-shot back to hyper's service fn — taken on `.end()`.
+    /// One-shot back to hyper's service fn — taken on `.end()`, or earlier
+    /// by `begin_streaming` when the headers flush before the body is done.
     pub response_tx: Option<oneshot::Sender<HyperResponseShape>>,
+    /// Live body channel once the response head has been flushed early
+    /// (`res.flushHeaders()` / first `res.write(...)`). `Some` means
+    /// streaming mode: subsequent chunks go straight to the wire and
+    /// `.end()` closes the channel instead of sending a buffered shape.
+    pub stream_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamFrame>>,
+    /// Bytes written to the stream channel but not yet handed to hyper.
+    /// Backs the `res.write()` backpressure return (`false` past the HWM)
+    /// and the `'drain'` edge the pump emits when it sinks below it again.
+    pub stream_in_flight: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    /// True after a streaming `res.write()` returned `false`; the pump
+    /// fires `'drain'` (once) when the in-flight count drops below the HWM.
+    pub needs_drain: bool,
     /// Event-name → list of registered listener closure pointers.
     pub listeners: HashMap<String, Vec<i64>>,
     /// #4904: true for `new http.ServerResponse(req)` instances (and any
@@ -175,7 +248,7 @@ pub struct HyperResponseShape {
     pub status_message: Option<String>,
     pub headers: Vec<(String, String)>,
     pub trailers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    pub body: ShapeBody,
 }
 
 impl HyperResponseShape {
@@ -187,9 +260,15 @@ impl HyperResponseShape {
         for (k, v) in self.headers {
             builder = builder.header(k, v);
         }
+        let full = match self.body {
+            ShapeBody::Stream { rx, in_flight } => {
+                return builder.body(ChannelBody { rx, in_flight }.boxed()).unwrap();
+            }
+            ShapeBody::Full(bytes) => bytes,
+        };
         let trailers = self.trailers;
         let body = if trailers.is_empty() {
-            Full::new(Bytes::from(self.body)).boxed()
+            Full::new(Bytes::from(full)).boxed()
         } else {
             let mut map = HeaderMap::new();
             for (name, value) in trailers {
@@ -201,7 +280,7 @@ impl HyperResponseShape {
                 }
             }
             TrailerBody {
-                body: Some(Bytes::from(self.body)),
+                body: Some(Bytes::from(full)),
                 trailers: Some(map),
             }
             .boxed()
@@ -284,6 +363,9 @@ impl ServerResponse {
             outgoing_message_only: false,
             buffered_body: Vec::new(),
             response_tx: Some(response_tx),
+            stream_tx: None,
+            stream_in_flight: None,
+            needs_drain: false,
             listeners: HashMap::new(),
             standalone: false,
             standalone_socket: f64::from_bits(TAG_UNDEFINED),
@@ -837,15 +919,46 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
     }
 }
 
-/// `res.write(chunk)` — append to the buffered body. Returns 1
-/// (always-flushed for the buffered MVP — Node's contract is "false
-/// = call drain", which we sidestep by buffering).
+/// Send `bytes` over the live stream channel, charging the in-flight
+/// counter. Returns `Some(below_hwm)` when the response is streaming
+/// (`begin_streaming` succeeded now or earlier), `None` when it isn't —
+/// the caller falls back to the legacy buffered path.
+fn stream_write(handle: i64, bytes: &[u8]) -> Option<bool> {
+    if !begin_streaming(handle) {
+        return None;
+    }
+    let sr = get_handle_mut::<ServerResponse>(handle)?;
+    let tx = sr.stream_tx.as_ref()?;
+    let in_flight = sr.stream_in_flight.as_ref()?;
+    let queued =
+        in_flight.fetch_add(bytes.len(), std::sync::atomic::Ordering::AcqRel) + bytes.len();
+    let _ = tx.send(StreamFrame::Data(Bytes::copy_from_slice(bytes)));
+    let below_hwm = queued <= DEFAULT_HIGH_WATER_MARK;
+    if !below_hwm {
+        sr.needs_drain = true;
+    }
+    Some(below_hwm)
+}
+
+/// `res.write(chunk)` — flush the head on first write (Node's behavior)
+/// and stream the chunk to the wire; falls back to buffering for handle
+/// flavors that can't stream. Returns 0 (backpressure: "wait for drain")
+/// once the queued-but-unsent bytes pass the HWM, else 1.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write(handle: i64, chunk: f64) -> i32 {
     let bytes = match jsvalue_to_body_bytes(chunk) {
         Some(b) => b,
         None => return 1,
     };
+    let ended = get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.writable_ended)
+        .unwrap_or(true);
+    if ended {
+        return 1;
+    }
+    if let Some(below_hwm) = stream_write(handle, &bytes) {
+        return below_hwm as i32;
+    }
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.writable_ended {
             sr.headers_sent = true;
@@ -895,6 +1008,22 @@ pub extern "C" fn js_node_http_res_write_full(
 ) -> f64 {
     let callback = pick_trailing_callback(arg2, arg3);
     let bytes = jsvalue_to_body_bytes(chunk);
+    let ended = get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.writable_ended)
+        .unwrap_or(true);
+    if ended {
+        return f64::from_bits(TAG_TRUE);
+    }
+    if let Some(b) = &bytes {
+        if let Some(below_hwm) = stream_write(handle, b) {
+            // Streaming: the chunk is on its way to the wire, so the write
+            // callback fires now rather than queueing for `.end()`.
+            if callback != 0 {
+                call_closure0(callback);
+            }
+            return f64::from_bits(if below_hwm { TAG_TRUE } else { TAG_FALSE });
+        }
+    }
     let mut below_hwm = true;
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.writable_ended {
@@ -1012,6 +1141,38 @@ fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)
     if sr.writable_ended {
         return None;
     }
+
+    // Streaming mode: the head already went to the wire. Send the final
+    // chunk + trailer block as frames and close the channel — hyper ends
+    // the (chunked) body when the sender drops.
+    if let Some(tx) = sr.stream_tx.take() {
+        if let Some(c) = final_chunk {
+            if let Some(in_flight) = sr.stream_in_flight.as_ref() {
+                in_flight.fetch_add(c.len(), std::sync::atomic::Ordering::AcqRel);
+            }
+            let _ = tx.send(StreamFrame::Data(Bytes::from(c)));
+        }
+        let trailers = sr.snapshot_trailers();
+        if !trailers.is_empty() {
+            let mut map = HeaderMap::new();
+            for (name, value) in trailers {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(&value),
+                ) {
+                    map.insert(name, value);
+                }
+            }
+            let _ = tx.send(StreamFrame::Trailers(map));
+        }
+        sr.writable_ended = true;
+        sr.writable_finished = true;
+        sr.needs_drain = false;
+        let finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
+        let close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
+        return Some((finish_listeners, close_listeners));
+    }
+
     if let Some(c) = final_chunk {
         sr.buffered_body.extend_from_slice(&c);
     }
@@ -1026,7 +1187,7 @@ fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)
         status_message: sr.status_message.clone(),
         headers,
         trailers,
-        body,
+        body: ShapeBody::Full(body),
     };
     let finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
     let close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
@@ -1048,13 +1209,107 @@ pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
     }
 }
 
+/// Flush the response head to the wire now and switch the response into
+/// streaming mode: the status line + headers go back to hyper immediately
+/// with a channel-backed body, and subsequent `res.write(...)` chunks flow
+/// straight to the client (chunked transfer-encoding unless the handler set
+/// Content-Length). This is what makes Node shapes like "send headers, keep
+/// the response open, write later" (SSE, long-poll, `res.flushHeaders()`,
+/// `res.write()` before an async gap) observable client-side before
+/// `.end()`.
+///
+/// Returns `true` when the response is in streaming mode after the call.
+/// Standalone (`assignSocket`) and bare `OutgoingMessage` handles keep the
+/// buffered path, as does a response whose connection already died.
+pub(crate) fn begin_streaming(handle: i64) -> bool {
+    let Some(sr) = get_handle_mut::<ServerResponse>(handle) else {
+        return false;
+    };
+    if sr.writable_ended {
+        return false;
+    }
+    if sr.stream_tx.is_some() {
+        return true;
+    }
+    if sr.standalone || sr.outgoing_message_only {
+        return false;
+    }
+    let receiver_alive = sr
+        .response_tx
+        .as_ref()
+        .map(|tx| !tx.is_closed())
+        .unwrap_or(false);
+    if !receiver_alive {
+        return false;
+    }
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let shape = HyperResponseShape {
+        status: sr.status_code,
+        status_message: sr.status_message.clone(),
+        headers: sr.snapshot_headers(),
+        trailers: Vec::new(),
+        body: ShapeBody::Stream {
+            rx,
+            in_flight: in_flight.clone(),
+        },
+    };
+    sr.headers_sent = true;
+    let oneshot_tx = sr.response_tx.take().expect("checked above");
+    if oneshot_tx.send(shape).is_err() {
+        return false;
+    }
+    if !sr.buffered_body.is_empty() {
+        let first = std::mem::take(&mut sr.buffered_body);
+        in_flight.fetch_add(first.len(), std::sync::atomic::Ordering::AcqRel);
+        let _ = tx.send(StreamFrame::Data(Bytes::from(first)));
+    }
+    sr.stream_tx = Some(tx);
+    sr.stream_in_flight = Some(in_flight);
+    true
+}
+
+/// If a streaming response previously hit backpressure (`res.write()`
+/// returned `false`) and its queued bytes have since drained below the
+/// HWM, clear the flag and return its `'drain'` listeners for the caller
+/// (the pump) to fire. Empty otherwise.
+pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
+    let Some(sr) = get_handle_mut::<ServerResponse>(handle) else {
+        return Vec::new();
+    };
+    if !sr.needs_drain || sr.writable_ended {
+        return Vec::new();
+    }
+    let below = sr
+        .stream_in_flight
+        .as_ref()
+        .map(|c| c.load(std::sync::atomic::Ordering::Acquire) <= DEFAULT_HIGH_WATER_MARK)
+        .unwrap_or(false);
+    if !below {
+        return Vec::new();
+    }
+    sr.needs_drain = false;
+    sr.listeners.get("drain").cloned().unwrap_or_default()
+}
+
+/// True when a streaming response's connection died under it (hyper
+/// dropped the body receiver — client disconnect / server close).
+pub(crate) fn stream_receiver_gone(handle: i64) -> bool {
+    get_handle::<ServerResponse>(handle)
+        .and_then(|sr| sr.stream_tx.as_ref().map(|tx| tx.is_closed()))
+        .unwrap_or(false)
+}
+
 /// `res.flushHeaders()` — Node sends headers immediately even before
-/// any body. Phase 1 marks the response as headers-sent (our actual
-/// flush is unified at `.end()` time since we buffer).
+/// any body. Flushes the head to the wire and switches to the streaming
+/// body path; falls back to marking headers-sent for handle flavors that
+/// can't stream (standalone / bare OutgoingMessage).
 #[no_mangle]
 pub extern "C" fn js_node_http_res_flush_headers(handle: i64) {
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
-        sr.headers_sent = true;
+    if !begin_streaming(handle) {
+        if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+            sr.headers_sent = true;
+        }
     }
 }
 

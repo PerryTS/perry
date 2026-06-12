@@ -111,6 +111,25 @@ pub(crate) enum PendingHttpEvent {
         trailers: Vec<(String, String)>,
         body: Vec<u8>,
     },
+    /// Streaming delivery (reqwest path): the response head arrived — fire
+    /// the `http.request` callback / `'response'` listeners now; body
+    /// chunks follow as [`PendingHttpEvent::ResponseChunk`]s. This is what
+    /// lets client code observe headers (and start timers / destroy the
+    /// request) while the server is still writing.
+    ResponseHead {
+        request_handle: Handle,
+        status: u16,
+        status_message: String,
+        headers: Vec<(String, String)>,
+    },
+    /// One streamed body chunk following a `ResponseHead`.
+    ResponseChunk {
+        request_handle: Handle,
+        chunk: Vec<u8>,
+    },
+    /// The streamed body finished — `'end'` on the message, `'close'` on
+    /// the request.
+    ResponseEnd { request_handle: Handle },
     Error {
         request_handle: Handle,
         error_message: String,
@@ -451,6 +470,10 @@ pub struct ClientRequestHandle {
     listeners: HashMap<String, Vec<i64>>,
     timeout_ms: Option<u64>,
     ended: bool,
+    /// `flushHeaders()` dispatched the exchange before `end()` was called;
+    /// the eventual `end()` still owes the write/finish/end callback
+    /// ordering exactly once.
+    flushed_early: bool,
     /// #4909 — `write(chunk, cb)` callbacks queued until the body is
     /// flushed at `end()` (Node fires them once the chunk hits the
     /// transport; our buffered MVP flushes everything at `end()`).
@@ -476,6 +499,11 @@ pub struct ClientRequestHandle {
     /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
     /// `checkServerIdentity`. Default = no customization (pooled client).
     tls: tls_client::TlsOptions,
+    /// The IncomingMessage handle created when a streamed `ResponseHead`
+    /// arrived; later `ResponseChunk` / `ResponseEnd` events route to it.
+    /// `0` until the head is delivered (and always for the full-buffer
+    /// delivery paths).
+    incoming_handle: Handle,
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -635,6 +663,7 @@ fn make_request_handle(
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        flushed_early: false,
         pending_write_callbacks: Vec::new(),
         end_callback: 0,
         completed: false,
@@ -642,6 +671,7 @@ fn make_request_handle(
         close_emitted: false,
         agent_handle,
         tls: tls_client::TlsOptions::default(),
+        incoming_handle: 0,
     });
     // #4909 — `options.timeout` arms the inactivity timer as soon as the
     // socket exists in Node, not at `end()`; a request that is never
@@ -1158,10 +1188,17 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
 
     let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         if req.ended {
-            return None;
+            // Already dispatched by `flushHeaders()` — the exchange is in
+            // flight, but this `end()` still owes its write/finish/end
+            // callback ordering (once).
+            if req.flushed_early {
+                req.flushed_early = false;
+                return Err(true);
+            }
+            return Err(false);
         }
         req.ended = true;
-        Some((
+        Ok((
             req.method.clone(),
             req.url.clone(),
             req.headers.clone(),
@@ -1172,18 +1209,78 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
         ))
     });
 
-    let snapshot = match snapshot.flatten() {
-        Some(s) => s,
+    let snapshot = match snapshot {
+        Some(Ok(s)) => s,
+        Some(Err(owes_flush)) => {
+            if owes_flush {
+                push_event(PendingHttpEvent::Flushed {
+                    request_handle: handle,
+                });
+            }
+            return handle;
+        }
         None => return handle,
     };
-
-    let (method, url, headers, body, timeout_ms, agent_handle, tls) = snapshot;
 
     // #4909 — queue the flush notification before dispatching so the
     // write/end callbacks and `'finish'` drain ahead of any `'response'`.
     push_event(PendingHttpEvent::Flushed {
         request_handle: handle,
     });
+
+    dispatch_request_snapshot(handle, snapshot);
+    handle
+}
+
+/// `req.flushHeaders()` — Node opens the connection and puts the request
+/// head on the wire immediately. Our transport sends a complete request in
+/// one shot, so for a request with no buffered body (and a method that
+/// doesn't usually carry one) this dispatches the exchange now; a later
+/// `end()` only drains the callback ordering. Requests that already
+/// buffered body bytes (or use body-carrying methods) keep the
+/// dispatch-at-`end()` behavior, since the head can't go out alone.
+pub(crate) unsafe fn client_request_flush_headers(handle: Handle) {
+    let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if req.ended || !req.body.is_empty() {
+            return None;
+        }
+        let method = req.method.to_ascii_uppercase();
+        if !matches!(method.as_str(), "GET" | "HEAD" | "DELETE" | "OPTIONS") {
+            return None;
+        }
+        req.ended = true;
+        req.flushed_early = true;
+        Some((
+            req.method.clone(),
+            req.url.clone(),
+            req.headers.clone(),
+            Vec::new(),
+            req.timeout_ms,
+            req.agent_handle,
+            req.tls.clone(),
+        ))
+    })
+    .flatten();
+    if let Some(snapshot) = snapshot {
+        dispatch_request_snapshot(handle, snapshot);
+    }
+}
+
+type RequestSnapshot = (
+    String,
+    String,
+    HashMap<String, String>,
+    Vec<u8>,
+    Option<u64>,
+    Handle,
+    tls_client::TlsOptions,
+);
+
+/// The shared dispatch tail of `end()` / `flushHeaders()`: route through the
+/// agent's `createConnection` / `createSocket` override when present, else
+/// the reqwest path.
+unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
+    let (method, url, headers, body, timeout_ms, agent_handle, tls) = snapshot;
 
     // #2154 — if the agent supplied a `createConnection` / `createSocket`
     // override, invoke it here on the main thread (JS closure calls must not
@@ -1200,7 +1297,7 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
             // fall through to reqwest after dispatching it.
             if agent::create_socket_override(agent_handle) != 0 {
                 invoke_create_socket(handle, agent_handle, &host, port, &path);
-                return handle;
+                return;
             }
             if let Some(socket_id) =
                 agent::try_create_connection_socket(agent_handle, &host, port, &path)
@@ -1213,7 +1310,7 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
                 dispatch_request_over_socket(
                     handle, method, url, headers, body, timeout_ms, socket_id,
                 );
-                return handle;
+                return;
             }
         }
     }
@@ -1228,7 +1325,6 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
         agent_handle,
         tls,
     );
-    handle
 }
 
 /// Parse a request URL into the `(host, port, path)` an
@@ -1646,6 +1742,28 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                     trailers,
                     body,
                 );
+            }
+            PendingHttpEvent::ResponseHead {
+                request_handle,
+                status,
+                status_message,
+                headers,
+            } => {
+                client_events::handle_response_head_event(
+                    request_handle,
+                    status,
+                    status_message,
+                    headers,
+                );
+            }
+            PendingHttpEvent::ResponseChunk {
+                request_handle,
+                chunk,
+            } => {
+                client_events::handle_response_chunk_event(request_handle, chunk);
+            }
+            PendingHttpEvent::ResponseEnd { request_handle } => {
+                client_events::handle_response_end_event(request_handle);
             }
             PendingHttpEvent::Error {
                 request_handle,

@@ -580,6 +580,12 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
         "httpVersion" | "__get_httpVersion" => {
             string_ptr_value(js_node_http_im_http_version(handle))
         }
+        "httpVersionMajor" | "__get_httpVersionMajor" => {
+            crate::request::incoming_http_version_part(handle, false)
+        }
+        "httpVersionMinor" | "__get_httpVersionMinor" => {
+            crate::request::incoming_http_version_part(handle, true)
+        }
         "__get_complete" => bool_value(js_node_http_im_complete(handle) != 0),
         "__get_aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
         "__get_destroyed" => bool_value(js_node_http_im_destroyed(handle) != 0),
@@ -850,6 +856,8 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "method" => string_ptr_value(js_node_http_im_method(handle)),
         "url" => string_ptr_value(js_node_http_im_url(handle)),
         "httpVersion" => string_ptr_value(js_node_http_im_http_version(handle)),
+        "httpVersionMajor" => crate::request::incoming_http_version_part(handle, false),
+        "httpVersionMinor" => crate::request::incoming_http_version_part(handle, true),
         "headers" => json_string_value(js_node_http_im_headers_json(handle)),
         "rawHeaders" => json_string_value(js_node_http_im_raw_headers_json(handle)),
         "headersDistinct" => json_string_value(js_node_http_im_headers_distinct_json(handle)),

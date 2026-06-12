@@ -320,6 +320,21 @@ pub extern "C" fn js_http_client_request_noop_undefined(
     undefined_value()
 }
 
+/// Static-dispatch route for `req.flushHeaders()` — dispatch the exchange
+/// now for body-less requests (Node puts the head on the wire immediately).
+///
+/// # Safety
+/// FFI entry; `handle` must be a live `ClientRequestHandle` id (or absent).
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_flush_headers(
+    handle: Handle,
+    _arg0: f64,
+    _arg1: f64,
+) -> f64 {
+    crate::client_request_flush_headers(handle);
+    undefined_value()
+}
+
 #[no_mangle]
 pub extern "C" fn js_http_client_request_aborted(handle: Handle) -> f64 {
     state_bool(handle, "aborted")
@@ -569,9 +584,11 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             });
             handle_value(handle)
         }
-        "flushHeaders" | "cork" | "uncork" | "setNoDelay" | "setSocketKeepAlive" => {
+        "flushHeaders" => {
+            unsafe { crate::client_request_flush_headers(handle) };
             undefined_value()
         }
+        "cork" | "uncork" | "setNoDelay" | "setSocketKeepAlive" => undefined_value(),
         _ => return None,
     })
 }

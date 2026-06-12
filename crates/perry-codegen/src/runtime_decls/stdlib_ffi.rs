@@ -90,6 +90,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_http_client_request_flush_headers",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_http_client_request_aborted", DOUBLE, &[I64]);
     module.declare_function("js_http_client_request_destroyed", DOUBLE, &[I64]);
     module.declare_function("js_http_client_request_finished", DOUBLE, &[I64]);

@@ -224,6 +224,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_http_client_request_abort",                OwnerKind::WellKnown("http")),
     ("js_http_client_request_destroy",              OwnerKind::WellKnown("http")),
     ("js_http_client_request_noop_undefined",       OwnerKind::WellKnown("http")),
+    ("js_http_client_request_flush_headers",        OwnerKind::WellKnown("http")),
     ("js_http_client_request_method",               OwnerKind::WellKnown("http")),
     ("js_http_client_request_protocol",             OwnerKind::WellKnown("http")),
     ("js_http_client_request_host",                 OwnerKind::WellKnown("http")),

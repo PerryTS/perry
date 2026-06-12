@@ -200,6 +200,168 @@ pub(crate) unsafe fn handle_response_event(
     fire_request_close_once(request_handle);
 }
 
+/// Drain handler for `PendingHttpEvent::ResponseHead` (streaming path):
+/// build the IncomingMessage handle with an empty body, remember it on the
+/// request, and fire the factory callback + `'response'` listeners. Body
+/// chunks and the end edge arrive as separate events.
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
+pub(crate) unsafe fn handle_response_head_event(
+    request_handle: Handle,
+    status: u16,
+    status_message: String,
+    headers: Vec<(String, String)>,
+) {
+    // A destroyed request delivers nothing.
+    let destroyed =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| req.completed)
+            .unwrap_or(true);
+    if destroyed {
+        return;
+    }
+
+    let mut headers_map = HashMap::new();
+    for (k, v) in headers {
+        headers_map.insert(k, v);
+    }
+    let incoming = register_handle(IncomingMessageHandle {
+        status_code: status,
+        status_message,
+        headers: headers_map,
+        trailers: HashMap::new(),
+        body: Vec::new(),
+        listeners: HashMap::new(),
+        encoding: None,
+    });
+    let response_callback = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+        req.incoming_handle = incoming;
+        req.response_callback
+    })
+    .unwrap_or(0);
+
+    let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
+    if response_callback != 0 {
+        let closure = JsClosure::from_raw(response_callback as *const RawClosureHeader);
+        let _ = closure.call1(arg);
+    }
+    let response_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .and_then(|r| r.listeners.get("response").cloned())
+        .unwrap_or_default();
+    for cb in response_listeners {
+        if cb != 0 {
+            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+            let _ = closure.call1(arg);
+        }
+    }
+}
+
+/// Drain handler for `PendingHttpEvent::ResponseChunk`: deliver to the
+/// message's `'data'` listeners, or buffer until `'end'` when none are
+/// registered yet (listeners typically attach inside the response
+/// callback, which has already run by the time chunks drain).
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
+pub(crate) unsafe fn handle_response_chunk_event(request_handle: Handle, chunk: Vec<u8>) {
+    let (incoming, done) = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .map(|r| (r.incoming_handle, r.completed))
+        .unwrap_or((0, true));
+    // `completed` mid-stream means the request was destroyed — chunks
+    // never arrive after the end edge, so this only suppresses delivery
+    // into a torn-down exchange.
+    if incoming == 0 || done {
+        return;
+    }
+    let (data_listeners, encoding) = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .map(|r| {
+            (
+                r.listeners.get("data").cloned().unwrap_or_default(),
+                r.encoding.clone(),
+            )
+        })
+        .unwrap_or_default();
+    if data_listeners.is_empty() {
+        if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
+            im.body.extend_from_slice(&chunk);
+        }
+        return;
+    }
+    let arg = body_chunk_value(&chunk, encoding.as_deref());
+    if arg.to_bits() == TAG_UNDEFINED {
+        return;
+    }
+    for cb in data_listeners {
+        if cb != 0 {
+            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+            let _ = closure.call1(arg);
+        }
+    }
+}
+
+/// Drain handler for `PendingHttpEvent::ResponseEnd`: flush any buffered
+/// chunks to late-registered `'data'` listeners, fire `'end'` on the
+/// message, then `'close'` on the request.
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
+pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
+    let (incoming, was_done) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+            let was = req.completed;
+            req.completed = true;
+            (req.incoming_handle, was)
+        })
+        .unwrap_or((0, true));
+    // `was_done` means the request was destroyed mid-stream — the
+    // teardown already emitted its own error/close edges.
+    if incoming == 0 || was_done {
+        return;
+    }
+
+    let (data_listeners, encoding, buffered) = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .map(|r| {
+            (
+                r.listeners.get("data").cloned().unwrap_or_default(),
+                r.encoding.clone(),
+                std::mem::take(&mut r.body),
+            )
+        })
+        .unwrap_or_default();
+    if !data_listeners.is_empty() && !buffered.is_empty() {
+        let arg = body_chunk_value(&buffered, encoding.as_deref());
+        if arg.to_bits() != TAG_UNDEFINED {
+            for cb in data_listeners {
+                if cb != 0 {
+                    let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+                    let _ = closure.call1(arg);
+                }
+            }
+        }
+    } else if !buffered.is_empty() {
+        // Nobody consumed the body — keep it on the handle for any
+        // late reader.
+        if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
+            im.body = buffered;
+        }
+    }
+
+    let end_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .and_then(|r| r.listeners.get("end").cloned())
+        .unwrap_or_default();
+    for cb in end_listeners {
+        if cb != 0 {
+            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+            let _ = closure.call0();
+        }
+    }
+
+    fire_request_close_once(request_handle);
+}
+
 /// Drain handler for `PendingHttpEvent::Error`: `'error'` listeners then
 /// `'close'`, suppressed entirely once the request already completed
 /// (e.g. a `req.destroy()` raced the transport failure).

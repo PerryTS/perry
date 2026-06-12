@@ -995,7 +995,7 @@ async fn handle_request(
         Err(_) => Vec::new(),
     };
 
-    let im = IncomingMessage::new(
+    let mut im = IncomingMessage::new(
         method,
         url,
         headers_lower,
@@ -1004,6 +1004,14 @@ async fn handle_request(
         peer.ip().to_string(),
         peer.port(),
     );
+    // `req.httpVersion` reflects the wire version, not a constant — an
+    // HTTP/1.0 request must read "1.0" (test-http-1.0 asserts all three
+    // httpVersion fields).
+    im.http_version = match http_version {
+        hyper::Version::HTTP_10 => "1.0".to_string(),
+        hyper::Version::HTTP_2 => "2.0".to_string(),
+        _ => "1.1".to_string(),
+    };
     let im_handle = alloc_incoming_message(im);
 
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
@@ -1272,6 +1280,7 @@ fn has_in_flight_requests() -> bool {
 fn reap_in_flight_requests() {
     // (request_handle, response_handle, needs_synthesize)
     let mut to_finalize: Vec<(i64, i64, bool)> = Vec::new();
+    let mut drain_listeners: Vec<Vec<i64>> = Vec::new();
     {
         let mut guard = match IN_FLIGHT.lock() {
             Ok(g) => g,
@@ -1283,14 +1292,24 @@ fn reap_in_flight_requests() {
         let now = Instant::now();
         guard.retain(|e| {
             let ended = response_writable_ended(e.response_handle);
+            if !ended {
+                // Streaming backpressure cleared — fire `'drain'` (outside
+                // the lock) so `res.on('drain')` producer loops resume.
+                let ls = crate::response::take_drain_listeners_if_ready(e.response_handle);
+                if !ls.is_empty() {
+                    drain_listeners.push(ls);
+                }
+            }
             // #4905: the per-request oneshot receiver died with its
             // connection task (client disconnected / closeAllConnections)
             // — the response can never be flushed, so don't pin the event
-            // loop for the rest of the grace window.
+            // loop for the rest of the grace window. A streaming response
+            // whose body receiver dropped is the same edge.
             let peer_gone = get_handle::<ServerResponse>(e.response_handle)
                 .and_then(|sr| sr.response_tx.as_ref())
                 .map(|tx| tx.is_closed())
-                .unwrap_or(false);
+                .unwrap_or(false)
+                || crate::response::stream_receiver_gone(e.response_handle);
             let expired = now >= e.deadline;
             if ended || expired || peer_gone {
                 to_finalize.push((
@@ -1307,6 +1326,9 @@ fn reap_in_flight_requests() {
                 true
             }
         });
+    }
+    for ls in drain_listeners {
+        crate::request::emit_no_arg_to_listeners(&ls);
     }
     // Finalize outside the lock — `synthesize_default_response_if_needed`
     // and `drop_handle` don't touch `IN_FLIGHT`, but keeping them off the
@@ -1702,6 +1724,12 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
             sr.writable_ended = true;
             sr.headers_sent = true;
             sr.writable_finished = true;
+            // Streaming response whose handler never called `.end()`: the
+            // head is already on the wire — just close the body channel.
+            if sr.stream_tx.take().is_some() {
+                sr.needs_drain = false;
+                return;
+            }
             let body = std::mem::take(&mut sr.buffered_body);
             // `snapshot_headers` expands array-valued headers (e.g.
             // Set-Cookie) into one entry per element so they emit a separate
@@ -1717,7 +1745,7 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 status_message: sr.status_message.clone(),
                 headers,
                 trailers: Vec::new(),
-                body,
+                body: crate::response::ShapeBody::Full(body),
             };
             if let Some(tx) = sr.response_tx.take() {
                 let _ = tx.send(shape);

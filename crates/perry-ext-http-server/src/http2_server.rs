@@ -967,7 +967,7 @@ fn synthesize_default_h2_stream_response(stream_handle: i64) {
             status_message: None,
             headers,
             trailers: Vec::new(),
-            body: Vec::new(),
+            body: crate::response::ShapeBody::Full(Vec::new()),
         };
         if let Some(tx) = stream.response_tx.take() {
             let _ = tx.send(shape);
@@ -1987,7 +1987,7 @@ fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
             status_message: None,
             headers,
             trailers: Vec::new(),
-            body,
+            body: crate::response::ShapeBody::Full(body),
         };
         if let Some(tx) = stream.response_tx.take() {
             let _ = tx.send(shape);
