@@ -457,6 +457,30 @@ pub(crate) fn lower_string_method(
             let repl_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
+            // #4871: a `searchValue` codegen can't type (an object-property
+            // read, a destructured loop binding, a call result) may still be
+            // a RegExp at runtime. ToString-coercing it here turned
+            // `str.replace(obj.regex, …)` into a literal search for "/foo/g"
+            // — a silent no-op. Route through the runtime search dispatcher,
+            // which checks the registered-RegExp set before coercing (and
+            // handles every replacement shape via the `_dyn` family).
+            if !needle_is_regex && !needle_is_str {
+                let runtime_fn = if property == "replaceAll" {
+                    "js_string_replace_all_search_dyn"
+                } else {
+                    "js_string_replace_search_dyn"
+                };
+                let result = blk.call(
+                    I64,
+                    runtime_fn,
+                    &[
+                        (I64, &recv_handle),
+                        (DOUBLE, &needle_box),
+                        (DOUBLE, &repl_box),
+                    ],
+                );
+                return Ok(nanbox_string_inline(blk, &result));
+            }
             let needle_handle = if needle_is_regex || needle_is_str {
                 unbox_str_handle(blk, &needle_box)
             } else {
