@@ -30,6 +30,7 @@ mod view;
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
+pub(crate) use header::is_small_buf_slab_addr;
 pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
     buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
