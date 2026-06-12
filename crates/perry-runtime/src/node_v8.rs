@@ -375,6 +375,7 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
 /// Build a 2-field native-module namespace object: field[0] = `module` tag,
 /// field[1] = registry `id`. NOT cached (every `new` must be a fresh instance).
 unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
+    crate::object::install_native_module_vtable();
     let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
     let mname = js_string_from_bytes(module.as_ptr(), module.len() as u32);
     crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(mname));
@@ -617,7 +618,8 @@ pub extern "C" fn js_v8_promise_hook_register() -> f64 {
 pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
     unsafe {
         let module = "v8.GCProfiler";
-        let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
+        crate::object::install_native_module_vtable();
+    let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
         let module_name = js_string_from_bytes(module.as_ptr(), module.len() as u32);
         crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
         crate::object::js_object_set_field(obj, 1, JSValue::bool(false));

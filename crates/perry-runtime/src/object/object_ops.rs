@@ -889,7 +889,8 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                 .as_deref()
                 .zip(super::has_own_helpers::str_from_string_header(key_str))
                 .map(|(module, key)| {
-                    super::native_module::native_module_has_enumerable_key(module, key)
+                    super::native_module::native_module_vtable()
+                        .is_some_and(|vt| (vt.has_enumerable_key)(module, key))
                 })
                 .unwrap_or(false);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
@@ -913,7 +914,8 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             };
             let present = read_native_module_name(obj)
                 .as_deref()
-                .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
+                .is_some_and(|module_name| super::native_module::native_module_vtable()
+                .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name)));
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 

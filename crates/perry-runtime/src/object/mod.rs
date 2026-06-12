@@ -48,6 +48,7 @@ pub(crate) mod iterator_prototypes;
 mod namespace_create;
 mod native_call_method;
 mod native_module;
+pub(crate) use native_module::install_native_module_vtable;
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;

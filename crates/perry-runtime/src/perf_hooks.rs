@@ -1143,6 +1143,7 @@ thread_local! {
 
 /// Build the `perf_observer` namespace object carrying the registry index.
 unsafe fn make_observer_object(id: usize) -> f64 {
+    crate::object::install_native_module_vtable();
     let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
     let module = b"perf_observer";
     let mname = crate::string::js_string_from_bytes(module.as_ptr(), module.len() as u32);
@@ -1524,6 +1525,7 @@ pub fn scan_perf_entries_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
 /// `is_native_module_callable_export` (methods) and
 /// `get_native_module_constant` (numeric accessors).
 unsafe fn make_histogram_object() -> f64 {
+    crate::object::install_native_module_vtable();
     let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 1);
     let module = b"perf_histogram";
     let mname = crate::string::js_string_from_bytes(module.as_ptr(), module.len() as u32);

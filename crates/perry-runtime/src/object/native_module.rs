@@ -897,27 +897,64 @@ pub extern "C" fn js_worker_threads_locks_query() -> f64 {
     worker_threads_locks_query(std::ptr::null())
 }
 
-/// Linker-strippability indirection for the native-module method
-/// dispatcher (see #466 size work). `dispatch_native_module_method` is a
-/// 600+-arm match that statically references every module's runtime
-/// implementation; a direct call from the generic method path pins all of
-/// it in every binary, `-dead_strip` notwithstanding. Namespace objects
-/// (NATIVE_MODULE_CLASS_ID) can only be created by
-/// `js_create_native_module_namespace`, so installing the pointer there
-/// makes the dispatcher — and everything only it references — dead-strippable
-/// in programs that never import a native module. Relaxed ordering is
-/// sufficient: the store happens-before any namespace object can reach a
-/// call site on the creating thread, and cross-thread publication of the
-/// object pointer itself already synchronizes.
-pub(crate) static NATIVE_MODULE_DISPATCH_HOOK: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+/// Linker-strippability vtable for every native-module behavior reachable
+/// from the always-linked generic object paths (method dispatch, own-field
+/// reads, Object.keys, has/in checks). All of these bottom out in large
+/// static (module, method) tables that reference every module's runtime
+/// implementation; a direct call from a generic path pins all of it in
+/// every binary, `-dead_strip` notwithstanding. Namespace-class objects
+/// (NATIVE_MODULE_CLASS_ID) are only created by
+/// `js_create_native_module_namespace` and a handful of in-crate
+/// allocators (node_v8 serializer, perf_hooks observer), all of which
+/// install this vtable first — so a program that never creates one lets
+/// the linker drop the tables wholesale. Relaxed ordering is sufficient:
+/// the store happens-before any namespace object can reach a call site on
+/// the creating thread, and cross-thread publication of the object
+/// pointer itself already synchronizes.
+pub(crate) struct NativeModuleVtable {
+    pub dispatch: unsafe fn(*const ObjectHeader, &str, *const f64, usize) -> f64,
+    pub get_own_field:
+        unsafe fn(*const ObjectHeader, *const crate::StringHeader) -> Option<JSValue>,
+    pub own_keys_array: unsafe fn(*const ObjectHeader) -> Option<*mut crate::array::ArrayHeader>,
+    pub has_enumerable_key: fn(&str, &str) -> bool,
+}
 
-type NativeModuleDispatchFn =
-    unsafe fn(*const ObjectHeader, &str, *const f64, usize) -> f64;
+static NATIVE_MODULE_VTABLE_IMPL: NativeModuleVtable = NativeModuleVtable {
+    dispatch: dispatch_native_module_method,
+    get_own_field: vt_get_own_field,
+    own_keys_array: vt_own_keys_array,
+    has_enumerable_key: native_module_has_enumerable_key,
+};
 
-/// Route a NATIVE_MODULE_CLASS_ID method call through the installed hook.
-/// A zero hook means no namespace object was ever created, so no such
-/// object can exist to dispatch on — unreachable in practice.
+static NATIVE_MODULE_VTABLE_PTR: AtomicPtr<NativeModuleVtable> =
+    AtomicPtr::new(std::ptr::null_mut());
+
+/// Make the native-module vtable reachable. Must be called by every code
+/// path that creates a NATIVE_MODULE_CLASS_ID object — this is the only
+/// static reference to the dispatch/table machinery in the crate.
+pub(crate) fn install_native_module_vtable() {
+    NATIVE_MODULE_VTABLE_PTR.store(
+        &NATIVE_MODULE_VTABLE_IMPL as *const NativeModuleVtable as *mut NativeModuleVtable,
+        Ordering::Relaxed,
+    );
+}
+
+/// `None` until the first namespace object exists; generic paths treat
+/// that as "no native module can be involved" and fall through to their
+/// default behavior.
+#[inline]
+pub(crate) fn native_module_vtable() -> Option<&'static NativeModuleVtable> {
+    let p = NATIVE_MODULE_VTABLE_PTR.load(Ordering::Relaxed);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { &*(p as *const NativeModuleVtable) })
+    }
+}
+
+/// Route a NATIVE_MODULE_CLASS_ID method call through the vtable. A null
+/// vtable means no namespace object was ever created, so no such object
+/// can exist to dispatch on — unreachable in practice.
 #[inline]
 pub(crate) unsafe fn call_native_module_dispatch_hook(
     obj: *const ObjectHeader,
@@ -925,19 +962,16 @@ pub(crate) unsafe fn call_native_module_dispatch_hook(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    let raw = NATIVE_MODULE_DISPATCH_HOOK.load(Ordering::Relaxed);
-    debug_assert!(
-        raw != 0,
-        "native-module method call before any namespace was created"
-    );
-    if raw == 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    match native_module_vtable() {
+        Some(vt) => (vt.dispatch)(obj, method_name, args_ptr, args_len),
+        None => {
+            debug_assert!(false, "native-module method call before any namespace was created");
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
     }
-    let f: NativeModuleDispatchFn = std::mem::transmute(raw);
-    f(obj, method_name, args_ptr, args_len)
 }
 
-/// Create a native module namespace object
+/// Create a native module namespace object/// Create a native module namespace object
 /// This is used for `import * as X from 'module'` patterns
 /// The returned object identifies itself as an object (typeof returns "object")
 /// and stores the module name for debugging purposes
@@ -950,12 +984,9 @@ pub extern "C" fn js_create_native_module_namespace(
     module_name_ptr: *const u8,
     module_name_len: usize,
 ) -> f64 {
-    // Install the dispatch hook the moment the first namespace exists —
-    // the only static reference to the dispatcher in the crate.
-    NATIVE_MODULE_DISPATCH_HOOK.store(
-        crate::object::dispatch_native_module_method as usize,
-        Ordering::Relaxed,
-    );
+    // Install the vtable the moment the first namespace exists — the only
+    // static reference to the dispatch/table machinery in the crate.
+    install_native_module_vtable();
     let module_name = unsafe {
         std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
             .unwrap_or("")
@@ -3140,6 +3171,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
+    // Codegen NativeModuleRef fast path — can mint native-module-backed
+    // values without a namespace object; the vtable must be live for the
+    // generic paths that later touch them.
+    install_native_module_vtable();
     let module_name =
         std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
             .unwrap_or("");
@@ -3262,6 +3297,11 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 }
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+    // Bound-native closures carry (module, method) metadata that the
+    // generic property/call paths resolve through the vtable — and they
+    // can be minted via the codegen NativeModuleRef fast path without any
+    // namespace object existing. Install here too.
+    install_native_module_vtable();
     let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
     let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
@@ -8375,4 +8415,89 @@ unsafe fn create_fs_constants_object() -> f64 {
         Ordering::Relaxed,
     );
     result
+}
+
+// ─── Vtable impls relocated from field_get_set.rs (EN size work) ───────
+// Bodies moved verbatim so their table references are reachable only
+// through the installed vtable. See `NativeModuleVtable`.
+
+/// Own-field read on a namespace object (`fs.constants`, method values,
+/// process IPC props, …). Returns `None` when the receiver carries no
+/// module name — the caller falls through to the generic field scan.
+unsafe fn vt_get_own_field(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
+    let module_name = get_module_name_from_namespace(nb_ptr);
+    if module_name.is_empty() {
+        return None;
+    }
+    let property_name =
+        std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+    if matches!(
+        module_name,
+        "process" | "process.namespace" | "process.default"
+    ) {
+        if let Some(value) = crate::process::process_ipc_property(property_name) {
+            return Some(JSValue::from_bits(value.to_bits()));
+        }
+    }
+    if let Some(value) = super::field_get_set::native_module_own_field_by_key(obj, key) {
+        return Some(value);
+    }
+    // #3687: node:cluster default-import EventEmitter methods on the
+    // distinct `cluster.default` namespace (see original comment at the
+    // pre-relocation site in field_get_set.rs history).
+    if module_name == "cluster.default" && super::is_cluster_emitter_method(property_name) {
+        return Some(JSValue::from_bits(
+            bound_native_callable_export_value(module_name, property_name).to_bits(),
+        ));
+    }
+    if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
+        return Some(JSValue::from_bits(val.to_bits()));
+    }
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return Some(JSValue::from_bits(value.to_bits()));
+        }
+    }
+    if module_name == "crypto.subtle" {
+        if let Some(value) = super::global_this::subtle_crypto_method_value(property_name) {
+            return Some(JSValue::from_bits(value.to_bits()));
+        }
+    }
+    // Issue #894: callable exports (`("events", "EventEmitter")` …) get a
+    // bound-method closure for require-then-member-access parity.
+    if is_native_module_callable_export(module_name, property_name) {
+        return Some(JSValue::from_bits(
+            bound_native_callable_export_value(module_name, property_name).to_bits(),
+        ));
+    }
+    Some(JSValue::undefined())
+}
+
+/// `Object.keys(namespace)` — fresh array of the module's enumerable
+/// keys. `None` when the module is unknown; caller falls back to the
+/// generic keys_array path.
+unsafe fn vt_own_keys_array(obj: *const ObjectHeader) -> Option<*mut crate::array::ArrayHeader> {
+    let module_name = read_native_module_name(obj)?;
+    let keys = native_module_enumerable_keys(&module_name)?;
+    let include_permission = matches!(
+        module_name.as_str(),
+        "process" | "process.namespace" | "process.default"
+    ) && crate::process::process_permission_enabled();
+    let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
+    for key_bytes in keys {
+        let key_str = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
+    }
+    if include_permission {
+        let key_str =
+            crate::string::js_string_from_bytes(b"permission".as_ptr(), b"permission".len() as u32);
+        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
+    }
+    Some(out)
 }

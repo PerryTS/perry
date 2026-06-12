@@ -1775,28 +1775,11 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
     }
     unsafe {
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
-            if let Some(module_name) = read_native_module_name(obj) {
-                if let Some(keys) = native_module_enumerable_keys(&module_name) {
-                    let include_permission = matches!(
-                        module_name.as_str(),
-                        "process" | "process.namespace" | "process.default"
-                    ) && crate::process::process_permission_enabled();
-                    let out =
-                        crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
-                    for key_bytes in keys {
-                        let key_str = crate::string::js_string_from_bytes(
-                            key_bytes.as_ptr(),
-                            key_bytes.len() as u32,
-                        );
-                        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
-                    }
-                    if include_permission {
-                        let key_str = crate::string::js_string_from_bytes(
-                            b"permission".as_ptr(),
-                            b"permission".len() as u32,
-                        );
-                        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
-                    }
+            // Relocated to native_module.rs::vt_own_keys_array so the
+            // module key tables are reachable only through the vtable
+            // (linker-strippable when no namespace object exists).
+            if let Some(vt) = super::native_module::native_module_vtable() {
+                if let Some(out) = (vt.own_keys_array)(obj) {
                     return out;
                 }
             }
@@ -2329,7 +2312,8 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     .as_deref()
                     .zip(super::has_own_helpers::str_from_string_header(key_ptr))
                     .map(|(module, key)| {
-                        super::native_module::native_module_has_enumerable_key(module, key)
+                        super::native_module::native_module_vtable()
+                            .is_some_and(|vt| (vt.has_enumerable_key)(module, key))
                     })
                     .unwrap_or(false);
                 return if present { nanbox_true } else { nanbox_false };
@@ -2401,7 +2385,8 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         };
         let present = unsafe { read_native_module_name(obj_ptr) }
             .as_deref()
-            .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
+            .is_some_and(|module_name| super::native_module::native_module_vtable()
+                .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name)));
         return if present { nanbox_true } else { nanbox_false };
     }
 
@@ -2658,7 +2643,7 @@ fn reified_function_method_name(name: &str) -> Option<&'static [u8]> {
     }
 }
 
-unsafe fn native_module_own_field_by_key(
+pub(super) unsafe fn native_module_own_field_by_key(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
@@ -4616,74 +4601,17 @@ pub extern "C" fn js_object_get_field_by_name(
         // lookup fell through to the field-bag scan (which only stores
         // `__module__`) and returned undefined. Now we route through
         // `get_native_module_constant` directly.
+        // Issue #649 / #3687 / #894: native-module own-field reads
+        // (sub-namespaces, process IPC props, callable exports). Body
+        // relocated to native_module.rs::vt_get_own_field so the
+        // (module, method) tables are reachable only through the vtable.
+        // `None` (no module name / vtable uninstalled) falls through to
+        // the generic scans below, matching the pre-relocation flow.
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
-            let module_name = get_module_name_from_namespace(nb_ptr);
-            if !module_name.is_empty() {
-                let property_name =
-                    std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
-                if matches!(
-                    module_name,
-                    "process" | "process.namespace" | "process.default"
-                ) {
-                    if let Some(value) = crate::process::process_ipc_property(property_name) {
-                        return JSValue::from_bits(value.to_bits());
-                    }
+            if let Some(vt) = super::native_module::native_module_vtable() {
+                if let Some(v) = (vt.get_own_field)(obj, key) {
+                    return v;
                 }
-                if let Some(value) = native_module_own_field_by_key(obj, key) {
-                    return value;
-                }
-                // #3687: node:cluster default-import EventEmitter methods on the
-                // distinct `cluster.default` namespace. Mirror the
-                // NativeModuleRef fast path (`js_native_module_property_by_name`)
-                // — this dynamic `obj[key]` read must resolve `on`/`emit`/… to
-                // bound methods *before* `get_native_module_constant` (which
-                // normalizes to `cluster` and returns `undefined` for `on`).
-                if module_name == "cluster.default"
-                    && super::is_cluster_emitter_method(property_name)
-                {
-                    return JSValue::from_bits(
-                        super::bound_native_callable_export_value(module_name, property_name)
-                            .to_bits(),
-                    );
-                }
-                if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
-                    return JSValue::from_bits(val.to_bits());
-                }
-                if module_name == "crypto.webcrypto" {
-                    if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
-                        return JSValue::from_bits(value.to_bits());
-                    }
-                }
-                if module_name == "crypto.subtle" {
-                    if let Some(value) =
-                        super::global_this::subtle_crypto_method_value(property_name)
-                    {
-                        return JSValue::from_bits(value.to_bits());
-                    }
-                }
-                // Issue #894: parity with the direct-NativeModuleRef
-                // fast path (`js_native_module_property_by_name`). For
-                // (module, prop) pairs whose property-read should
-                // produce a callable handle — e.g.
-                // `("events", "EventEmitter")` — synthesize the same
-                // BOUND_METHOD_FUNC_PTR closure so the require-then-
-                // member-access shape (`const { EventEmitter } =
-                // require("node:events")`) matches the direct
-                // namespace-import shape (`import { EventEmitter } from
-                // "node:events"`). Pre-fix the slow path returned
-                // undefined here, and the downstream
-                // `EventEmitter.prototype` read tripped the spec
-                // "Cannot read properties of undefined" throw.
-                if is_native_module_callable_export(module_name, property_name) {
-                    return JSValue::from_bits(
-                        super::bound_native_callable_export_value(module_name, property_name)
-                            .to_bits(),
-                    );
-                }
-                return JSValue::undefined();
             }
         }
 
