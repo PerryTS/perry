@@ -53,6 +53,10 @@ use std::sync::Once;
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
 mod cluster_bind;
+// Unit-test binaries do not link the host stdlib/runtime archive that
+// provides the perry_ffi async bridge; without these the test link is at the
+// mercy of --gc-sections keeping/dropping the perry-ffi references pulled in
+// via the perry-ext-net rlib (same shims as perry-ext-net / perry-ext-fetch).
 mod handle_dispatch;
 mod http2_server;
 mod http2_session_settings;
@@ -63,6 +67,8 @@ mod raw_upgrade;
 mod request;
 mod response;
 mod server;
+#[cfg(test)]
+mod test_async_shims;
 mod tls;
 mod types;
 mod upgrade;
