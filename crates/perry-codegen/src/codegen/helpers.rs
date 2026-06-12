@@ -584,6 +584,46 @@ pub(super) fn init_static_fields_early(
             &[(crate::types::I32, &cid_str), (I64, &func_ptr_i64)],
         );
     }
+    // Uninitialized, non-computed static fields (`static foo;`, `static "g";`,
+    // `static 0;`) are own data properties of the constructor with value
+    // `undefined` per ClassDefinitionEvaluation. Their value is a compile-time
+    // constant (`undefined`) with no dependency on user lets, and a class name
+    // is in TDZ before its declaration, so registering them here — before user
+    // code — is observably identical to registering at the class-decl position
+    // and strictly earlier than the `init_static_fields_late` fallback that
+    // previously handled them (which ran AFTER user statements, so
+    // `Object.keys(C)` / `getOwnPropertyDescriptor(C, "foo")` immediately after
+    // the declaration saw nothing). test262 class/elements static-as-valid-
+    // static-field & friends. Initialized and computed-key fields are emitted
+    // inline at their source position elsewhere and are skipped here.
+    for c in &hir.classes {
+        let Some(&class_id) = ctx.class_ids.get(&c.name) else {
+            continue;
+        };
+        if class_id == 0 {
+            continue;
+        }
+        for sf in &c.static_fields {
+            if sf.key_expr.is_some() || sf.init.is_some() || sf.name.starts_with('#') {
+                continue;
+            }
+            let idx = ctx.strings.intern(&sf.name);
+            let entry = ctx.strings.entry(idx);
+            let bytes_ref = format!("@{}", entry.bytes_global);
+            let len_str = entry.byte_len.to_string();
+            let cid_str = class_id.to_string();
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.block().call_void(
+                "js_class_register_static_field",
+                &[
+                    (crate::types::I32, &cid_str),
+                    (crate::types::PTR, &bytes_ref),
+                    (crate::types::I64, &len_str),
+                    (DOUBLE, &undef),
+                ],
+            );
+        }
+    }
     Ok(())
 }
 
@@ -744,11 +784,13 @@ pub(super) fn init_static_fields_late(
                 let g_ref = format!("@{}", global_name);
                 crate::expr::emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
                 emit_static_field_registration(ctx, &v);
-            } else {
-                let undef =
-                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                emit_static_field_registration(ctx, &undef);
             }
+            // Uninitialized non-computed static fields are now registered in
+            // `init_static_fields_early` (before user code) with value
+            // `undefined`. Re-registering here — after user statements — would
+            // clobber any `C.foo = …` the program performed between the class
+            // declaration and module-init end, so the no-init `else` branch was
+            // intentionally removed.
         }
     }
     // Static blocks — emitted as synthetic static methods with the

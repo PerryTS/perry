@@ -17,7 +17,7 @@ fn property_name_array_index(name: &str) -> Option<u32> {
     Some(value)
 }
 
-fn sort_property_names_ecma(names: &mut Vec<String>) {
+pub(crate) fn sort_property_names_ecma(names: &mut Vec<String>) {
     let mut indexed = Vec::new();
     let mut rest = Vec::new();
     for name in names.drain(..) {

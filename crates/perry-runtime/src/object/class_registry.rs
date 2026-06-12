@@ -92,6 +92,28 @@ pub(crate) fn class_own_static_field_value(class_id: u32, name: &str) -> Option<
     })
 }
 
+/// Enumerable own string keys of a class constructor: the static fields (and
+/// runtime `C.x = …` assignments) recorded in CLASS_DYNAMIC_PROPS. The built-in
+/// `length`/`name`/`prototype` slots and static *methods*/*accessors* are
+/// non-enumerable, so they are intentionally excluded — this is exactly the set
+/// `Object.keys(C)` / `for (k in C)` must yield. Private (`#`) keys are filtered
+/// here too (never reflectable). Returned unsorted; the caller applies ECMA
+/// ordering. (test262 class/elements static-field-declaration & friends.)
+pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .map(|props| {
+                props
+                    .keys()
+                    .filter(|k| !k.starts_with('#'))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     CLASS_DYNAMIC_PROPS.with(|m| {
         if let Some(props) = m.borrow_mut().get_mut(&class_id) {

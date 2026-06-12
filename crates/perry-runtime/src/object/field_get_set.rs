@@ -1197,6 +1197,24 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             )
         };
     }
+    // A class constructor ref `C` is an INT32-tagged value (not a pointer), so it
+    // would otherwise fall through to the empty-array tail below. Its enumerable
+    // own keys are the static fields registered in CLASS_DYNAMIC_PROPS — built-in
+    // `length`/`name`/`prototype` and static methods are non-enumerable. Backs
+    // `Object.keys(C)` / `for (k in C)` (test262 class/elements static-field-*).
+    if let Some(class_id) = super::class_ref_id(value) {
+        if super::class_prototype_ref_id(value).is_none() {
+            let mut names = super::class_registry::class_own_enumerable_field_names(class_id);
+            super::descriptors::sort_property_names_ecma(&mut names);
+            let arr = crate::array::js_array_alloc(names.len().max(1) as u32);
+            let mut out = arr;
+            for name in names {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                out = crate::array::js_array_push(out, JSValue::string_ptr(key));
+            }
+            return out;
+        }
+    }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
         if crate::value::addr_class::is_small_handle(ptr) {

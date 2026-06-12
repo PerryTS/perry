@@ -994,6 +994,24 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             return f64::from_bits(TAG_FALSE);
         }
 
+        // ClassRef receiver (INT32-tagged constructor, not a heap object): the
+        // only enumerable own string keys are the static FIELDS recorded in
+        // CLASS_DYNAMIC_PROPS — `length`/`name`/`prototype` and static
+        // methods/accessors are non-enumerable. `extract_obj_ptr` below would
+        // null out on the INT32 payload and report every key non-enumerable, so
+        // `verifyProperty(C, "f", …)`'s isEnumerable check failed (test262
+        // class/elements static-field-declaration & friends).
+        if let Some(class_id) = super::class_ref_id(obj_value) {
+            if super::class_prototype_ref_id(obj_value).is_none() {
+                if let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) {
+                    let is_static_field = !key_name.starts_with('#')
+                        && super::class_registry::class_own_static_field_value(class_id, key_name)
+                            .is_some();
+                    return f64::from_bits(if is_static_field { TAG_TRUE } else { TAG_FALSE });
+                }
+            }
+        }
+
         // String primitives: index keys in range are enumerable own props;
         // "length" is a non-enumerable own prop; everything else absent.
         if obj_jv.is_any_string() {
