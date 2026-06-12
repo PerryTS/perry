@@ -565,6 +565,7 @@ impl RootScanCycleState {
         consider_evacuation: bool,
         budget: usize,
         allow_synchronous_scanners: bool,
+        pin_only_old_conservative: bool,
     ) -> bool {
         match self.subphase {
             RootScanSubphase::ConservativeStack => {
@@ -572,8 +573,13 @@ impl RootScanCycleState {
                     return false;
                 }
                 let conservative_scan_decision = conservative_stack_scan_decision();
-                let conservative_root_stats =
-                    mark_stack_roots_for_decision(valid_ptrs, conservative_scan_decision);
+                // #5029: minors retain old-gen conservative discoveries
+                // pin-only (no trace) — see try_mark_conservative_word.
+                let conservative_root_stats = mark_stack_roots_for_decision(
+                    valid_ptrs,
+                    conservative_scan_decision,
+                    pin_only_old_conservative,
+                );
                 let conservative_pin_stats = if consider_evacuation
                     && matches!(
                         conservative_scan_decision,
@@ -824,6 +830,9 @@ pub(super) struct GcCycleState {
     atomic_finalize: Option<AtomicFinalizeCycleState>,
     minor: Option<MinorCycleContext>,
     live_old_to_young_sticky: Option<StickyRememberedSet>,
+    /// Dirty snapshot captured just before this cycle's remembered_set_clear
+    /// begins, for the post-restore coverage repair (#5029).
+    pre_clear_dirty_snapshot: Option<super::barrier::RememberedDirtySnapshot>,
     sweep_state: Option<IncrementalSweepState>,
     reclaim_state: Option<ReclaimCycleState>,
     sweep: Option<SweepTraceStats>,
@@ -854,6 +863,7 @@ impl GcCycleState {
             atomic_finalize: None,
             minor: None,
             live_old_to_young_sticky: None,
+            pre_clear_dirty_snapshot: None,
             sweep_state: None,
             reclaim_state: None,
             sweep: None,
@@ -907,6 +917,7 @@ impl GcCycleState {
                 evacuation_sticky: StickyRememberedSet::default(),
             }),
             live_old_to_young_sticky: None,
+            pre_clear_dirty_snapshot: None,
             sweep_state: None,
             reclaim_state: None,
             sweep: None,
@@ -1079,6 +1090,7 @@ impl GcCycleState {
                     consider_evacuation,
                     budget.work_units,
                     allow_synchronous_scanners,
+                    self.minor.is_some(),
                 );
             trace_phase_record(&mut self.trace, phase_name, phase_start);
             if done {
@@ -1415,6 +1427,14 @@ impl GcCycleState {
                     let clear = {
                         let reclaim_state =
                             self.reclaim_state.as_mut().expect("reclaim state exists");
+                        if reclaim_state.remembered_set_clear.is_none()
+                            && self.pre_clear_dirty_snapshot.is_none()
+                        {
+                            // Snapshot the pre-clear dirty set so the
+                            // post-restore repair can rescan it (#5029).
+                            self.pre_clear_dirty_snapshot =
+                                Some(super::barrier::remembered_dirty_snapshot());
+                        }
                         reclaim_state
                             .remembered_set_clear
                             .get_or_insert_with(RememberedSetClearState::new)
@@ -1429,6 +1449,9 @@ impl GcCycleState {
                         }
                         if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
                             sticky.restore();
+                        }
+                        if let Some(snapshot) = self.pre_clear_dirty_snapshot.take() {
+                            restore_surviving_dirty_coverage(&snapshot);
                         }
                         let reclaim_state =
                             self.reclaim_state.as_mut().expect("reclaim state exists");

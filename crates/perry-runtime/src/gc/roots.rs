@@ -434,9 +434,10 @@ pub extern "C" fn js_gc_register_global_root(ptr: i64) {
 pub(super) fn mark_stack_roots_for_decision(
     valid_ptrs: &ValidPointerSet,
     decision: ConservativeStackScanDecision,
+    pin_only_old: bool,
 ) -> ConservativeRootTraceStats {
     match decision {
-        ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
+        ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs, pin_only_old),
         ConservativeStackScanDecision::SkipDisabled => ConservativeRootTraceStats::default(),
     }
 }
@@ -447,6 +448,7 @@ pub(super) fn mark_stack_roots_for_decision(
 /// variables — codegen stores these as raw I64 words (not NaN-boxed) in registers and on stack.
 pub(super) fn mark_stack_roots_unchecked(
     valid_ptrs: &ValidPointerSet,
+    pin_only_old: bool,
 ) -> ConservativeRootTraceStats {
     let mut stats = ConservativeRootTraceStats::default();
     // Capture callee-saved registers into a buffer via setjmp.
@@ -476,7 +478,7 @@ pub(super) fn mark_stack_roots_unchecked(
 
     // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
     for &word in &jmp_buf {
-        if try_mark_value_or_raw(word, valid_ptrs) {
+        if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
             stats.root_count += 1;
         }
     }
@@ -530,7 +532,7 @@ pub(super) fn mark_stack_roots_unchecked(
             options(nostack, preserves_flags),
         );
         for &word in &fp_regs {
-            if try_mark_value_or_raw(word, valid_ptrs) {
+            if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
                 stats.root_count += 1;
             }
         }
@@ -566,7 +568,7 @@ pub(super) fn mark_stack_roots_unchecked(
     let mut addr = stack_top;
     while addr < stack_bottom {
         let word = unsafe { *(addr as *const u64) };
-        if try_mark_value_or_raw(word, valid_ptrs) {
+        if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
             stats.root_count += 1;
         }
         addr += 8;
@@ -579,6 +581,88 @@ pub(super) fn mark_stack_roots_unchecked(
 /// This is used for conservative scanning where Perry stores raw I64 pointers (for is_string/
 /// is_array/is_pointer/is_closure vars) alongside NaN-boxed F64 values.
 #[inline]
+/// Conservative-scan variant of `try_mark_value_or_raw` (#5029).
+///
+/// In a MINOR cycle, a conservative stack discovery that lives in the OLD
+/// generation is retained WITHOUT tracing: minors never sweep the old
+/// generation, so the mark is not needed for survival, and `CONS_PINNED`
+/// already excludes the object from every evacuation candidate set. Tracing
+/// it is actively unsound: a stale stack word (a dead frame slot from an
+/// earlier loop iteration) can resurrect a DEAD old object whose slots still
+/// hold pointers into long-swept nursery memory. Once fresh nursery blocks
+/// are allocated over those freed ranges, the resurrected object's slots
+/// alias live young objects; tracing / force-evacuating / rewriting through
+/// them corrupts the heap, and the old-young-edge verifier reports the same
+/// aliases as phantom missing remembered-set edges (the
+/// gc_write_barrier_stress signature: missing_edges=7710 on a dead 256 KB
+/// array backing). A LIVE old object loses nothing here: its real old→young
+/// edges are dirty-page-covered by the write barriers, which is the only
+/// mechanism a minor uses to find them anyway, and precise roots (shadow
+/// stack, module vars, registered scanners) still mark and trace as before.
+///
+/// FULL collections (`pin_only_old == false`) keep the old behavior: the old
+/// sweep frees unmarked old objects, so a stack-only-referenced old object
+/// must be marked for retention there (#4977).
+pub(super) fn try_mark_conservative_word(
+    word: u64,
+    valid_ptrs: &ValidPointerSet,
+    pin_only_old: bool,
+) -> bool {
+    if !pin_only_old {
+        return try_mark_value_or_raw(word, valid_ptrs);
+    }
+
+    // Resolve the candidate exactly like `try_mark_value_or_raw` —
+    // NaN-boxed heap tags first, then the raw-I64 pointer fallback with the
+    // interior-pointer (`enclosing_object`) lookup.
+    let tag = word & TAG_MASK;
+    let target = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+        let ptr_val = (word & POINTER_MASK) as usize;
+        if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
+            return false;
+        }
+        ptr_val
+    } else {
+        if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&word) {
+            return false;
+        }
+        let raw_ptr = word as usize;
+        if !valid_ptrs.maybe_contains(raw_ptr)
+            && raw_ptr.saturating_sub(0x10_0000) > valid_ptrs.range_max
+        {
+            return false;
+        }
+        if valid_ptrs.contains(&raw_ptr) {
+            raw_ptr
+        } else {
+            match valid_ptrs.enclosing_object(raw_ptr) {
+                Some(start) => start,
+                None => return false,
+            }
+        }
+    };
+
+    unsafe {
+        let header = header_from_user_ptr(target as *const u8);
+        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+            return false;
+        }
+        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+            return false;
+        }
+        if matches!(
+            crate::arena::classify_heap_generation(target),
+            crate::arena::HeapGeneration::Old
+        ) {
+            // Pin-only retention: not moved, not traced, not marked.
+            return pin_conservative_root_header(header);
+        }
+        (*header).gc_flags |= GC_FLAG_MARKED;
+        push_mark_seed(header);
+    }
+    true
+}
+
 pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> bool {
     // First try NaN-boxed interpretation (POINTER_TAG / STRING_TAG / BIGINT_TAG)
     if try_mark_value(word, valid_ptrs) {

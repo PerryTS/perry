@@ -111,7 +111,24 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let current_rss_bytes = crate::process::get_rss_bytes();
     let evacuation_policy_allowed = gen_gc_evacuate_enabled();
     let force_evacuation = gc_force_evacuate_enabled();
-    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
+    // #5029: old-page defrag (C4b old-gen compaction) is skipped on cycles
+    // that run the conservative native-stack scan. Conservative stack words
+    // cannot be rewritten after a move, and per-object CONS_PINNED only
+    // protects DIRECT discoveries — the stress suite demonstrated a moved
+    // old object whose remaining referrer was not rewritten (clone shape
+    // lookups through it returned recycled memory). Until every such
+    // referrer surface is registered for rewrite, moving old objects is only
+    // sound when all roots are precise. Copying minors (the steady-state
+    // path) never run the conservative scan, so defrag keeps operating
+    // there via its own policy.
+    let conservative_scan_this_cycle = matches!(
+        roots::conservative_stack_scan_decision(),
+        roots::ConservativeStackScanDecision::Scan
+    );
+    let old_page_selection = if evacuation_policy_allowed
+        && old_to_young_tracking_complete()
+        && !conservative_scan_this_cycle
+    {
         select_old_page_defrag_pages(force_evacuation)
     } else {
         OldPageDefragSelection::default()
