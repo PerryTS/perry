@@ -1436,30 +1436,14 @@ pub(super) fn build_and_run_link(
                         .arg("--manifest-path")
                         .arg(&cargo_toml);
 
-                    // Per-project feature forwarding: a
-                    // `[native-library."<pkg>"]` table in perry.toml maps
-                    // onto cargo `--features` / `--no-default-features` so
-                    // apps can select a build profile of the native crate
-                    // (e.g. a 2D-only build of a 2D+3D engine).
-                    if let Some(ovr) = native_features::lookup_native_library_override(
+                    // perry.toml `[native-library."<pkg>"]` feature
+                    // forwarding — see native_features.rs.
+                    native_features::apply_native_library_override(
+                        &mut cargo_cmd,
                         &ctx.project_root,
                         &native_lib.module,
-                    ) {
-                        if !ovr.default_features {
-                            cargo_cmd.arg("--no-default-features");
-                        }
-                        if !ovr.features.is_empty() {
-                            cargo_cmd.arg("--features").arg(ovr.features.join(","));
-                        }
-                        if matches!(format, OutputFormat::Text) {
-                            println!(
-                                "  native-library features for {}: default-features={} features=[{}]",
-                                native_lib.module,
-                                ovr.default_features,
-                                ovr.features.join(", ")
-                            );
-                        }
-                    }
+                        matches!(format, OutputFormat::Text),
+                    );
 
                     if let Some(triple) = rust_target_triple(target) {
                         cargo_cmd.arg("--target").arg(triple);
@@ -1969,56 +1953,4 @@ pub(super) fn build_and_run_link(
 }
 
 #[cfg(test)]
-mod optional_framework_dir_tests {
-    use super::*;
-
-    /// Lay out a temp project: `<root>/perry.toml` + `<root>/src/main.ts`,
-    /// with the perry.toml `[google_auth]` table set to `toml_body`.
-    /// Returns (tempdir, entry-ts-path).
-    fn scaffold(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("perry.toml"), toml_body).unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        let entry = src.join("main.ts");
-        fs::write(&entry, "export {}\n").unwrap();
-        (dir, entry)
-    }
-
-    #[test]
-    fn resolves_framework_dir_relative_to_project_root() {
-        let (dir, entry) =
-            scaffold("[google_auth]\nframework_dir = \"vendor/google-sign-in/frameworks\"\n");
-        // Use a uniquely-named env var that is guaranteed unset.
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_A";
-        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
-        // Compare against the canonicalized root — `find_project_root_for`
-        // canonicalizes the entry, so the resolved path is symlink-resolved
-        // (e.g. /var/folders → /private/var on macOS).
-        assert_eq!(
-            resolved,
-            dir.path()
-                .canonicalize()
-                .unwrap()
-                .join("vendor/google-sign-in/frameworks")
-        );
-    }
-
-    #[test]
-    fn returns_none_when_no_framework_dir_key() {
-        let (_dir, entry) = scaffold("[google_auth]\nios_client_id = \"abc\"\n");
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_B";
-        assert!(resolve_optional_framework_dir(env_name, &entry).is_none());
-    }
-
-    #[test]
-    fn env_var_takes_precedence_over_perry_toml() {
-        let (_dir, entry) = scaffold("[google_auth]\nframework_dir = \"vendor/from-toml\"\n");
-        // Unique name so we don't race other tests sharing process env.
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_SET_C";
-        std::env::set_var(env_name, "/absolute/from/env");
-        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
-        std::env::remove_var(env_name);
-        assert_eq!(resolved, PathBuf::from("/absolute/from/env"));
-    }
-}
+mod optional_framework_dir_tests;

@@ -26,6 +26,7 @@
 //! so the failure is attributable.
 
 use std::path::Path;
+use std::process::Command;
 
 /// Feature overrides for one native-library package, as declared in the
 /// project's `perry.toml`.
@@ -81,6 +82,35 @@ fn lookup_in_table(doc: &toml::Table, module: &str) -> Option<NativeLibraryBuild
         features,
         default_features,
     })
+}
+
+/// Apply the project's `[native-library."<pkg>"]` override (if any) to a
+/// native-library cargo invocation: `--no-default-features` /
+/// `--features a,b`, logging the selection in text mode. No-op when the
+/// project declares nothing for this package.
+pub(super) fn apply_native_library_override(
+    cargo_cmd: &mut Command,
+    project_root: &Path,
+    module: &str,
+    text_output: bool,
+) {
+    let Some(ovr) = lookup_native_library_override(project_root, module) else {
+        return;
+    };
+    if !ovr.default_features {
+        cargo_cmd.arg("--no-default-features");
+    }
+    if !ovr.features.is_empty() {
+        cargo_cmd.arg("--features").arg(ovr.features.join(","));
+    }
+    if text_output {
+        println!(
+            "  native-library features for {}: default-features={} features=[{}]",
+            module,
+            ovr.default_features,
+            ovr.features.join(", ")
+        );
+    }
 }
 
 #[cfg(test)]
