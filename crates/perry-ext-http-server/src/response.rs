@@ -257,6 +257,18 @@ impl HyperResponseShape {
     pub fn into_hyper(self) -> Response<ResponseBody> {
         let mut builder =
             Response::builder().status(StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
+        // `res.statusMessage = 'Custom Message'` must reach the HTTP/1
+        // status line (test-http-status-message reads it off the raw
+        // socket). hyper emits it via the ReasonPhrase extension.
+        if let Some(msg) = self.status_message.as_deref() {
+            if !msg.is_empty() {
+                if let Ok(reason) = hyper::ext::ReasonPhrase::try_from(msg.to_string()) {
+                    if let Some(ext) = builder.extensions_mut() {
+                        ext.insert(reason);
+                    }
+                }
+            }
+        }
         for (k, v) in self.headers {
             builder = builder.header(k, v);
         }

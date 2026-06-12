@@ -262,10 +262,24 @@ pub extern "C" fn js_http_client_request_get_headers(handle: Handle) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_http_client_request_abort(handle: Handle) -> f64 {
     if is_client_request_handle(handle) {
-        with_state_mut(handle, |state| {
+        let already = with_state_mut(handle, |state| {
+            let was = state.aborted;
             state.aborted = true;
             state.destroyed = true;
+            was
         });
+        if !already {
+            // Node: `abort()` tears the exchange down — a later `end()`
+            // must not dispatch, no `'error'` fires, and the (legacy)
+            // `'abort'` event precedes the once-only `'close'`.
+            with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+                req.completed = true;
+            });
+            unsafe {
+                client_events::fire_request_event_listeners(handle, "abort");
+            }
+            client_events::fire_request_close_once(handle);
+        }
     }
     undefined_value()
 }

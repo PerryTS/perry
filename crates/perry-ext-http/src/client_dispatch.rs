@@ -100,6 +100,12 @@ pub(crate) fn dispatch_request(
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
             }
+            // Node's default agent is keep-alive (v19+) and sends the
+            // header explicitly; servers reading `req.headers.connection`
+            // expect it.
+            if !headers.keys().any(|k| k.eq_ignore_ascii_case("connection")) {
+                req = req.header("Connection", "keep-alive");
+            }
             if let Some(ms) = timeout_ms {
                 req = req.timeout(std::time::Duration::from_millis(ms));
             } else {

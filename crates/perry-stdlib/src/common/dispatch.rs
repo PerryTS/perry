@@ -2042,6 +2042,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "url"
                 | "rawBody"
                 | "httpVersion"
+                | "httpVersionMajor"
+                | "httpVersionMinor"
                 | "headers"
                 | "rawHeaders"
                 | "headersDistinct"

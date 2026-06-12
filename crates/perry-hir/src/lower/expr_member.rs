@@ -1594,6 +1594,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("IncomingMessage", "method")
                             | ("IncomingMessage", "url")
                             | ("IncomingMessage", "httpVersion")
+                            | ("IncomingMessage", "httpVersionMajor")
+                            | ("IncomingMessage", "httpVersionMinor")
                             | ("IncomingMessage", "complete")
                             | ("IncomingMessage", "aborted")
                             | ("IncomingMessage", "destroyed")
@@ -2807,6 +2809,8 @@ fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {
         "method"
             | "url"
             | "httpVersion"
+            | "httpVersionMajor"
+            | "httpVersionMinor"
             | "headers"
             | "rawHeaders"
             | "headersDistinct"

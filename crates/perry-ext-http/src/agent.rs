@@ -211,7 +211,6 @@ pub(crate) fn client_for_agent(handle: Handle) -> reqwest::Client {
     };
 
     let built = reqwest::Client::builder()
-        .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
         .pool_max_idle_per_host(pool_max_idle)
         .pool_idle_timeout(idle_timeout)
         .tcp_keepalive(std::time::Duration::from_secs(60))

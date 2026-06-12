@@ -205,6 +205,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_im_method", I64, &[I64]);
     module.declare_function("js_node_http_im_url", I64, &[I64]);
     module.declare_function("js_node_http_im_http_version", I64, &[I64]);
+    module.declare_function("js_node_http_im_http_version_major", DOUBLE, &[I64]);
+    module.declare_function("js_node_http_im_http_version_minor", DOUBLE, &[I64]);
     module.declare_function("js_node_http_im_headers_json", I64, &[I64]);
     module.declare_function("js_node_http_im_raw_headers_json", I64, &[I64]);
     module.declare_function("js_node_http_im_headers_distinct_json", I64, &[I64]);

@@ -295,6 +295,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_node_http_im_method",                      OwnerKind::WellKnown("http")),
     ("js_node_http_im_url",                         OwnerKind::WellKnown("http")),
     ("js_node_http_im_http_version",                OwnerKind::WellKnown("http")),
+    ("js_node_http_im_http_version_major",          OwnerKind::WellKnown("http")),
+    ("js_node_http_im_http_version_minor",          OwnerKind::WellKnown("http")),
     ("js_node_http_im_complete",                    OwnerKind::WellKnown("http")),
     ("js_node_http_im_aborted",                     OwnerKind::WellKnown("http")),
     ("js_node_http_im_destroyed",                   OwnerKind::WellKnown("http")),

@@ -207,6 +207,18 @@ pub extern "C" fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader
     alloc_string(&s).as_raw()
 }
 
+/// `req.httpVersionMajor` — numeric major half of `httpVersion`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_http_version_major(handle: i64) -> f64 {
+    incoming_http_version_part(handle, false)
+}
+
+/// `req.httpVersionMinor` — numeric minor half of `httpVersion`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_http_version_minor(handle: i64) -> f64 {
+    incoming_http_version_part(handle, true)
+}
+
 /// `req.httpVersionMajor` / `req.httpVersionMinor` — numeric halves of
 /// `httpVersion` ("1.0" → 1 / 0).
 pub(crate) fn incoming_http_version_part(handle: i64, minor: bool) -> f64 {

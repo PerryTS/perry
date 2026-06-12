@@ -151,7 +151,6 @@ lazy_static! {
     /// session cache. Without this each request allocs a fresh
     /// reqwest::Client (~250 KB) and the memory never gets reused.
     pub(crate) static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
-        .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(16)
         .tcp_keepalive(std::time::Duration::from_secs(60))
@@ -1180,6 +1179,12 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
 }
 
 pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
+    // An aborted/destroyed request never dispatches — Node's `abort()`
+    // before `end()` means the server must not see the request and no
+    // `'error'` fires (test-http-abort-before-end).
+    if client_request_surface::request_destroyed(handle) {
+        return handle;
+    }
     if let Some(body) = client_outgoing::chunk_to_bytes(body_f64) {
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
             req.body.extend_from_slice(&body);
@@ -1240,6 +1245,9 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
 /// buffered body bytes (or use body-carrying methods) keep the
 /// dispatch-at-`end()` behavior, since the head can't go out alone.
 pub(crate) unsafe fn client_request_flush_headers(handle: Handle) {
+    if client_request_surface::request_destroyed(handle) {
+        return;
+    }
     let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         if req.ended || !req.body.is_empty() {
             return None;

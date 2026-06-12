@@ -82,9 +82,8 @@ impl TlsOptions {
         &self,
         pool: Option<(bool, f64, f64)>,
     ) -> Result<reqwest::Client, String> {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
-            .tcp_keepalive(std::time::Duration::from_secs(60));
+        let mut builder =
+            reqwest::Client::builder().tcp_keepalive(std::time::Duration::from_secs(60));
 
         if self.accept_invalid_certs() {
             builder = builder.danger_accept_invalid_certs(true);
