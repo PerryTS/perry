@@ -285,13 +285,25 @@ fn arrow_default_parameter_eval_var_conflict_throws_syntax_error() {
         panic!("expected default-parameter guard, got {body:?}");
     };
 
-    assert!(
-        matches!(
-            then_branch.as_slice(),
-            [Stmt::Throw(Expr::SyntaxErrorNew(_))]
-        ),
-        "{then_branch:?}"
-    );
+    // The conflict throw lowers either as a SyntaxErrorNew guard (the #4122
+    // shape) or, since the #5003 direct-eval fold, as the Node-exact
+    // `js_throw_eval_syntax_error("Identifier 'a' has already been declared")`
+    // call (verified against Node: `((a = eval("var a = 42")) => 1)()` throws
+    // SyntaxError with exactly that message). Accept both shapes.
+    let throws_syntax_error = match then_branch.as_slice() {
+        [Stmt::Throw(Expr::SyntaxErrorNew(_))] => true,
+        [Stmt::Throw(Expr::Call { callee, args, .. })] => {
+            matches!(
+                callee.as_ref(),
+                Expr::ExternFuncRef { name, .. } if name == "js_throw_eval_syntax_error"
+            ) && matches!(
+                args.as_slice(),
+                [Expr::String(msg)] if msg == "Identifier 'a' has already been declared"
+            )
+        }
+        _ => false,
+    };
+    assert!(throws_syntax_error, "{then_branch:?}");
 }
 
 #[test]
