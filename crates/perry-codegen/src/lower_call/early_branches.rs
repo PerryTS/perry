@@ -258,13 +258,19 @@ pub fn try_lower_closure_typed_local_call(
             // Receiverless call of a closure-typed local: bind `this` to
             // undefined for the duration of the call (OrdinaryCallBindThis,
             // #3576) so an enclosing method dispatch's IMPLICIT_THIS does
-            // not leak into the callee body.
+            // not leak into the callee body. Like the FuncRef path, the
+            // reset is gated on the statically-known callee actually reading
+            // dynamic `this`, so a hot-loop call of a plain helper closure
+            // pays nothing (#5030). When the typed-feedback guard falls back
+            // (the receiver is NOT the statically-mapped closure), the
+            // fallback block does its own reset — that callee is unknown.
             let undef_this =
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let prev_this =
-                ctx.block()
-                    .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &undef_this)]);
-            if let Some(func_id) = ctx.local_closure_func_ids.get(id).copied() {
+            let known_func_id = ctx.local_closure_func_ids.get(id).copied();
+            let callee_reads_this = known_func_id
+                .map(|fid| ctx.funcs_reading_dynamic_this.contains(&fid))
+                .unwrap_or(true);
+            if let Some(func_id) = known_func_id {
                 let declared_count = ctx
                     .local_closure_param_counts
                     .get(id)
@@ -280,6 +286,15 @@ pub fn try_lower_closure_typed_local_call(
                         &format!("closure:{}", func_id),
                         TypedFeedbackContract::closure_direct_call(),
                     );
+                    let prev_this = if callee_reads_this {
+                        Some(ctx.block().call(
+                            DOUBLE,
+                            "js_implicit_this_set",
+                            &[(DOUBLE, &undef_this)],
+                        ))
+                    } else {
+                        None
+                    };
                     let expected_arity = declared_count.to_string();
                     let call_arity = lowered_args.len().to_string();
                     let guard_ok = ctx.block().call(
@@ -318,6 +333,18 @@ pub fn try_lower_closure_typed_local_call(
                     ctx.current_block = fallback_idx;
                     ctx.block()
                         .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+                    // Guard failed: the receiver is some OTHER closure whose
+                    // body codegen never saw — reset `this` here (and only
+                    // here) when the static gating skipped the outer reset.
+                    let fallback_prev_this = if prev_this.is_none() {
+                        Some(ctx.block().call(
+                            DOUBLE,
+                            "js_implicit_this_set",
+                            &[(DOUBLE, &undef_this)],
+                        ))
+                    } else {
+                        None
+                    };
                     let runtime_fn = format!("js_closure_call{}", lowered_args.len());
                     let mut fallback_args: Vec<(crate::types::LlvmType, &str)> =
                         vec![(I64, &closure_handle)];
@@ -325,6 +352,11 @@ pub fn try_lower_closure_typed_local_call(
                         fallback_args.push((DOUBLE, v.as_str()));
                     }
                     let fallback_value = ctx.block().call(DOUBLE, &runtime_fn, &fallback_args);
+                    if let Some(prev) = &fallback_prev_this {
+                        let _ = ctx
+                            .block()
+                            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, prev)]);
+                    }
                     let after_fallback = ctx.block().label.clone();
                     if !ctx.block().is_terminated() {
                         ctx.block().br(&merge_label);
@@ -338,12 +370,20 @@ pub fn try_lower_closure_typed_local_call(
                             (fallback_value.as_str(), after_fallback.as_str()),
                         ],
                     );
-                    let _ =
-                        ctx.block()
-                            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev_this)]);
+                    if let Some(prev) = &prev_this {
+                        let _ = ctx
+                            .block()
+                            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, prev)]);
+                    }
                     return Ok(Some(merged));
                 }
             }
+            // Generic js_closure_callN dispatch (unknown func id, rest
+            // params, or arity mismatch): the runtime-resolved callee may
+            // read `this`, so the reset is unconditional here.
+            let prev_this =
+                ctx.block()
+                    .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &undef_this)]);
             let runtime_fn = format!("js_closure_call{}", lowered_args.len());
             let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
             for v in &lowered_args {

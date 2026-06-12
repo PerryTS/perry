@@ -2062,7 +2062,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         "deflateRawSync",
         false,
         None,
-        &[p_str("p0")],
+        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(
