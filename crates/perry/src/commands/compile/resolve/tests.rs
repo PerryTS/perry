@@ -1474,6 +1474,56 @@ mod declaration_sidecar_tests {
     }
 
     #[test]
+    fn extract_compile_package_dir_uses_path_components() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root
+            .join("node_modules")
+            .join("@noble")
+            .join("curves")
+            .join("node_modules")
+            .join("@noble")
+            .join("hashes")
+            .join("src")
+            .join("sha256.ts");
+
+        assert_eq!(
+            extract_compile_package_dir(&path, "@noble/hashes").expect("package dir"),
+            root.join("node_modules")
+                .join("@noble")
+                .join("curves")
+                .join("node_modules")
+                .join("@noble")
+                .join("hashes")
+        );
+        assert_eq!(
+            extract_compile_package_dir(&path, "@noble/curves").expect("outer package dir"),
+            root.join("node_modules").join("@noble").join("curves")
+        );
+    }
+
+    #[test]
+    fn compile_package_membership_uses_path_components() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root
+            .join("node_modules")
+            .join("left-pad")
+            .join("lib")
+            .join("index.js");
+        let compile_packages = HashSet::from(["left-pad".to_string()]);
+
+        assert!(is_in_compile_package(&path, &compile_packages));
+        assert!(!is_in_compile_package(
+            &root
+                .join("not_node_modules")
+                .join("left-pad")
+                .join("index.js"),
+            &compile_packages
+        ));
+    }
+
+    #[test]
     fn declaration_file_detection_includes_mts_and_cts_sidecars() {
         assert!(is_declaration_file(Path::new("index.d.ts")));
         assert!(is_declaration_file(Path::new("index.d.mts")));

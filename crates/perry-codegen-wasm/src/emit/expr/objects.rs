@@ -260,6 +260,61 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall_void(func, "object_set_dynamic", 3);
                 func.instruction(&Instruction::LocalGet(self.temp_store_local));
             }
+            // #5016: assignment PutValue for property/index references
+            // (`obj.prop = v` / `obj[i] = v`). The HIR lowers BOTH member-write
+            // forms to `PutValueSet`; without this arm it fell through to the
+            // `_ => TAG_UNDEFINED` catch-all and the write was silently dropped
+            // — module-level array element mutation (the recommended mutable
+            // state pattern) appeared immutable on the web/wasm target.
+            //
+            // Mirror the pre-`PutValueSet` lowering split so behavior matches
+            // the still-handled `PropertySet`/`IndexSet` arms: a string-literal
+            // key (`obj.prop = v`) routes through `class_set_field` so class
+            // getters/setters still fire; any other key (`obj[i] = v`) routes
+            // through `object_set_dynamic`. Both return the assigned RHS value
+            // to preserve assignment-expression semantics.
+            Expr::PutValueSet {
+                target, key, value, ..
+            } => {
+                if let Expr::String(property) = key.as_ref() {
+                    let key_id = self
+                        .emitter
+                        .string_map
+                        .get(property.as_str())
+                        .copied()
+                        .unwrap_or(0);
+                    let key_bits = (STRING_TAG << 48) | (key_id as u64);
+                    self.emit_frame_begin(func, 3);
+                    self.emit_store_arg(func, 0, target);
+                    self.emit_store_const(func, 1, f64::from_bits(key_bits));
+                    self.emit_expr(func, value);
+                    func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                    self.emit_slot_addr(func, 2);
+                    func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit_memcall_void(func, "class_set_field", 3);
+                    func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                } else {
+                    self.emit_frame_begin(func, 3);
+                    self.emit_store_arg(func, 0, target);
+                    self.emit_store_arg(func, 1, key);
+                    self.emit_expr(func, value);
+                    func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                    self.emit_slot_addr(func, 2);
+                    func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit_memcall_void(func, "object_set_dynamic", 3);
+                    func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                }
+            }
             Expr::IndexUpdate {
                 object,
                 index,

@@ -1,7 +1,10 @@
 //! Tests for the dynamic-import glob expansion + module collection driver.
 //! Split out of `collect_modules.rs` to keep that file under the file-size gate.
 
-use super::{collect_modules, env_defines_for_lowering, expand_dynamic_import_glob};
+use super::{
+    collect_modules, env_defines_for_lowering, expand_dynamic_import_glob,
+    refuse_compile_package_native_addon,
+};
 use crate::commands::compile::{CompilationContext, DefineValue};
 use crate::commands::progress::VerboseProgress;
 use crate::OutputFormat;
@@ -132,6 +135,302 @@ console.log(got);
         entry_debug.contains("424242"),
         "entry HIR should contain the dependency method literal after cross-module inlining:\n{entry_debug}"
     );
+}
+
+fn write_compile_package_fixture(
+    root: &std::path::Path,
+    package_name: &str,
+    package_json_extra: &str,
+) -> std::path::PathBuf {
+    let package = root.join("node_modules").join(package_name);
+    let lib = package.join("lib");
+    std::fs::create_dir_all(&lib).expect("create package lib");
+    let package_json = format!(
+        r#"{{
+  "name": "{package_name}",
+  "version": "1.0.0",
+  "main": "./lib/index.js"{package_json_extra}
+}}"#
+    );
+    std::fs::write(package.join("package.json"), package_json).expect("write package json");
+    std::fs::write(
+        lib.join("index.js"),
+        r#"
+exports.value = 42;
+"#,
+    )
+    .expect("write package entry");
+
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        format!(
+            r#"
+import * as pkg from "{package_name}";
+console.log(typeof pkg);
+"#
+        ),
+    )
+    .expect("write entry");
+    entry
+}
+
+fn collect_compile_package(
+    root: &std::path::Path,
+    entry: &std::path::Path,
+    package_name: &str,
+) -> anyhow::Result<()> {
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.compile_packages.insert(package_name.to_string());
+    ctx.allow_native_library.push(package_name.to_string());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry.to_path_buf(),
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .map(|_| ())
+}
+
+fn guard_compile_package(
+    root: &std::path::Path,
+    package_name: &str,
+    entry: &std::path::Path,
+) -> anyhow::Result<()> {
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.compile_packages.insert(package_name.to_string());
+    ctx.compile_package_dirs.insert(
+        package_name.to_string(),
+        root.join("node_modules")
+            .join(package_name)
+            .canonicalize()
+            .expect("package root"),
+    );
+    refuse_compile_package_native_addon(&mut ctx, entry)
+}
+
+fn assert_compile_package_native_addon_rejected(
+    marker_setup: impl FnOnce(&std::path::Path),
+    expected_marker: &str,
+) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = write_compile_package_fixture(root, "node-pty", "");
+    let package = root.join("node_modules/node-pty");
+    marker_setup(&package);
+
+    let err = collect_compile_package(root, &entry, "node-pty")
+        .expect_err("node native addon packages should not enter compilePackages");
+    let message = err.to_string();
+    assert!(message.contains("node-pty"), "got: {message}");
+    assert!(message.contains("Node native addon"), "got: {message}");
+    assert!(message.contains(expected_marker), "got: {message}");
+    assert!(message.contains("perry.compilePackages"), "got: {message}");
+    assert!(message.contains("perry.nativeLibrary"), "got: {message}");
+}
+
+#[test]
+fn compile_package_with_binding_gyp_is_rejected() {
+    assert_compile_package_native_addon_rejected(
+        |package| {
+            std::fs::write(package.join("binding.gyp"), "{}\n").expect("write binding.gyp");
+        },
+        "binding.gyp",
+    );
+}
+
+#[test]
+fn compile_package_with_prebuilds_dir_is_rejected() {
+    assert_compile_package_native_addon_rejected(
+        |package| {
+            std::fs::create_dir_all(package.join("prebuilds/win32-x64")).expect("create prebuilds");
+        },
+        "prebuilds/",
+    );
+}
+
+#[test]
+fn compile_package_with_node_file_is_rejected() {
+    assert_compile_package_native_addon_rejected(
+        |package| {
+            let dir = package.join("build/Release");
+            std::fs::create_dir_all(&dir).expect("create build dir");
+            std::fs::write(dir.join("addon.node"), b"not a real addon")
+                .expect("write addon marker");
+        },
+        "*.node",
+    );
+}
+
+#[test]
+fn compile_package_with_node_directory_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_compile_package_fixture(root, "directory-node", "");
+    let package = root.join("node_modules/directory-node");
+    std::fs::create_dir_all(package.join("build/not-an-addon.node")).expect("create .node dir");
+    let entry = package
+        .join("lib/index.js")
+        .canonicalize()
+        .expect("entry path");
+
+    guard_compile_package(root, "directory-node", &entry)
+        .expect(".node directories should not be treated as native addon files");
+}
+
+#[test]
+fn compile_package_with_gypfile_package_json_is_rejected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = write_compile_package_fixture(
+        root,
+        "nativeish",
+        r#",
+  "gypfile": true"#,
+    );
+
+    let err = collect_compile_package(root, &entry, "nativeish")
+        .expect_err("gypfile packages should not enter compilePackages");
+    let message = err.to_string();
+    assert!(message.contains("nativeish"), "got: {message}");
+    assert!(message.contains("package.json gypfile"), "got: {message}");
+    assert!(message.contains("perry.nativeLibrary"), "got: {message}");
+}
+
+#[test]
+fn compile_package_with_gypfile_false_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_compile_package_fixture(
+        root,
+        "not-gyp",
+        r#",
+  "gypfile": false"#,
+    );
+    let entry = root
+        .join("node_modules/not-gyp/lib/index.js")
+        .canonicalize()
+        .expect("entry path");
+
+    guard_compile_package(root, "not-gyp", &entry)
+        .expect("gypfile false should not be treated as a native addon marker");
+}
+
+#[test]
+fn compile_package_with_native_addon_loader_dependency_is_rejected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = write_compile_package_fixture(
+        root,
+        "loader-native",
+        r#",
+  "dependencies": {
+    "node-gyp-build": "^4.8.0"
+  }"#,
+    );
+
+    let err = collect_compile_package(root, &entry, "loader-native")
+        .expect_err("node-gyp-build packages should not enter compilePackages");
+    let message = err.to_string();
+    assert!(message.contains("loader-native"), "got: {message}");
+    assert!(
+        message.contains("native addon loader dependency"),
+        "got: {message}"
+    );
+    assert!(message.contains("perry.nativeLibrary"), "got: {message}");
+}
+
+#[test]
+fn compile_package_with_loader_dev_dependency_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_compile_package_fixture(
+        root,
+        "loader-dev-only",
+        r#",
+  "devDependencies": {
+    "bindings": "^1.5.0"
+  }"#,
+    );
+    let entry = root
+        .join("node_modules/loader-dev-only/lib/index.js")
+        .canonicalize()
+        .expect("entry path");
+
+    guard_compile_package(root, "loader-dev-only", &entry)
+        .expect("dev-only native addon loader dependencies should not be hard rejected");
+}
+
+#[test]
+fn compile_package_nested_manifest_uses_compile_package_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_compile_package_fixture(root, "nested-native", "");
+    let package = root.join("node_modules/nested-native");
+    let nested = package.join("lib/esm");
+    std::fs::create_dir_all(&nested).expect("nested dir");
+    std::fs::write(nested.join("package.json"), r#"{ "type": "module" }"#)
+        .expect("nested package json");
+    std::fs::write(nested.join("index.js"), "export const value = 42;\n").expect("nested entry");
+    std::fs::write(package.join("binding.gyp"), "{}\n").expect("write binding.gyp");
+    let entry = nested.join("index.js").canonicalize().expect("entry path");
+
+    let err = guard_compile_package(root, "nested-native", &entry)
+        .expect_err("root native marker should be detected past nested package.json");
+    let message = err.to_string();
+    assert!(message.contains("nested-native"), "got: {message}");
+    assert!(message.contains("binding.gyp"), "got: {message}");
+}
+
+#[test]
+fn normal_compile_package_without_native_addon_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_compile_package_fixture(root, "pure-js", "");
+    let entry = root
+        .join("node_modules/pure-js/lib/index.js")
+        .canonicalize()
+        .expect("entry path");
+
+    guard_compile_package(root, "pure-js", &entry).expect("pure JS package should not be rejected");
+}
+
+#[test]
+fn perry_native_library_package_is_not_rejected_by_node_addon_guard() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_compile_package_fixture(
+        root,
+        "native-lib",
+        r#",
+  "perry": {
+    "nativeLibrary": {
+      "abiVersion": "0.5",
+      "functions": [
+        { "name": "js_native_lib_value", "params": [], "returns": "number" }
+      ]
+    }
+  }"#,
+    );
+    let package = root.join("node_modules/native-lib");
+    std::fs::write(package.join("binding.gyp"), "{}\n").expect("write binding.gyp");
+    let entry = package
+        .join("lib/index.js")
+        .canonicalize()
+        .expect("entry path");
+
+    guard_compile_package(root, "native-lib", &entry)
+        .expect("perry.nativeLibrary package should not be rejected by the Node addon guard");
 }
 
 #[cfg(unix)]
