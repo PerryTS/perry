@@ -642,3 +642,49 @@ fn transition_cache_lookup_rejects_mutated_edge_target() {
         };
     });
 }
+
+#[test]
+fn entries_and_values_skip_non_enumerable_descriptor_slots() {
+    // #5046: Object.defineProperty(o, 'hidden', { value: 1 }) defaults to
+    // enumerable: false. Object.keys filtered it; entries/values did not.
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        let hidden_key = crate::string::js_string_from_bytes(b"hidden".as_ptr(), 6);
+        let shown_key = crate::string::js_string_from_bytes(b"shown".as_ptr(), 5);
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+
+        let descriptor = js_object_alloc(0, 0);
+        js_object_set_field_by_name(descriptor, value_key, 1.0);
+
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let hidden_value = f64::from_bits(JSValue::string_ptr(hidden_key).bits());
+        let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+        js_object_define_property(obj_value, hidden_value, descriptor_value);
+        js_object_set_field_by_name(obj as *mut ObjectHeader, shown_key, 2.0);
+
+        let keys = js_object_keys(obj);
+        assert_eq!(crate::array::js_array_length(keys), 1);
+        assert_eq!(
+            js_string_to_rust(crate::array::js_array_get(keys, 0).into()),
+            "shown"
+        );
+
+        let values = js_object_values(obj);
+        assert_eq!(crate::array::js_array_length(values), 1);
+        assert_eq!(
+            crate::array::js_array_get(values, 0).bits(),
+            2.0f64.to_bits()
+        );
+
+        let entries = js_object_entries(obj);
+        assert_eq!(crate::array::js_array_length(entries), 1);
+        let pair = crate::value::js_nanbox_get_pointer(f64::from_bits(
+            crate::array::js_array_get(entries, 0).bits(),
+        )) as *const crate::array::ArrayHeader;
+        assert_eq!(
+            js_string_to_rust(crate::array::js_array_get(pair, 0).into()),
+            "shown"
+        );
+        assert_eq!(crate::array::js_array_get(pair, 1).bits(), 2.0f64.to_bits());
+    }
+}

@@ -1874,6 +1874,30 @@ pub(crate) unsafe fn instance_private_key_hidden(
         .unwrap_or(false)
 }
 
+/// True when a per-property descriptor marks `key_val`'s name non-enumerable
+/// (`Object.defineProperty(o, k, { enumerable: false })`). Mirrors the
+/// slow-path filter in `js_object_keys` so `Object.values`/`Object.entries`
+/// agree with `Object.keys` (#5046). Callers gate on a cheap "does this object
+/// have any descriptors at all" probe so the common descriptor-free object
+/// never pays the string extraction.
+pub(crate) unsafe fn descriptor_marks_non_enumerable(
+    obj: *const ObjectHeader,
+    key_val: crate::JSValue,
+) -> bool {
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = match crate::string::js_string_key_bytes(key_val, &mut buf) {
+        Some(b) => b,
+        None => return false,
+    };
+    let key_str = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    get_property_attrs(obj as usize, key_str)
+        .map(|attrs| !attrs.enumerable())
+        .unwrap_or(false)
+}
+
 /// Returns an array of the object's field values
 #[no_mangle]
 pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader {
@@ -1963,11 +1987,19 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
                 None => j as u32,
             }
         };
+        // #5046: skip keys a descriptor marks non-enumerable, like
+        // `js_object_keys` does. Cheap any-descriptor probe first so
+        // descriptor-free objects stay on the fast path.
+        let has_descriptors =
+            PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == obj as usize));
         for j in 0..count {
             let i = pos(j);
             if !keys.is_null() && i < crate::array::js_array_length(keys) {
                 let key_val = crate::array::js_array_get(keys, i);
                 if instance_private_key_hidden(obj, key_val) {
+                    continue;
+                }
+                if has_descriptors && descriptor_marks_non_enumerable(obj, key_val) {
                     continue;
                 }
             }
@@ -2101,11 +2133,19 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
                 None => j as u32,
             }
         };
+        // #5046: skip keys a descriptor marks non-enumerable, like
+        // `js_object_keys` does. Cheap any-descriptor probe first so
+        // descriptor-free objects stay on the fast path.
+        let has_descriptors =
+            PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == obj as usize));
         for j in 0..count {
             let i = pos(j);
             if !keys.is_null() && i < crate::array::js_array_length(keys) {
                 let key_val = crate::array::js_array_get(keys, i);
                 if instance_private_key_hidden(obj, key_val) {
+                    continue;
+                }
+                if has_descriptors && descriptor_marks_non_enumerable(obj, key_val) {
                     continue;
                 }
             }
