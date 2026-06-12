@@ -383,7 +383,39 @@ fn call_local_constructor_symbol(
     // from `_addCheck`, where ZodNumber has no own ctor and ZodType does).
     let param_count = effective_constructor_param_count(ctx, class);
     let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let mut ctor_values = lowered_args.to_vec();
+    // When the ctor's signature is statically known, build per-param values
+    // with the SAME packing rules the inline path uses — a rest param or the
+    // synthesized `arguments` param receives a PACKED ARRAY, not a raw
+    // positional value. Pre-fix, `new Kid({...})` from a method of Kid (the
+    // recursion-guarded symbol-call path) shoved the user arg RAW into the
+    // ctor's synthetic `arguments` slot; `super(...arguments)` then spread
+    // an object with no `length` and the parent ctor saw zero args
+    // (vendored zod's `z.number().int()` chain — `_addCheck` →
+    // `new ZodNumber({…})` → `constructor(){ super(...arguments) }`).
+    let effective_params: Option<Vec<perry_hir::Param>> = {
+        let mut found = class.constructor.as_ref().map(|c| c.params.clone());
+        if found.is_none() {
+            let mut parent = class.extends_name.as_deref().map(|s| s.to_string());
+            while let Some(pname) = parent {
+                match ctx.classes.get(&pname).copied() {
+                    Some(pc) => {
+                        if let Some(pctor) = pc.constructor.as_ref() {
+                            found = Some(pctor.params.clone());
+                            break;
+                        }
+                        parent = pc.extends_name.as_deref().map(|s| s.to_string());
+                    }
+                    None => break,
+                }
+            }
+        }
+        found
+    };
+    let mut ctor_values = if let Some(params) = effective_params {
+        inline_constructor_param_values(ctx, &params, lowered_args)
+    } else {
+        lowered_args.to_vec()
+    };
     ctor_values.truncate(param_count);
     while ctor_values.len() < param_count {
         ctor_values.push(undef_lit.clone());
