@@ -623,6 +623,39 @@ pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Opt
     )
 }
 
+/// Node subpath imports (#5039): resolve a `#`-prefixed specifier through the
+/// importing package's own `package.json` `"imports"` map
+/// (https://nodejs.org/api/packages.html#imports). chalk 5 loads its vendored
+/// dependencies this way (`import ansiStyles from '#ansi-styles'` →
+/// `./source/vendor/ansi-styles/index.js`), so without this every compiled
+/// chalk style table came up empty. The map shares the `exports` value shape
+/// (string / conditional object / `*` patterns), so the same resolver is
+/// reused — with `node` ranked above `default` so conditional pairs like
+/// chalk's `#supports-color` `{ node, default: browser }` pick the node build
+/// for native compilation. Per Node's package-scope rule, only the NEAREST
+/// `package.json` up from the importer is consulted.
+fn resolve_subpath_import(import_source: &str, importer_path: &Path) -> Option<PathBuf> {
+    let mut dir = importer_path.parent();
+    while let Some(d) = dir {
+        let pkg_json = d.join("package.json");
+        if pkg_json.is_file() {
+            let content = std::fs::read_to_string(&pkg_json).ok()?;
+            let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+            let target = resolve_exports_with_conditions(
+                json.get("imports")?,
+                import_source,
+                &["perry", "node", "import", "module", "default", "require"],
+            )?;
+            let base = d.join(target.trim_start_matches("./"));
+            return resolve_with_extensions(&base)
+                .and_then(|p| p.canonicalize().ok())
+                .or_else(|| base.canonicalize().ok());
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 fn canonical_existing_declaration(path: PathBuf) -> Option<PathBuf> {
     if path.exists() && is_declaration_file(&path) {
         Some(path.canonicalize().unwrap_or(path))
@@ -804,9 +837,23 @@ pub(super) fn resolve_import(
         return None; // Native modules are handled by stdlib, not file imports
     }
 
+    // Node subpath imports (`#…`, #5039) resolve through the importing
+    // package's own `"imports"` map and then classify exactly like a relative
+    // import to the mapped file.
+    let subpath_import_target = if import_source.starts_with('#') {
+        match resolve_subpath_import(import_source, importer_path) {
+            Some(canonical) => Some(canonical),
+            None => return None,
+        }
+    } else {
+        None
+    };
+
     // Handle relative imports (./ or ../)
-    if import_source.starts_with("./") || import_source.starts_with("../") {
-        if let Some(canonical) = resolve_relative_import_path(import_source, importer_path) {
+    if import_source.starts_with("./") || import_source.starts_with("../") || subpath_import_target.is_some() {
+        if let Some(canonical) = subpath_import_target
+            .or_else(|| resolve_relative_import_path(import_source, importer_path))
+        {
             // Refs #486: a relative `import './foo.js'` from inside a compile
             // package must classify as NativeCompiled even when the resolved
             // file lives outside the literal `node_modules/<pkg>/` substring

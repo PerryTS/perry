@@ -21,9 +21,40 @@ pub(crate) fn unescape_template(s: &str) -> String {
                 Some('n') => result.push('\n'),
                 Some('t') => result.push('\t'),
                 Some('r') => result.push('\r'),
+                Some('b') => result.push('\u{0008}'),
+                Some('f') => result.push('\u{000C}'),
+                Some('v') => result.push('\u{000B}'),
                 Some('\\') => result.push('\\'),
                 Some('$') => result.push('$'),
                 Some('`') => result.push('`'),
+                Some('\'') => result.push('\''),
+                Some('"') => result.push('"'),
+                // `\0` (not followed by another digit) is NUL.
+                Some('0') if !chars.peek().is_some_and(|d| d.is_ascii_digit()) => {
+                    result.push('\0')
+                }
+                // Line continuation: backslash-newline contributes nothing.
+                Some('\n') => {}
+                Some('\r') => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                }
+                // `\xHH` / `\uHHHH` / `\u{H…}` — #5039: ansi-styles builds its
+                // escape codes as `` `[${code}m` `` template literals;
+                // falling through to the literal-backslash arm turned every
+                // chalk style into the 6-char text "" instead of ESC.
+                Some(esc @ ('x' | 'u')) => {
+                    if let Some(decoded) = unescape_hex_escape(esc, &mut chars) {
+                        result.push_str(&decoded);
+                    } else {
+                        // Invalid escape (only reachable in tagged templates,
+                        // where cooked semantics are undefined) — keep the
+                        // original text.
+                        result.push('\\');
+                        result.push(esc);
+                    }
+                }
                 Some(other) => {
                     result.push('\\');
                     result.push(other);
@@ -36,6 +67,75 @@ pub(crate) fn unescape_template(s: &str) -> String {
     }
 
     result
+}
+
+/// Decode the body of a `\xHH`, `\uHHHH`, or `\u{H…}` escape, with `esc`
+/// being the introducer character just consumed (`x` or `u`). A `\uD800–DBFF`
+/// high surrogate followed immediately by an escaped low surrogate decodes as
+/// the combined supplementary code point; a lone surrogate becomes U+FFFD
+/// (Perry strings are UTF-8 — see the WTF-8 categorical gap in CLAUDE.md).
+/// Returns `None` (consuming nothing further) on malformed hex so the caller
+/// can preserve the source text.
+fn unescape_hex_escape(
+    esc: char,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Option<String> {
+    fn hex_fixed(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, n: usize) -> Option<u32> {
+        let mut value = 0u32;
+        for _ in 0..n {
+            let d = chars.peek()?.to_digit(16)?;
+            chars.next();
+            value = value * 16 + d;
+        }
+        Some(value)
+    }
+    fn hex_braced(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<u32> {
+        chars.next(); // consume '{'
+        let mut value = 0u32;
+        let mut any = false;
+        loop {
+            match chars.peek() {
+                Some('}') => {
+                    chars.next();
+                    return any.then_some(value);
+                }
+                Some(c) => {
+                    let d = c.to_digit(16)?;
+                    chars.next();
+                    any = true;
+                    value = value.checked_mul(16)?.checked_add(d)?;
+                    if value > 0x10FFFF {
+                        return None;
+                    }
+                }
+                None => return None,
+            }
+        }
+    }
+
+    let code = if esc == 'x' {
+        hex_fixed(chars, 2)?
+    } else if chars.peek() == Some(&'{') {
+        hex_braced(chars)?
+    } else {
+        hex_fixed(chars, 4)?
+    };
+
+    // High surrogate: try to pair with an immediately following `\uDC00–DFFF`.
+    if (0xD800..=0xDBFF).contains(&code) {
+        let mut lookahead = chars.clone();
+        if lookahead.next() == Some('\\') && lookahead.next() == Some('u') {
+            if let Some(low) = hex_fixed(&mut lookahead, 4) {
+                if (0xDC00..=0xDFFF).contains(&low) {
+                    *chars = lookahead;
+                    let combined = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                    return char::from_u32(combined).map(String::from);
+                }
+            }
+        }
+    }
+
+    Some(char::from_u32(code).unwrap_or('\u{FFFD}').to_string())
 }
 
 pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {

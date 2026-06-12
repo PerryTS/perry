@@ -399,6 +399,29 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         // regular object, read the named field via the field getter; for a
         // closure, recurse via its own props. Distinguish by CLOSURE_MAGIC.
         if is_closure_ptr(proto_ptr) {
+            // #5039: the proto may carry accessor properties — chalk's style
+            // proto is `Object.defineProperties(() => {}, styles)` where every
+            // style is `{ get() {...} }`. Invoke the getter with the ORIGINAL
+            // receiver (`ptr`, not the proto) so chalk's
+            // `Object.defineProperty(this, styleName, {value: builder})`
+            // caches the builder on the chalk instance, and nested builders
+            // chain their stylers off the right `this`.
+            if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+                if acc.get == 0 {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+                let getter_bits = clone_closure_rebind_this(acc.get, receiver);
+                let getter =
+                    (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+                if getter.is_null() {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                let prev = crate::object::js_implicit_this_set(receiver);
+                let result = crate::closure::js_closure_call0(getter);
+                crate::object::js_implicit_this_set(prev);
+                return result;
+            }
             if let Ok(props) = get_closure_props().lock() {
                 if let Some(p) = props.get(&proto_ptr).and_then(|m| m.get(prop)) {
                     return *p;
@@ -407,6 +430,28 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             cur = proto_ptr;
             depth += 1;
             continue;
+        }
+        // #5039: an accessor on the proto object must run with the ORIGINAL
+        // closure as receiver, not the proto. chalk's style getters live on
+        // `createChalk.prototype` and cache the built style via
+        // `Object.defineProperty(this, styleName, {value: builder})` — with
+        // `this` = proto that's a TypeError (redefining the non-configurable
+        // accessor) instead of an own-property cache on the chalk instance.
+        if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+            if acc.get == 0 {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+            let getter_bits = clone_closure_rebind_this(acc.get, receiver);
+            let getter =
+                (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+            if getter.is_null() {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            let prev = crate::object::js_implicit_this_set(receiver);
+            let result = crate::closure::js_closure_call0(getter);
+            crate::object::js_implicit_this_set(prev);
+            return result;
         }
         unsafe {
             let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);

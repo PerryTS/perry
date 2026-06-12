@@ -329,10 +329,14 @@ pub fn try_lower_property_get_method_call(
             "split" | "charCodeAt" | "charAt" | "trim" | "trimStart" | "trimEnd" | "substring"
             | "substr" | "toLowerCase" | "toUpperCase" | "toLocaleLowerCase"
             | "toLocaleUpperCase" | "replaceAll" | "padStart" | "padEnd" | "repeat"
-            | "normalize" | "codePointAt" | "localeCompare"
-            // Annex B §B.2.2 HTML wrappers — string-only, no array/map/set form.
-            | "anchor" | "big" | "blink" | "bold" | "fixed" | "fontcolor" | "fontsize"
-            | "italics" | "link" | "small" | "strike" | "sub" | "sup" => true,
+            | "normalize" | "codePointAt" | "localeCompare" => true,
+            // Annex B §B.2.2 HTML wrappers (`bold`, `link`, `anchor`, …) are
+            // string-only in the spec but collide with common user method
+            // names — chalk's `chalk.bold(s)` is a styled-string builder
+            // (#5039). Forcing the string path here coerced the chalk closure
+            // to its source text and wrapped it in `<b>…</b>`. An Any-typed
+            // receiver that really is a string still gets them via the
+            // `jsval.is_string()` arm of `js_native_call_method`.
             // Issue #638: `replace` is also string-exclusive, but routing
             // it here unconditionally caused regressions in async dispatch
             // pathways. Only fire when args[1] is statically detectable as
