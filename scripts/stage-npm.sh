@@ -73,7 +73,7 @@ PLATFORMS=(
 # Unix libs shared across platforms (runtime + stdlib). The UI lib is
 # handled per-platform above. Windows equivalents are baked into the case
 # block further down.
-UNIX_CORE_LIBS=(libperry_runtime.a libperry_stdlib.a)
+UNIX_CORE_LIBS=(libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a)
 WIN_CORE_LIBS=(perry_runtime.lib perry_stdlib.lib)
 
 # -----------------------------------------------------------------------------

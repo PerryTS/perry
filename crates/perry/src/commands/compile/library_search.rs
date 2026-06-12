@@ -898,6 +898,22 @@ pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
     })
 }
 
+/// Find the panic=abort prebuilt runtime variant (optional — shipped by
+/// release packaging for runtime-only apps; selected by the out-of-tree
+/// fallback in `optimized_libs.rs` when no `catch_unwind` callers are
+/// reachable and stdlib is not linked). Unix-only: Windows always links
+/// stdlib, which is built panic=unwind.
+pub(super) fn find_runtime_abort_library(target: Option<&str>) -> Option<PathBuf> {
+    if matches!(target, Some("windows") | Some("windows-winui")) {
+        return None;
+    }
+    #[cfg(target_os = "windows")]
+    if target.is_none() {
+        return None;
+    }
+    find_library("libperry_runtime_abort.a", target)
+}
+
 /// Find the stdlib library for linking (optional - only needed for native modules)
 pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = match target {

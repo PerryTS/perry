@@ -576,6 +576,18 @@ pub(super) fn build_optimized_libs(
     let workspace_root = match find_perry_workspace_root() {
         Some(p) => p,
         None => {
+            // Not verbose-gated: the fallback links the full-feature
+            // prebuilt stdlib (sqlite/crypto/tokio/…), which typically
+            // adds 5MB+ of code the linker cannot dead-strip (the
+            // dynamic dispatch table pins every module). Users should
+            // know why the binary is big and how to opt back in.
+            if matches!(format, OutputFormat::Text) && verbose == 0 {
+                eprintln!(
+                    "  note: Perry workspace source not found — linking the prebuilt \
+                     full stdlib (larger binary). Set PERRY_WORKSPACE_ROOT to a \
+                     source checkout to enable size-optimized rebuilds."
+                );
+            }
             if matches!(format, OutputFormat::Text) && verbose > 0 {
                 let (rt_name, std_name) = match target {
                     Some("windows") | Some("windows-winui") => {
@@ -610,7 +622,27 @@ pub(super) fn build_optimized_libs(
             } else {
                 Vec::new()
             };
+            // Out-of-tree size salvage: release packaging ships a
+            // panic=abort prebuilt runtime variant alongside the unwind
+            // one (stage-npm.sh / release-packages.yml). When the app
+            // links runtime-only (no stdlib) and pulls in nothing that
+            // needs `catch_unwind`, prefer it — same ~12-18% saving the
+            // workspace rebuild gets from panic=abort, no source needed.
+            // Unix-only by construction: Windows always links stdlib
+            // (codegen declares all stdlib externs there), and mixing an
+            // abort runtime with the unwind stdlib is not supported.
+            let runtime = if panic_abort_safe && !ctx.needs_stdlib {
+                let found =
+                    super::library_search::find_runtime_abort_library(target);
+                if found.is_some() && matches!(format, OutputFormat::Text) && verbose > 0 {
+                    eprintln!("  auto-optimize: using prebuilt panic=abort runtime");
+                }
+                found
+            } else {
+                None
+            };
             return OptimizedLibs {
+                runtime,
                 prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
                 well_known_libs,
                 ..OptimizedLibs::empty()

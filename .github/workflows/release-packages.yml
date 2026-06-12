@@ -270,6 +270,21 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p perry-runtime
           cargo build --release --target ${{ matrix.target }} -p perry-stdlib
 
+      - name: Build panic=abort runtime variant (Unix)
+        # Out-of-tree installs can't rebuild the runtime, so ship the
+        # panic=abort profile prebuilt: `perry compile` links it for
+        # runtime-only apps with no catch_unwind callers (games, CLIs),
+        # dropping unwind tables/landing pads (~12-18% of the binary).
+        # See optimized_libs.rs (find_runtime_abort_library selection).
+        # Separate CARGO_TARGET_DIR so the profile override doesn't
+        # invalidate the main build's incremental cache.
+        if: runner.os != 'Windows'
+        run: |
+          CARGO_TARGET_DIR=target-abort CARGO_PROFILE_RELEASE_PANIC=abort \
+            cargo build --release --target ${{ matrix.target }} -p perry-runtime
+          cp "target-abort/${{ matrix.target }}/release/libperry_runtime.a" \
+             "target/${{ matrix.target }}/release/libperry_runtime_abort.a"
+
       - name: Build native ext libraries (Unix)
         # #2532 — the perry-ext-* wrapper crates ship the host functions for
         # node:http (server), ws, net, zlib, fastify, the db drivers, etc.
@@ -430,7 +445,7 @@ jobs:
           mkdir -p staging
           cp target/${{ matrix.target }}/release/perry staging/
           # Include static libraries for linking (runtime, stdlib, UI)
-          for lib in libperry_runtime.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
+          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/release/$lib" ]; then
               cp "target/${{ matrix.target }}/release/$lib" staging/
             fi

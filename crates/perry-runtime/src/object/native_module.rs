@@ -897,6 +897,46 @@ pub extern "C" fn js_worker_threads_locks_query() -> f64 {
     worker_threads_locks_query(std::ptr::null())
 }
 
+/// Linker-strippability indirection for the native-module method
+/// dispatcher (see #466 size work). `dispatch_native_module_method` is a
+/// 600+-arm match that statically references every module's runtime
+/// implementation; a direct call from the generic method path pins all of
+/// it in every binary, `-dead_strip` notwithstanding. Namespace objects
+/// (NATIVE_MODULE_CLASS_ID) can only be created by
+/// `js_create_native_module_namespace`, so installing the pointer there
+/// makes the dispatcher — and everything only it references — dead-strippable
+/// in programs that never import a native module. Relaxed ordering is
+/// sufficient: the store happens-before any namespace object can reach a
+/// call site on the creating thread, and cross-thread publication of the
+/// object pointer itself already synchronizes.
+pub(crate) static NATIVE_MODULE_DISPATCH_HOOK: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+type NativeModuleDispatchFn =
+    unsafe fn(*const ObjectHeader, &str, *const f64, usize) -> f64;
+
+/// Route a NATIVE_MODULE_CLASS_ID method call through the installed hook.
+/// A zero hook means no namespace object was ever created, so no such
+/// object can exist to dispatch on — unreachable in practice.
+#[inline]
+pub(crate) unsafe fn call_native_module_dispatch_hook(
+    obj: *const ObjectHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let raw = NATIVE_MODULE_DISPATCH_HOOK.load(Ordering::Relaxed);
+    debug_assert!(
+        raw != 0,
+        "native-module method call before any namespace was created"
+    );
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let f: NativeModuleDispatchFn = std::mem::transmute(raw);
+    f(obj, method_name, args_ptr, args_len)
+}
+
 /// Create a native module namespace object
 /// This is used for `import * as X from 'module'` patterns
 /// The returned object identifies itself as an object (typeof returns "object")
@@ -910,6 +950,12 @@ pub extern "C" fn js_create_native_module_namespace(
     module_name_ptr: *const u8,
     module_name_len: usize,
 ) -> f64 {
+    // Install the dispatch hook the moment the first namespace exists —
+    // the only static reference to the dispatcher in the crate.
+    NATIVE_MODULE_DISPATCH_HOOK.store(
+        crate::object::dispatch_native_module_method as usize,
+        Ordering::Relaxed,
+    );
     let module_name = unsafe {
         std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
             .unwrap_or("")

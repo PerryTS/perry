@@ -85,6 +85,22 @@ fn workspace_root_from_exe(exe: &Path) -> Option<PathBuf> {
 
 /// Find the Perry workspace root by searching upward from the executable location.
 pub fn find_perry_workspace_root() -> Option<PathBuf> {
+    // Explicit override: npm/homebrew installs place the perry binary
+    // outside the workspace, so neither the exe walk nor the cwd walk
+    // below can ever find the source tree — auto-optimize then silently
+    // falls back to the prebuilt full-feature runtime/stdlib and every
+    // binary ships the whole stdlib (sqlite, crypto, tokio, …). Users
+    // who keep a workspace checkout can point at it explicitly.
+    if let Ok(root) = std::env::var("PERRY_WORKSPACE_ROOT") {
+        let path = PathBuf::from(root);
+        if is_perry_workspace_root(&path) {
+            return Some(path);
+        }
+        eprintln!(
+            "warning: PERRY_WORKSPACE_ROOT is set but does not look like a \
+             Perry workspace (missing crates/perry-runtime); ignoring it"
+        );
+    }
     // First try: relative to the perry executable
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = workspace_root_from_exe(&exe) {

@@ -40,6 +40,7 @@ use super::{
 };
 
 mod link_cache;
+mod native_features;
 mod platform_cmd;
 mod windows_link;
 
@@ -1434,6 +1435,31 @@ pub(super) fn build_and_run_link(
                         .arg("--release")
                         .arg("--manifest-path")
                         .arg(&cargo_toml);
+
+                    // Per-project feature forwarding: a
+                    // `[native-library."<pkg>"]` table in perry.toml maps
+                    // onto cargo `--features` / `--no-default-features` so
+                    // apps can select a build profile of the native crate
+                    // (e.g. a 2D-only build of a 2D+3D engine).
+                    if let Some(ovr) = native_features::lookup_native_library_override(
+                        &ctx.project_root,
+                        &native_lib.module,
+                    ) {
+                        if !ovr.default_features {
+                            cargo_cmd.arg("--no-default-features");
+                        }
+                        if !ovr.features.is_empty() {
+                            cargo_cmd.arg("--features").arg(ovr.features.join(","));
+                        }
+                        if matches!(format, OutputFormat::Text) {
+                            println!(
+                                "  native-library features for {}: default-features={} features=[{}]",
+                                native_lib.module,
+                                ovr.default_features,
+                                ovr.features.join(", ")
+                            );
+                        }
+                    }
 
                     if let Some(triple) = rust_target_triple(target) {
                         cargo_cmd.arg("--target").arg(triple);

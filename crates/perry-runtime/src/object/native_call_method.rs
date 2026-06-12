@@ -3453,7 +3453,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 // #853: the `is_valid_obj_ptr` guard that used to live after
                 // this return was dead — the early return claims the path
                 // unconditionally. Removed.
-                return dispatch_native_module_method(obj, method_name, args_ptr, args_len);
+                return crate::object::native_module::call_native_module_dispatch_hook(obj, method_name, args_ptr, args_len);
             }
             // Issue #1206: Buffer iterators returned from `buf.values()` etc.
             // have a dedicated class id so `.next()` lands here and dispatches
@@ -3977,7 +3977,7 @@ pub unsafe extern "C" fn js_native_call_method(
             // Check for native module namespace
             if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
                 // #853: same dead-after-return as the first arm above.
-                return dispatch_native_module_method(obj, method_name, args_ptr, args_len);
+                return crate::object::native_module::call_native_module_dispatch_hook(obj, method_name, args_ptr, args_len);
             }
             // Issue #1206: same class-id check as the NaN-boxed path above
             // so a raw-pointer iterator value (uncommon, but possible after
