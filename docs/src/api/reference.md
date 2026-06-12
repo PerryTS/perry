@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2786 entries across 114 modules.
+Total: 2800 entries across 115 modules.
 
 ## Modules
 
@@ -82,6 +82,7 @@ Total: 2786 entries across 114 modules.
 - [`perry/updater`](#perry-updater)
 - [`perry/widget`](#perry-widget)
 - [`perry/workloads`](#perry-workloads)
+- [`perry/yoga`](#perry-yoga)
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
@@ -2669,6 +2670,25 @@ Total: 2786 entries across 114 modules.
 
 - `policy`
 - `runtime`
+
+## `perry/yoga`
+
+### Methods
+
+- `calculateLayout` — module
+- `childCount` — module
+- `getComputed` — module
+- `getComputedEdge` — module
+- `insertChild` — module
+- `nodeFree` — module
+- `nodeNew` — module
+- `removeChild` — module
+- `setEdge` — module
+- `setEnum` — module
+- `setGap` — module
+- `setMeasureFunc` — module
+- `setNumber` — module
+- `unsetMeasureFunc` — module
 
 ## `pg`
 

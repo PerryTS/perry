@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1925 entries across 111 modules
+// Coverage: 1939 entries across 112 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3053,6 +3053,37 @@ declare module "perry/workloads" {
   export function node(...args: any[]): any;
   /** stdlib */
   export function runGraph(...args: any[]): any;
+}
+
+declare module "perry/yoga" {
+  /** stdlib */
+  export function calculateLayout(...args: any[]): any;
+  /** stdlib */
+  export function childCount(...args: any[]): any;
+  /** stdlib */
+  export function getComputed(...args: any[]): any;
+  /** stdlib */
+  export function getComputedEdge(...args: any[]): any;
+  /** stdlib */
+  export function insertChild(...args: any[]): any;
+  /** stdlib */
+  export function nodeFree(...args: any[]): any;
+  /** stdlib */
+  export function nodeNew(...args: any[]): any;
+  /** stdlib */
+  export function removeChild(...args: any[]): any;
+  /** stdlib */
+  export function setEdge(...args: any[]): any;
+  /** stdlib */
+  export function setEnum(...args: any[]): any;
+  /** stdlib */
+  export function setGap(...args: any[]): any;
+  /** stdlib */
+  export function setMeasureFunc(...args: any[]): any;
+  /** stdlib */
+  export function setNumber(...args: any[]): any;
+  /** stdlib */
+  export function unsetMeasureFunc(...args: any[]): any;
 }
 
 declare module "pg" {

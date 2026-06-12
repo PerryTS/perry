@@ -2348,6 +2348,26 @@ pub static API_MANIFEST: &[ApiEntry] = &[
         TypeSpec::Void,
     ),
     method_sig("perry/tui", "exit", false, None, &[], TypeSpec::Void),
+    // `perry/yoga` — native taffy-backed flexbox primitives consumed by the
+    // `yoga-layout` TS shim (see crates/perry-runtime/src/yoga.rs and
+    // codegen's native_table/yoga.rs). All free functions taking numeric
+    // handle/value args; the `(...args: any[]): any` .d.ts fallback is fine
+    // since only the internal shim calls them. These rows mirror the dispatch
+    // table so the manifest-consistency check (#513) stays satisfied.
+    method("perry/yoga", "nodeNew", false, None),
+    method("perry/yoga", "nodeFree", false, None),
+    method("perry/yoga", "insertChild", false, None),
+    method("perry/yoga", "removeChild", false, None),
+    method("perry/yoga", "childCount", false, None),
+    method("perry/yoga", "setMeasureFunc", false, None),
+    method("perry/yoga", "unsetMeasureFunc", false, None),
+    method("perry/yoga", "setNumber", false, None),
+    method("perry/yoga", "setEdge", false, None),
+    method("perry/yoga", "setGap", false, None),
+    method("perry/yoga", "setEnum", false, None),
+    method("perry/yoga", "calculateLayout", false, None),
+    method("perry/yoga", "getComputed", false, None),
+    method("perry/yoga", "getComputedEdge", false, None),
     method_sig(
         "perry/tui",
         "boxSetFlexDirection",

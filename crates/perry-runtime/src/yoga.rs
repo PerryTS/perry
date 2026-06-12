@@ -487,7 +487,12 @@ const YG_MEASURE_EXACTLY: f64 = 1.0;
 const YG_MEASURE_AT_MOST: f64 = 2.0;
 
 #[no_mangle]
-pub extern "C" fn js_yoga_calculate_layout(id: f64, width: f64, height: f64, _direction: f64) -> f64 {
+pub extern "C" fn js_yoga_calculate_layout(
+    id: f64,
+    width: f64,
+    height: f64,
+    _direction: f64,
+) -> f64 {
     let root_id = id as u32;
 
     // Phase 1: build a fresh taffy tree from the registry, collecting the
@@ -653,7 +658,10 @@ fn store_layout(
         }
     }
     // Recurse (children list is on the node; clone to avoid borrow clash).
-    let children = m.get(&handle).map(|n| n.children.clone()).unwrap_or_default();
+    let children = m
+        .get(&handle)
+        .map(|n| n.children.clone())
+        .unwrap_or_default();
     for c in children {
         store_layout(m, taffy, map, c);
     }
