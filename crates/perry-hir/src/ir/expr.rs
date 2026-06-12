@@ -122,6 +122,13 @@ pub enum Expr {
         type_args: Vec<Type>,
     },
 
+    /// `super(...)` with spread arguments (`super(...arguments)` — the tsc
+    /// pass-through-ctor emit zod's ZodNumber/ZodBigInt use). The parent
+    /// ctor is invoked at runtime through the CLASS_CONSTRUCTORS registry
+    /// with the materialized args array (codegen can't inline a dynamic
+    /// arg count).
+    SuperCallSpread(Vec<CallArg>),
+
     // Named function reference
     FuncRef(FuncId),
 
@@ -376,6 +383,15 @@ pub enum Expr {
         class_name: String,
         captures: Vec<Expr>,
     },
+
+    /// Read slot `index` of a class's decl-site capture snapshot
+    /// (`CLASS_CAPTURE_VALUES`, written by `RegisterClassCaptures`). Used by
+    /// STATIC method bodies of function-nested capturing classes — statics
+    /// have no instance to carry `__perry_cap_*` fields, so their prologue
+    /// rebinds read the snapshot instead (vendored zod's
+    /// `static create(...) { … typeName: k.ZodRecord … }` where `k` is an
+    /// enclosing-function local).
+    ClassCaptureValue { class_name: String, index: u32 },
 
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the
     /// class is returned from a factory function body. The static-Symbol

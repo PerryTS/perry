@@ -128,6 +128,155 @@ fn class_capture_values(class_id: u32) -> Option<Vec<u64>> {
     CLASS_CAPTURE_VALUES.with(|m| m.borrow().get(&class_id).cloned())
 }
 
+/// Codegen FFI: read one slot of a class's decl-site capture snapshot —
+/// STATIC method prologue rebinds (statics have no instance to carry the
+/// `__perry_cap_*` fields). Absent snapshot/slot reads `undefined`.
+#[no_mangle]
+pub extern "C" fn js_class_capture_value(class_id: u32, index: u32) -> f64 {
+    CLASS_CAPTURE_VALUES.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .and_then(|v| v.get(index as usize).copied())
+            .map(f64::from_bits)
+            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+    })
+}
+
+/// Keepalive anchor (generated-code-only callee).
+#[used]
+static KEEP_JS_CLASS_CAPTURE_VALUE: extern "C" fn(u32, u32) -> f64 = js_class_capture_value;
+
+/// `super(...spread)` — invoke the closest registered ancestor constructor
+/// of `child_cid` on the EXISTING `this`, with args from the materialized
+/// `args_array` (dynamic count; the inline-super path needs a static arg
+/// list). The ancestor's trailing `__perry_cap_*` params are filled from
+/// its decl-site snapshot, mirroring `replay_registered_class_constructor`.
+///
+/// # Safety
+/// `this_value`/`args_array` must be valid NaN-boxed heap pointers.
+#[no_mangle]
+pub unsafe extern "C" fn js_super_construct_apply(
+    child_cid: u32,
+    this_value: f64,
+    args_array: f64,
+) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let this_raw = (this_value.to_bits() & crate::value::POINTER_MASK) as i64;
+    if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
+        eprintln!(
+            "super_apply child={} this_bits={:#x} args_bits={:#x}",
+            child_cid,
+            this_value.to_bits(),
+            args_array.to_bits()
+        );
+    }
+    if this_raw == 0 {
+        return undef;
+    }
+    let arr =
+        (args_array.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    let mut cur = crate::object::get_parent_class_id(child_cid).unwrap_or(0);
+    let mut depth = 0usize;
+    while cur != 0 && depth < 64 {
+        if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
+            if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
+                eprintln!("super_apply resolved ancestor cid={} total={}", cur, total_params);
+            }
+            let caps = class_capture_values(cur).unwrap_or_default();
+            let user_params = (total_params as usize).saturating_sub(caps.len());
+            let n = if arr.is_null() {
+                0
+            } else {
+                crate::array::js_array_length(arr)
+            } as usize;
+            let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
+            for i in 0..user_params {
+                if i < n {
+                    final_args.push(crate::array::js_array_get_f64(arr, i as u32));
+                } else {
+                    final_args.push(undef);
+                }
+            }
+            for bits in &caps {
+                final_args.push(f64::from_bits(*bits));
+            }
+            let _ = call_vtable_method(
+                ctor_ptr,
+                this_raw,
+                final_args.as_ptr(),
+                final_args.len(),
+                total_params,
+                false,
+                false,
+            );
+            return undef;
+        }
+        let next = crate::object::get_parent_class_id(cur).unwrap_or(0);
+        if next == cur {
+            break;
+        }
+        cur = next;
+        depth += 1;
+    }
+    undef
+}
+
+/// Keepalive anchor (generated-code-only callee).
+#[used]
+static KEEP_JS_SUPER_CONSTRUCT_APPLY: unsafe extern "C" fn(u32, f64, f64) -> f64 =
+    js_super_construct_apply;
+
+/// Append the spread of `value` to `target` (array handle), handling BOTH
+/// real arrays AND array-likes (Perry's `arguments` object is an
+/// ObjectHeader with "0".."n-1" + "length" props — `super(...arguments)`
+/// spreads it). Returns the (possibly reallocated) target handle.
+///
+/// # Safety
+/// `target` must be a valid ArrayHeader pointer.
+#[no_mangle]
+pub unsafe extern "C" fn js_array_push_spread_any(
+    target: *mut crate::array::ArrayHeader,
+    value: f64,
+) -> *mut crate::array::ArrayHeader {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() && !jv.is_string() {
+        return target;
+    }
+    let raw = (value.to_bits() & crate::value::POINTER_MASK) as *const u8;
+    if raw.is_null() {
+        return target;
+    }
+    // Real array → bulk append.
+    let as_arr = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
+    if !as_arr.is_null() {
+        return crate::array::js_array_push_spread_f64(target, as_arr);
+    }
+    // Array-like object (arguments): read `length`, copy indexed props.
+    let obj = raw as *const ObjectHeader;
+    let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let len_v = crate::object::js_object_get_field_by_name(obj, len_key);
+    let len_f = f64::from_bits(len_v.bits());
+    if !len_f.is_finite() || len_f < 0.0 {
+        return target;
+    }
+    let n = len_f as u32;
+    let mut cur = target;
+    for i in 0..n {
+        let idx = i.to_string();
+        let key = crate::string::js_string_from_bytes(idx.as_ptr(), idx.len() as u32);
+        let v = crate::object::js_object_get_field_by_name(obj, key);
+        cur = crate::array::js_array_push_f64(cur, f64::from_bits(v.bits()));
+    }
+    cur
+}
+
+/// Keepalive anchor (generated-code-only callee).
+#[used]
+static KEEP_JS_ARRAY_PUSH_SPREAD_ANY: unsafe extern "C" fn(
+    *mut crate::array::ArrayHeader,
+    f64,
+) -> *mut crate::array::ArrayHeader = js_array_push_spread_any;
+
 /// #1787: replay a class expression's constructor on a freshly-allocated
 /// instance. `classobj_value` is the NaN-boxed heap class object the `new`
 /// callee resolved to; `class_cid` is its (template) class_id; `inst` is the

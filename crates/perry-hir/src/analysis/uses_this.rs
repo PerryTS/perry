@@ -9,6 +9,7 @@ pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
     match expr {
         Expr::This => true,
         Expr::SuperCall(_)
+        | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperPropertyGet { .. }
         | Expr::SuperPropertySet { .. }

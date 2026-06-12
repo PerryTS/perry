@@ -336,7 +336,16 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
     match &call.callee {
         ast::Callee::Super(_) => {
-            // super() call in constructor
+            // super() call in constructor. With spread args
+            // (`super(...arguments)` — tsc's pass-through-ctor emit) the
+            // parent ctor is invoked at runtime via the
+            // CLASS_CONSTRUCTORS registry with the materialized args
+            // array; the flat lowering would pass the spread operand as
+            // ONE positional arg (zod's ZodNumber stored the whole
+            // `arguments` object into `this._def`).
+            if let Some(spread_args) = spread_args {
+                return Ok(Expr::SuperCallSpread(spread_args));
+            }
             Ok(Expr::SuperCall(args))
         }
         ast::Callee::Expr(expr) => {

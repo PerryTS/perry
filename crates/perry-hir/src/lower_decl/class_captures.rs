@@ -32,6 +32,7 @@ pub fn synthesize_class_captures(
     setters: &mut Vec<(String, Function)>,
     computed_members: &mut Vec<ClassComputedMember>,
     constructor: &mut Option<Function>,
+    static_methods: &mut Vec<Function>,
 ) {
     let module_level_ids = ctx.module_level_ids.clone();
     let outer_scope_ids: std::collections::HashSet<LocalId> =
@@ -59,6 +60,15 @@ pub fn synthesize_class_captures(
     }
     if let Some(ctor) = constructor.as_ref() {
         for id in collect_method_captures(ctor, &outer_scope_ids, &module_level_ids) {
+            union_captures.insert(id);
+        }
+    }
+    // STATIC methods reference enclosing-fn locals too (vendored zod's
+    // `static create(...)` reads the ZodFirstPartyTypeKind enum local).
+    // Their refs join the union so the decl-site snapshot includes them;
+    // the rewrite below reads the snapshot instead of instance fields.
+    for sm in static_methods.iter() {
+        for id in collect_method_captures(sm, &outer_scope_ids, &module_level_ids) {
             union_captures.insert(id);
         }
     }
@@ -426,6 +436,40 @@ pub fn synthesize_class_captures(
         append_self_sites(&mut member.function.body, &id_map);
     }
 
+    // 2b. STATIC methods: no instance carries `__perry_cap_*` fields, so
+    // the prologue rebinds read the decl-site snapshot instead
+    // (`ClassCaptureValue { class_name, index }` →
+    // `js_class_capture_value(class_id, index)` at codegen). The snapshot
+    // is written by the `RegisterClassCaptures` statement emitted at the
+    // class's declaration position, which runs before any user code can
+    // reference the class (TDZ).
+    for sm in static_methods.iter_mut() {
+        let mut id_map: std::collections::HashMap<LocalId, LocalId> =
+            std::collections::HashMap::new();
+        let mut prologue: Vec<Stmt> = Vec::new();
+        for (index, &outer_id) in captures_vec.iter().enumerate() {
+            let new_id = ctx.fresh_local();
+            id_map.insert(outer_id, new_id);
+            prologue.push(Stmt::Let {
+                id: new_id,
+                name: format!("__perry_cap_{}", outer_id),
+                ty: captured_outer_types
+                    .get(&outer_id)
+                    .cloned()
+                    .unwrap_or(Type::Any),
+                mutable: true,
+                init: Some(Expr::ClassCaptureValue {
+                    class_name: name.to_string(),
+                    index: index as u32,
+                }),
+            });
+        }
+        crate::analysis::remap_local_ids_in_stmts(&mut sm.body, &id_map);
+        prologue.append(&mut sm.body);
+        sm.body = prologue;
+        append_self_sites(&mut sm.body, &id_map);
+    }
+
     // 3. Constructor.
     //
     // Issue #4972: when the class has heritage and NO user-written ctor,
@@ -543,7 +587,7 @@ pub fn synthesize_class_captures(
     let super_pos = ctor
         .body
         .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_))));
+        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
     let insert_at = super_pos.map(|p| p + 1).unwrap_or(0);
     for (i, stmt) in assignment_stmts.into_iter().enumerate() {
         ctor.body.insert(insert_at + i, stmt);

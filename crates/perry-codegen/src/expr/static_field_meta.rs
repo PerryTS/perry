@@ -165,6 +165,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
         }
+        // Read slot `index` of the class's decl-site capture snapshot —
+        // STATIC method prologue rebinds (no instance to carry the
+        // `__perry_cap_*` fields).
+        Expr::ClassCaptureValue { class_name, index } => {
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                let cid_str = class_id.to_string();
+                let idx_str = index.to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_class_capture_value",
+                    &[(crate::types::I32, &cid_str), (crate::types::I32, &idx_str)],
+                ));
+            }
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
         // Issue #894: `static [Symbol.for("k")] = init` inside a
         // class expression returned from a factory function. Emitted
         // by HIR lowering as a `Sequence([…, RegisterClassStaticSymbol,

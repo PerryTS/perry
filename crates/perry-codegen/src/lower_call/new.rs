@@ -108,7 +108,7 @@ fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
 }
 
 fn expr_calls_super(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_)) {
+    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
         return true;
     }
     let mut found = false;
@@ -131,7 +131,7 @@ fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
 }
 
 fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_)) {
+    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
         return true;
     }
     if let Expr::Closure { body, .. } = expr {

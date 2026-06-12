@@ -1469,7 +1469,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => {
             new_dynamic::lower(ctx, expr)
         }
-        Expr::This | Expr::NewTarget | Expr::SuperCall(..) => this_super_call::lower(ctx, expr),
+        Expr::This | Expr::NewTarget | Expr::SuperCall(..) | Expr::SuperCallSpread(..) => {
+            this_super_call::lower(ctx, expr)
+        }
         Expr::IsNaN(..)
         | Expr::MathPow(..)
         | Expr::MathImul(..)
@@ -1893,6 +1895,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::StaticFieldSet { .. }
         | Expr::RegisterClassParentDynamic { .. }
         | Expr::RegisterClassCaptures { .. }
+        | Expr::ClassCaptureValue { .. }
         | Expr::RegisterClassStaticSymbol { .. }
         | Expr::RegisterClassComputedMethod { .. }
         | Expr::RegisterClassComputedAccessor { .. }

@@ -1108,6 +1108,7 @@ pub fn lower_class_decl(
         &mut setters,
         &mut computed_members,
         &mut constructor,
+        &mut static_methods,
     );
 
     // Phase 4.1: register each method's and getter's return type so
@@ -1594,6 +1595,7 @@ pub fn lower_class_from_ast(
         &mut setters,
         &mut computed_members,
         &mut constructor,
+        &mut static_methods,
     );
 
     Ok(Class {

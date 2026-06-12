@@ -203,15 +203,69 @@ pub fn lower_fn_body_block_stmt(
         }
     }
 
+    // Phase 1.5: pre-register sibling class DECLARATION names so forward
+    // references inside earlier statements/method bodies resolve to
+    // `ClassRef` instead of the unknown-global sentinel. JS resolves
+    // these at call time (vendored zod: `ZodType.optional()` calls
+    // `ZodOptional.create(...)` declared far below in the same webpack
+    // module function). Scoped: the previous set is restored on exit so
+    // names don't leak across function bodies.
+    let saved_forward_class_names = ctx.forward_class_names.clone();
+    for stmt in &block.stmts {
+        if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            ctx.forward_class_names
+                .insert(class_decl.ident.sym.to_string());
+        }
+    }
+
     // Phase 2: lower the body. The inner FnDecl arm in `lower_body_stmt`
     // calls `lookup_local(name)` and reuses our pre-defined id.
-    let body = match lower_block_stmt(ctx, block) {
+    let mut body = match lower_block_stmt(ctx, block) {
         Ok(body) => body,
         Err(err) => {
             ctx.current_strict = parent_strict;
+            ctx.forward_class_names = saved_forward_class_names;
             return Err(err);
         }
     };
+    ctx.forward_class_names = saved_forward_class_names;
+
+    // Re-register capture snapshots for classes declared in this body at
+    // its END. The decl-site `RegisterClassCaptures` runs before later
+    // statements assign captured vars (tsc emits TS-enum namespaces AFTER
+    // the classes that reference them — vendored zod's
+    // ZodFirstPartyTypeKind), so static-method snapshot reads and post-
+    // return dynamic constructions need the FINAL values. Inserted before
+    // a trailing `return` when present; bodies with early returns keep the
+    // decl-site snapshot for those paths.
+    {
+        let mut re_regs: Vec<Stmt> = Vec::new();
+        for stmt in &block.stmts {
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                let cname = class_decl.ident.sym.to_string();
+                if let Some(captured) = ctx.lookup_class_captures(&cname) {
+                    if !captured.is_empty() {
+                        let captures: Vec<Expr> =
+                            captured.iter().map(|id| Expr::LocalGet(*id)).collect();
+                        re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                            class_name: cname,
+                            captures,
+                        }));
+                    }
+                }
+            }
+        }
+        if !re_regs.is_empty() {
+            let insert_at = if matches!(body.last(), Some(Stmt::Return(_))) {
+                body.len() - 1
+            } else {
+                body.len()
+            };
+            for (i, s) in re_regs.into_iter().enumerate() {
+                body.insert(insert_at + i, s);
+            }
+        }
+    }
 
     // Undefined-initialised entry slots for hoisted `var`s declared in
     // nested blocks (see predefine_var_bindings_in_function_body docs).

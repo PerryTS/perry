@@ -584,6 +584,7 @@ where
                 f(c);
             }
         }
+        Expr::ClassCaptureValue { .. } => {}
         Expr::RegisterClassStaticSymbol {
             key_expr,
             value_expr,
@@ -852,6 +853,13 @@ where
         }
         Expr::CallSpread { callee, args, .. } => {
             f(callee);
+            for a in args {
+                match a {
+                    CallArg::Expr(e) | CallArg::Spread(e) => f(e),
+                }
+            }
+        }
+        Expr::SuperCallSpread(args) => {
             for a in args {
                 match a {
                     CallArg::Expr(e) | CallArg::Spread(e) => f(e),

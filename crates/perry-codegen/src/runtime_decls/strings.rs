@@ -1130,6 +1130,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Decl-site snapshot of a function-nested class's captured locals —
     // consumed by the dynamic-construction replay (`new mod.C()`).
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);
+    // Static-method prologue read of one decl-site capture snapshot slot.
+    module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
+    // `super(...spread)` — dynamic-arity ancestor ctor invocation on `this`.
+    module.declare_function("js_super_construct_apply", VOID, &[I32, DOUBLE, DOUBLE]);
+    module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
     // Issue #711 part 2: prototype-based class declaration via
     // `<func>.prototype = <obj>`. Binds an object as the function's
     // prototype source; subsequent `class X extends <func>` lookups
