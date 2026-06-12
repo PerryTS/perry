@@ -269,21 +269,43 @@ fn inline_constructor_param_values(
     lowered_args: &[String],
 ) -> Vec<String> {
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    // Synthesized `__perry_cap_<id>` capture params are always TRAILING
+    // params, and `Expr::New` sites always append the capture values after
+    // the user args — but the two sides need not agree on the USER arity.
+    // A no-user-ctor capturing class has zero user params while the `new`
+    // site may pass user args (`new ZodString({})` — the vendored-zod
+    // bundle), so positional binding put the user arg into the capture
+    // slot. Bind capture params from the args TAIL and user params from
+    // the head.
+    let n_caps = params
+        .iter()
+        .filter(|p| {
+            p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+        })
+        .count()
+        .min(lowered_args.len());
+    let user_len = lowered_args.len() - n_caps;
+    let (user_args, cap_args) = lowered_args.split_at(user_len);
+    let mut cap_iter = cap_args.iter();
+
     let mut out = Vec::with_capacity(params.len());
     let mut visible_index = 0usize;
     for param in params {
-        if param.arguments_object.is_some() {
-            out.push(pack_lowered_args_array(ctx, lowered_args));
+        if param.name.starts_with("__perry_cap_") && !param.is_rest && param.arguments_object.is_none()
+        {
+            out.push(cap_iter.next().cloned().unwrap_or_else(|| undef.clone()));
+        } else if param.arguments_object.is_some() {
+            out.push(pack_lowered_args_array(ctx, user_args));
         } else if param.is_rest {
-            let tail = if visible_index < lowered_args.len() {
-                &lowered_args[visible_index..]
+            let tail = if visible_index < user_args.len() {
+                &user_args[visible_index..]
             } else {
                 &[]
             };
             out.push(pack_lowered_args_array(ctx, tail));
         } else {
             out.push(
-                lowered_args
+                user_args
                     .get(visible_index)
                     .cloned()
                     .unwrap_or_else(|| undef.clone()),

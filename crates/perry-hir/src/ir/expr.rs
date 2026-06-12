@@ -364,6 +364,19 @@ pub enum Expr {
         parent_expr: Box<Expr>,
     },
 
+    /// Snapshot the CURRENT values of a function-nested class's captured
+    /// outer-scope locals into the runtime `CLASS_CAPTURE_VALUES` table.
+    /// Emitted at the source-order position of the class declaration
+    /// (parallel to `RegisterClassParentDynamic`), so dynamic construction
+    /// of the class VALUE (`exports.C = C; … new mod.C()` — the webpack /
+    /// zod bundle pattern) can fill the synthesized `__perry_cap_<id>`
+    /// constructor params. Static `new C()` sites keep passing captures as
+    /// trailing args and don't consult the table.
+    RegisterClassCaptures {
+        class_name: String,
+        captures: Vec<Expr>,
+    },
+
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the
     /// class is returned from a factory function body. The static-Symbol
     /// registration must re-run each time the factory is called, with

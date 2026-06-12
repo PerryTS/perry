@@ -568,6 +568,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
 
             if let Some(parent_ctor) = &effective_parent_class.constructor {
+                // The parent's synthesized `__perry_cap_*` params (a parent
+                // class that captures enclosing locals) are NOT in the
+                // user-written `super(...)` args. The CHILD's ctor carries
+                // same-named cap params (capture union), bound in the current
+                // scope — append their values by NAME so the binder's
+                // tail-aligned cap binding sees them. Without this,
+                // tail-binding pulled the LAST user arg into the parent's cap
+                // slot and the parent ctor's real params read undefined
+                // (vendored zod: ZodType's `this._def = def` got undefined).
+                let parent_cap_params: Vec<String> = parent_ctor
+                    .params
+                    .iter()
+                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .map(|p| p.name.clone())
+                    .collect();
+                if !parent_cap_params.is_empty() {
+                    let child_cap_ids: std::collections::HashMap<String, u32> = ctx
+                        .class_stack
+                        .last()
+                        .and_then(|child| ctx.classes.get(child.as_str()))
+                        .and_then(|c| c.constructor.as_ref())
+                        .map(|ctor| {
+                            ctor.params
+                                .iter()
+                                .filter(|p| p.name.starts_with("__perry_cap_"))
+                                .map(|p| (p.name.clone(), p.id))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for cap_name in &parent_cap_params {
+                        let val = child_cap_ids
+                            .get(cap_name)
+                            .and_then(|id| ctx.locals.get(id).cloned())
+                            .map(|slot| ctx.block().load(DOUBLE, &slot));
+                        lowered_args.push(val.unwrap_or_else(|| {
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                        }));
+                    }
+                }
                 let saved_scope =
                     bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
 

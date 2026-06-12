@@ -209,7 +209,9 @@ pub fn synthesize_class_captures(
     // Helper closure: build a fresh-id map for one function's body,
     // rewrite the body refs (with field-write propagation), and
     // prepend the rebinding lets.
-    let rewrite_method_body = |ctx: &mut LoweringContext, body: &mut Vec<Stmt>| {
+    let rewrite_method_body = |ctx: &mut LoweringContext,
+                               body: &mut Vec<Stmt>|
+     -> std::collections::HashMap<LocalId, LocalId> {
         let mut id_map: std::collections::HashMap<LocalId, LocalId> =
             std::collections::HashMap::new();
         let mut prologue: Vec<Stmt> = Vec::new();
@@ -240,23 +242,188 @@ pub fn synthesize_class_captures(
         );
         prologue.append(body);
         *body = prologue;
+        id_map
     };
 
-    // 2. Methods / getters / setters.
+    // SELF-construction inside this class's own members: `new <Self>(…)`
+    // sites in method bodies were lowered BEFORE this class registered its
+    // captures, so the `Expr::New` Ident arm appended nothing (vendored
+    // zod's `_addCheck(e){ return new ZodString({…this._def…}) }`). After
+    // `rewrite_method_body` runs, the method prologue rebinds every capture
+    // under a fresh id — append those rebind ids here. Nested closure
+    // bodies are walked too; their capture lists already include the
+    // prologue ids when the closure body references them, and a closure
+    // whose ONLY reference is the appended arg gets the id added to its
+    // captures list below.
+    fn append_self_new_args_expr(
+        expr: &mut Expr,
+        class_name: &str,
+        cap_args: &[(LocalId, LocalId)],
+    ) {
+        if let Expr::New {
+            class_name: cn,
+            args,
+            ..
+        } = expr
+        {
+            if cn == class_name {
+                for (_, fresh) in cap_args {
+                    args.push(Expr::LocalGet(*fresh));
+                }
+            }
+        }
+        if let Expr::Closure { body, captures, .. } = expr {
+            for stmt in body.iter_mut() {
+                append_self_new_args_stmt(stmt, class_name, cap_args);
+            }
+            // The appended LocalGet reads the enclosing method's rebind
+            // slot — make sure the closure captures it.
+            let mut refs = Vec::new();
+            let mut visited = std::collections::HashSet::new();
+            for stmt in body.iter() {
+                crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+            }
+            for (_, fresh) in cap_args {
+                if refs.contains(fresh) && !captures.contains(fresh) {
+                    captures.push(*fresh);
+                }
+            }
+            return;
+        }
+        crate::walker::walk_expr_children_mut(expr, &mut |child| {
+            append_self_new_args_expr(child, class_name, cap_args)
+        });
+    }
+    fn append_self_new_args_stmt(
+        stmt: &mut Stmt,
+        class_name: &str,
+        cap_args: &[(LocalId, LocalId)],
+    ) {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(e) = init {
+                    append_self_new_args_expr(e, class_name, cap_args);
+                }
+            }
+            Stmt::Expr(e) | Stmt::Throw(e) => append_self_new_args_expr(e, class_name, cap_args),
+            Stmt::Return(opt) => {
+                if let Some(e) = opt {
+                    append_self_new_args_expr(e, class_name, cap_args);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                append_self_new_args_expr(condition, class_name, cap_args);
+                for s in then_branch {
+                    append_self_new_args_stmt(s, class_name, cap_args);
+                }
+                if let Some(eb) = else_branch {
+                    for s in eb {
+                        append_self_new_args_stmt(s, class_name, cap_args);
+                    }
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                append_self_new_args_expr(condition, class_name, cap_args);
+                for s in body {
+                    append_self_new_args_stmt(s, class_name, cap_args);
+                }
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(s) = init {
+                    append_self_new_args_stmt(s, class_name, cap_args);
+                }
+                if let Some(e) = condition {
+                    append_self_new_args_expr(e, class_name, cap_args);
+                }
+                if let Some(e) = update {
+                    append_self_new_args_expr(e, class_name, cap_args);
+                }
+                for s in body {
+                    append_self_new_args_stmt(s, class_name, cap_args);
+                }
+            }
+            Stmt::Labeled { body, .. } => append_self_new_args_stmt(body, class_name, cap_args),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                for s in body {
+                    append_self_new_args_stmt(s, class_name, cap_args);
+                }
+                if let Some(c) = catch {
+                    for s in &mut c.body {
+                        append_self_new_args_stmt(s, class_name, cap_args);
+                    }
+                }
+                if let Some(fb) = finally {
+                    for s in fb {
+                        append_self_new_args_stmt(s, class_name, cap_args);
+                    }
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                append_self_new_args_expr(discriminant, class_name, cap_args);
+                for c in cases {
+                    if let Some(t) = &mut c.test {
+                        append_self_new_args_expr(t, class_name, cap_args);
+                    }
+                    for s in &mut c.body {
+                        append_self_new_args_stmt(s, class_name, cap_args);
+                    }
+                }
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_) => {}
+        }
+    }
+
+    // 2. Methods / getters / setters. After each body's capture rebind,
+    //    append the rebind ids to any SELF-construction `new <Self>(…)`
+    //    sites the body contains (lowered before this class registered).
+    let append_self_sites = |body: &mut Vec<Stmt>,
+                             id_map: &std::collections::HashMap<LocalId, LocalId>| {
+        let cap_args: Vec<(LocalId, LocalId)> = captures_vec
+            .iter()
+            .filter_map(|oid| id_map.get(oid).map(|f| (*oid, *f)))
+            .collect();
+        for stmt in body.iter_mut() {
+            append_self_new_args_stmt(stmt, name, &cap_args);
+        }
+    };
     for m in methods.iter_mut() {
-        rewrite_method_body(ctx, &mut m.body);
+        let id_map = rewrite_method_body(ctx, &mut m.body);
+        append_self_sites(&mut m.body, &id_map);
     }
     for (_, g) in getters.iter_mut() {
-        rewrite_method_body(ctx, &mut g.body);
+        let id_map = rewrite_method_body(ctx, &mut g.body);
+        append_self_sites(&mut g.body, &id_map);
     }
     for (_, s) in setters.iter_mut() {
-        rewrite_method_body(ctx, &mut s.body);
+        let id_map = rewrite_method_body(ctx, &mut s.body);
+        append_self_sites(&mut s.body, &id_map);
     }
     for member in computed_members
         .iter_mut()
         .filter(|member| !member.is_static)
     {
-        rewrite_method_body(ctx, &mut member.function.body);
+        let id_map = rewrite_method_body(ctx, &mut member.function.body);
+        append_self_sites(&mut member.function.body, &id_map);
     }
 
     // 3. Constructor.
@@ -273,26 +440,77 @@ pub fn synthesize_class_captures(
     // forced a ctor into existence. The SuperCall also routes known
     // user-class parents through the inline-parent-ctor arm so the
     // parent body runs, matching the no-own-ctor `new` path.
-    let mut ctor = constructor.take().unwrap_or_else(|| Function {
-        id: ctx.fresh_func(),
-        name: format!("{}::constructor", name),
-        type_params: Vec::new(),
-        params: Vec::new(),
-        return_type: Type::Void,
-        body: if has_heritage {
-            vec![Stmt::Expr(Expr::SuperCall(Vec::new()))]
-        } else {
-            Vec::new()
-        },
-        is_async: false,
-        is_generator: false,
-        is_strict: true,
-        was_plain_async: false,
-        was_unrolled: false,
-        is_exported: false,
-        captures: Vec::new(),
-        decorators: Vec::new(),
-    });
+    let mut ctor = match constructor.take() {
+        Some(c) => c,
+        None => {
+            // The spec default ctor FORWARDS its args:
+            // `constructor(...args) { super(...args) }`. A bare
+            // `SuperCall([])` dropped the construction-site user args, so
+            // `new Derived({def})` left the parent ctor's params undefined
+            // (vendored zod: ZodString.create → new ZodString({...}) →
+            // ZodType ctor never saw `def`, `this._def` stayed undefined).
+            // Synthesize explicit forwarding params matching the closest
+            // pending-ancestor ctor's USER arity (its `__perry_cap_*`
+            // params excluded). Ancestors outside `pending_classes`
+            // (module-level / native parents) keep the no-arg baseline.
+            let parent_user_arity = if has_heritage {
+                let mut arity = 0usize;
+                let mut walker: Option<String> = extends_name.map(|s| s.to_string());
+                while let Some(pname) = walker.take() {
+                    let Some(pc) = ctx.pending_classes.iter().find(|c| c.name == pname) else {
+                        break;
+                    };
+                    if let Some(pctor) = pc.constructor.as_ref() {
+                        arity = pctor
+                            .params
+                            .iter()
+                            .filter(|p| !p.name.starts_with("__perry_cap_"))
+                            .count();
+                        break;
+                    }
+                    walker = pc.extends_name.clone();
+                }
+                arity
+            } else {
+                0
+            };
+            let mut params: Vec<Param> = Vec::with_capacity(parent_user_arity);
+            let mut super_args: Vec<Expr> = Vec::with_capacity(parent_user_arity);
+            for i in 0..parent_user_arity {
+                let pid = ctx.fresh_local();
+                params.push(Param {
+                    id: pid,
+                    name: format!("__perry_dflt_arg_{}", i),
+                    ty: Type::Any,
+                    default: None,
+                    decorators: Vec::new(),
+                    is_rest: false,
+                    arguments_object: None,
+                });
+                super_args.push(Expr::LocalGet(pid));
+            }
+            Function {
+                id: ctx.fresh_func(),
+                name: format!("{}::constructor", name),
+                type_params: Vec::new(),
+                params,
+                return_type: Type::Void,
+                body: if has_heritage {
+                    vec![Stmt::Expr(Expr::SuperCall(super_args))]
+                } else {
+                    Vec::new()
+                },
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            }
+        }
+    };
     let mut ctor_id_map: std::collections::HashMap<LocalId, LocalId> =
         std::collections::HashMap::new();
     let mut assignment_stmts: Vec<Stmt> = Vec::with_capacity(captures_vec.len());
@@ -321,6 +539,7 @@ pub fn synthesize_class_captures(
     // Rewrite user-written ctor body BEFORE inserting the assignment
     // stmts (which already reference the fresh ids directly).
     crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
+    append_self_sites(&mut ctor.body, &ctor_id_map);
     let super_pos = ctor
         .body
         .iter()

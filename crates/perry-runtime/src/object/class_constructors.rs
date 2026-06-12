@@ -65,6 +65,69 @@ fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32)> {
         .copied()
 }
 
+thread_local! {
+    /// Decl-site snapshots of a function-nested class DECLARATION's captured
+    /// outer locals, keyed by class_id. Filled by the codegen-emitted
+    /// `js_class_register_capture_values` call at the class's source-order
+    /// declaration position (parallel to `js_register_class_parent_dynamic`),
+    /// consumed by `replay_registered_class_constructor` so dynamic
+    /// construction of the class VALUE (`exports.C = C; new mod.C()` — the
+    /// webpack / vendored-zod bundle pattern) fills the synthesized
+    /// `__perry_cap_<id>` ctor params. Re-running the enclosing function
+    /// overwrites the snapshot (last-definition-wins) — exact for the
+    /// run-once module-factory pattern these bundles use; class EXPRESSIONS
+    /// keep their per-evaluation `__perry_ctor_caps` snapshot instead.
+    static CLASS_CAPTURE_VALUES: std::cell::RefCell<HashMap<u32, Vec<u64>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Codegen FFI: snapshot `len` capture values for `class_id`. See
+/// [`CLASS_CAPTURE_VALUES`].
+///
+/// # Safety
+/// `values_ptr` must point at `len` readable f64 slots.
+#[no_mangle]
+pub unsafe extern "C" fn js_class_register_capture_values(
+    class_id: u32,
+    values_ptr: *const f64,
+    len: usize,
+) {
+    if class_id == 0 || values_ptr.is_null() {
+        return;
+    }
+    let mut values = Vec::with_capacity(len);
+    for i in 0..len {
+        values.push((*values_ptr.add(i)).to_bits());
+    }
+    CLASS_CAPTURE_VALUES.with(|m| {
+        m.borrow_mut().insert(class_id, values);
+    });
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build —
+/// `js_class_register_capture_values` is a generated-code-only callee.
+#[used]
+static KEEP_JS_CLASS_REGISTER_CAPTURE_VALUES: unsafe extern "C" fn(u32, *const f64, usize) =
+    js_class_register_capture_values;
+
+/// GC root scan for the capture-value snapshots (registered alongside the
+/// other runtime mutable-root scanners in `gc::mod`).
+pub fn scan_class_capture_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CLASS_CAPTURE_VALUES.with(|m| {
+        let mut m = m.borrow_mut();
+        for values in m.values_mut() {
+            for bits in values.iter_mut() {
+                visitor.visit_nanbox_u64_slot(bits);
+            }
+        }
+    });
+}
+
+/// The decl-site capture snapshot for `class_id`, if one was registered.
+fn class_capture_values(class_id: u32) -> Option<Vec<u64>> {
+    CLASS_CAPTURE_VALUES.with(|m| m.borrow().get(&class_id).cloned())
+}
+
 /// #1787: replay a class expression's constructor on a freshly-allocated
 /// instance. `classobj_value` is the NaN-boxed heap class object the `new`
 /// callee resolved to; `class_cid` is its (template) class_id; `inst` is the
@@ -145,14 +208,23 @@ pub(crate) unsafe fn replay_registered_class_constructor(
         return;
     };
 
+    // A function-nested class declaration may carry a decl-site capture
+    // snapshot (see CLASS_CAPTURE_VALUES). The ctor's trailing
+    // `__perry_cap_<id>` params are filled from it; user args fill the rest.
+    let caps = class_capture_values(class_cid).unwrap_or_default();
+    let user_params = (total_params as usize).saturating_sub(caps.len());
+
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-    for i in 0..total_params as usize {
+    for i in 0..user_params {
         if !args_ptr.is_null() && i < args_len {
             final_args.push(*args_ptr.add(i));
         } else {
             final_args.push(undef);
         }
+    }
+    for bits in &caps {
+        final_args.push(f64::from_bits(*bits));
     }
     let _ = call_vtable_method(
         ctor_ptr,

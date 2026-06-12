@@ -579,6 +579,11 @@ where
         Expr::RegisterClassParentDynamic { parent_expr, .. } => {
             f(parent_expr);
         }
+        Expr::RegisterClassCaptures { captures, .. } => {
+            for c in captures {
+                f(c);
+            }
+        }
         Expr::RegisterClassStaticSymbol {
             key_expr,
             value_expr,

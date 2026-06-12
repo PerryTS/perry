@@ -285,6 +285,23 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         member,
                     )));
                 }
+                // A function-nested class that captures enclosing locals
+                // (`const n = require('x'); class C { m() { n.f() } }` — the
+                // webpack/zod bundle pattern) snapshots the CURRENT capture
+                // values at the decl site so dynamic construction of the
+                // class VALUE (`exports.C = C; new mod.C()`) can fill the
+                // synthesized `__perry_cap_<id>` ctor params. Static `new C()`
+                // sites still pass captures as trailing args directly.
+                if let Some(captured) = ctx.lookup_class_captures(&class.name) {
+                    if !captured.is_empty() {
+                        let captures: Vec<Expr> =
+                            captured.iter().map(|id| Expr::LocalGet(*id)).collect();
+                        result.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                            class_name: class.name.clone(),
+                            captures,
+                        }));
+                    }
+                }
                 ctx.pending_classes.push(class);
             } else {
                 // Duplicate same-named class: still evaluate its computed

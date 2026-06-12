@@ -1892,6 +1892,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StaticFieldGet { .. }
         | Expr::StaticFieldSet { .. }
         | Expr::RegisterClassParentDynamic { .. }
+        | Expr::RegisterClassCaptures { .. }
         | Expr::RegisterClassStaticSymbol { .. }
         | Expr::RegisterClassComputedMethod { .. }
         | Expr::RegisterClassComputedAccessor { .. }
