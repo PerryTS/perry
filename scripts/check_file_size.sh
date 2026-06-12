@@ -273,6 +273,12 @@ crates/perry-runtime/src/typedarray/mod.rs
 # prologue lift (run param binding at call time) + per-yield operand Await.
 # Splitting the state builder from the closure assembly is tracked under #1435.
 crates/perry-transform/src/generator/lower.rs
+# HTTP/2 server-and-client session surface (settings/ping/goaway controls,
+# stream lifecycle, the loopback connect/session event-ordering machinery).
+# Crossed the 2000-line gate after the Node-ordering deferral that emits the
+# server `session` event after the client `connect`. Splitting the session
+# event pump from the handle/settings surface is tracked under #1435.
+crates/perry-ext-http-server/src/http2_server.rs
 EOF
 )
 
