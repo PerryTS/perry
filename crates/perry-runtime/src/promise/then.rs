@@ -1313,7 +1313,10 @@ fn finally_wrapper_common(
         }
         return undef;
     }
-    let ret = crate::closure::js_closure_call1(on_finally, undef);
+    // Spec (Promise.prototype.finally): `onFinally` is invoked with NO
+    // arguments. Calling it with a single `undefined` made `arguments.length`
+    // report 1, failing every finally test that asserts a zero-arg invocation.
+    let ret = crate::closure::js_closure_call0(on_finally);
     crate::exception::js_try_end();
 
     // If onFinally returned a Promise/thenable, adopt it: wait for it before

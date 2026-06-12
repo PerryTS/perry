@@ -4209,7 +4209,7 @@ declare module "zlib" {
   /** stdlib */
   export function deflateRaw(buffer: any, callback: any): void;
   /** stdlib */
-  export function deflateRawSync(p0: string): Buffer;
+  export function deflateRawSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function deflateSync(p0: any, options?: any): Buffer;
   /** stdlib */

@@ -1148,28 +1148,34 @@ pub extern "C" fn js_string_split_regex_n(
         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
 
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     unsafe {
-        // Fancy-regex fallback (lookbehind/backreferences): `fancy_regex` has no
-        // `split`, so walk non-overlapping matches and slice between them. This
-        // mirrors the `regex` crate's `split` (delimiter text dropped, captured
-        // groups NOT spliced into the result — same as the standard path here).
-        let mut parts: Vec<&str> = if let Some(fre) = lookup_fancy_regex(re) {
-            let mut v: Vec<&str> = Vec::new();
+        // Each element is either a substring (`Some`) or `undefined` (`None`,
+        // for an unmatched capture group spliced into the result).
+        let parts: Vec<Option<String>> = if let Some(fre) = lookup_fancy_regex(re) {
+            // Fancy-regex fallback (lookbehind/backreferences): `fancy_regex` has
+            // no `split`, so walk non-overlapping matches and slice between them.
+            // (Captured-group splicing is not reproduced for this engine.)
+            let mut v: Vec<Option<String>> = Vec::new();
             let mut last = 0usize;
             let mut iter = fre.find_iter(&str_data);
             while let Some(Ok(m)) = iter.next() {
-                v.push(&str_data[last..m.start()]);
+                v.push(Some(str_data[last..m.start()].to_string()));
                 last = m.end();
             }
-            v.push(&str_data[last..]);
+            v.push(Some(str_data[last..].to_string()));
+            if limit > 0 && (v.len() as i64) > (limit as i64) {
+                v.truncate(limit as usize);
+            }
             v
         } else {
-            let regex = &*(*re).regex_ptr;
-            regex.split(&str_data).collect()
+            // Standard engine: the JS `RegExp.prototype[Symbol.split]` algorithm
+            // (21.2.5.11). The `regex` crate's own `split` diverges from JS for
+            // zero-width matches (it emits leading/trailing/consecutive empty
+            // strings the spec's `e == p` skip suppresses) and never splices
+            // captured groups, so walk the string the spec's way instead.
+            crate::string::spec_regex_split(&*(*re).regex_ptr, &str_data, limit)
         };
-        if limit > 0 && (parts.len() as i64) > (limit as i64) {
-            parts.truncate(limit as usize);
-        }
 
         let arr = crate::array::js_array_alloc(parts.len() as u32);
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -1177,9 +1183,14 @@ pub extern "C" fn js_string_split_regex_n(
         (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = parts.len() as u32;
 
         for (i, part) in parts.iter().enumerate() {
-            let str_ptr = js_string_from_str(part) as u64;
+            let nanboxed = match part {
+                Some(text) => {
+                    let str_ptr = js_string_from_str(text) as u64;
+                    STRING_TAG | (str_ptr & POINTER_MASK)
+                }
+                None => TAG_UNDEFINED,
+            };
             let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let nanboxed = STRING_TAG | (str_ptr & POINTER_MASK);
             // GC_STORE_AUDIT(BARRIERED): regex split result slot uses the shared array slot-store helper.
             crate::array::store_array_slot(arr, i, nanboxed);
         }
