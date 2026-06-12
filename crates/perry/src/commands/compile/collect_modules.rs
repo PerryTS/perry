@@ -501,16 +501,15 @@ fn collect_module_one(
     // surfaces as an unsupported-module error rather than silently running).
     let should_use_js_runtime =
         (is_js_file(&canonical) && !is_in_compiled_pkg && is_in_node_modules)
-            || is_declaration_file(&canonical)
-            || is_json;
+            || is_declaration_file(&canonical);
 
-    // Skip JSON files — they're data, not code (imported via `with { type: "json" }`)
-    if is_json {
-        return Ok(ModuleDiscovery {
-            finish: None,
-            children: pending,
-        });
-    }
+    // #348 follow-up: JSON module imports (`import data from "./x.json"`,
+    // optionally with `with { type: "json" }`) are NOT skipped — they compile
+    // to a native module whose default export is the parsed data (synthesized
+    // as `export default <json>;` just below). Previously JSON was handed to
+    // the (now-removed) JS runtime / skipped outright, leaving the default
+    // import bound to the empty-module sentinel — which broke cli-boxes (and
+    // thus ink's `borderStyle` box-drawing).
 
     if should_use_js_runtime {
         // Skip declaration files - they're just type information
@@ -607,6 +606,23 @@ fn collect_module_one(
     // It's a TypeScript file to compile natively
     let raw_source = fs::read_to_string(&canonical)
         .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+    // JSON module import: turn the data file into a native ESM module whose
+    // default export is the parsed value. JSON is a syntactic subset of a JS
+    // expression, so `export default <json>;` parses and lowers like any other
+    // module. Validate as JSON first so a malformed file yields a clear error
+    // rather than a confusing TS parse failure on the synthesized source.
+    let raw_source = if is_json {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&raw_source) {
+            return Err(anyhow!(
+                "Failed to parse JSON module {}: {}",
+                canonical.display(),
+                e
+            ));
+        }
+        format!("export default {};\n", raw_source.trim())
+    } else {
+        raw_source
+    };
     if is_in_compiled_pkg {
         refuse_compile_package_native_addon(ctx, &canonical)?;
     }

@@ -1,3 +1,62 @@
+## v0.5.1162 — feat: native yoga-layout via taffy + JSON module imports + Context.Provider fix (ink #348 end-to-end)
+
+Makes `ink` (React-based TUI) compile **and render** fully natively — no WASM
+yoga, no V8. Three independent changes land together under #348.
+
+### 1. Native `perry/yoga` backend over taffy
+
+`yoga-layout` (the WASM flexbox engine ink depends on for geometry) is replaced
+by a native backend built on `taffy` 0.7 (already a `perry-runtime` dependency).
+
+- New `crates/perry-runtime/src/yoga.rs`: a handle-based node store
+  (`YOGA_NODES`) with the full FFI surface ink uses — node new/free,
+  insert/remove/child-count, set number/edge/gap/enum props, measure-func
+  register/unregister, `calculateLayout`, and computed-box/edge getters. Each
+  `calculateLayout` builds a fresh `TaffyTree`, wires per-node measure
+  callbacks back into JS via `js_native_call_value`, and computes layout with
+  `compute_layout_with_measure`. A GC root scanner marks the live measure
+  callbacks.
+- New `crates/perry-codegen/src/lower_call/native_table/yoga.rs`: 14
+  `NativeModSig` rows mapping the `perry/yoga` method names to the runtime
+  entry points; registered in `native_table/mod.rs`.
+- `perry/yoga` added to the perry-namespace module list in
+  `perry-api-manifest`.
+- `node_modules/yoga-layout`'s `src/index.ts` is a thin shim re-exporting the
+  native primitives behind the real yoga `Node`/`Config` API surface.
+
+### 2. JSON module imports compile to a native default export
+
+`import data from "./x.json"` (with or without `with { type: "json" }`) was
+previously **skipped entirely** during module collection, leaving the default
+import bound to the empty-module sentinel. ink's `cli-boxes` dependency
+(`import cliBoxes from "./boxes.json"`) therefore resolved to `undefined`, and
+any `<Box borderStyle="round">` threw `Cannot read properties of undefined
+(reading 'topLeft')`.
+
+`crates/perry/src/commands/compile/collect_modules.rs` now materializes a JSON
+import as a native ESM module: the file is validated as JSON, then compiled as
+`export default <json>;` (JSON being a syntactic subset of a JS expression) and
+flows through the normal parse → lower → codegen path. Non-JSON modules are
+unaffected (identical code path). Malformed JSON now fails with a clear
+`Failed to parse JSON module …` error instead of silently producing the
+sentinel.
+
+### 3. Labeled `break` from a nested `switch` resolves to the outer switch
+
+A labeled `switch` did not register its label as a break target, so a
+`break <label>;` from a *nested* switch (as in react-reconciler's
+`createFiberFromTypeAndProps`) escaped to the wrong exit — dropping
+`Context.Provider` children, so ink rendered nothing. `switch_stmt.rs` now
+registers the consumed label like loops already did.
+
+Result: `render(<App/>)` with nested Boxes, `flexDirection` row/column,
+`padding`/`margin`/`width`/`justifyContent`, and `borderStyle` all lay out via
+taffy and emit positioned ANSI from a single native executable.
+
+Known remaining follow-up (separate, minor): `<Text dimColor>` renders as
+`[object Object]` (boolean style-modifier handling in ink's Text); `color=`
+works.
+
 ## v0.5.1161 — fix(http): `server.ref()`/`server.unref()` return `this` instead of a raw number (#5011)
 
 Fixes #5011 — `server.ref()` and `server.unref()` on a `node:http`/`node:https`
