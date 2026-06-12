@@ -190,9 +190,6 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_http_server_close_all_connections", VOID, &[I64]);
     module.declare_function("js_node_http_server_close_idle_connections", VOID, &[I64]);
-    // #5011 — ref()/unref() return the receiver handle (Node returns `this`).
-    module.declare_function("js_node_http_server_ref", I64, &[I64]);
-    module.declare_function("js_node_http_server_unref", I64, &[I64]);
     module.declare_function("js_node_http_server_address_json", I64, &[I64]);
     module.declare_function("js_node_http_server_listening", I32, &[I64]);
     module.declare_function("js_node_http_server_listening_value", DOUBLE, &[I64]);
@@ -282,9 +279,6 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_https_server_close", VOID, &[I64, I64]);
     module.declare_function("js_node_https_server_close_all_connections", VOID, &[I64]);
     module.declare_function("js_node_https_server_close_idle_connections", VOID, &[I64]);
-    // #5011 — ref()/unref() return the receiver handle (Node returns `this`).
-    module.declare_function("js_node_https_server_ref", I64, &[I64]);
-    module.declare_function("js_node_https_server_unref", I64, &[I64]);
     module.declare_function("js_node_https_server_address_json", I64, &[I64]);
     module.declare_function("js_node_https_server_on", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_node_https_server_listening_value", DOUBLE, &[I64]);

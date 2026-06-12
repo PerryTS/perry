@@ -338,4 +338,5 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_net_socket_set_encoding", I64, &[I64, I64]);
 
     declare_stdlib_ffi(module);
+    declare_stdlib_ffi_part2(module);
 }

@@ -16,12 +16,14 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
 mod arrays;
 mod objects;
 mod stdlib_ffi;
+mod stdlib_ffi_part2;
 mod strings;
 mod strings_part2;
 
 pub use arrays::declare_phase_b_arrays;
 pub use objects::declare_phase_b_objects;
 pub use stdlib_ffi::declare_stdlib_ffi;
+pub(crate) use stdlib_ffi_part2::declare_stdlib_ffi_part2;
 pub use strings::declare_phase_b_strings;
 pub(crate) use strings_part2::declare_phase_b_strings_part2;
 
