@@ -2385,8 +2385,10 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         };
         let present = unsafe { read_native_module_name(obj_ptr) }
             .as_deref()
-            .is_some_and(|module_name| super::native_module::native_module_vtable()
-                .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name)));
+            .is_some_and(|module_name| {
+                super::native_module::native_module_vtable()
+                    .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
+            });
         return if present { nanbox_true } else { nanbox_false };
     }
 

@@ -632,8 +632,7 @@ pub(super) fn build_optimized_libs(
             // (codegen declares all stdlib externs there), and mixing an
             // abort runtime with the unwind stdlib is not supported.
             let runtime = if panic_abort_safe && !ctx.needs_stdlib {
-                let found =
-                    super::library_search::find_runtime_abort_library(target);
+                let found = super::library_search::find_runtime_abort_library(target);
                 if found.is_some() && matches!(format, OutputFormat::Text) && verbose > 0 {
                     eprintln!("  auto-optimize: using prebuilt panic=abort runtime");
                 }

@@ -619,7 +619,7 @@ pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
     unsafe {
         let module = "v8.GCProfiler";
         crate::object::install_native_module_vtable();
-    let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
+        let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
         let module_name = js_string_from_bytes(module.as_ptr(), module.len() as u32);
         crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
         crate::object::js_object_set_field(obj, 1, JSValue::bool(false));

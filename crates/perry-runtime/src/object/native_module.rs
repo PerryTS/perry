@@ -965,7 +965,10 @@ pub(crate) unsafe fn call_native_module_dispatch_hook(
     match native_module_vtable() {
         Some(vt) => (vt.dispatch)(obj, method_name, args_ptr, args_len),
         None => {
-            debug_assert!(false, "native-module method call before any namespace was created");
+            debug_assert!(
+                false,
+                "native-module method call before any namespace was created"
+            );
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
     }
@@ -8491,7 +8494,8 @@ unsafe fn vt_own_keys_array(obj: *const ObjectHeader) -> Option<*mut crate::arra
     ) && crate::process::process_permission_enabled();
     let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
     for key_bytes in keys {
-        let key_str = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let key_str =
+            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
         crate::array::js_array_push(out, JSValue::string_ptr(key_str));
     }
     if include_permission {

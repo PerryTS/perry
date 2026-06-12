@@ -5178,7 +5178,9 @@ unsafe fn try_native_static_method_in_proto_chain(
                 let module = b"buffer.Buffer";
                 let ns = js_create_native_module_namespace(module.as_ptr(), module.len());
                 let ns_obj = JSValue::from_bits(ns.to_bits()).as_pointer::<ObjectHeader>();
-                let result = crate::object::native_module::call_native_module_dispatch_hook(ns_obj, name, args_ptr, args_len);
+                let result = crate::object::native_module::call_native_module_dispatch_hook(
+                    ns_obj, name, args_ptr, args_len,
+                );
                 if !JSValue::from_bits(result.to_bits()).is_undefined() {
                     return Some(result);
                 }
@@ -5189,7 +5191,9 @@ unsafe fn try_native_static_method_in_proto_chain(
             if read_native_module_name(proto_obj as *const ObjectHeader).as_deref()
                 == Some("buffer.Buffer")
             {
-                let result = crate::object::native_module::call_native_module_dispatch_hook(proto_obj, name, args_ptr, args_len);
+                let result = crate::object::native_module::call_native_module_dispatch_hook(
+                    proto_obj, name, args_ptr, args_len,
+                );
                 if !JSValue::from_bits(result.to_bits()).is_undefined() {
                     return Some(result);
                 }

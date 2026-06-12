@@ -914,8 +914,10 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             };
             let present = read_native_module_name(obj)
                 .as_deref()
-                .is_some_and(|module_name| super::native_module::native_module_vtable()
-                .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name)));
+                .is_some_and(|module_name| {
+                    super::native_module::native_module_vtable()
+                        .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
+                });
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
