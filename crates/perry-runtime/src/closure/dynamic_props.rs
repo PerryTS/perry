@@ -412,8 +412,8 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
                 }
                 let receiver = crate::value::js_nanbox_pointer(ptr as i64);
                 let getter_bits = clone_closure_rebind_this(acc.get, receiver);
-                let getter =
-                    (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+                let getter = (getter_bits & crate::value::POINTER_MASK)
+                    as *const crate::closure::ClosureHeader;
                 if getter.is_null() {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }

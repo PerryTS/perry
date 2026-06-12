@@ -1576,3 +1576,122 @@ mod declaration_sidecar_tests {
         assert_eq!(found.len(), 5, "exactly the five real packages");
     }
 }
+
+/// Issue #5039 — Node subpath imports (`#…` specifiers resolved through the
+/// importing package's own `package.json` `"imports"` map). chalk 5 loads
+/// its vendored deps this way (`import ansiStyles from '#ansi-styles'`);
+/// before the fix the specifier fell through bare-package resolution, the
+/// import silently came up empty, and every chalk style table was blank
+/// (ink's `<Text dimColor>` rendered `[object Object]`).
+mod subpath_imports_tests {
+    use super::super::{resolve_import, ModuleKind};
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
+
+    fn write_chalk_like_package(root: &std::path::Path) -> PathBuf {
+        let pkg = root.join("node_modules/chalky");
+        std::fs::create_dir_all(pkg.join("source/vendor/ansi-styles")).unwrap();
+        std::fs::create_dir_all(pkg.join("source/vendor/supports-color")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r##"{
+                "name": "chalky",
+                "type": "module",
+                "exports": "./source/index.js",
+                "imports": {
+                    "#ansi-styles": "./source/vendor/ansi-styles/index.js",
+                    "#supports-color": {
+                        "node": "./source/vendor/supports-color/index.js",
+                        "default": "./source/vendor/supports-color/browser.js"
+                    }
+                }
+            }"##,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("source/index.js"), "export default 1;\n").unwrap();
+        std::fs::write(
+            pkg.join("source/vendor/ansi-styles/index.js"),
+            "export default {};\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("source/vendor/supports-color/index.js"),
+            "export default { stdout: false };\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("source/vendor/supports-color/browser.js"),
+            "export default { stdout: false };\n",
+        )
+        .unwrap();
+        pkg
+    }
+
+    #[test]
+    fn hash_specifier_resolves_through_imports_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pkg = write_chalk_like_package(root);
+        let importer = pkg.join("source/index.js");
+
+        let compile_packages: HashSet<String> = ["chalky".to_string()].into_iter().collect();
+        let compile_package_dirs: HashMap<String, PathBuf> = HashMap::new();
+
+        let (resolved, kind) = resolve_import(
+            "#ansi-styles",
+            &importer,
+            root,
+            &compile_packages,
+            &compile_package_dirs,
+        )
+        .expect("#ansi-styles must resolve via the imports map");
+        assert_eq!(
+            resolved,
+            pkg.join("source/vendor/ansi-styles/index.js")
+                .canonicalize()
+                .unwrap()
+        );
+        // The mapped file is inside a compile package → compiled natively.
+        assert_eq!(kind, ModuleKind::NativeCompiled);
+    }
+
+    #[test]
+    fn conditional_imports_target_prefers_node_over_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pkg = write_chalk_like_package(root);
+        let importer = pkg.join("source/index.js");
+
+        let compile_packages: HashSet<String> = ["chalky".to_string()].into_iter().collect();
+        let compile_package_dirs: HashMap<String, PathBuf> = HashMap::new();
+
+        let (resolved, _) = resolve_import(
+            "#supports-color",
+            &importer,
+            root,
+            &compile_packages,
+            &compile_package_dirs,
+        )
+        .expect("#supports-color must resolve via the imports map");
+        assert_eq!(
+            resolved,
+            pkg.join("source/vendor/supports-color/index.js")
+                .canonicalize()
+                .unwrap(),
+            "conditional imports entry must pick `node`, not the browser `default`"
+        );
+    }
+
+    #[test]
+    fn unmapped_hash_specifier_stays_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pkg = write_chalk_like_package(root);
+        let importer = pkg.join("source/index.js");
+
+        assert!(
+            resolve_import("#nope", &importer, root, &HashSet::new(), &HashMap::new(),).is_none(),
+            "a `#` specifier missing from the imports map must not resolve"
+        );
+    }
+}

@@ -30,9 +30,7 @@ pub(crate) fn unescape_template(s: &str) -> String {
                 Some('\'') => result.push('\''),
                 Some('"') => result.push('"'),
                 // `\0` (not followed by another digit) is NUL.
-                Some('0') if !chars.peek().is_some_and(|d| d.is_ascii_digit()) => {
-                    result.push('\0')
-                }
+                Some('0') if !chars.peek().is_some_and(|d| d.is_ascii_digit()) => result.push('\0'),
                 // Line continuation: backslash-newline contributes nothing.
                 Some('\n') => {}
                 Some('\r') => {
@@ -41,9 +39,9 @@ pub(crate) fn unescape_template(s: &str) -> String {
                     }
                 }
                 // `\xHH` / `\uHHHH` / `\u{H…}` — #5039: ansi-styles builds its
-                // escape codes as `` `[${code}m` `` template literals;
+                // escape codes as `` `\u001B[${code}m` `` template literals;
                 // falling through to the literal-backslash arm turned every
-                // chalk style into the 6-char text "" instead of ESC.
+                // chalk style into the 6-char literal source text instead of ESC.
                 Some(esc @ ('x' | 'u')) => {
                     if let Some(decoded) = unescape_hex_escape(esc, &mut chars) {
                         result.push_str(&decoded);

@@ -1,3 +1,53 @@
+## v0.5.1163 — fix: chalk boolean style modifiers — `<Text dimColor>` no longer renders `[object Object]` (#5039)
+
+Fixes #5039 — ink's `<Text dimColor>` (and `bold`/`italic`/`underline`/…)
+rendered `[object Object]` instead of the styled text. chalk 5's style
+modifiers are **getter accessors on a function prototype chain**
+(`Object.defineProperties(createChalk.prototype, styles)` reached through
+`Object.setPrototypeOf(chalk, createChalk.prototype)` where `chalk` is itself
+a function), and four independent Perry gaps conspired so `chalk.dim` never
+resolved:
+
+1. **runtime** (`closure/dynamic_props.rs`): `closure_get_dynamic_prop`'s
+   static-prototype walk only consulted data properties. Both arms (closure
+   proto and plain-object proto) now resolve ACCESSOR descriptors, invoking
+   the getter with the ORIGINAL receiver (`clone_closure_rebind_this`) so
+   chalk's `Object.defineProperty(this, styleName, {value: builder})`
+   self-cache lands on the instance instead of throwing "Cannot redefine
+   property: dim" against the non-configurable accessor on the shared proto.
+2. **codegen** (`lower_call/property_get.rs`): Annex B HTML-wrapper names
+   (`bold`, `link`, `anchor`, `big`, …) on *any*-typed receivers were
+   force-routed to `String.prototype`, so `chalk.bold(s)` coerced the chalk
+   closure to its source text and returned `<b>(...strings) => strings.join(' ')</b>`.
+   Dropped from the force list; an Any receiver that really is a string still
+   resolves through the `jsval.is_string()` arm of `js_native_call_method`.
+3. **resolver** (`commands/compile/resolve.rs`): Node subpath imports
+   (`#`-prefixed specifiers via the package's own `package.json` `"imports"`
+   map) were unsupported, so chalk's `import ansiStyles from '#ansi-styles'`
+   (vendored dep) silently resolved to nothing and EVERY style table came up
+   empty — `color="cyan"` only *looked* fine because ink fell back to the
+   unstyled string. Conditional entries prefer `node` over `default` (chalk's
+   `#supports-color` ships a browser build as `default`).
+4. **HIR** (`lower_patterns.rs`): `unescape_template` didn't decode
+   `\xHH` / `\uHHHH` / `\u{…}` (plus `\b\f\v\0` and line continuations), so
+   ansi-styles' `` `\u001B[${code}m` `` template literals produced the
+   6-char literal text instead of ESC. Surrogate pairs combine; a lone
+   surrogate becomes U+FFFD (WTF-8 remains a categorical gap).
+
+Validation: new `test-files/test_gap_chalk_proto_styles_5039.ts` is
+byte-identical vs `node --experimental-strip-types`; real chalk 5 compiled
+via `perry.compilePackages` produces Node-identical ANSI output for
+`dim`/`bold`/`cyan` including nested `chalk.dim.bold`; the issue's ink repro
+(on top of #5038's yoga-taffy branch) renders all four lines correctly with
+real escape codes. 3 new resolver unit tests cover the imports map (exact,
+conditional node/default, unmapped). Touched-crate test suites green.
+
+Deferred (pre-existing, observed while validating): `Object.entries` on
+ansi-styles' assembled object returns 55 entries vs Node's 45
+(non-enumerable `defineProperty` slots leak into enumeration);
+`JSON.stringify` emits `\u000c`/`\u0008` instead of the `\f`/`\b` short
+forms.
+
 ## v0.5.1162 — feat: native yoga-layout via taffy + JSON module imports + Context.Provider fix (ink #348 end-to-end)
 
 Makes `ink` (React-based TUI) compile **and render** fully natively — no WASM

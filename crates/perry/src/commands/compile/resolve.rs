@@ -850,7 +850,10 @@ pub(super) fn resolve_import(
     };
 
     // Handle relative imports (./ or ../)
-    if import_source.starts_with("./") || import_source.starts_with("../") || subpath_import_target.is_some() {
+    if import_source.starts_with("./")
+        || import_source.starts_with("../")
+        || subpath_import_target.is_some()
+    {
         if let Some(canonical) = subpath_import_target
             .or_else(|| resolve_relative_import_path(import_source, importer_path))
         {
