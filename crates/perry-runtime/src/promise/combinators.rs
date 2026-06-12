@@ -574,6 +574,34 @@ fn take_already_resolved(guard: *mut crate::array::ArrayHeader) -> bool {
     true
 }
 
+/// Register the dispatch arity (= 1) of the native resolving / thenable-job
+/// functions, once per thread. Each is an `extern "C" fn(closure, value)`, so a
+/// JS call that passes FEWER arguments — a thenable whose `then` does
+/// `resolve()` with no args (27.2.1.3.2 step 9) — must pad the missing `value`
+/// to `undefined`. Without a registered arity, `js_closure_call0` falls to the
+/// zero-arg direct-call arm and the function reads a GARBAGE second register
+/// (observed as the denormal `5e-324`, i.e. bits = 1), corrupting the
+/// resolution value. (test262 exception-after-resolve-in-{executor,thenable-job}.)
+fn ensure_native_resolving_arity_registered() {
+    thread_local! {
+        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    DONE.with(|d| {
+        if d.get() {
+            return;
+        }
+        d.set(true);
+        for f in [
+            promise_resolve_fn as *const u8,
+            promise_reject_fn as *const u8,
+            thenable_job_resolve_fn as *const u8,
+            thenable_job_reject_fn as *const u8,
+        ] {
+            crate::closure::js_register_closure_arity(f, 1);
+        }
+    });
+}
+
 /// Wire a resolve/reject closure pair to a promise with a shared
 /// `[[AlreadyResolved]]` guard. Returns `(resolve_closure, reject_closure)`.
 pub(super) fn make_resolving_functions(
@@ -583,6 +611,7 @@ pub(super) fn make_resolving_functions(
     *mut crate::closure::ClosureHeader,
 ) {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    ensure_native_resolving_arity_registered();
     let guard = alloc_already_resolved_guard();
     let resolve = js_closure_alloc(promise_resolve_fn as *const u8, 2);
     js_closure_set_capture_ptr(resolve, 0, promise as i64);
@@ -847,6 +876,10 @@ extern "C" fn promise_resolve_thenable_job(closure: *const crate::closure::Closu
         js_promise_resolve(promise, thenable);
         return 0.0;
     }
+    // The resolve/reject closures below may be invoked with zero arguments by
+    // the thenable's `then`; ensure their dispatch arity is registered so the
+    // missing value pads to `undefined`.
+    ensure_native_resolving_arity_registered();
 
     let guard_arr = js_array_alloc(1);
     unsafe {

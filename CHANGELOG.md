@@ -1,3 +1,43 @@
+## v0.5.1160 — fix(hir): `queueMicrotask`/`structuredClone`/`atob`/`btoa` as first-class function values (#5015)
+
+Fixes #5015 — react-reconciler 0.33 production build threw `TypeError: value is
+not a function` inside `updateContainerSync` on the first render, blocking every
+custom React renderer (ink, react-three-fiber, react-pdf, …).
+
+**Root cause.** Four callable global helpers — `queueMicrotask`,
+`structuredClone`, `atob`, `btoa` — were callable directly
+(`queueMicrotask(fn)` is picked off in `expr_call/globals.rs`) but were never
+added to `is_builtin_global_value_name` in `crates/perry-hir/src/analysis/builtins.rs`.
+So a bare *value* read — `const m = queueMicrotask`, or the object-literal
+property `{ scheduleMicrotask: queueMicrotask }` — fell through the ident
+lowering to the `GlobalGet(0)` sentinel and evaluated to the **number `0`**.
+`typeof` reported `"number"` and calling the stored value threw "value is not a
+function". (The companion `typeof`-of-bare-ident fold and the
+`globalThis.<name>` thunk table already covered these names; only the value-read
+list was missing them — a gap left over from #3986.)
+
+react-reconciler stores the host config's `scheduleMicrotask: queueMicrotask`
+into a module var and later invokes it from
+`scheduleImmediateRootScheduleTask` (reached via `updateContainerSync →
+updateContainerImpl → scheduleUpdateOnFiber → ensureRootIsScheduled`). The
+stored `0` was the non-callable the issue's backtrace pinpointed.
+
+**Fix.** Add the four names to `is_builtin_global_value_name` so a bare value
+read lowers to `PropertyGet { GlobalGet(0), <name> }`, resolving through the
+existing globalThis thunk (the same path `fetch`/`parseInt`/`eval` already use).
+This fixes both the bare value read and the object-literal property form, and
+is value-read-only — direct calls are unaffected. Regression test:
+`test-files/test_gap_global_fn_values_5015.ts` (byte-for-byte vs Node).
+
+**Follow-up wall (separate bug, not in this PR).** With this fix
+`updateContainerSync` succeeds; the minimal repro's subsequent `flushSyncWork()`
+now reaches `commitRoot`, where `flushPendingEffects` — a forward-referenced,
+hoisted sibling function declaration captured by `commitRoot` inside the
+huge `module.exports = function($$$config){…}` factory — reads back as
+`undefined` (a distinct closure-capture/box issue, independent of
+`queueMicrotask`: it reproduces with an arrow `scheduleMicrotask` too). To be
+filed as its own issue.
+
 ## v0.5.1159 — security: fix path traversal / arbitrary file write in `perry publish` (GHSA-x55v-q459-68ch)
 
 Security release. `perry publish` trusted the build server's

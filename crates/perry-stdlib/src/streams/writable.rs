@@ -239,7 +239,7 @@ fn sync_writer_ready_promise(stream_id: usize, writer_id: usize, ready: *mut Pro
 }
 
 pub(super) unsafe fn install_writable_backpressure_ready(stream_id: usize, writer_id: usize) {
-    let ready = js_promise_new();
+    let ready = internal_promise();
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.ready_promise = ready;
     }

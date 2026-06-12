@@ -189,6 +189,16 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
                 }
                 return obj_value;
             }
+            // Arrays store indices densely and named props in a side table —
+            // neither is in `keys_array`, so handle them explicitly.
+            if super::mark_all_array_props(
+                obj, /*drop_writable=*/ true, /*drop_configurable=*/ true,
+            ) {
+                mark_all_symbol_keys(
+                    obj, /*drop_writable=*/ true, /*drop_configurable=*/ true,
+                );
+                return obj_value;
+            }
             // Drop writable + configurable for every existing key.
             mark_all_keys(
                 obj, /*drop_writable=*/ true, false, /*drop_configurable=*/ true,
@@ -275,6 +285,15 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
                         PropertyAttrs::new(cur.writable(), cur.enumerable(), false),
                     );
                 }
+                return obj_value;
+            }
+            // Arrays: indices + named props live outside `keys_array`.
+            if super::mark_all_array_props(
+                obj, /*drop_writable=*/ false, /*drop_configurable=*/ true,
+            ) {
+                mark_all_symbol_keys(
+                    obj, /*drop_writable=*/ false, /*drop_configurable=*/ true,
+                );
                 return obj_value;
             }
             // Drop configurable for every existing key (but leave writable intact).

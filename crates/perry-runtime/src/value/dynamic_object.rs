@@ -371,6 +371,23 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 
     // Handle Error objects specially
     if object_type == crate::error::OBJECT_TYPE_ERROR {
+        // An own expando / accessor property (installed via defineProperty, or a
+        // reassigned `message`/`stack`) lives in the exotic side tables and wins
+        // over the builtin slot. The compiled member-get path consults these,
+        // but this lower-level dynamic getter — used by
+        // `Object.defineProperties` to read each descriptor off the properties
+        // bag — historically dropped straight to `undefined` for any key other
+        // than the five native slots, so an accessor/data expando on an Error
+        // read as `undefined` (and `defineProperties(obj, errObj)` then threw
+        // "Property description must be an object: undefined").
+        if let Some(v) = crate::object::exotic_expando::exotic_get_own_property(
+            ptr as usize,
+            crate::object::exotic_expando::ExoticKind::Error,
+            property_name,
+            obj_value,
+        ) {
+            return v;
+        }
         let error_ptr = ptr as *mut crate::error::ErrorHeader;
         match property_name {
             "message" => {

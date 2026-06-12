@@ -75,8 +75,8 @@ unsafe fn alloc_transform_stream_with_strategies(
     // Allocate writable side; its write_cb is synthesized via the
     // dispatcher table below to invoke transform(chunk, controller).
     let writable_id = next_id(&NEXT_STREAM_ID);
-    let ready = js_promise_new();
-    let closed = js_promise_new();
+    let ready = internal_promise();
+    let closed = internal_promise();
     js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
     WRITABLE_STREAMS.lock().unwrap().insert(
         writable_id,

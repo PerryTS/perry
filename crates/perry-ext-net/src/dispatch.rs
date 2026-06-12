@@ -38,7 +38,12 @@ extern "C" {
 }
 
 extern "C" fn process_pending_aux() -> i32 {
-    unsafe { crate::js_net_process_pending() }
+    // Drain via the DISTINCT `js_ext_net_drain_pending` symbol — NOT the
+    // `js_net_process_pending` extern, whose symbol the bundled stdlib net
+    // twin shadows in a workspace build (that twin drains stdlib's queue,
+    // leaving ext-net's own adopted-socket events — e.g. the raw-`'upgrade'`
+    // `Close` — stuck and the loop pinned). #5010.
+    unsafe { crate::js_ext_net_drain_pending() }
 }
 
 pub(crate) fn ensure_runtime_dispatch_registered() {
@@ -186,7 +191,12 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             undefined()
         }
         "destroy" | "destroySoon" => {
-            crate::js_net_socket_destroy(handle);
+            // Drive teardown through the DISTINCT `js_ext_net_destroy_socket`
+            // symbol — NOT the `js_net_socket_destroy` extern, whose symbol the
+            // bundled stdlib net twin shadows in a workspace build (it would
+            // mark the socket destroyed in stdlib's registry, leaving the
+            // adopted raw-`'upgrade'` socket alive in ext-net's). #5010.
+            crate::js_ext_net_destroy_socket(handle);
             undefined()
         }
         "on" | "addListener" if args.len() >= 2 => {

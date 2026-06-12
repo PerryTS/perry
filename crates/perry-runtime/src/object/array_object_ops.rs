@@ -13,6 +13,51 @@ unsafe fn is_array_object(obj: *const ObjectHeader) -> bool {
     (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
 }
 
+/// Apply `Object.freeze` / `Object.seal` to an array's OWN index + named data
+/// properties. The generic `mark_all_keys` walks `(*obj).keys_array`, but an
+/// array's indices live in the dense element store and its named props in the
+/// `ARRAY_NAMED_PROPS` side table — neither appears in `keys_array` — so
+/// freeze/seal historically missed them, leaving a frozen array's elements
+/// writable/configurable. Returns `true` when `obj` is an array (handled here),
+/// `false` otherwise so the caller can fall back to the ordinary key walk.
+pub(crate) unsafe fn mark_all_array_props(
+    obj: *mut ObjectHeader,
+    drop_writable: bool,
+    drop_configurable: bool,
+) -> bool {
+    if !is_array_object(obj) {
+        return false;
+    }
+    // Any explicit per-index/named attribute override makes the raw numeric
+    // fast paths ineligible — gate them on the descriptor flag so the recorded
+    // non-writable/non-configurable attrs are actually honored on read/write.
+    {
+        let gc = gc_header_for(obj);
+        (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    }
+    let arr = obj as *const crate::array::ArrayHeader;
+    let addr = obj as usize;
+    let mut apply = |key: String| {
+        let mut attrs =
+            super::get_property_attrs(addr, &key).unwrap_or(PropertyAttrs::new(true, true, true));
+        if drop_writable {
+            attrs.bits &= !PropertyAttrs::WRITABLE;
+        }
+        if drop_configurable {
+            attrs.bits &= !PropertyAttrs::CONFIGURABLE;
+        }
+        super::set_property_attrs(addr, key, attrs);
+    };
+    let len = (*arr).length;
+    for i in 0..len {
+        apply(i.to_string());
+    }
+    for name in crate::array::array_named_property_names(arr, false) {
+        apply(name);
+    }
+    true
+}
+
 pub(crate) unsafe fn array_property_is_enumerable(
     obj: *mut ObjectHeader,
     key_str: *const crate::StringHeader,
@@ -308,14 +353,29 @@ pub(crate) unsafe fn define_array_property(
         let desc_has_get = super::desc_has_field(descriptor_value, b"get");
         let desc_has_set = super::desc_has_field(descriptor_value, b"set");
         if desc_has_get || desc_has_set {
-            // Non-configurable existing index can't switch to an accessor.
+            // ValidateAndApplyPropertyDescriptor for an existing non-configurable
+            // index: reject the data→accessor switch AND a change to a
+            // non-configurable accessor's `get`/`set` (or a forbidden
+            // enumerable/configurable change). The historical check only
+            // rejected the data→accessor case, so redefining a non-configurable
+            // accessor index with a different setter silently succeeded.
             if exists {
                 let cur = super::get_property_attrs(obj as usize, key_name)
                     .unwrap_or_else(|| PropertyAttrs::new(true, true, true));
-                let already_accessor =
-                    super::get_accessor_descriptor(obj as usize, key_name).is_some();
-                if !cur.configurable() && !already_accessor {
-                    return Some(false);
+                if !cur.configurable() {
+                    let cur_accessor = super::get_accessor_descriptor(obj as usize, key_name);
+                    let cur_value = if cur_accessor.is_none() {
+                        crate::array::js_array_get_f64(arr, index)
+                    } else {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    };
+                    super::validate_nonconfigurable_redefine(
+                        key_name,
+                        cur,
+                        cur_accessor,
+                        cur_value,
+                        descriptor_value,
+                    );
                 }
             }
             let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
@@ -500,6 +560,34 @@ pub(crate) unsafe fn define_array_property(
         );
         let _ = obj_value;
         return Some(true);
+    }
+
+    // ValidateAndApplyPropertyDescriptor for an EXISTING non-configurable named
+    // (non-index) own property on an array. The index path above performs this
+    // check; the named path historically did not, so a redefine of a
+    // non-configurable `arr.prop` (data or accessor) silently succeeded instead
+    // of throwing a TypeError.
+    {
+        let cur_accessor = super::get_accessor_descriptor(obj as usize, key_name);
+        let cur_attrs = super::get_property_attrs(obj as usize, key_name);
+        if cur_attrs.is_some() || cur_accessor.is_some() {
+            let attrs = cur_attrs.unwrap_or_else(|| PropertyAttrs::new(true, true, true));
+            if !attrs.configurable() {
+                let cur_value = if cur_accessor.is_none() {
+                    crate::array::array_named_property_get_by_name(arr, key_name)
+                        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                super::validate_nonconfigurable_redefine(
+                    key_name,
+                    attrs,
+                    cur_accessor,
+                    cur_value,
+                    descriptor_value,
+                );
+            }
+        }
     }
 
     // Named (non-index) accessor on an array target: store get/set in the

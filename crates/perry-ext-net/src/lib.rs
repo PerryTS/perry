@@ -1499,6 +1499,27 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 /// capacity retained → zero steady-state allocation).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_process_pending() -> i32 {
+    js_ext_net_drain_pending()
+}
+
+/// Drain ext-net's own pending-event queue.
+///
+/// This carries a DISTINCT `#[no_mangle]` symbol (`js_ext_net_drain_pending`),
+/// deliberately NOT the `js_net_process_pending` name that the bundled stdlib
+/// net ALSO exports. In a workspace/auto-optimize build both crates are
+/// linked, so `js_net_process_pending` is a duplicate symbol; the link binds
+/// every reference to whichever twin wins (stdlib's). The aux pump
+/// (`process_pending_aux`) and the extern wrapper above therefore call THIS
+/// uniquely-named entry point instead — a symbol with no twin and nothing to
+/// fold against — so the adopted raw-`'upgrade'` socket's `Close` event in
+/// ext-net's own queue is actually drained rather than left to pin the event
+/// loop forever. Without this the loop hung, and the behavior flipped with
+/// unrelated code-size changes (link-order roulette). (#5010)
+///
+/// # Safety
+/// Fires user JS closures (listeners); callers must hold a valid runtime.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
     thread_local! {
         static SCRATCH: std::cell::RefCell<Vec<PendingNetEvent>> =
             const { std::cell::RefCell::new(Vec::new()) };

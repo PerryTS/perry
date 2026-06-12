@@ -30,10 +30,12 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         return read_stream_object_mode_chunk(stream);
     }
 
-    // `read()` with no size argument drains the entire internal buffer and
-    // returns it as a single value (Node semantics). The chunks are stored as
-    // separate entries to preserve boundaries for sized `read(n)` calls, so we
-    // gather them all here and concatenate before clearing the buffer.
+    // `read()` with no size argument returns ONE chunk — the head of the
+    // internal buffer — not the whole buffer concatenated. This matches Node:
+    // `howMuchToRead(NaN)` yields a single buffered entry, so a `readable`
+    // drain loop (`while ((c = r.read()) !== null)`) and `for await` both see
+    // chunk boundaries preserved. Sized `read(n)` (read_stream_exact_size)
+    // still spans chunks. (#1545)
     let mut values = Vec::new();
     if let Some(chunks) = readable_hidden_chunks(stream) {
         push_chunk_values(chunks, &mut values, 0);
@@ -46,37 +48,28 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         return f64::from_bits(TAG_NULL);
     }
 
-    clear_readable_buffer(stream);
+    let head = values.remove(0);
+    let mut remaining_len = 0usize;
+    for value in &values {
+        let mut bytes = Vec::new();
+        append_chunk_bytes(*value, &mut bytes, 0);
+        remaining_len += bytes.len();
+    }
+    set_readable_buffer_values(stream, &values, remaining_len);
     mark_disturbed(stream);
-    clear_pending_readable_chunks(stream);
-    if stream_hidden_ended(stream) {
+    if stream_hidden_ended(stream) && remaining_len == 0 {
+        clear_pending_readable_chunks(stream);
         queue_readable_event(stream);
         schedule_readable_end(stream);
     }
 
-    let encoded = readable_encoding_tag(stream).is_some();
-    if encoded {
-        let mut decoded = Vec::with_capacity(values.len());
-        for value in values {
-            if let Some(value) = super::decode_readable_chunk_for_encoding(stream, value) {
-                decoded.push(value);
-            }
-        }
-        values = decoded;
-        if values.is_empty() {
-            return f64::from_bits(TAG_NULL);
-        }
-        if values.len() == 1 {
-            return values[0];
-        }
-        let result = crate::string::js_string_concat_chain(values.as_ptr(), values.len() as i32);
-        return f64::from_bits(JSValue::string_ptr(result).bits());
+    if readable_encoding_tag(stream).is_some() {
+        return super::decode_readable_chunk_for_encoding(stream, head)
+            .unwrap_or(f64::from_bits(TAG_NULL));
     }
 
     let mut bytes = Vec::new();
-    for value in &values {
-        append_chunk_bytes(*value, &mut bytes, 0);
-    }
+    append_chunk_bytes(head, &mut bytes, 0);
     buffer_value_from_bytes(&bytes)
 }
 

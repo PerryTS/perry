@@ -212,7 +212,7 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
         throw_type_error("ReadableStream is locked");
     }
     let reader_id = next_id(&NEXT_STREAM_ID);
-    let closed_p = js_promise_new();
+    let closed_p = internal_promise();
     if s.state == ReadableState::Closed {
         js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
     } else if s.state == ReadableState::Errored {
