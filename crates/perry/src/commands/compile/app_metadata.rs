@@ -158,7 +158,7 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("visionos-simulator") => Some("aarch64-apple-visionos-sim"),
         Some("visionos") => Some("aarch64-apple-visionos"),
         Some("watchos-simulator") => Some("aarch64-apple-watchos-sim"),
-        Some("watchos") => Some("arm64_32-apple-watchos"),
+        Some("watchos") => Some("aarch64-apple-watchos"),
         Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
         Some("tvos") => Some("aarch64-apple-tvos"),
         Some("harmonyos") => Some("aarch64-unknown-linux-ohos"),

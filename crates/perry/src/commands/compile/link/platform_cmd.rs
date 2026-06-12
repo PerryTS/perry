@@ -56,7 +56,9 @@ pub fn select_linker_command(
         let triple = if target == Some("watchos-simulator") {
             "arm64-apple-watchos10.0-simulator"
         } else {
-            "arm64_32-apple-watchos10.0"
+            // Device builds are arm64-only (S9+ / watchOS 26): Perry's
+            // NaN-boxed values need 64-bit pointers, which arm64_32 lacks.
+            "arm64-apple-watchos26.0"
         };
 
         // Find the entry object whose stem matches the user's input file stem

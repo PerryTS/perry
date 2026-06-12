@@ -1247,7 +1247,7 @@ pub(super) fn build_and_run_link(
             let (lib_name, build_cmd) = if is_watchos {
                 (
                     "libperry_ui_watchos.a",
-                    "cargo build --release -p perry-ui-watchos --target arm64_32-apple-watchos",
+                    "cargo +nightly build -Z build-std=std,panic_abort --release -p perry-ui-watchos --target aarch64-apple-watchos (or --target aarch64-apple-watchos-sim for the simulator)",
                 )
             } else if is_tvos {
                 (
@@ -1755,7 +1755,9 @@ pub(super) fn build_and_run_link(
                 let swift_triple = if target == Some("watchos-simulator") {
                     "arm64-apple-watchos10.0-simulator"
                 } else {
-                    "arm64_32-apple-watchos10.0"
+                    // Device builds are arm64-only (S9+ / watchOS 26): Perry's
+                    // NaN-boxed values need 64-bit pointers, which arm64_32 lacks.
+                    "arm64-apple-watchos26.0"
                 };
                 let swift_sysroot = String::from_utf8(
                     Command::new("xcrun")

@@ -379,7 +379,7 @@ pub(crate) fn default_target_triple() -> String {
 /// Supported:
 ///  * `ios`, `ios-simulator`           → aarch64-apple-ios
 ///  * `visionos`, `visionos-simulator` → arm64-apple-xros1.0{,-simulator}
-///  * `watchos`                        → arm64_32-apple-watchos (ILP32)
+///  * `watchos`                        → aarch64-apple-watchos (arm64, S9+ / watchOS 26)
 ///  * `watchos-simulator`              → arm64-apple-watchos10.0-simulator
 ///  * `tvos`, `tvos-simulator`         → aarch64-apple-tvos
 ///  * `android`                        → aarch64-unknown-linux-android
@@ -397,7 +397,7 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "ios-simulator" => Some("arm64-apple-ios17.0-simulator".to_string()),
         "visionos" => Some("arm64-apple-xros1.0".to_string()),
         "visionos-simulator" => Some("arm64-apple-xros1.0-simulator".to_string()),
-        "watchos" => Some("arm64_32-apple-watchos".to_string()),
+        "watchos" => Some("aarch64-apple-watchos".to_string()),
         "watchos-simulator" => Some("arm64-apple-watchos10.0-simulator".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),

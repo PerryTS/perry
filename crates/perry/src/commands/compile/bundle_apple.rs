@@ -173,6 +173,14 @@ pub(super) fn bundle_for_watchos(
     // #4849: read version/build_number from perry.toml (was hardcoded "1.0").
     let (app_version, app_build_number) = read_apple_app_version(input);
 
+    // Device builds are arm64-only, which requires watchOS 26 (S9+); the
+    // simulator target keeps the lower floor.
+    let min_os = if target == Some("watchos-simulator") {
+        "10.0"
+    } else {
+        "26.0"
+    };
+
     let info_plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -189,7 +197,7 @@ pub(super) fn bundle_for_watchos(
     <key>CFBundleShortVersionString</key>
     <string>{app_version}</string>
     <key>MinimumOSVersion</key>
-    <string>10.0</string>
+    <string>{min_os}</string>
     <key>UIDeviceFamily</key>
     <array>
         <integer>4</integer>
