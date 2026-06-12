@@ -198,6 +198,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 | "TransformStream"
                                 | "Request"
                                 | "Response"
+                                | "Event"
+                                | "CustomEvent"
                         ) || is_other_builtin_constructor_name(parent_name.as_str());
                     if !is_builtin_parent_name {
                         if let Some(extends_expr) = current_class.extends_expr.as_deref() {
@@ -361,6 +363,44 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // handle at runtime (see `fetch_subclass_handle_id`). This
                     // makes `class Request extends GlobalRequest {}` — exactly
                     // what `@hono/node-server` does — produce a working Request.
+                    // `class X extends Event` / `extends CustomEvent` (the `ws`
+                    // package's CloseEvent/ErrorEvent/MessageEvent): `super(type,
+                    // options)` initializes the standard Event fields/methods onto
+                    // `this`. The `X → Event` registry edge (registered at class-
+                    // definition time via js_register_class_parent_dynamic) keeps
+                    // `instanceof Event` and EventTarget dispatch acceptance.
+                    if matches!(parent_name.as_str(), "Event" | "CustomEvent") {
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
+                        for a in super_args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        let arg0 = lowered.first().cloned().unwrap_or_else(|| undef.clone());
+                        let arg1 = lowered.get(1).cloned().unwrap_or_else(|| undef.clone());
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => undef.clone(),
+                        };
+                        let argc = super_args.len().min(2).to_string();
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_event_subclass_init",
+                            &[
+                                (DOUBLE, &this_box),
+                                (DOUBLE, &arg0),
+                                (DOUBLE, &arg1),
+                                (I32, &argc),
+                            ],
+                        );
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
                     let fetch_subclass_fn = match parent_name.as_str() {
                         "Request" => Some("js_request_subclass_init"),
                         "Response" => Some("js_response_subclass_init"),

@@ -1012,10 +1012,18 @@ fn collect_module_one(
                     worker_path_sets.push(set);
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
-                    dyn_errors.push(format!(
-                        "worker_threads Worker in module {}: {}",
+                    // Real-world packages (e.g. Next.js build-time worker
+                    // pools) construct Workers on paths that are never hit
+                    // when the compiled program runs. Warn and let codegen
+                    // lower this WorkerNew to a runtime throw instead of
+                    // failing the whole compile. Push an empty set to keep
+                    // the fill pass aligned with resolved siblings.
+                    eprintln!(
+                        "  Warning: worker_threads Worker in module {}: {} — \
+                         this Worker will throw if constructed at runtime",
                         module_name, reason
-                    ));
+                    );
+                    worker_path_sets.push(Vec::new());
                 }
             }
         }

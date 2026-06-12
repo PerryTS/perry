@@ -87,6 +87,25 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
             };
             return super::has_own_helpers::closure_own_key_present(obj_addr, &key_name);
         }
+        // Native-module namespaces (console, fs, …) expose their members as
+        // VIRTUAL keys — dispatch tables, not keys_array entries. Mirror the
+        // `js_object_get_own_property_descriptor` arm so a redefinition like
+        // `Object.defineProperty(console, 'error', { value })` (Next.js
+        // patches console methods this way, repeatedly) is treated as
+        // redefining an EXISTING property — absent descriptor attributes then
+        // retain the property's writable/enumerable/configurable=true
+        // defaults instead of collapsing to the new-property `false`s (which
+        // made the SECOND patch throw `Cannot redefine property`).
+        if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+            if let (Some(module_name), Some(key_name)) = (
+                super::native_module::read_native_module_name(obj),
+                key_to_rust_string(key),
+            ) {
+                if super::native_module::native_module_has_enumerable_key(&module_name, &key_name) {
+                    return true;
+                }
+            }
+        }
         let key_str = crate::builtins::js_string_coerce(key);
         if key_str.is_null() {
             return false;

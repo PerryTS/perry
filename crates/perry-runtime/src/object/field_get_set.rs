@@ -2681,6 +2681,11 @@ fn reified_function_method_name(name: &str) -> Option<&'static [u8]> {
         "call" => Some(b"call"),
         "apply" => Some(b"apply"),
         "isPrototypeOf" => Some(b"isPrototypeOf"),
+        // `fn.toString` read as a VALUE (`original.toString.bind(original)` —
+        // Next.js's unhandled-rejection extension preserves patched-function
+        // toString this way). Previously read back `undefined`, so the
+        // subsequent `.bind` threw "Bind must be called on a function".
+        "toString" => Some(b"toString"),
         _ => None,
     }
 }

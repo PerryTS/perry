@@ -985,6 +985,13 @@ fn submodule_has_default_object(submod_key: &str) -> bool {
             | "stream_consumers"
             | "stream_web"
             | "test_reporters"
+            // `const nodeTimers = require('node:timers')` (Next.js's
+            // fast-set-immediate extension) — without a default object the
+            // binding read the TAG_TRUE sentinel, so member reads were
+            // undefined and the `nodeTimers.setImmediate = patched`
+            // monkey-patch threw at module init.
+            | "timers"
+            | "timers_promises"
     )
 }
 

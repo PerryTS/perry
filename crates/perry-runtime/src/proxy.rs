@@ -1110,14 +1110,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
     // #5054 fast path: the spec walk below probes own_set_descriptor on the
     // target, which ends in a LINEAR keys_array scan — so every dynamic
     // `obj[key] = v` was O(own-key-count) and building a wide dynamic object
-    // quadratic (10k props ~ 12s). When nothing the walk models can apply —
-    // plain GC_TYPE_OBJECT receiver written as itself, no property/accessor
-    // descriptor ever installed in the process (monotonic global), no class
-    // machinery (class_id 0), no recorded setPrototypeOf target, extensible,
-    // string key — the write reduces to the ordinary data-property store.
-    // #5054 fast path: the spec walk below probes own_set_descriptor on the
-    // target, which ends in a LINEAR keys_array scan — so every dynamic
-    // `obj[key] = v` was O(own-key-count) and building a wide dynamic object
     // quadratic (10k props ~ 12s). When nothing the walk models can apply,
     // the write reduces to the ordinary data-property store:
     //   - target written as itself (receiver bits identical),
@@ -1154,6 +1146,38 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         && crate::object::prototype_chain::object_static_prototype(addr).is_none()
                     {
                         target_set(target, key, value);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // CommonJS native-module namespaces are MUTABLE in Node — monkey-patching
+    // like Next.js's `require('node:timers').setImmediate = patched` must
+    // store the override (read back through the namespace vtable's
+    // `get_own_field`) rather than reporting the built-in member
+    // non-writable and throwing under strict mode.
+    {
+        let jv = crate::value::JSValue::from_bits(target.to_bits());
+        if jv.is_pointer() {
+            let obj = extract_pointer(target.to_bits()) as *const crate::object::ObjectHeader;
+            if !obj.is_null() && unsafe { (*obj).class_id } == crate::object::NATIVE_MODULE_CLASS_ID
+            {
+                let module_name = unsafe { crate::object::get_module_name_from_namespace(target) };
+                if let (false, Some(prop)) =
+                    (module_name.is_empty(), property_key_to_rust_string(key))
+                {
+                    if prop != "__module__" {
+                        if module_name == "buffer.Buffer" && prop == "poolSize" {
+                            crate::object::set_buffer_pool_size(value);
+                        } else {
+                            crate::object::native_namespace_prop_override_store(
+                                module_name,
+                                &prop,
+                                value,
+                            );
+                        }
                         return true;
                     }
                 }

@@ -329,7 +329,7 @@ pub fn try_lower_property_get_method_call(
             "split" | "charCodeAt" | "charAt" | "trim" | "trimStart" | "trimEnd" | "substring"
             | "substr" | "toLowerCase" | "toUpperCase" | "toLocaleLowerCase"
             | "toLocaleUpperCase" | "replaceAll" | "padStart" | "padEnd" | "repeat"
-            | "normalize" | "codePointAt" | "localeCompare" => true,
+            | "codePointAt" | "localeCompare" => true,
             // Annex B §B.2.2 HTML wrappers (`bold`, `link`, `anchor`, …) are
             // string-only in the spec but collide with common user method
             // names — chalk's `chalk.bold(s)` is a styled-string builder
@@ -337,6 +337,9 @@ pub fn try_lower_property_get_method_call(
             // to its source text and wrapped it in `<b>…</b>`. An Any-typed
             // receiver that really is a string still gets them via the
             // `jsval.is_string()` arm of `js_native_call_method`.
+            // (`normalize` is intentionally NOT in this unconditional list — the
+            // arg-gated `"normalize" if args.len() <= 1` arm below handles it so
+            // user 2-arg `normalize(pathname, matched)` methods fall through.)
             // Issue #638: `replace` is also string-exclusive, but routing
             // it here unconditionally caused regressions in async dispatch
             // pathways. Only fire when args[1] is statically detectable as
@@ -363,6 +366,11 @@ pub fn try_lower_property_get_method_call(
             // startsWith / endsWith only exist on String — both 1-arg
             // and 2-arg (searchString, position) forms route here.
             "startsWith" | "endsWith" if args.len() == 1 || args.len() == 2 => true,
+            // `normalize` is string-exclusive only at 0/1 args. User classes
+            // commonly define 2-arg `normalize(pathname, matched)` methods
+            // (Next.js route normalizers) — those must fall through to the
+            // runtime dispatcher instead of erroring on String arity.
+            "normalize" if args.len() <= 1 => true,
             "lastIndexOf" if args.len() == 1 => true,
             _ => false,
         };

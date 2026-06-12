@@ -97,6 +97,76 @@ mod tests {
     }
 
     #[test]
+    fn require_only_file_with_import_word_in_comment_is_cjs() {
+        // Next.js `setup-node-env.external.js`: pure side-effect requires,
+        // but the header comment contains the word "import". The comment
+        // must not flip classification to ESM.
+        let src = r#"// This is a minimal import that initializes the node environment
+"use strict";
+if (process.env.NEXT_RUNTIME !== 'edge') {
+    require('next/dist/server/node-environment');
+}
+"#;
+        assert!(
+            is_commonjs(src),
+            "comment text must not defeat require( arm"
+        );
+    }
+
+    #[test]
+    fn template_literal_esm_codegen_is_still_cjs() {
+        // next/dist/build/utils.js writes an ESM server.js via a template
+        // literal whose column-0 `import path from 'node:path'` line must
+        // not flip this CJS file to the ESM pipeline.
+        let src = "\"use strict\";\nObject.defineProperty(exports, \"__esModule\", { value: true });\nexports.write = function() {\n  return `performance.mark('next-start');\nimport path from 'node:path'\nimport module from 'node:module'\n`;\n};\n";
+        assert!(
+            is_commonjs(src),
+            "template-literal import must not defeat CJS detection"
+        );
+    }
+
+    #[test]
+    fn nested_template_interpolation_stays_masked() {
+        // next/dist/build/utils.js shape: an outer template whose `${…}`
+        // interpolation contains NESTED templates with column-0 `import`
+        // lines. The whole construct must stay masked as string content.
+        let src = "\"use strict\";\nexports.write = (m) => {\n  return `${m ? `x\nimport path from 'node:path'\n` : `const path = require('path')`}\nrest`;\n};\n";
+        assert!(
+            is_commonjs(src),
+            "nested template import lines must not defeat CJS detection"
+        );
+    }
+
+    #[test]
+    fn regex_with_quote_does_not_mask_trailing_module_exports() {
+        // comment-json's bundle shape: regex literals containing quotes
+        // followed by the real `module.exports=` tail. The stripper must
+        // track regex literals or the tail is masked as string content.
+        let src = "const e = s.split(/['\"]/);\nvar i = make();\nmodule.exports = i;\n";
+        assert!(
+            is_commonjs(src),
+            "regex with quote must not hide module.exports"
+        );
+    }
+
+    #[test]
+    fn require_in_string_only_is_not_cjs() {
+        // `require(` appearing only inside a string literal is not evidence
+        // of CommonJS.
+        let src = "const msg = \"call require('x') yourself\";\nconsole.log(msg);\n";
+        assert!(!is_commonjs(src));
+    }
+
+    #[test]
+    fn empty_file_is_cjs() {
+        // Marker packages (react's `client-only`) ship a 0-byte index.js;
+        // its default import must resolve to the wrap's empty exports
+        // object, so empty/whitespace-only sources count as CommonJS.
+        assert!(is_commonjs(""));
+        assert!(is_commonjs("  \n\t\n"));
+    }
+
+    #[test]
     fn issue_851_rollup_hybrid_esm_with_inner_cjs_is_esm() {
         // Rollup-bundled output (vitest's `dist/chunks/*.js` shape):
         // top-level ESM `import` + inlined CJS body in a nested IIFE.

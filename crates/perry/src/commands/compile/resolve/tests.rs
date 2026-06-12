@@ -1695,3 +1695,42 @@ mod subpath_imports_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod exports_candidates_tests {
+    use crate::commands::compile::resolve::resolve_exports_candidates;
+
+    #[test]
+    fn pruned_import_target_falls_back_to_default() {
+        // @swc/helpers shape under Next.js standalone output: file tracing
+        // prunes esm/, so the `import` condition target is absent on disk and
+        // the resolver must surface `default` (cjs) as a later candidate.
+        let exports: serde_json::Value = serde_json::json!({
+            ".": { "import": "./esm/index.js", "default": "./cjs/index.cjs" },
+            "./_/_interop_require_default": {
+                "import": "./esm/_interop_require_default.js",
+                "default": "./cjs/_interop_require_default.cjs"
+            }
+        });
+        let candidates = resolve_exports_candidates(&exports, "./_/_interop_require_default");
+        assert_eq!(
+            candidates,
+            vec![
+                "./esm/_interop_require_default.js".to_string(),
+                "./cjs/_interop_require_default.cjs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wildcard_candidates_expand_star() {
+        let exports: serde_json::Value = serde_json::json!({
+            "./cjs/*": { "import": "./esm/*.js", "default": "./cjs/*.cjs" }
+        });
+        let candidates = resolve_exports_candidates(&exports, "./cjs/foo");
+        assert_eq!(
+            candidates,
+            vec!["./esm/foo.js".to_string(), "./cjs/foo.cjs".to_string()]
+        );
+    }
+}

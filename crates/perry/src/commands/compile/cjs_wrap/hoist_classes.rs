@@ -248,11 +248,14 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
             continue;
         };
 
-        // Match optional leading whitespace.
-        let mut p = line_start;
-        while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
-            p += 1;
-        }
+        // Column-0 only: an indented `class` is (almost always) nested inside
+        // a function — `function mod() {\n  const f = ...;\n  class Event2 {
+        // constructor(t) { this[f] = t; } }\n}` (the `ws` package's event
+        // classes have this shape). Hoisting a nested class out of the IIFE
+        // severs its closure over the enclosing function's locals, turning
+        // `f` into a ReferenceError at runtime. The #2310 let/const/var
+        // guard below can't catch those — it only collects TOP-LEVEL names.
+        let p = line_start;
 
         if p + 6 <= bytes.len() && &bytes[p..p + 6] == b"class " {
             // Skip past "class ".

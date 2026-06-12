@@ -465,7 +465,13 @@ pub(super) fn resolve_package_entry(package_dir: &Path, subpath: Option<&str>) -
     };
 
     if let Some(exports) = pkg.get("exports") {
-        if let Some(entry) = resolve_exports(exports, &export_key) {
+        // Try every condition branch in priority order and take the first
+        // target that exists on disk. A single-winner pick breaks under
+        // Next.js standalone output: its file tracing prunes the package
+        // files the build didn't load, so `@swc/helpers`' `import` target
+        // (`esm/*.js`) is absent while the `default` target (`cjs/*.cjs`)
+        // is present — Node resolves the latter at require time.
+        for entry in resolve_exports_candidates(exports, &export_key) {
             let entry_path = package_dir.join(&entry);
             if entry_path.exists() {
                 return Some(entry_path);
@@ -654,6 +660,60 @@ fn resolve_subpath_import(import_source: &str, importer_path: &Path) -> Option<P
         dir = d.parent();
     }
     None
+}
+
+/// Like [`resolve_exports`], but returns EVERY condition branch's resolution
+/// in priority order instead of only the first. Callers that check disk
+/// existence (`resolve_package_entry`) walk the list so a pruned target
+/// (Next.js standalone file tracing) falls through to the next condition.
+pub(super) fn resolve_exports_candidates(
+    exports: &serde_json::Value,
+    subpath: &str,
+) -> Vec<String> {
+    const CONDITIONS: &[&str] = &["perry", "import", "module", "default", "require", "node"];
+    fn collect(value: &serde_json::Value, subpath: &str, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(s) => {
+                if !out.contains(s) {
+                    out.push(s.clone());
+                }
+            }
+            serde_json::Value::Object(map) => {
+                if let Some(entry) = map.get(subpath) {
+                    collect(entry, subpath, out);
+                    return;
+                }
+                for (key, entry) in map.iter() {
+                    if key.contains('*') {
+                        let parts: Vec<&str> = key.splitn(2, '*').collect();
+                        if parts.len() == 2 {
+                            let (prefix, suffix) = (parts[0], parts[1]);
+                            if subpath.starts_with(prefix) && subpath.ends_with(suffix) {
+                                let matched = &subpath[prefix.len()..subpath.len() - suffix.len()];
+                                let mut templates = Vec::new();
+                                collect(entry, subpath, &mut templates);
+                                for template in templates {
+                                    let resolved = template.replace('*', matched);
+                                    if !out.contains(&resolved) {
+                                        out.push(resolved);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for condition in CONDITIONS {
+                    if let Some(entry) = map.get(*condition) {
+                        collect(entry, subpath, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    collect(exports, subpath, &mut out);
+    out
 }
 
 fn canonical_existing_declaration(path: PathBuf) -> Option<PathBuf> {
