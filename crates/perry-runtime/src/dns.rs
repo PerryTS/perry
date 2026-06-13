@@ -825,14 +825,39 @@ fn dns_error_code(err: DnsError) -> &'static str {
     }
 }
 
+/// Build a c-ares-style DNS error carrying Node's `.code`, `.syscall`, and
+/// `.hostname` own properties. Node's `dns.resolve*`/`dns.reverse` rejections
+/// always set all three (with `errno` left `undefined`); registering them on
+/// the message StringHeader mirrors the `.code` path so caught errors expose
+/// the full shape, not just `.code`.
+fn dns_query_error_value(
+    message: &str,
+    code: &'static str,
+    syscall: &'static str,
+    hostname: &str,
+) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    crate::node_submodules::register_error_syscall(msg, syscall);
+    crate::node_submodules::register_error_hostname(msg, hostname.to_string());
+    let err = crate::error::js_error_new_with_message(msg);
+    boxed_pointer(err as *const u8)
+}
+
 fn resolve_error_value(kind: RecordKind, host: &str, err: DnsError) -> f64 {
     let code = dns_error_code(err);
-    plain_error_value(&format!("{} {code} {host}", resolve_syscall(kind)), code)
+    let syscall = resolve_syscall(kind);
+    dns_query_error_value(&format!("{syscall} {code} {host}"), code, syscall, host)
 }
 
 fn reverse_error_value(host: &str, err: DnsError) -> f64 {
     let code = dns_error_code(err);
-    plain_error_value(&format!("getHostByAddr {code} {host}"), code)
+    dns_query_error_value(
+        &format!("getHostByAddr {code} {host}"),
+        code,
+        "getHostByAddr",
+        host,
+    )
 }
 
 /// Deterministic-mode (`PERRY_DETERMINISTIC_NET=1`) loopback answers — the

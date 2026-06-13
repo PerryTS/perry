@@ -477,6 +477,31 @@ pub fn error_path_for_message(message_ptr: *const StringHeader) -> Option<String
     ERROR_MESSAGE_PATHS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
 }
 
+thread_local! {
+    pub(crate) static ERROR_MESSAGE_HOSTNAMES: RefCell<HashMap<usize, String>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Attach a Node-style `hostname` string to an Error keyed by its message
+/// StringHeader. Node's c-ares `dns.resolve*`/`dns.reverse` failures carry the
+/// queried hostname (or address) on `err.hostname`. Read back from the
+/// `.hostname` getter in `field_get_set` (mirrors `.path`).
+pub fn register_error_hostname(message_ptr: *const StringHeader, hostname: String) {
+    if message_ptr.is_null() {
+        return;
+    }
+    ERROR_MESSAGE_HOSTNAMES.with(|m| {
+        m.borrow_mut().insert(message_ptr as usize, hostname);
+    });
+}
+
+pub fn error_hostname_for_message(message_ptr: *const StringHeader) -> Option<String> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    ERROR_MESSAGE_HOSTNAMES.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
+}
+
 /// Attach a Node-style `dest` string to an Error keyed by its message
 /// StringHeader. Node sets `dest` on two-path fs errors (rename/copyFile/
 /// link/symlink) alongside `path`. Read back from the `.dest` getter.
