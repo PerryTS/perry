@@ -184,13 +184,20 @@ pub fn lower_fn_body_block_stmt(
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
     // any earlier statement resolve via `lookup_local`. Generator and
-    // async-generator FnDecls are excluded — those go through the
-    // hoist-to-top-level + FuncRef path in `lower_body_stmt` and aren't
-    // closure-bound at the source position.
+    // async-generator FnDecls ARE included: `lower_body_stmt` lowers them to
+    // a top-level function plus a source-position `Stmt::Let { init: FuncRef }`
+    // binding the name. Spec function-declaration hoisting still applies to
+    // generators, so a forward reference (`A.gen = gen` ABOVE the
+    // `function* gen(){}` in a webpack/ncc inner module — next/dist/compiled/
+    // edge-runtime's `consumeUint8ArrayReadableStream`) must resolve. We
+    // pre-define the local here (so `lookup_local` succeeds at the forward
+    // reference) and Phase 3 moves the FuncRef `Let` to the front (so it is
+    // initialized before that reference runs). The FuncRef value is pure, so
+    // reordering it ahead of other statements is safe.
     let mut hoisted_id_set: HashSet<LocalId> = HashSet::new();
     for stmt in &block.stmts {
         if let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt {
-            if fn_decl.function.body.is_none() || fn_decl.function.is_generator {
+            if fn_decl.function.body.is_none() {
                 continue;
             }
             let name = fn_decl.ident.sym.to_string();
@@ -313,9 +320,17 @@ pub fn lower_fn_body_block_stmt(
     let mut hoisted_lets: Vec<Stmt> = Vec::new();
     let mut other: Vec<Stmt> = Vec::new();
     for s in body {
+        // A regular/async FnDecl lowers to a `Let { init: Closure }`; a
+        // generator/async-generator FnDecl lowers to a `Let { init: FuncRef }`
+        // (the body lives in a hoisted top-level function). Both forms are
+        // hoisted to the front per spec function-declaration semantics.
         let is_hoisted = matches!(
             &s,
             Stmt::Let { id, init: Some(Expr::Closure { .. }), .. }
+                if hoisted_id_set.contains(id)
+        ) || matches!(
+            &s,
+            Stmt::Let { id, init: Some(Expr::FuncRef(_)), .. }
                 if hoisted_id_set.contains(id)
         );
         if is_hoisted {
