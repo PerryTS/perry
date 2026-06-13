@@ -235,6 +235,38 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
 /// recognizes `Expr::LocalGet(obj_id)` as a method receiver. The Phase 6
 /// driver passes the class name; Phases 4 (init) and 5 (top-level functions)
 /// pass `None`.
+/// Exact-receiver facts that stay valid on *every* iteration of a loop body:
+/// the subset of `outer` whose receiver local is never reassigned anywhere in
+/// the loop (`body` plus any condition/update exprs in `extra_exprs`). A
+/// receiver reassigned mid-loop could hold a different (sub)class on a later
+/// iteration, so its fact is dropped — keeping direct method inlining sound
+/// while still inlining calls on loop-invariant receivers declared *before* the
+/// loop (e.g. `const c = new Counter(); for (…) c.increment();`). Before this,
+/// loop bodies were seeded with empty facts, so such calls were never inlined.
+///
+/// `collect_mutated_local_ids` recurses into closures and nested loops and
+/// catches every `LocalSet`/`Update`, so "not mutated in the loop" is a sound
+/// (conservative) proxy for "fact holds on every iteration".
+fn loop_invariant_seed_facts(
+    outer: &ExactReceiverFacts,
+    body: &[Stmt],
+    extra_exprs: &[&Expr],
+) -> ExactReceiverFacts {
+    if outer.is_empty() {
+        return ExactReceiverFacts::new();
+    }
+    let mut mutated = std::collections::HashSet::new();
+    collect_mutated_local_ids(body, &mut mutated);
+    for e in extra_exprs {
+        collect_mutated_local_ids(std::slice::from_ref(&Stmt::Expr((*e).clone())), &mut mutated);
+    }
+    outer
+        .iter()
+        .filter(|(id, _)| !mutated.contains(*id))
+        .map(|(id, f)| (*id, f.clone()))
+        .collect()
+}
+
 pub fn inline_calls_in_stmts(
     stmts: &mut Vec<Stmt>,
     func_candidates: &HashMap<FuncId, Function>,
@@ -572,7 +604,8 @@ pub fn inline_calls_in_stmts(
                 if hoisted.is_empty() {
                     *condition = condition_candidate;
                 }
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -588,7 +621,8 @@ pub fn inline_calls_in_stmts(
                 exact_effect_handled = true;
             }
             Stmt::DoWhile { body, condition } => {
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -672,7 +706,15 @@ pub fn inline_calls_in_stmts(
                         class_field_types,
                     );
                 }
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut for_extra: Vec<&Expr> = Vec::new();
+                if let Some(c) = condition.as_ref() {
+                    for_extra.push(c);
+                }
+                if let Some(u) = update.as_ref() {
+                    for_extra.push(u);
+                }
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &for_extra);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
