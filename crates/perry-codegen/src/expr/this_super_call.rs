@@ -289,6 +289,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
                     }
                     let node_stream_kind = match parent_name.as_str() {
+                        "Readable" => Some("readable"),
                         "Writable" => Some("writable"),
                         "Duplex" => Some("duplex"),
                         "Transform" => Some("transform"),
@@ -336,6 +337,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     let node_stream_kind = match parent_name.as_str() {
                         "Readable" => Some("readable"),
+                        "Writable" => Some("writable"),
                         "Duplex" => Some("duplex"),
                         "Transform" => Some("transform"),
                         _ => None,

@@ -215,6 +215,21 @@ pub fn lower_class_decl(
                     "transform_stream".to_string(),
                     "TransformStream".to_string(),
                 )),
+                // #1545: classic node:stream base classes. Recognising them
+                // as native parents (rather than letting the unknown-Ident
+                // arm capture `extends_expr`) avoids the dynamic
+                // parent-registration throw ("Class extends value is not a
+                // constructor") — a node:stream export is a callable but not
+                // a registered class constructor. The `super(opts)` codegen
+                // arm (`lower_node_stream_super_init`) and the runtime
+                // `js_node_stream_*_subclass_init` helpers, which install the
+                // native stream methods directly onto `this`, were already
+                // built; this is the missing HIR wiring. Keep in lockstep
+                // with the parallel arm in `lower_class_from_ast` below.
+                "Readable" => Some(("node_stream".to_string(), "Readable".to_string())),
+                "Writable" => Some(("node_stream".to_string(), "Writable".to_string())),
+                "Duplex" => Some(("node_stream".to_string(), "Duplex".to_string())),
+                "Transform" => Some(("node_stream".to_string(), "Transform".to_string())),
                 _ => None,
             };
             if native_parent.is_some() {
@@ -1215,6 +1230,12 @@ pub fn lower_class_from_ast(
                     "transform_stream".to_string(),
                     "TransformStream".to_string(),
                 )),
+                // #1545: classic node:stream base classes — keep in lockstep
+                // with the parallel arm in `lower_class_decl` above.
+                "Readable" => Some(("node_stream".to_string(), "Readable".to_string())),
+                "Writable" => Some(("node_stream".to_string(), "Writable".to_string())),
+                "Duplex" => Some(("node_stream".to_string(), "Duplex".to_string())),
+                "Transform" => Some(("node_stream".to_string(), "Transform".to_string())),
                 _ => None,
             };
             if native_parent.is_some() {
