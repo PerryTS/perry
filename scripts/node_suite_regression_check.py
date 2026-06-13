@@ -46,8 +46,10 @@ def main():
                           capture_output=True, text=True)
     sys.stderr.write(proc.stderr)
     print(proc.stdout)
-    if proc.returncode != 0 and not proc.stdout:
-        print("ERROR: runner failed", file=sys.stderr)
+    # Fail closed: any non-zero runner exit means we cannot trust the table
+    # (crash/timeout could leave partial output), so don't risk parsing it.
+    if proc.returncode != 0:
+        print(f"ERROR: runner exited {proc.returncode}", file=sys.stderr)
         return 2
 
     # Parse "module  pass  total  %" rows from the runner table.

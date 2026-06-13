@@ -57,6 +57,9 @@ def run_one(args):
         n = subprocess.run([NODE, path], capture_output=True, text=True, timeout=30)
     except Exception:
         return (mod, "node_err")
+    # A non-zero node exit can be intentional (the test exercises an error path),
+    # so we don't bucket it as node_err; we require Perry to match BOTH stdout and
+    # the exit code below, which keeps genuine error-path parity counted as pass.
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, "o")
         try:
@@ -66,7 +69,11 @@ def run_one(args):
             p = subprocess.run([out], capture_output=True, text=True, timeout=30)
         except Exception:
             return (mod, "perry_err")
-    return (mod, "pass" if n.stdout.strip() == p.stdout.strip() else "diff")
+    # Match stdout byte-for-byte (ignore only trailing-newline noise, not leading
+    # whitespace) AND exit code — so a Perry crash that happened to print matching
+    # output before dying is a diff, not a false pass.
+    ok = (n.stdout.rstrip("\n") == p.stdout.rstrip("\n")) and (n.returncode == p.returncode)
+    return (mod, "pass" if ok else "diff")
 
 
 # --- pre-warm one test per module serially ---
