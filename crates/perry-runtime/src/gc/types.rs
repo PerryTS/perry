@@ -812,6 +812,12 @@ pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 // and `GC_ARRAY_ARGUMENTS_OBJECT` (0x200). Only meaningful for
 // `GC_TYPE_ARRAY`.
 pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
+// #5054: a property/accessor descriptor (or builtin attrs) has been installed
+// on this specific object — the dynamic-write fast path must take the full
+// descriptor-aware OrdinarySet walk. Bit 11; only meaningful for
+// `GC_TYPE_OBJECT`. Set-only (clearing a descriptor leaves it set; the slow
+// path is always correct).
+pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
