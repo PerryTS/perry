@@ -52468,11 +52468,11 @@ msgstr ""
 #: src/cli/fast-math.md:99
 msgid ""
 "For reference, Rust nightly's `#![feature(float_algebraic)]` enables "
-"`reassoc + contract + nsz + arcp + afn`. Perry's `--fast-math` is strictly "
+"`reassoc + contract + nsz + arcp`. Perry's `--fast-math` is strictly "
 "more conservative than that."
 msgstr ""
 "Como referencia, `#![feature(float_algebraic)]` de Rust nightly habilita "
-"`reassoc + contract + nsz + arcp + afn`. El `--fast-math` de Perry es "
+"`reassoc + contract + nsz + arcp`. El `--fast-math` de Perry es "
 "estrictamente más conservador que eso."
 
 #: src/cli/fast-math.md:103

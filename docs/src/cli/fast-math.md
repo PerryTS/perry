@@ -97,7 +97,7 @@ particular, these flags stay clear:
   precision math intrinsics.
 
 For reference, Rust nightly's `#![feature(float_algebraic)]` enables
-`reassoc + contract + nsz + arcp + afn`. Perry's `--fast-math` is
+`reassoc + contract + nsz + arcp`. Perry's `--fast-math` is
 strictly more conservative than that.
 
 ## Performance numbers

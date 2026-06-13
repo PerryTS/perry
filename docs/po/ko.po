@@ -49388,11 +49388,11 @@ msgstr "`afn` (근사 함수) — LLVM이 더 낮은 정밀도의 수학 내장 
 #: src/cli/fast-math.md:99
 msgid ""
 "For reference, Rust nightly's `#![feature(float_algebraic)]` enables "
-"`reassoc + contract + nsz + arcp + afn`. Perry's `--fast-math` is strictly "
+"`reassoc + contract + nsz + arcp`. Perry's `--fast-math` is strictly "
 "more conservative than that."
 msgstr ""
 "참고로, Rust nightly의 `#![feature(float_algebraic)]`은 `reassoc + contract + nsz"
-" + arcp + afn`을 활성화합니다. Perry의 `--fast-math`는 그보다 엄격하게 보수적입니다."
+" + arcp`을 활성화합니다. Perry의 `--fast-math`는 그보다 엄격하게 보수적입니다."
 
 #: src/cli/fast-math.md:103
 msgid "Performance numbers"
