@@ -1,3 +1,30 @@
+## v0.5.1165 — fix(perry-ffi): unbreak the `cargo test -p perry-ffi` link on Linux
+
+The `cargo-test` CI gate started failing after v0.5.1164 (#5083, the http2
+`server.close()` timer-id collision fix). That PR added a perry-runtime hook,
+`js_register_ffi_handle_exists_probe`, declared as an `extern "C"` in
+`crates/perry-ffi/src/handle.rs` and called from
+`ensure_handle_exists_probe_registered`, which `register_handle` invokes
+lazily on first handle creation.
+
+In the real `perry` binary the symbol resolves because perry-runtime is always
+linked in. But the **`perry-ffi` lib-test binary does not link perry-runtime**,
+so the symbol is undefined there. `perry-ffi`'s unit tests (`round_trip_simple_value`,
+`handles_are_unique`, …) all call `register_handle`, so the probe call sits on
+a test-reachable path and survives `--gc-sections`. On Linux `ld` an undefined
+reference is a hard link error (`undefined reference to
+'js_register_ffi_handle_exists_probe'`), aborting the gate. macOS's linker
+resolves it lazily, so it passed locally. The crate's other runtime hooks
+(`perry_ffi_gc_register_*`) stay undefined harmlessly: no test-reachable code
+calls them, so the linker drops their references.
+
+Fix: split the probe out of the shared `extern "C"` block into a
+`#[cfg(not(test))]` extern declaration (production, unchanged) plus a
+`#[cfg(test)] #[no_mangle]` no-op definition that gives the lib-test binary a
+local symbol to link against. Production codegen is byte-identical; only the
+test binary gains the stub. `cargo test -p perry-ffi` now links and passes
+(13 tests).
+
 ## v0.5.1164 — perf(codegen): integer-specialize `i < n` loop guards when the bound is `any`/untyped
 
 Tight integer loops whose bound is **not statically typed `number`** — most

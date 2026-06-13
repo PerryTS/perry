@@ -105,12 +105,28 @@ extern "C" {
         scanner_id: usize,
         scanner: PerryFfiNamedMutableRootScanner,
     );
-    /// perry-runtime hook: register a probe the runtime's generic method
-    /// dispatcher consults to tell a `register_handle` id apart from a Node
-    /// timer id (both occupy the pointer-tagged small-integer band). Resolved
-    /// at final link (perry-runtime is always linked into the binary).
+}
+
+// perry-runtime hook: register a probe the runtime's generic method
+// dispatcher consults to tell a `register_handle` id apart from a Node
+// timer id (both occupy the pointer-tagged small-integer band). Resolved
+// at final link (perry-runtime is always linked into the binary).
+//
+// The `perry-ffi` lib-test binary does not link perry-runtime, so under
+// `cfg(test)` this is a local no-op definition instead of an undefined
+// extern — otherwise the test link fails on linkers that don't lazily
+// resolve undefined symbols (Linux `ld`). The other runtime hooks above
+// stay undefined harmlessly: no test-reachable code calls them, so
+// `--gc-sections` drops their references; this probe is the only hook on
+// `register_handle`'s hot path, which the unit tests exercise.
+#[cfg(not(test))]
+extern "C" {
     fn js_register_ffi_handle_exists_probe(probe: extern "C" fn(handle: i64) -> bool);
 }
+
+#[cfg(test)]
+#[no_mangle]
+extern "C" fn js_register_ffi_handle_exists_probe(_probe: extern "C" fn(handle: i64) -> bool) {}
 
 /// Probe handed to perry-runtime: is `handle` a live entry in this registry?
 /// Used to disambiguate a `POINTER_TAG | id` value that names both a live
