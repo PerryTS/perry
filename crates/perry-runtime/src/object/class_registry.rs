@@ -1639,7 +1639,10 @@ pub unsafe extern "C" fn js_new_function_construct(
             || jv.is_bigint()
         {
             let desc = unsafe { super::object_ops::describe_value_for_type_error(func_value) };
-            super::object_ops::throw_object_type_error_with_suffix(&format!("{desc} "), "is not a constructor");
+            super::object_ops::throw_object_type_error_with_suffix(
+                &format!("{desc} "),
+                "is not a constructor",
+            );
         }
     }
     // `new (new String(""))` / `new (new Number(1))` — a boxed primitive WRAPPER

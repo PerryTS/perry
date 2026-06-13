@@ -391,7 +391,10 @@ pub enum Expr {
     /// rebinds read the snapshot instead (vendored zod's
     /// `static create(...) { … typeName: k.ZodRecord … }` where `k` is an
     /// enclosing-function local).
-    ClassCaptureValue { class_name: String, index: u32 },
+    ClassCaptureValue {
+        class_name: String,
+        index: u32,
+    },
 
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the
     /// class is returned from a factory function body. The static-Symbol

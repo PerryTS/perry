@@ -271,9 +271,7 @@ pub fn lower_fn_body_block_stmt(
                         let cap_args: Vec<(perry_types::LocalId, perry_types::LocalId)> =
                             captured.iter().map(|id| (*id, *id)).collect();
                         for s in body.iter_mut() {
-                            super::class_captures::append_new_args_stmt(
-                                s, &cname, &cap_args, true,
-                            );
+                            super::class_captures::append_new_args_stmt(s, &cname, &cap_args, true);
                         }
                         re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
                             class_name: cname,

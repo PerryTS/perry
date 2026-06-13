@@ -107,7 +107,10 @@ if (process.env.NEXT_RUNTIME !== 'edge') {
     require('next/dist/server/node-environment');
 }
 "#;
-        assert!(is_commonjs(src), "comment text must not defeat require( arm");
+        assert!(
+            is_commonjs(src),
+            "comment text must not defeat require( arm"
+        );
     }
 
     #[test]
@@ -116,7 +119,10 @@ if (process.env.NEXT_RUNTIME !== 'edge') {
         // literal whose column-0 `import path from 'node:path'` line must
         // not flip this CJS file to the ESM pipeline.
         let src = "\"use strict\";\nObject.defineProperty(exports, \"__esModule\", { value: true });\nexports.write = function() {\n  return `performance.mark('next-start');\nimport path from 'node:path'\nimport module from 'node:module'\n`;\n};\n";
-        assert!(is_commonjs(src), "template-literal import must not defeat CJS detection");
+        assert!(
+            is_commonjs(src),
+            "template-literal import must not defeat CJS detection"
+        );
     }
 
     #[test]
@@ -137,7 +143,10 @@ if (process.env.NEXT_RUNTIME !== 'edge') {
         // followed by the real `module.exports=` tail. The stripper must
         // track regex literals or the tail is masked as string content.
         let src = "const e = s.split(/['\"]/);\nvar i = make();\nmodule.exports = i;\n";
-        assert!(is_commonjs(src), "regex with quote must not hide module.exports");
+        assert!(
+            is_commonjs(src),
+            "regex with quote must not hide module.exports"
+        );
     }
 
     #[test]

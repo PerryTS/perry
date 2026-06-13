@@ -101,8 +101,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
                 super::native_module::read_native_module_name(obj),
                 key_to_rust_string(key),
             ) {
-                if super::native_module::native_module_has_enumerable_key(&module_name, &key_name)
-                {
+                if super::native_module::native_module_has_enumerable_key(&module_name, &key_name) {
                     return true;
                 }
             }

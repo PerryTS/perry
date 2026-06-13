@@ -291,7 +291,9 @@ fn inline_constructor_param_values(
     let mut out = Vec::with_capacity(params.len());
     let mut visible_index = 0usize;
     for param in params {
-        if param.name.starts_with("__perry_cap_") && !param.is_rest && param.arguments_object.is_none()
+        if param.name.starts_with("__perry_cap_")
+            && !param.is_rest
+            && param.arguments_object.is_none()
         {
             out.push(cap_iter.next().cloned().unwrap_or_else(|| undef.clone()));
         } else if param.arguments_object.is_some() {

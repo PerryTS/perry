@@ -1341,8 +1341,7 @@ mod manifest_parse_tests {
         std::fs::write(root.join("stream-ops.js"), "// requiring module\n").expect("write");
         std::fs::write(root.join("stream-ops.web.js"), "// the real target\n").expect("write");
 
-        let resolved =
-            resolve_with_extensions(&root.join("stream-ops.web")).expect("must resolve");
+        let resolved = resolve_with_extensions(&root.join("stream-ops.web")).expect("must resolve");
         assert_eq!(
             resolved,
             root.join("stream-ops.web.js"),

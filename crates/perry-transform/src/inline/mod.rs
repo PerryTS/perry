@@ -493,7 +493,8 @@ pub fn inline_functions(
                     type_only: false,
                     is_dynamic: false,
                     is_dynamic_target: false,
-                    is_deferred_require: false,                });
+                    is_deferred_require: false,
+                });
             }
         }
     }

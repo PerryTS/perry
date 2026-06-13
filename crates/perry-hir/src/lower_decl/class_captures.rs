@@ -283,16 +283,16 @@ pub fn synthesize_class_captures(
     // 2. Methods / getters / setters. After each body's capture rebind,
     //    append the rebind ids to any SELF-construction `new <Self>(…)`
     //    sites the body contains (lowered before this class registered).
-    let append_self_sites = |body: &mut Vec<Stmt>,
-                             id_map: &std::collections::HashMap<LocalId, LocalId>| {
-        let cap_args: Vec<(LocalId, LocalId)> = captures_vec
-            .iter()
-            .filter_map(|oid| id_map.get(oid).map(|f| (*oid, *f)))
-            .collect();
-        for stmt in body.iter_mut() {
-            append_self_new_args_stmt(stmt, name, &cap_args);
-        }
-    };
+    let append_self_sites =
+        |body: &mut Vec<Stmt>, id_map: &std::collections::HashMap<LocalId, LocalId>| {
+            let cap_args: Vec<(LocalId, LocalId)> = captures_vec
+                .iter()
+                .filter_map(|oid| id_map.get(oid).map(|f| (*oid, *f)))
+                .collect();
+            for stmt in body.iter_mut() {
+                append_self_new_args_stmt(stmt, name, &cap_args);
+            }
+        };
     for m in methods.iter_mut() {
         let id_map = rewrite_method_body(ctx, &mut m.body);
         append_self_sites(&mut m.body, &id_map);

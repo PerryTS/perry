@@ -143,9 +143,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 match a {
                     perry_hir::CallArg::Expr(e) => {
                         let v = lower_expr(ctx, e)?;
-                        arr = ctx
-                            .block()
-                            .call(I64, "js_array_push_f64", &[(I64, &arr), (DOUBLE, &v)]);
+                        arr = ctx.block().call(
+                            I64,
+                            "js_array_push_f64",
+                            &[(I64, &arr), (DOUBLE, &v)],
+                        );
                     }
                     perry_hir::CallArg::Spread(e) => {
                         // `js_array_push_spread_any` also handles the
@@ -449,9 +451,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let argc = super_args.len().min(2).to_string();
                         // `extends CustomEvent` → initialize `constructor` +
                         // `detail` as a CustomEvent, not a plain Event.
-                        let is_custom =
-                            if parent_name.as_str() == "CustomEvent" { "1" } else { "0" }
-                                .to_string();
+                        let is_custom = if parent_name.as_str() == "CustomEvent" {
+                            "1"
+                        } else {
+                            "0"
+                        }
+                        .to_string();
                         ctx.block().call(
                             DOUBLE,
                             "js_event_subclass_init",

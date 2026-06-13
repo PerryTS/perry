@@ -207,10 +207,7 @@ pub(crate) fn strip_comments_and_strings(source: &str) -> String {
             State::Str(quote) => {
                 if bytes[i] == b'\\' {
                     i += 2;
-                } else if quote == b'`'
-                    && bytes[i] == b'$'
-                    && bytes.get(i + 1) == Some(&b'{')
-                {
+                } else if quote == b'`' && bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
                     // `${` — interpolation body is code (and may nest).
                     template_interp_depth.push(0);
                     state = State::Code;

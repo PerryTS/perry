@@ -180,7 +180,10 @@ pub unsafe extern "C" fn js_super_construct_apply(
     while cur != 0 && depth < 64 {
         if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
             if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
-                eprintln!("super_apply resolved ancestor cid={} total={}", cur, total_params);
+                eprintln!(
+                    "super_apply resolved ancestor cid={} total={}",
+                    cur, total_params
+                );
             }
             let caps = class_capture_values(cur).unwrap_or_default();
             let user_params = (total_params as usize).saturating_sub(caps.len());
