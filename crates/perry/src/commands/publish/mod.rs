@@ -158,13 +158,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     } else if interactive {
         prompt_target(saved.default_target.as_deref())
     } else {
-        bail!("No target specified. Use: perry publish <macos|ios|visionos|tvos|android|linux|windows|web>");
+        bail!("No target specified. Use: perry publish <macos|ios|visionos|tvos|watchos|android|linux|windows|web>");
     };
 
     let target_display = match target_name.as_str() {
         "ios" => "iOS",
         "visionos" => "visionOS",
         "tvos" => "tvOS",
+        "watchos" => "watchOS",
         "android" => "Android",
         "linux" => "Linux",
         "windows" => "Windows",
@@ -174,6 +175,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let is_ios = target_name == "ios";
     let is_visionos = target_name == "visionos";
     let is_tvos = target_name == "tvos";
+    let is_watchos = target_name == "watchos";
     let is_android = target_name == "android";
     let is_linux = target_name == "linux";
 
@@ -240,6 +242,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
             .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
             .unwrap_or_else(|| "src/main_tvos.ts".into())
+    } else if is_watchos {
+        config
+            .watchos
+            .as_ref()
+            .and_then(|w| w.entry.clone())
+            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
+            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
+            .unwrap_or_else(|| "src/main_watchos.ts".into())
     } else {
         config
             .app
@@ -284,31 +294,38 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     // Auto-increment build_number for targets that need monotonic build numbers
     let is_windows = target_name == "windows";
     let is_web = target_name == "web";
-    let is_macos =
-        !is_ios && !is_visionos && !is_tvos && !is_android && !is_linux && !is_windows && !is_web;
+    let is_macos = !is_ios
+        && !is_visionos
+        && !is_tvos
+        && !is_watchos
+        && !is_android
+        && !is_linux
+        && !is_windows
+        && !is_web;
     let macos_needs_upload =
         is_macos && matches!(macos_distribute.as_deref(), Some("appstore") | Some("both"));
-    let build_number = if is_ios || is_visionos || is_tvos || is_android || macos_needs_upload {
-        let n = toml_build_number + 1;
-        if let Ok(content) = fs::read_to_string(&perry_toml_path) {
-            let updated = if content.contains("build_number =") {
-                content.replace(
-                    &format!("build_number = {}", toml_build_number),
-                    &format!("build_number = {}", n),
-                )
-            } else {
-                // Insert build_number after the version line
-                content.replace(
-                    &format!("version = \"{}\"", version),
-                    &format!("version = \"{}\"\nbuild_number = {}", version, n),
-                )
-            };
-            fs::write(&perry_toml_path, &updated).ok();
-        }
-        n
-    } else {
-        toml_build_number
-    };
+    let build_number =
+        if is_ios || is_visionos || is_tvos || is_watchos || is_android || macos_needs_upload {
+            let n = toml_build_number + 1;
+            if let Ok(content) = fs::read_to_string(&perry_toml_path) {
+                let updated = if content.contains("build_number =") {
+                    content.replace(
+                        &format!("build_number = {}", toml_build_number),
+                        &format!("build_number = {}", n),
+                    )
+                } else {
+                    // Insert build_number after the version line
+                    content.replace(
+                        &format!("version = \"{}\"", version),
+                        &format!("version = \"{}\"\nbuild_number = {}", version, n),
+                    )
+                };
+                fs::write(&perry_toml_path, &updated).ok();
+            }
+            n
+        } else {
+            toml_build_number
+        };
 
     let app_bundle_id = config.app.as_ref().and_then(|a| a.bundle_id.clone());
     let project_bundle_id = config.project.as_ref().and_then(|p| p.bundle_id.clone());
@@ -349,6 +366,17 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             .or_else(|| app_bundle_id.clone())
             .or_else(|| project_bundle_id.clone())
             .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
+            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
+    } else if is_watchos {
+        // A standalone watchOS app must have its OWN unique bundle id — do NOT
+        // fall back to the iOS app's id (App Store Connect rejects duplicates).
+        // The appstore/testflight preflight below hard-requires [watchos] bundle_id.
+        config
+            .watchos
+            .as_ref()
+            .and_then(|w| w.bundle_id.clone())
+            .or_else(|| app_bundle_id.clone())
+            .or_else(|| project_bundle_id.clone())
             .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
     } else {
         config
@@ -472,6 +500,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let visionos_distribute = config.visionos.as_ref().and_then(|i| i.distribute.clone());
     let visionos_encryption_exempt = config.visionos.as_ref().and_then(|i| i.encryption_exempt);
     let visionos_info_plist = config.visionos.as_ref().and_then(|i| i.info_plist.clone());
+    let tvos_distribute = config.tvos.as_ref().and_then(|t| t.distribute.clone());
+    let watchos_distribute = config.watchos.as_ref().and_then(|w| w.distribute.clone());
     let macos_encryption_exempt = config.macos.as_ref().and_then(|m| m.encryption_exempt);
 
     // Android-specific config from perry.toml
@@ -1054,7 +1084,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
     // Pre-flight credential validation — fail fast before building the tarball
     {
-        let is_macos = !is_android && !is_ios && !is_linux && !is_windows && !is_web;
+        let is_macos = !is_android
+            && !is_ios
+            && !is_visionos
+            && !is_tvos
+            && !is_watchos
+            && !is_linux
+            && !is_windows
+            && !is_web;
         validate_credentials_for_distribute(
             is_android,
             android_distribute.as_deref(),
@@ -1066,7 +1103,34 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             p8_key_content.as_deref(),
             is_macos,
             macos_distribute.as_deref(),
+            is_tvos,
+            tvos_distribute.as_deref(),
+            is_watchos,
+            watchos_distribute.as_deref(),
         )?;
+    }
+
+    // A standalone watchOS app uploaded to App Store Connect must have its own
+    // unique bundle id, distinct from any companion iOS app. Require it explicitly
+    // rather than silently inheriting (and colliding with) the iOS bundle id.
+    if is_watchos
+        && matches!(
+            watchos_distribute.as_deref(),
+            Some("appstore") | Some("testflight")
+        )
+        && config
+            .watchos
+            .as_ref()
+            .and_then(|w| w.bundle_id.clone())
+            .is_none()
+    {
+        bail!(
+            "watchos.distribute = \"{}\" requires an explicit [watchos] bundle_id.\n\
+             A standalone watchOS app must have its own bundle id, distinct from your iOS app \
+             (App Store Connect rejects duplicate bundle ids).\n\
+             Run `perry setup watchos` or add `bundle_id = \"...\"` under [watchos] in perry.toml.",
+            watchos_distribute.as_deref().unwrap_or("appstore")
+        );
     }
 
     // Pre-flight validation for iOS App Store / TestFlight — detect common rejection reasons
@@ -1114,7 +1178,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             {
                 println!("  Signing:   Google Cloud KMS (EV code signing)");
             }
-        } else if is_ios || is_macos {
+        } else if is_ios || is_macos || is_tvos || is_watchos {
             if let Some(ref id) = apple_identity {
                 println!("  Signing:   {id}");
             }
@@ -1124,6 +1188,17 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else if is_ios
             && matches!(
                 ios_distribute.as_deref(),
+                Some("appstore") | Some("testflight")
+            )
+        {
+            println!("  Distribute: App Store Connect (TestFlight)");
+        } else if (is_tvos || is_watchos)
+            && matches!(
+                if is_tvos {
+                    tvos_distribute.as_deref()
+                } else {
+                    watchos_distribute.as_deref()
+                },
                 Some("appstore") | Some("testflight")
             )
         {
@@ -1271,6 +1346,26 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else {
             None
         },
+        tvos_distribute: if is_tvos { tvos_distribute } else { None },
+        watchos_deployment_target: if is_watchos {
+            config
+                .watchos
+                .as_ref()
+                .and_then(|w| w.deployment_target.clone())
+        } else {
+            None
+        },
+        watchos_encryption_exempt: if is_watchos {
+            config.watchos.as_ref().and_then(|w| w.encryption_exempt)
+        } else {
+            None
+        },
+        watchos_info_plist: if is_watchos {
+            config.watchos.as_ref().and_then(|w| w.info_plist.clone())
+        } else {
+            None
+        },
+        watchos_distribute: if is_watchos { watchos_distribute } else { None },
         android_min_sdk: if is_android { android_min_sdk } else { None },
         android_target_sdk: if is_android { android_target_sdk } else { None },
         android_permissions: if is_android {

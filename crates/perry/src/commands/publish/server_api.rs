@@ -125,6 +125,16 @@ pub(super) struct BuildManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tvos_info_plist: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tvos_distribute: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_deployment_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_encryption_exempt: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_info_plist: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_distribute: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) android_min_sdk: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) android_target_sdk: Option<String>,
