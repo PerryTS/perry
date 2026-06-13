@@ -408,6 +408,26 @@ fn throw_type_error(msg: &str) -> f64 {
     crate::exception::js_throw(boxed)
 }
 
+/// `String(value)` rendering of a JS value, for diagnostic messages that
+/// embed the offending value (e.g. Node's `"1 is not a constructor"` and
+/// the proxy construct-trap `"… non-object ('1')"`). Returns an empty
+/// string on a null/unrenderable value. (#2768)
+pub(crate) fn value_display_string(value: f64) -> String {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let str_ptr = crate::value::js_jsvalue_to_string(value);
+    if str_ptr.is_null() {
+        return String::new();
+    }
+    let nb = f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(nb, &mut scratch) {
+        if !ptr.is_null() && len > 0 {
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+    }
+    String::new()
+}
+
 fn reflect_value_is_symbol(value: f64) -> bool {
     let bits = value.to_bits();
     (bits >> 48) == (POINTER_TAG >> 48)
@@ -1721,7 +1741,11 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
     crate::object::js_implicit_this_set(prev);
     // [[Construct]] must return an Object (spec step 9 of the construct trap).
     if !reflect_value_is_object(result) {
-        return throw_type_error("proxy [[Construct]] trap returned a non-object value");
+        // Node/V8 wording: `'construct' on proxy: trap returned non-object ('1')`.
+        return throw_type_error(&format!(
+            "'construct' on proxy: trap returned non-object ('{}')",
+            value_display_string(result)
+        ));
     }
     result
 }
