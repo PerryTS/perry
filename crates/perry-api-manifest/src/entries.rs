@@ -5344,6 +5344,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("http", "__get_method", true, Some("IncomingMessage")),
     method("http", "__get_url", true, Some("IncomingMessage")),
     method("http", "__get_httpVersion", true, Some("IncomingMessage")),
+    method("http", "__get_httpVersionMajor", true, Some("IncomingMessage")),
+    method("http", "__get_httpVersionMinor", true, Some("IncomingMessage")),
     method("http", "__get_complete", true, Some("IncomingMessage")),
     method("http", "__get_aborted", true, Some("IncomingMessage")),
     method("http", "__get_destroyed", true, Some("IncomingMessage")),
