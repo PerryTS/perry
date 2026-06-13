@@ -2,9 +2,9 @@
   "_schema": {
     "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass; dropping below is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
     "oracle": "node v26.3.0 on Linux (the box)",
-    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9)."
+    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content."
   },
-  "overall": { "pass": 2781, "total": 2863, "pct": 97.1 },
+  "overall": { "pass": 2792, "total": 2863, "pct": 97.5 },
   "modules": {
     "assert": { "pass": 70, "total": 70 },
     "async_hooks": { "pass": 5, "total": 5 },
@@ -12,7 +12,7 @@
     "buffer": { "pass": 134, "total": 134 },
     "child_process": { "pass": 26, "total": 26 },
     "cluster": { "pass": 1, "total": 1 },
-    "console": { "pass": 108, "total": 119 },
+    "console": { "pass": 119, "total": 119 },
     "constants": { "pass": 4, "total": 4 },
     "crypto": { "pass": 240, "total": 242 },
     "dgram": { "pass": 4, "total": 4 },
