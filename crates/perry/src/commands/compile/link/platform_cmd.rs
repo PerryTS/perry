@@ -206,19 +206,21 @@ pub fn select_linker_command(
             "Local visionOS compilation requires Xcode on macOS. Use a macOS host or Perry Hub remote build."
         ));
     } else if is_visionos {
+        // visionOS has two app models, mirroring watchOS:
+        //   - `--features ios-game-loop`: a UIKit + CAMetalLayer game-loop app.
+        //     perry-runtime's ios_game_loop `main()` owns the process and calls
+        //     UIApplicationMain; the native lib builds the Metal view / wgpu
+        //     surface on scene-connect. Linked with clang — no SwiftUI shell and
+        //     no PerryVisionApp.swift. The `_main → __perry_user_main` rename is
+        //     applied by the orchestrator in link/mod.rs (shared with iOS/tvOS).
+        //   - default: a SwiftUI app shell (PerryVisionApp.swift) linked with
+        //     swiftc; `_main → _perry_main_init` so the Swift `@main` entry wins.
+        let is_visionos_game_loop = compiled_features.iter().any(|f| f == "ios-game-loop");
         let sdk = if target == Some("visionos-simulator") {
             "xrsimulator"
         } else {
             "xros"
         };
-        let swiftc = String::from_utf8(
-            Command::new("xcrun")
-                .args(["--sdk", sdk, "--find", "swiftc"])
-                .output()?
-                .stdout,
-        )?
-        .trim()
-        .to_string();
         let sysroot = String::from_utf8(
             Command::new("xcrun")
                 .args(["--sdk", sdk, "--show-sdk-path"])
@@ -233,70 +235,112 @@ pub fn select_linker_command(
         } else {
             format!("arm64-apple-xros{}", sdk_version)
         };
-        let swift_runtime = find_visionos_swift_runtime().ok_or_else(|| {
-            anyhow!(
-                "PerryVisionApp.swift not found. Expected next to perry binary or in source tree."
-            )
-        })?;
 
-        let input_stem = args_input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| format!("{}_ts", s))
-            .unwrap_or_else(|| "main_ts".to_string());
-        // The entry object is the one that defines the `_main` text symbol.
-        // Object files are content-hash-named in the per-module cache
-        // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
-        // silently missed them — the objcopy rename then no-op'd and the link
-        // failed with undefined `__perry_user_main`. Query each object's symbol
-        // table instead; fall back to the stem match only if `nm` is unavailable.
-        let defines_main = |obj: &std::path::Path| -> bool {
-            Command::new("nm")
-                .arg(obj)
-                .output()
-                .ok()
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .any(|l| l.ends_with(" T _main") || l.ends_with(" t _main"))
-                })
-                .unwrap_or(false)
-        };
-        let entry_obj = obj_paths
-            .iter()
-            .find(|f| defines_main(f.as_ref()))
-            .or_else(|| {
-                obj_paths.iter().find(|f| {
-                    f.file_stem()
-                        .and_then(|s| s.to_str())
-                        .map(|s| {
-                            s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem))
-                        })
-                        .unwrap_or(false)
-                })
-            });
-        if let Some(entry_obj) = entry_obj {
-            let objcopy = std::env::var("HOME").ok()
-                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
-                .filter(|p| p.exists())
-                .or_else(|| std::env::var("HOME").ok()
-                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
-                    .filter(|p| p.exists()))
-                .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
-            let _ = Command::new(&objcopy)
-                .args(["--redefine-sym", "_main=_perry_main_init"])
-                .arg(entry_obj)
-                .status();
+        if is_visionos_game_loop {
+            // UIKit/Metal game-loop app — link with clang, mirroring the iOS
+            // native branch (Swift-stdlib search paths + libc++ for the engine's
+            // C++ deps). perry-runtime supplies `main()`; no Swift app shell.
+            let clang = String::from_utf8(
+                Command::new("xcrun")
+                    .args(["--sdk", sdk, "--find", "clang"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim()
+            .to_string();
+            let developer_dir =
+                String::from_utf8(Command::new("xcode-select").arg("-p").output()?.stdout)?
+                    .trim()
+                    .to_string();
+            let mut c = Command::new(clang);
+            c.arg("-target")
+                .arg(&triple)
+                .arg("-isysroot")
+                .arg(&sysroot)
+                .arg("-L")
+                .arg(format!("{}/usr/lib/swift", sysroot))
+                .arg("-L")
+                .arg(format!(
+                    "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}",
+                    developer_dir, sdk
+                ))
+                .arg("-lc++")
+                .arg("-lc++abi");
+            c
+        } else {
+            let swiftc = String::from_utf8(
+                Command::new("xcrun")
+                    .args(["--sdk", sdk, "--find", "swiftc"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim()
+            .to_string();
+            let swift_runtime = find_visionos_swift_runtime().ok_or_else(|| {
+                anyhow!(
+                    "PerryVisionApp.swift not found. Expected next to perry binary or in source tree."
+                )
+            })?;
+
+            let input_stem = args_input
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| format!("{}_ts", s))
+                .unwrap_or_else(|| "main_ts".to_string());
+            // The entry object is the one that defines the `_main` text symbol.
+            // Object files are content-hash-named in the per-module cache
+            // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
+            // silently missed them — the objcopy rename then no-op'd and the link
+            // failed with undefined `__perry_user_main`. Query each object's symbol
+            // table instead; fall back to the stem match only if `nm` is unavailable.
+            let defines_main = |obj: &std::path::Path| -> bool {
+                Command::new("nm")
+                    .arg(obj)
+                    .output()
+                    .ok()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .lines()
+                            .any(|l| l.ends_with(" T _main") || l.ends_with(" t _main"))
+                    })
+                    .unwrap_or(false)
+            };
+            let entry_obj = obj_paths
+                .iter()
+                .find(|f| defines_main(f.as_ref()))
+                .or_else(|| {
+                    obj_paths.iter().find(|f| {
+                        f.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| {
+                                s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem))
+                            })
+                            .unwrap_or(false)
+                    })
+                });
+            if let Some(entry_obj) = entry_obj {
+                let objcopy = std::env::var("HOME").ok()
+                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
+                    .filter(|p| p.exists())
+                    .or_else(|| std::env::var("HOME").ok()
+                        .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
+                        .filter(|p| p.exists()))
+                    .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+                let _ = Command::new(&objcopy)
+                    .args(["--redefine-sym", "_main=_perry_main_init"])
+                    .arg(entry_obj)
+                    .status();
+            }
+
+            let mut c = Command::new(swiftc);
+            c.arg("-target")
+                .arg(&triple)
+                .arg("-sdk")
+                .arg(&sysroot)
+                .arg("-parse-as-library")
+                .arg(&swift_runtime);
+            c
         }
-
-        let mut c = Command::new(swiftc);
-        c.arg("-target")
-            .arg(&triple)
-            .arg("-sdk")
-            .arg(&sysroot)
-            .arg("-parse-as-library")
-            .arg(&swift_runtime);
-        c
     } else if is_ios && is_cross_ios {
         // Cross-compile iOS from Linux using ld64.lld + Apple SDK sysroot
         let ld64 = find_llvm_tool("ld64.lld")
