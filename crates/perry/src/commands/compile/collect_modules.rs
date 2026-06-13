@@ -1018,11 +1018,13 @@ fn collect_module_one(
                     // lower this WorkerNew to a runtime throw instead of
                     // failing the whole compile. Push an empty set to keep
                     // the fill pass aligned with resolved siblings.
-                    eprintln!(
-                        "  Warning: worker_threads Worker in module {}: {} — \
-                         this Worker will throw if constructed at runtime",
-                        module_name, reason
-                    );
+                    if matches!(format, OutputFormat::Text) {
+                        eprintln!(
+                            "  Warning: worker_threads Worker in module {}: {} — \
+                             this Worker will throw if constructed at runtime",
+                            module_name, reason
+                        );
+                    }
                     worker_path_sets.push(Vec::new());
                 }
             }

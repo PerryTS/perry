@@ -44,15 +44,17 @@ fn is_non_constructable_builtin_function_value(value: f64) -> bool {
 /// property read produces). These represent real Node classes/functions and
 /// must be accepted as `extends` targets.
 fn is_bound_native_method_closure_value(value: f64) -> bool {
-    use crate::value::JSValue;
-    let jv = JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return false;
+    // Gate on the native-module metadata, not the raw BOUND_METHOD_FUNC_PTR
+    // trampoline: reified `Function.prototype.{bind,call,apply}` values
+    // (`reify_function_method_value`) share that trampoline but are NOT native
+    // constructors, so matching the sentinel alone would let `class X extends
+    // obj.method {}` skip the spec-required TypeError and silently stay
+    // parentless. A real native-module export carries a non-empty module name.
+    unsafe {
+        super::native_module::bound_native_callable_module_and_method(value)
+            .map(|(module, _)| !module.is_empty())
+            .unwrap_or(false)
     }
-    let raw_ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
-    let closure_ptr = crate::closure::clean_closure_ptr(raw_ptr);
-    let func_ptr = crate::closure::get_valid_func_ptr(closure_ptr);
-    !func_ptr.is_null() && func_ptr == crate::closure::BOUND_METHOD_FUNC_PTR
 }
 
 fn throw_non_constructable_builtin_function() -> ! {
@@ -4351,6 +4353,15 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
         let parent_cid = super::instanceof::global_builtin_constructor_class_id(name);
         if parent_cid != 0 && parent_cid != class_id {
             register_class(class_id, parent_cid);
+        }
+        // A dynamic subclass that resolves its parent through this builtin
+        // branch must still record the fetch-parent kind so `new X()` attaches
+        // the native Request/Response handle — the bookkeeping below this
+        // early return would otherwise be skipped.
+        match name {
+            "Request" => super::register_fetch_parent_kind(class_id, 1),
+            "Response" => super::register_fetch_parent_kind(class_id, 2),
+            _ => {}
         }
         return;
     }

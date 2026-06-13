@@ -447,6 +447,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             None => undef.clone(),
                         };
                         let argc = super_args.len().min(2).to_string();
+                        // `extends CustomEvent` → initialize `constructor` +
+                        // `detail` as a CustomEvent, not a plain Event.
+                        let is_custom =
+                            if parent_name.as_str() == "CustomEvent" { "1" } else { "0" }
+                                .to_string();
                         ctx.block().call(
                             DOUBLE,
                             "js_event_subclass_init",
@@ -455,6 +460,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (DOUBLE, &arg0),
                                 (DOUBLE, &arg1),
                                 (I32, &argc),
+                                (I32, &is_custom),
                             ],
                         );
                         let current_class_name =

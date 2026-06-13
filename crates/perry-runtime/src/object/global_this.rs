@@ -479,10 +479,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
             let usable = if bits & TAG_MASK == POINTER_TAG {
                 let p = (bits & PTR_MASK) as usize;
+                // A real callability test: a closure, or a per-evaluation class
+                // OBJECT (constructor). The prior `class_id != 0` accepted any
+                // pointer-tagged object with a class id — including non-callable
+                // instances — so a stale captured slot holding one of those
+                // skipped the `parent_closure_in_chain` recovery below and
+                // dispatched `js_native_call_value` on a non-function.
                 crate::closure::is_closure_ptr(p)
-                    || crate::object::js_object_get_class_id(
-                        p as *const crate::object::ObjectHeader,
-                    ) != 0
+                    || super::class_registry::is_class_object_ptr(p as *const u8)
             } else {
                 // INT32-tagged ClassRefs route through the static super paths
                 // before reaching here; anything else (undefined / a stale

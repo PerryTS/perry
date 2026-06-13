@@ -292,6 +292,7 @@ pub extern "C" fn js_event_subclass_init(
     type_value: f64,
     options: f64,
     argc: u32,
+    is_custom: u32,
 ) -> f64 {
     let Some(event) = value_as_ptr::<ObjectHeader>(this_value) else {
         return undefined_value();
@@ -299,14 +300,23 @@ pub extern "C" fn js_event_subclass_init(
     if argc == 0 {
         throw_missing_arg("type");
     }
-    init_event_fields(event, type_value, options, b"Event", None);
+    // `class X extends CustomEvent` must initialize as a CustomEvent: the
+    // `constructor` field resolves to the CustomEvent global and `detail` is
+    // read off the options bag (mirroring the direct `new CustomEvent(...)`
+    // path). Plain `extends Event` keeps `b"Event"` and no `detail`.
+    if is_custom != 0 {
+        let detail = unsafe { option_detail(options) };
+        init_event_fields(event, type_value, options, b"CustomEvent", Some(detail));
+    } else {
+        init_event_fields(event, type_value, options, b"Event", None);
+    }
     undefined_value()
 }
 
 /// Keepalive anchor for the auto-optimize whole-program build —
 /// `js_event_subclass_init` is a generated-code-only callee.
 #[used]
-static KEEP_JS_EVENT_SUBCLASS_INIT: extern "C" fn(f64, f64, f64, u32) -> f64 =
+static KEEP_JS_EVENT_SUBCLASS_INIT: extern "C" fn(f64, f64, f64, u32, u32) -> f64 =
     js_event_subclass_init;
 
 fn is_event_instance(event: *const ObjectHeader) -> bool {
