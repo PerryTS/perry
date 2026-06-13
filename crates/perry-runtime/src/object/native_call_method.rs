@@ -2009,7 +2009,16 @@ pub unsafe extern "C" fn js_native_call_method(
         let top16 = bits >> 48;
         if top16 == 0x7FFD {
             let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-            if crate::timer::is_known_timer_id(id) {
+            // Timer ids and `perry-ffi` registry handles share the pointer-tagged
+            // small-integer band and both count from 1, so a bare id can be
+            // ambiguous (e.g. an HTTP/2 server handle 1 vs a `setTimeout` id 1
+            // alive at the same time). A live registered handle is the
+            // authoritative interpretation — it owns a real Rust object and its
+            // method surface (`close`/`ref`/`unref`/…) — so yield to the handle
+            // dispatch below rather than swallow `server.close()` as
+            // `clearTimeout`. A genuine timer whose id does not also name a live
+            // handle still resolves here.
+            if crate::timer::is_known_timer_id(id) && !super::class_handles::ffi_handle_exists(id) {
                 match method_name {
                     "ref" => {
                         crate::timer::js_timer_ref(id);
