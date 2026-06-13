@@ -87,7 +87,7 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             target_os = "visionos",
         )))]
         let heap_min: usize = 0x200_0000_0000;
-        if handle < heap_min || handle >= 0x8000_0000_0000 {
+        if handle < heap_min || (handle as u64) >= 0x8000_0000_0000 {
             return 0.0;
         }
         if let Some(value) = unsafe {

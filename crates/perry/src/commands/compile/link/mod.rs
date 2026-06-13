@@ -1762,11 +1762,20 @@ pub(super) fn build_and_run_link(
                 } else {
                     "watchos"
                 };
+                // arm64_32 watchOS (Series 4-8 / SE): opt-in, matches the app
+                // binary's triple in platform_cmd.rs so the native @main lib
+                // links against the same arch.
+                let swift_arm64_32 = target == Some("watchos")
+                    && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
+                let swift_watchos_min =
+                    std::env::var("PERRY_WATCHOS_MIN").unwrap_or_else(|_| "11.0".to_string());
+                let swift_triple_owned;
                 let swift_triple = if target == Some("watchos-simulator") {
                     "arm64-apple-watchos10.0-simulator"
+                } else if swift_arm64_32 {
+                    swift_triple_owned = format!("arm64_32-apple-watchos{}", swift_watchos_min);
+                    swift_triple_owned.as_str()
                 } else {
-                    // Device builds are arm64-only (S9+ / watchOS 26): Perry's
-                    // NaN-boxed values need 64-bit pointers, which arm64_32 lacks.
                     "arm64-apple-watchos26.0"
                 };
                 let swift_sysroot = String::from_utf8(

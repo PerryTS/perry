@@ -397,6 +397,12 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "ios-simulator" => Some("arm64-apple-ios17.0-simulator".to_string()),
         "visionos" => Some("arm64-apple-xros1.0".to_string()),
         "visionos-simulator" => Some("arm64-apple-xros1.0-simulator".to_string()),
+        // arm64_32 (Series 4-8 / SE) when opted in via PERRY_WATCHOS_ARM64_32;
+        // otherwise arm64 (S9+). Sets the arch of the emitted TS object files,
+        // which must match the runtime/native-lib/link triples.
+        "watchos" if std::env::var("PERRY_WATCHOS_ARM64_32").is_ok() => {
+            Some("arm64_32-apple-watchos".to_string())
+        }
         "watchos" => Some("aarch64-apple-watchos".to_string()),
         "watchos-simulator" => Some("arm64-apple-watchos10.0-simulator".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),

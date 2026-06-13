@@ -87,7 +87,7 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             // address (alloc gives 8-aligned pointers in user space)
             // matches `is_plausible_box_ptr` to keep this a no-op for
             // any pathological entry.
-            if addr >= 0x1000 && addr < 0x0001_0000_0000_0000 && addr % 8 == 0 {
+            if addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0 {
                 unsafe {
                     visitor.visit_nanbox_f64_raw_slot(&raw mut (*ptr).value);
                 }
@@ -200,7 +200,7 @@ fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
     if addr < 0x1000 {
         return false;
     }
-    if addr >= 0x0001_0000_0000_0000 {
+    if (addr as u64) >= 0x0001_0000_0000_0000 {
         return false;
     }
     if addr % std::mem::align_of::<Box>() != 0 {

@@ -173,10 +173,17 @@ pub(super) fn bundle_for_watchos(
     // #4849: read version/build_number from perry.toml (was hardcoded "1.0").
     let (app_version, app_build_number) = read_apple_app_version(input);
 
-    // Device builds are arm64-only, which requires watchOS 26 (S9+); the
-    // simulator target keeps the lower floor.
+    // Device builds default to arm64-only, which requires watchOS 26 (S9+).
+    // arm64_32 device builds (PERRY_WATCHOS_ARM64_32) reach pre-S9 watches and
+    // use a low floor (overridable via PERRY_WATCHOS_MIN); the simulator target
+    // keeps the lower floor too.
+    let arm64_32 = target == Some("watchos") && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
+    let min_os_owned;
     let min_os = if target == Some("watchos-simulator") {
         "10.0"
+    } else if arm64_32 {
+        min_os_owned = std::env::var("PERRY_WATCHOS_MIN").unwrap_or_else(|_| "11.0".to_string());
+        min_os_owned.as_str()
     } else {
         "26.0"
     };

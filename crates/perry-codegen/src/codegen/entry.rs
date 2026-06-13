@@ -132,7 +132,15 @@ pub(super) fn compile_module_entry(
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
-            llmod.define_function("main", I32, vec![])
+            // Allow the host build to override the C entry symbol. On arm64_32
+            // watchOS we can't rename `_main → __perry_user_main` after the
+            // fact (rust-objcopy's MachOWriter crashes on arm64_32 objects), so
+            // we emit the final symbol directly. Pass e.g. `_perry_user_main`
+            // (the leading underscore yields Mach-O `__perry_user_main`, which
+            // the Swift `@main` shell references via @_silgen_name).
+            let entry_name = std::env::var("PERRY_ENTRY_SYMBOL")
+                .unwrap_or_else(|_| "main".to_string());
+            llmod.define_function(&entry_name, I32, vec![])
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");

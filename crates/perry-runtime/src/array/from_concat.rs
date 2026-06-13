@@ -413,7 +413,9 @@ fn array_like_length(items: f64) -> usize {
     let n = n.floor();
     let max = (1u64 << 53) as f64 - 1.0;
     if n > max {
-        return (1usize << 53) - 1;
+        // 2^53 - 1 (JS max safe integer). usize can't represent this on 32-bit
+        // targets (arm64_32 watchOS, wasm32), so saturate to usize::MAX there.
+        return usize::try_from((1u64 << 53) - 1).unwrap_or(usize::MAX);
     }
     n as usize
 }

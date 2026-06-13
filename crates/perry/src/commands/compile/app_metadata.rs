@@ -158,6 +158,13 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("visionos-simulator") => Some("aarch64-apple-visionos-sim"),
         Some("visionos") => Some("aarch64-apple-visionos"),
         Some("watchos-simulator") => Some("aarch64-apple-watchos-sim"),
+        // arm64_32 watchOS (Series 4-8 / SE) when opted in; otherwise arm64
+        // (S9+). Governs the rust target used for the auto-optimize runtime
+        // rebuild and for building/resolving native libraries, so all three
+        // must agree with the link triple in platform_cmd.rs / link/mod.rs.
+        Some("watchos") if std::env::var("PERRY_WATCHOS_ARM64_32").is_ok() => {
+            Some("arm64_32-apple-watchos")
+        }
         Some("watchos") => Some("aarch64-apple-watchos"),
         Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
         Some("tvos") => Some("aarch64-apple-tvos"),

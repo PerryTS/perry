@@ -53,11 +53,19 @@ pub fn select_linker_command(
         )?
         .trim()
         .to_string();
+        // arm64_32 watchOS (Series 4-8 / SE): opt-in via PERRY_WATCHOS_ARM64_32.
+        // Lets the device target reach pre-S9 watches; deployment min defaults
+        // low (these watches run watchOS 9-11) but is overridable.
+        let arm64_32 = target == Some("watchos") && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
+        let watchos_min = std::env::var("PERRY_WATCHOS_MIN").unwrap_or_else(|_| "11.0".to_string());
+        let triple_owned;
         let triple = if target == Some("watchos-simulator") {
             "arm64-apple-watchos10.0-simulator"
+        } else if arm64_32 {
+            triple_owned = format!("arm64_32-apple-watchos{}", watchos_min);
+            triple_owned.as_str()
         } else {
-            // Device builds are arm64-only (S9+ / watchOS 26): Perry's
-            // NaN-boxed values need 64-bit pointers, which arm64_32 lacks.
+            // Device builds default to arm64-only (S9+ / watchOS 26).
             "arm64-apple-watchos26.0"
         };
 
@@ -108,7 +116,10 @@ pub fn select_linker_command(
                         .unwrap_or(false)
                 })
             });
-        if let Some(entry_obj) = entry_obj {
+        // arm64_32: rust-objcopy crashes on these Mach-O objects, so the entry
+        // symbol was emitted directly by codegen (PERRY_ENTRY_SYMBOL) instead of
+        // renamed here. Skip the objcopy pass entirely.
+        if let Some(entry_obj) = entry_obj.filter(|_| !arm64_32) {
             let objcopy = std::env::var("HOME").ok()
                 .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
                 .filter(|p| p.exists())
