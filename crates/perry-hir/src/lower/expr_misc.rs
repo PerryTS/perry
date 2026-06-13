@@ -296,22 +296,19 @@ pub(super) fn lower_meta_prop(
             ]))
         }
         ast::MetaPropKind::NewTarget => {
-            // Inside a class constructor, `new.target` evaluates to the
-            // class itself. We approximate this with a small object
-            // literal `{ name: <class_name> }` so:
-            //   - `new.target ? a : b` is truthy → takes the `a` branch
-            //   - `new.target.name` returns the class name string
-            // Outside a class constructor, ordinary function bodies read it
-            // dynamically from the constructor-call slot. Arrow closures can
-            // capture that value lexically during closure creation.
-            if let Some(class_name) = ctx.in_constructor_class.clone() {
-                Ok(Expr::Object(vec![(
-                    "name".to_string(),
-                    Expr::String(class_name),
-                )]))
-            } else {
-                Ok(Expr::NewTarget)
-            }
+            // `new.target` always lowers to the runtime meta-property read
+            // (#2768). Codegen resolves it to the active constructor's leaf
+            // class ref: for an inlined `new C()` via a `new_target_stack`
+            // slot holding `C`'s class ref, and for dynamic dispatch
+            // (`Reflect.construct`, imported classes) via the `js_new_target_*`
+            // cell the construct path sets. The previous in-constructor
+            // approximation hardcoded `{ name: <enclosing-class> }`, which made
+            // `new.target` the class whose BODY runs (a base class via super())
+            // rather than the actual constructed class, and broke
+            // `new.target === C` identity (a fresh object never equals the
+            // class ref). `ctx.in_constructor_class` is no longer consulted
+            // here.
+            Ok(Expr::NewTarget)
         }
     }
 }

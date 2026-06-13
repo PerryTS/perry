@@ -1661,13 +1661,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         if matches!(mp.kind, ast::MetaPropKind::NewTarget) {
                             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                                 let prop_name = prop_ident.sym.as_ref();
-                                if let Some(class_name) = ctx.in_constructor_class.clone() {
-                                    return Ok(match prop_name {
-                                        "name" => Expr::String(class_name),
-                                        _ => Expr::Undefined,
-                                    });
-                                }
-                                return Ok(Expr::Undefined);
+                                // #2768: `new.target?.<prop>` reads off the
+                                // runtime new.target (a leaf class ref inside a
+                                // constructor, `undefined` outside). Inside a
+                                // ctor it's non-null so `?.` resolves the
+                                // property; outside it yields undefined. The old
+                                // fold hardcoded the enclosing class name (wrong
+                                // leaf) and undefined for `.prototype`.
+                                return Ok(Expr::PropertyGet {
+                                    object: Box::new(Expr::NewTarget),
+                                    property: prop_name.to_string(),
+                                });
                             }
                         }
                     }

@@ -883,6 +883,29 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     ctx.this_stack.push(this_slot);
     ctx.class_stack.push(class_name.to_string());
 
+    // #2768/new.target: `new C()` is fully inlined here, so the runtime
+    // `js_new_target_*` cell is never set on this path. Bind `new.target`
+    // inside the (own or inherited-via-super) constructor body to THIS leaf
+    // class's ref via a `new_target_stack` slot. Using the codegen slot
+    // rather than the runtime cell keeps a non-constructor method called from
+    // the ctor body — compiled as a separate function whose `new_target_stack`
+    // is empty — correctly reading `undefined`. A class ref is
+    // `INT32_TAG | class_id`, the same value `Expr::ClassRef` produces, so
+    // `new.target === C`, `new.target.name`, and `new.target.prototype` all
+    // work. Falls back to `undefined` if the class id is somehow unresolved.
+    let new_target_bits = ctx
+        .class_ids
+        .get(class_name)
+        .map(|&cid| crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF))
+        .unwrap_or(crate::nanbox::TAG_UNDEFINED);
+    let new_target_slot = ctx.func.alloca_entry(DOUBLE);
+    ctx.block().store(
+        DOUBLE,
+        &double_literal(f64::from_bits(new_target_bits)),
+        &new_target_slot,
+    );
+    ctx.new_target_stack.push(new_target_slot);
+
     // Set up the inline-constructor return target. An explicit `return`
     // inside the (about-to-be-inlined) ctor body must apply spec
     // return-override semantics and yield the `new` expression's value —
@@ -1457,6 +1480,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         obj_box
     };
 
+    ctx.new_target_stack.pop();
     ctx.this_stack.pop();
     ctx.class_stack.pop();
     Ok(final_box)

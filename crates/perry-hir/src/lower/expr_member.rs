@@ -210,18 +210,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if matches!(mp.kind, ast::MetaPropKind::NewTarget) {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop_name = prop_ident.sym.as_ref();
-                if let Some(class_name) = ctx.in_constructor_class.clone() {
-                    return Ok(match prop_name {
-                        "name" => Expr::String(class_name),
-                        // Other props on a class reference (`prototype`,
-                        // arbitrary) — undefined is the safe fallback;
-                        // adding `prototype` would need a real class
-                        // reference, not in scope for #449.
-                        _ => Expr::Undefined,
-                    });
-                }
-                // Outside a constructor: `new.target` is undefined and
-                // ordinary functions resolve it dynamically at runtime.
+                // #2768: read the property off the RUNTIME `new.target`, which
+                // codegen resolves to the active constructor's leaf class ref
+                // (`INT32_TAG | class_id`). `.name` / `.prototype` /
+                // `=== SomeClass` then all reflect the actual constructed
+                // class. The old fold returned the *enclosing* class name
+                // string (wrong leaf for `super()`-inlined bodies) and made
+                // `new.target.prototype` undefined. Outside a constructor
+                // `new.target` is `undefined`, so the runtime read yields
+                // `undefined.<prop>` semantics via the same PropertyGet.
                 return Ok(Expr::PropertyGet {
                     object: Box::new(Expr::NewTarget),
                     property: prop_name.to_string(),
