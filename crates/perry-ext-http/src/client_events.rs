@@ -118,10 +118,6 @@ pub(crate) unsafe fn handle_response_event(
         .map(|r| r.response_callback)
         .unwrap_or(0);
 
-    let mut headers_map = HashMap::new();
-    for (k, v) in headers {
-        headers_map.insert(k, v);
-    }
     let mut trailers_map = HashMap::new();
     for (k, v) in trailers {
         trailers_map.insert(k, v);
@@ -131,7 +127,7 @@ pub(crate) unsafe fn handle_response_event(
     let incoming = register_handle(IncomingMessageHandle {
         status_code: status,
         status_message,
-        headers: headers_map,
+        headers,
         trailers: trailers_map,
         body,
         listeners: HashMap::new(),
@@ -222,14 +218,10 @@ pub(crate) unsafe fn handle_response_head_event(
         return;
     }
 
-    let mut headers_map = HashMap::new();
-    for (k, v) in headers {
-        headers_map.insert(k, v);
-    }
     let incoming = register_handle(IncomingMessageHandle {
         status_code: status,
         status_message,
-        headers: headers_map,
+        headers,
         trailers: HashMap::new(),
         body: Vec::new(),
         listeners: HashMap::new(),

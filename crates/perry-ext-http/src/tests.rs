@@ -81,7 +81,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     let incoming_handle = register_handle(IncomingMessageHandle {
         status_code: 200,
         status_message: "OK".to_string(),
-        headers: HashMap::new(),
+        headers: Vec::new(),
         trailers: HashMap::new(),
         body: Vec::new(),
         listeners: incoming_listeners,
