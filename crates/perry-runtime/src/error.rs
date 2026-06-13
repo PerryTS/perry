@@ -235,6 +235,18 @@ pub extern "C" fn js_rangeerror_new(message: *mut StringHeader) -> *mut ErrorHea
     unsafe { alloc_error(ERROR_KIND_RANGE_ERROR, b"RangeError", message, true) }
 }
 
+/// #5067 — throw a catchable `RangeError: Array buffer allocation failed`
+/// (V8/Node's allocation-failure message) instead of aborting the process
+/// when a user-controlled-size backing buffer cannot be allocated. Shared
+/// by the Set/Map/RegExp backing-store allocators.
+#[cold]
+pub(crate) fn throw_allocation_failed() -> ! {
+    let msg = b"Array buffer allocation failed";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = js_rangeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Create a new ReferenceError with a message
 #[no_mangle]
 pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut ErrorHeader {

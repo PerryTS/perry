@@ -563,7 +563,8 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         ) as *mut SetHeader;
         let elements = alloc(elem_layout) as *mut f64;
         if elements.is_null() {
-            panic!("Failed to allocate set elements");
+            // #5067 — catchable RangeError instead of aborting on OOM.
+            crate::error::throw_allocation_failed();
         }
 
         // Initialize header

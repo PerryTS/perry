@@ -385,7 +385,8 @@ pub extern "C" fn js_regexp_new(
     unsafe {
         let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_OBJECT);
         if raw.is_null() {
-            panic!("Failed to allocate RegExp");
+            // #5067 — catchable RangeError instead of aborting on OOM.
+            crate::error::throw_allocation_failed();
         }
         let ptr = raw as *mut RegExpHeader;
         // A previous (collected) RegExp at this address may have left expando

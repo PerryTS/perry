@@ -621,7 +621,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let h = blk.call(I64, "js_uint8array_alloc", &[(I32, "0")]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
-                Some(Expr::Integer(n)) => {
+                // Only take the i32 fast path when the literal fits in an i32;
+                // a larger length (`new Uint8Array(1e15)`) would truncate via
+                // `*n as i32`, so fall through to the runtime f64 path which
+                // throws `RangeError: Array buffer allocation failed` (#5067).
+                Some(Expr::Integer(n)) if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 => {
                     let size_str = (*n as i32).to_string();
                     let blk = ctx.block();
                     let h = blk.call(I64, "js_uint8array_alloc", &[(I32, &size_str)]);
@@ -911,7 +915,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Literal integer length: `new Int32Array(3)`. A negative
                     // literal (`new Int32Array(-1)`) is passed through verbatim
                     // so the runtime throws the spec RangeError (#3662).
-                    Expr::Integer(n) => {
+                    // Only take the i32 fast path when the literal actually fits
+                    // in an i32 — otherwise `*n as i32` would silently truncate
+                    // a huge length (`new Uint8Array(1e15)` → a bogus -1.5e9),
+                    // so fall through to the f64 runtime path which throws the
+                    // proper `RangeError: Array buffer allocation failed` (#5067).
+                    Expr::Integer(n) if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 => {
                         let len_str = (*n as i32).to_string();
                         let p = ctx.block().call(
                             I64,

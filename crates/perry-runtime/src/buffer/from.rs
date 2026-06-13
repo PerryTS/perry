@@ -484,6 +484,14 @@ fn uint8array_length_or_throw(val: f64) -> u32 {
         let err = crate::error::js_rangeerror_new(m);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
     }
+    // #5067 — a `Uint8Array` is backed by an `i32`-capacity `BufferHeader`, so
+    // a length above `i32::MAX` (~2 GiB) cannot be allocated. Node passes the
+    // `<= 2**53-1` length check for these and then fails the real allocation,
+    // so match its `RangeError: Array buffer allocation failed` rather than
+    // silently capping the length (which produced a wrong-size buffer).
+    if integer > i32::MAX as f64 {
+        crate::error::throw_allocation_failed();
+    }
     integer as u32
 }
 
@@ -571,8 +579,10 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
     // Node applies ToIndex (NaN → 0, truncate toward zero) and throws a
     // RangeError on a negative / out-of-range length (#3662).
     if !(0x7FFC..=0x7FFF).contains(&top16) {
+        // `uint8array_length_or_throw` already throws for lengths above
+        // `i32::MAX` (#5067), so the cast is in range here.
         let len = uint8array_length_or_throw(val);
-        return js_uint8array_alloc(len.min(i32::MAX as u32) as i32);
+        return js_uint8array_alloc(len as i32);
     }
     // Any other tag (undefined/null/bool/string/bigint) → empty buffer,
     // matching the JS semantics of `new Uint8Array(undefined)` et al.

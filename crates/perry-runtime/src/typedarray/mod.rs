@@ -344,6 +344,16 @@ fn typed_array_length_or_throw(val: f64) -> u32 {
         };
         throw_range_error(format!("Invalid typed array length: {shown}").as_bytes());
     }
+    // #5067 — Perry stores the element count in a `u32` capacity field, so a
+    // length above `u32::MAX` cannot be represented (and the backing block
+    // could never be allocated anyway). Node passes the `<= 2**53-1` length
+    // check for these and then fails the actual allocation, so match its
+    // `RangeError: Array buffer allocation failed` rather than silently
+    // saturating the cast to `u32::MAX` (which produced a wrong-size array
+    // or aborted the process in the allocator).
+    if integer > u32::MAX as f64 {
+        throw_range_error(b"Array buffer allocation failed");
+    }
     integer as u32
 }
 
@@ -532,7 +542,9 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
     unsafe {
         let raw = alloc(layout);
         if raw.is_null() {
-            panic!("typed_array_alloc OOM");
+            // #5067 — surface a catchable `RangeError` (Node's
+            // `Array buffer allocation failed`) instead of aborting.
+            throw_range_error(b"Array buffer allocation failed");
         }
         let p = raw as *mut TypedArrayHeader;
         (*p).length = length;

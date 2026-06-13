@@ -604,7 +604,8 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         // on a fresh Map that never saw entity 5121.
         let entries = alloc(ent_layout) as *mut f64;
         if entries.is_null() {
-            panic!("Failed to allocate map entries");
+            // #5067 — catchable RangeError instead of aborting on OOM.
+            crate::error::throw_allocation_failed();
         }
         ptr::write_bytes(entries as *mut u8, 0u8, ent_layout.size());
 
