@@ -9,7 +9,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{DOUBLE, I32, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::helpers::{
     emit_namespace_populator, enable_module_init_shadow_frame, init_static_fields_early,
@@ -17,6 +17,82 @@ use super::helpers::{
     write_barriers_enabled,
 };
 use super::opts::CrossModuleCtx;
+
+/// Collect the entry module's top-level `process.env.<NAME> = "<literal>"`
+/// assignments so they can be applied to the OS environment BEFORE eager
+/// module init (see the call site in `compile_module_entry`).
+///
+/// Node runs the entry script top-to-bottom, so a `process.env.NODE_ENV =
+/// 'production'` on line 1 is observed by every `require()`d dependency's
+/// init. Perry hoists `require`s to eager imports that init before the entry
+/// body runs, so without this the dependency observes the unmodified env —
+/// e.g. `react-dom/index.js` branches on `process.env.NODE_ENV === 'production'`
+/// to pick the production vs development bundle, and the development file is
+/// pruned from a Next.js standalone build, so the wrong branch yields an empty
+/// module and a downstream `ReactDOMSharedInternals.d` crash.
+///
+/// Only *unconditional module-top-level* assignments are collected: the entry
+/// init statements, plus one+ levels into a cjs-wrap IIFE (`_cjs =
+/// (function(){ ... })()`), which is where the wrapped entry's top-level
+/// statements live. Assignments nested in conditionals or inner functions are
+/// deliberately skipped — those run conditionally/lazily, exactly as in Node.
+fn collect_entry_env_literals(init: &[perry_hir::Stmt]) -> Vec<(String, String)> {
+    use perry_hir::{Expr, Stmt};
+
+    fn record(expr: &Expr, out: &mut Vec<(String, String)>) {
+        // `process.env.X = "lit"` lowers to either form depending on path.
+        if let Expr::PutValueSet {
+            target, key, value, ..
+        } = expr
+        {
+            if matches!(target.as_ref(), Expr::ProcessEnv) {
+                if let (Expr::String(k), Expr::String(v)) = (key.as_ref(), value.as_ref()) {
+                    out.push((k.clone(), v.clone()));
+                }
+            }
+        }
+        if let Expr::PropertySet {
+            object,
+            property,
+            value,
+        } = expr
+        {
+            if matches!(object.as_ref(), Expr::ProcessEnv) {
+                if let Expr::String(v) = value.as_ref() {
+                    out.push((property.clone(), v.clone()));
+                }
+            }
+        }
+    }
+
+    fn descend_iife(expr: &Expr, out: &mut Vec<(String, String)>, depth: u32) {
+        if depth >= 4 {
+            return;
+        }
+        if let Expr::Call { callee, .. } = expr {
+            if let Expr::Closure { body, .. } = callee.as_ref() {
+                scan(body, out, depth + 1);
+            }
+        }
+    }
+
+    fn scan(stmts: &[Stmt], out: &mut Vec<(String, String)>, depth: u32) {
+        for s in stmts {
+            match s {
+                Stmt::Expr(e) => {
+                    record(e, out);
+                    descend_iife(e, out, depth);
+                }
+                Stmt::Let { init: Some(e), .. } => descend_iife(e, out, depth),
+                _ => {}
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    scan(init, &mut out, 0);
+    out
+}
 
 /// Emit the module's entry function.
 ///
@@ -203,6 +279,25 @@ pub(super) fn compile_module_entry(
             let blk = main.block_mut(0).unwrap();
             // Entry module's own string pool first.
             blk.call_void(&strings_init_name, &[]);
+            // Apply the entry module's top-level `process.env.<NAME> =
+            // "<literal>"` assignments NOW — after the string pool is live but
+            // BEFORE any dependency's `__init` runs — so eager-inited deps that
+            // branch on `process.env` at init time observe what the entry sets,
+            // matching Node's require-is-lazy ordering. See
+            // `collect_entry_env_literals`. The "NODE_ENV"/"production" string
+            // handles are interned here and populated by the strings-init call
+            // above (the entry body also references them, so they share slots).
+            for (name, value) in collect_entry_env_literals(&hir.init) {
+                let name_idx = strings.intern(&name);
+                let value_idx = strings.intern(&value);
+                let name_global = format!("@{}", strings.entry(name_idx).handle_global);
+                let value_global = format!("@{}", strings.entry(value_idx).handle_global);
+                let name_box = blk.load(DOUBLE, &name_global);
+                let name_bits = blk.bitcast_double_to_i64(&name_box);
+                let name_handle = blk.and(I64, &name_bits, crate::nanbox::POINTER_MASK_I64);
+                let value_box = blk.load(DOUBLE, &value_global);
+                blk.call_void("js_setenv", &[(I64, &name_handle), (DOUBLE, &value_box)]);
+            }
             // Then every non-entry module's init in order. Each
             // non-entry module's `<prefix>__init` runs its own string
             // pool init internally before its top-level statements.
