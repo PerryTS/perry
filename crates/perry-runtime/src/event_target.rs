@@ -389,11 +389,10 @@ unsafe fn is_event_target(target: *const ObjectHeader) -> bool {
         return false;
     }
     // Handle-based receivers (EventEmitter ids live at 0x38000..0x40000,
-    // widget/stream handles lower) are small integers, not heap pointers —
-    // the runtime-wide convention is "below 0x100000 = handle". Probing the
-    // GcHeader at handle-8 read unmapped memory and SIGSEGV'd when
-    // events.on(emitter, ...) validated its target (#4633).
-    if (target as usize) < crate::gc::GC_HEADER_SIZE + 0x100000 {
+    // widget/stream handles lower) are small integers, not heap pointers.
+    // Probing the GcHeader at handle-8 read unmapped memory and SIGSEGV'd
+    // when events.on(emitter, ...) validated its target (#4633).
+    if crate::value::addr_class::is_handle_band(target as usize) {
         return false;
     }
     let gc_header =

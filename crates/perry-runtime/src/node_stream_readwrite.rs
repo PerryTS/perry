@@ -76,12 +76,12 @@ pub(super) fn string_value_eq(value: f64, expected: &[u8]) -> bool {
 
 pub(super) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     let raw = raw_ptr_from_value(value);
-    // Below 0x100000 is the handle band (EventEmitter ids sit at
-    // 0x38000..0x40000, widget/stream handles lower) — never a heap object.
-    // The old 0x10000 floor let an EventEmitter handle through to the
-    // GcHeader probe at raw-8, which is unmapped memory (#4633 SIGSEGV in
+    // The handle band (EventEmitter ids sit at 0x38000..0x40000,
+    // widget/stream handles lower) is never a heap object. The old 0x10000
+    // floor let an EventEmitter handle through to the GcHeader probe at
+    // raw-8, which is unmapped memory (#4633 SIGSEGV in
     // events.on(emitter, name, { signal }) target validation).
-    if raw < 0x100000 || crate::buffer::is_registered_buffer(raw) {
+    if crate::value::addr_class::is_handle_band(raw) || crate::buffer::is_registered_buffer(raw) {
         return None;
     }
     unsafe {
