@@ -4814,6 +4814,21 @@ pub(crate) fn set_bound_native_closure_name(
     let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_value = f64::from_bits(JSValue::string_ptr(ptr).bits());
     crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    // Spec: a function's `name` property is { writable:false, enumerable:false,
+    // configurable:true }. Storing it as a plain dynamic prop left it ENUMERABLE
+    // by default, so `for (k in Buffer)` yielded "name" — even though
+    // `getOwnPropertyDescriptor(Buffer,'name').enumerable` correctly reported
+    // false via the function-name special case. The inconsistency broke
+    // safe-buffer's `copyProps(Buffer, SafeBuffer)` (`for (k in Buffer)
+    // SafeBuffer[k] = Buffer[k]`): it copied "name" onto SafeBuffer, whose own
+    // `name` is read-only, throwing `Cannot assign to read only property 'name'`
+    // in strict mode (jsonwebtoken → Next.js). Pin the proper descriptor so
+    // enumeration matches reflection.
+    crate::object::set_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
 }
 
 thread_local! {
