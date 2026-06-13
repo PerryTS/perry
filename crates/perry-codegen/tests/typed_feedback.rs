@@ -2,6 +2,37 @@ use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 use perry_types::{FunctionType, Type};
 
+/// Serializes env-mutating tests so a concurrent test never observes a
+/// half-applied variable. Mirrors the guard in `typed_shape_descriptors.rs`.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Sets an env var for the duration of a test and restores the previous value
+/// (or unsets it) on drop, so the mutation never leaks to other tests.
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: Option<&str>) -> Self {
+        let prev = std::env::var_os(key);
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         target: None,
@@ -184,6 +215,12 @@ fn typed_feedback_trace_dump_runs_before_entry_return() {
 
 #[test]
 fn typed_feedback_instruments_property_and_method_boundaries() {
+    // Typed-feedback site *registration* is opt-in (emitted only when
+    // PERRY_TYPED_FEEDBACK / _TRACE is set); this test exercises the enabled
+    // path. Serialize on ENV_LOCK and restore the var on drop so concurrent or
+    // later tests in this binary never observe the changed environment.
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _env = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", Some("1"));
     let ir = ir_for(module(
         "typed_feedback_property.ts",
         vec![param(1, "obj", Type::Any)],

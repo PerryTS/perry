@@ -244,8 +244,8 @@ fn raw_value_to_jsvalue(value: &RawValue) -> JSValue {
 
 /// Convert a raw column to a field packet (must be called on main thread)
 fn raw_column_to_field_packet(col: &RawColumnInfo) -> *mut perry_runtime::ObjectHeader {
-    let obj = js_object_alloc(0, 3);
-    let mut keys_array = js_array_alloc(3);
+    let obj = js_object_alloc(0, 4);
+    let mut keys_array = js_array_alloc(4);
 
     // Set name
     let name_ptr = js_string_from_bytes(col.name.as_ptr(), col.name.len() as u32);
@@ -253,16 +253,21 @@ fn raw_column_to_field_packet(col: &RawColumnInfo) -> *mut perry_runtime::Object
     let key0 = js_string_from_bytes("name".as_ptr(), 4);
     keys_array = js_array_push(keys_array, JSValue::string_ptr(key0));
 
-    // Set type
-    let type_ptr = js_string_from_bytes(col.type_name.as_ptr(), col.type_name.len() as u32);
-    js_object_set_field(obj, 1, JSValue::string_ptr(type_ptr));
+    // Set type — numeric wire ID, matching mysql2's FieldPacket (#4917).
+    let type_id = super::types::mysql_type_id_from_name(&col.type_name);
+    js_object_set_field(obj, 1, JSValue::number(type_id));
     let key1 = js_string_from_bytes("type".as_ptr(), 4);
     keys_array = js_array_push(keys_array, JSValue::string_ptr(key1));
 
-    // Set length (0 for now)
-    js_object_set_field(obj, 2, JSValue::number(0.0));
-    let key2 = js_string_from_bytes("length".as_ptr(), 6);
+    // mysql2 exposes the same value as `columnType` too.
+    js_object_set_field(obj, 2, JSValue::number(type_id));
+    let key2 = js_string_from_bytes("columnType".as_ptr(), 10);
     keys_array = js_array_push(keys_array, JSValue::string_ptr(key2));
+
+    // Set length (0 — not recoverable through sqlx 0.8's public API, #4917)
+    js_object_set_field(obj, 3, JSValue::number(0.0));
+    let key3 = js_string_from_bytes("length".as_ptr(), 6);
+    keys_array = js_array_push(keys_array, JSValue::string_ptr(key3));
 
     js_object_set_keys(obj, keys_array);
     obj

@@ -2371,6 +2371,11 @@ pub enum Expr {
         target: Box<Expr>,
         key: Box<Expr>,
         value: Box<Expr>,
+        /// Optional `receiver` argument (4th): the object actually written
+        /// when the target's own/inherited descriptor allows it (observable
+        /// for Integer-Indexed exotic targets). Lowering supplies `target`
+        /// when the call omits it.
+        receiver: Box<Expr>,
     },
     /// Assignment PutValue for property references. Evaluates target/key/value
     /// in source order, performs ordinary [[Set]] with an explicit receiver,

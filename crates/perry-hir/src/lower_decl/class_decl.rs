@@ -253,21 +253,45 @@ pub fn lower_class_decl(
         } else if let ast::Expr::Member(member) = super_class.as_ref() {
             // Handle member expression like ethers.JsonRpcProvider or module.ClassName
             let parent_name = extract_member_class_name(member);
-            // Refs #488 drizzle-sqlite: also try resolving the parent
-            // class by name across modules. Pre-fix the Member arm set
-            // `extends = None`, so `class SQLiteIntegerBuilder extends
-            // import_mid.SQLiteColumnBuilder { ... }` lost its parent
-            // link entirely — inherited methods (drizzle's
-            // ColumnBuilder.setName etc.) were unreachable on instances.
-            // Class names are unique enough in practice that `lookup_class`
-            // resolves; if it doesn't, we fall back to the prior
-            // name-only behavior (no regression for unknown parents).
-            (
-                ctx.lookup_class(&parent_name),
-                Some(parent_name),
-                None,
-                None,
-            )
+            // Issue #4908: `extract_member_class_name` returns only the
+            // trailing property (`http.Agent` -> "Agent"). When that equals
+            // the subclass's OWN name (`class Agent extends http.Agent`), the
+            // bare-name resolution is bogus: the subclass registered its own
+            // name above (so `lookup_class` returns the class itself) and
+            // both `extends` and `extends_name` would self-reference. A
+            // self-link sends every codegen parent-chain walk into an
+            // infinite loop — the four node:http `class Agent extends
+            // http.Agent` tests OOM-crashed codegen. Leave the class
+            // parentless (all None), matching how a non-colliding native
+            // member base (`class Foo extends http.Agent`) already behaves:
+            // `extends_name` there resolves to no known class, so the class
+            // is effectively parentless and constructs cleanly. We do NOT
+            // route through the dynamic `extends_expr` path here — that
+            // turns the class derived and demands a runtime super() into the
+            // native base, which fails ("Class extends value is not a
+            // constructor" / "Must call super constructor"). Native member
+            // base inheritance (real `instanceof` / `super.method` dispatch)
+            // is unimplemented for the member-expression case generally;
+            // this keeps the colliding-name case on par with the rest.
+            if parent_name == name {
+                (None, None, None, None)
+            } else {
+                // Refs #488 drizzle-sqlite: also try resolving the parent
+                // class by name across modules. Pre-fix the Member arm set
+                // `extends = None`, so `class SQLiteIntegerBuilder extends
+                // import_mid.SQLiteColumnBuilder { ... }` lost its parent
+                // link entirely — inherited methods (drizzle's
+                // ColumnBuilder.setName etc.) were unreachable on instances.
+                // Class names are unique enough in practice that `lookup_class`
+                // resolves; if it doesn't, we fall back to the prior
+                // name-only behavior (no regression for unknown parents).
+                (
+                    ctx.lookup_class(&parent_name),
+                    Some(parent_name),
+                    None,
+                    None,
+                )
+            }
         } else {
             // Issue #711: `class X extends fn(...)` / `class X extends
             // new Foo(...)` etc. The super-class expression isn't
@@ -750,11 +774,26 @@ pub fn lower_class_decl(
                         // the property name, not `get_#name`).
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_getter(ctx, method)?;
+                        // A STATIC private accessor must register on the
+                        // class's static-accessor side (mirroring the public
+                        // static getter/setter arms above) so `this.#f` with
+                        // a class-ref receiver dispatches it. Pre-fix it only
+                        // landed in the instance getter registry and the
+                        // static read returned undefined (test262
+                        // static-private-getter*).
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_setter(ctx, method)?;
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         setters.push((prop_name, func));
                     }
                 }
@@ -1003,6 +1042,21 @@ pub fn lower_class_decl(
         ctx.register_class_field_types(name.clone(), field_types);
     }
 
+    // `this` in a STATIC field initializer is the class constructor per
+    // ClassDefinitionEvaluation. Substitute lexically — including inside
+    // arrow / this-capturing closure BODIES (which compile from these very
+    // exprs) — so every consumer (the inline init stmts at the class-decl
+    // source position, init_static_fields_late) evaluates with the right
+    // receiver. Without the in-place rewrite, a stmt-level clone substitution
+    // desyncs the closure creation site from the compiled body (the body is
+    // compiled from this original) and `static f = () => this` returned the
+    // unpatched capture slot (test262 static-field-init-this-inside-arrow).
+    for sf in &mut static_fields {
+        if let Some(init) = &mut sf.init {
+            crate::analysis::substitute_lexical_this_in_expr(init, &Expr::ClassRef(name.clone()));
+        }
+    }
+
     // Exit type parameter scope
     ctx.exit_type_param_scope();
 
@@ -1029,6 +1083,10 @@ pub fn lower_class_decl(
         ctx,
         &name,
         extends_name.as_deref(),
+        extends.is_some()
+            || extends_name.is_some()
+            || native_extends.is_some()
+            || extends_expr.is_some(),
         &mut fields,
         &mut methods,
         &mut getters,
@@ -1183,12 +1241,22 @@ pub fn lower_class_from_ast(
             // rationale — without this, the parent link is lost and
             // inherited methods don't reach instances.
             let parent_name = extract_member_class_name(member);
-            (
-                ctx.lookup_class(&parent_name),
-                Some(parent_name),
-                None,
-                None,
-            )
+            // Issue #4908: avoid a self-referential parent edge when the
+            // member's trailing property equals the subclass's own name
+            // (`class Agent extends http.Agent`). See the matching guard in
+            // `lower_class_decl` above — a self-link loops codegen's
+            // parent-chain walk forever. Leave the class parentless, matching
+            // the non-colliding native-member-base behavior.
+            if parent_name == name {
+                (None, None, None, None)
+            } else {
+                (
+                    ctx.lookup_class(&parent_name),
+                    Some(parent_name),
+                    None,
+                    None,
+                )
+            }
         } else {
             // Issue #711: see the matching arm in `lower_class_decl` above
             // for the full rationale. Capture the lowered extends
@@ -1366,11 +1434,21 @@ pub fn lower_class_from_ast(
                     ast::MethodKind::Getter => {
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_getter(ctx, method)?;
+                        // Static private accessor — register on the static
+                        // side (see the matching arm in `lower_class_decl`).
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         getters.push((prop_name, func));
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
                         let func = lower_private_setter(ctx, method)?;
+                        if method.is_static {
+                            static_accessor_names.push(prop_name.clone());
+                            static_accessor_fn_ids.push(func.id);
+                        }
                         setters.push((prop_name, func));
                     }
                 }
@@ -1403,6 +1481,17 @@ pub fn lower_class_from_ast(
                 });
             }
             _ => {}
+        }
+    }
+
+    // `this` in static field initializers — see the matching substitution in
+    // `lower_class_decl` above.
+    for sf in &mut static_fields {
+        if let Some(init) = &mut sf.init {
+            crate::analysis::substitute_lexical_this_in_expr(
+                init,
+                &Expr::ClassRef(name.to_string()),
+            );
         }
     }
 
@@ -1474,6 +1563,10 @@ pub fn lower_class_from_ast(
         ctx,
         name,
         extends_name.as_deref(),
+        extends.is_some()
+            || extends_name.is_some()
+            || native_extends.is_some()
+            || extends_expr.is_some(),
         &mut fields,
         &mut methods,
         &mut getters,

@@ -157,6 +157,21 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             // thunk (no dedicated HIR variant). Used by `qs` (→ `stripe`).
             | "escape"
             | "unescape"
+            // #5015: callable global helpers that have a `globalThis.<name>`
+            // thunk and are recognized as known globals + folded to typeof
+            // "function" (#3986), but were never added here — so a bare *value*
+            // read (`const m = queueMicrotask`, `{ scheduleMicrotask:
+            // queueMicrotask }`) fell through to the `GlobalGet(0)` sentinel and
+            // evaluated to the number `0`, not a function. react-reconciler's
+            // host config (`scheduleMicrotask: queueMicrotask`) hit exactly this:
+            // `updateContainerSync` → `scheduleImmediateRootScheduleTask` called
+            // the stored `0` and threw "value is not a function". Direct CALLS
+            // (`queueMicrotask(fn)`, `btoa(s)`) are picked off earlier in
+            // expr_call/globals.rs, so this only affects value reads.
+            | "queueMicrotask"
+            | "structuredClone"
+            | "atob"
+            | "btoa"
     )
 }
 

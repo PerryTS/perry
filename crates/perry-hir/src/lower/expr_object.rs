@@ -191,7 +191,20 @@ fn lower_method_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
-    ctx.enter_strict_mode(true);
+    // Object-literal methods are NOT implicitly strict (unlike class bodies):
+    // strictness is inherited from the enclosing code or introduced by the
+    // method's own directive prologue. A blanket `true` here made every
+    // direct `eval` inside a sloppy object method apply strict-mode early
+    // errors (test262 language/eval-code direct/*meth*-declare-arguments,
+    // super-prop-method).
+    let method_strict = ctx.current_strict_mode()
+        || method
+            .function
+            .body
+            .as_ref()
+            .map(|b| crate::lower_decl::body_has_use_strict(&b.stmts))
+            .unwrap_or(false);
+    ctx.enter_strict_mode(method_strict);
     let mut params = Vec::new();
     let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     // Destructuring method params (`method([x, y]) {}` / `m({a, b}) {}`) need
@@ -439,7 +452,12 @@ fn lower_accessor_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
-    ctx.enter_strict_mode(true);
+    // Accessors in object literals inherit strictness (see lower_method_prop).
+    let accessor_strict = ctx.current_strict_mode()
+        || body
+            .map(|b| crate::lower_decl::body_has_use_strict(&b.stmts))
+            .unwrap_or(false);
+    ctx.enter_strict_mode(accessor_strict);
     let mut params = Vec::new();
     if let Some(pat) = setter_param {
         // Setters take a single param. Skip the TS `this:` type-only marker

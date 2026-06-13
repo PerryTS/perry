@@ -258,3 +258,159 @@ pub extern "C" fn js_string_replace_all_string(
     result.push_str(&str_data[last..]);
     js_string_from_str(&result)
 }
+
+/// `replaceValue` whose function-ness is only knowable at RUNTIME (a closure
+/// returned from an IIFE / call / property read — codegen's static
+/// `repl_is_function` detection can't see it). Route to the callback variant
+/// when the value is callable, else ToString-coerce and take the plain
+/// string-replacement path — pre-fix the coercion stringified the closure
+/// source into the result (test262 10.4.3-1-102-s, react-family replacer
+/// callbacks).
+fn replacement_is_callable(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return false;
+    }
+    crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize)
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_string_dyn(
+    s: *const StringHeader,
+    pattern: *const StringHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return js_string_replace_string_fn(s, pattern, replacement);
+    }
+    js_string_replace_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_string_dyn(
+    s: *const StringHeader,
+    pattern: *const StringHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return js_string_replace_all_string_fn(s, pattern, replacement);
+    }
+    js_string_replace_all_string(s, pattern, crate::builtins::js_string_coerce(replacement))
+}
+
+/// Resolve a runtime-dynamic `searchValue` (an object-property read, call
+/// result, destructured loop binding, …) to a registered RegExp pointer, or
+/// `None` when the value isn't a RegExp.
+fn needle_regex_ptr(needle: f64) -> Option<*const crate::regex::RegExpHeader> {
+    let bits = needle.to_bits();
+    let top16 = bits >> 48;
+    let addr = if top16 == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if top16 == 0 {
+        // Module-level slots store heap pointers as raw I64 bits.
+        bits as usize
+    } else {
+        return None;
+    };
+    if crate::regex::is_regex_pointer(addr as *const u8) {
+        Some(addr as *const crate::regex::RegExpHeader)
+    } else {
+        None
+    }
+}
+
+/// `searchValue` whose RegExp-ness is only knowable at RUNTIME (#4871):
+/// codegen's static detection covers RegExp literals and RegExp-typed locals,
+/// but a RegExp read back from an object property (or destructured in a
+/// `for...of`) arrives as an opaque NaN-boxed value. Pre-fix it was
+/// ToString-coerced to "/foo/g" and searched literally — replace silently
+/// became a no-op. Dispatch on the registered-RegExp check, then defer to the
+/// replacement-shape dispatchers.
+#[no_mangle]
+pub extern "C" fn js_string_replace_search_dyn(
+    s: *const StringHeader,
+    needle: f64,
+    replacement: f64,
+) -> *mut StringHeader {
+    if let Some(re) = needle_regex_ptr(needle) {
+        return js_string_replace_regex_dyn(s, re, replacement);
+    }
+    js_string_replace_string_dyn(s, crate::builtins::js_string_coerce(needle), replacement)
+}
+
+/// `replaceAll` twin of [`js_string_replace_search_dyn`].
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_search_dyn(
+    s: *const StringHeader,
+    needle: f64,
+    replacement: f64,
+) -> *mut StringHeader {
+    if let Some(re) = needle_regex_ptr(needle) {
+        return js_string_replace_all_regex_dyn(s, re, replacement);
+    }
+    js_string_replace_all_string_dyn(s, crate::builtins::js_string_coerce(needle), replacement)
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_regex_dyn(
+    s: *const StringHeader,
+    re: *const crate::regex::RegExpHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return crate::regex::js_string_replace_regex_fn(s, re, replacement);
+    }
+    // The `_named` variant handles both `$1` and `$<name>` expansion.
+    crate::regex::js_string_replace_regex_named(
+        s,
+        re,
+        crate::builtins::js_string_coerce(replacement),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_string_replace_all_regex_dyn(
+    s: *const StringHeader,
+    re: *const crate::regex::RegExpHeader,
+    replacement: f64,
+) -> *mut StringHeader {
+    if replacement_is_callable(replacement) {
+        return crate::regex::js_string_replace_all_regex_fn(s, re, replacement);
+    }
+    crate::regex::js_string_replace_all_regex_named(
+        s,
+        re,
+        crate::builtins::js_string_coerce(replacement),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #4871: a RegExp arriving as an opaque NaN-boxed value (object-property
+    /// read) must dispatch to the regex path, not be ToString-coerced into a
+    /// literal "/foo/g" search.
+    #[test]
+    fn search_dyn_dispatches_runtime_regex_and_coerces_non_regex() {
+        let s = js_string_from_str("foofoo");
+        let pat = js_string_from_str("foo");
+        let flags = js_string_from_str("g");
+        let re = crate::regex::js_regexp_new(pat, flags);
+        let re_boxed = f64::from_bits(0x7FFD_0000_0000_0000u64 | (re as u64 & 0xFFFF_FFFF_FFFF));
+        let repl = js_nanbox_string(js_string_from_str("X") as i64);
+
+        // /foo/g: the g flag makes .replace substitute every match.
+        let out = js_string_replace_search_dyn(s, re_boxed, repl);
+        assert_eq!(string_as_str(out), "XX");
+
+        let out_all = js_string_replace_all_search_dyn(s, re_boxed, repl);
+        assert_eq!(string_as_str(out_all), "XX");
+
+        // Non-regex needle: ToString-coerce and search literally.
+        let needle_num = 12.0_f64;
+        let s2 = js_string_from_str("a12b");
+        let out2 = js_string_replace_search_dyn(s2, needle_num, repl);
+        assert_eq!(string_as_str(out2), "aXb");
+    }
+}

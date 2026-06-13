@@ -580,18 +580,31 @@ pub fn lower_module_full(
     // fails if FullMath is declared after SqrtPriceMath.
     for item in &ast_module.body {
         let class_decl = match item {
-            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(cd))) => Some(cd),
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(cd))) => {
+                Some((cd.ident.sym.to_string(), &cd.class))
+            }
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
                 if let ast::Decl::Class(cd) = &export_decl.decl {
-                    Some(cd)
+                    Some((cd.ident.sym.to_string(), &cd.class))
                 } else {
                     None
                 }
             }
+            // #4976: named inline `export default class Name { … }` is a
+            // real class declaration too — pre-register it so same-file
+            // static cross-references resolve regardless of order.
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultDecl(
+                ast::ExportDefaultDecl {
+                    decl: ast::DefaultDecl::Class(class_expr),
+                    ..
+                },
+            )) => class_expr
+                .ident
+                .as_ref()
+                .map(|ident| (ident.sym.to_string(), &class_expr.class)),
             _ => None,
         };
-        if let Some(cd) = class_decl {
-            let name = cd.ident.sym.to_string();
+        if let Some((name, cd)) = class_decl {
             if ctx.lookup_class(&name).is_none() {
                 let id = ctx.fresh_class();
                 ctx.register_class(name.clone(), id);
@@ -599,7 +612,7 @@ pub fn lower_module_full(
             // Collect static field/method names
             let mut static_field_names = Vec::new();
             let mut static_method_names = Vec::new();
-            for member in &cd.class.body {
+            for member in &cd.body {
                 match member {
                     // Only true static *methods* register as callable statics.
                     // Static accessors (`static get foo()`) are NOT methods —
@@ -766,6 +779,57 @@ pub fn lower_module_full(
         }
         if let Some(ref mut ctor) = class.constructor {
             widen_mutable_captures_stmts(&mut ctor.body);
+        }
+    }
+
+    // Post-pass: widen declared types lied about by later assignments
+    // (`var x = 2; … set foo(v){ x = this; }` must not leave `x: Number`,
+    // or codegen float-compares NaN-boxed pointers — #3576 family). Collect
+    // over EVERY body first (LocalIds are module-unique; the assignment and
+    // the `Stmt::Let` can live in different bodies), then rewrite.
+    {
+        let mut widening = crate::lower::type_widening::TypeWidening::new();
+        widening.collect(&module.init);
+        for func in &module.functions {
+            widening.collect(&func.body);
+        }
+        for class in &module.classes {
+            for method in &class.methods {
+                widening.collect(&method.body);
+            }
+            for (_, getter) in &class.getters {
+                widening.collect(&getter.body);
+            }
+            for (_, setter) in &class.setters {
+                widening.collect(&setter.body);
+            }
+            for static_method in &class.static_methods {
+                widening.collect(&static_method.body);
+            }
+            if let Some(ref ctor) = class.constructor {
+                widening.collect(&ctor.body);
+            }
+        }
+        widening.apply(&mut module.init);
+        for func in &mut module.functions {
+            widening.apply(&mut func.body);
+        }
+        for class in &mut module.classes {
+            for method in &mut class.methods {
+                widening.apply(&mut method.body);
+            }
+            for (_, getter) in &mut class.getters {
+                widening.apply(&mut getter.body);
+            }
+            for (_, setter) in &mut class.setters {
+                widening.apply(&mut setter.body);
+            }
+            for static_method in &mut class.static_methods {
+                widening.apply(&mut static_method.body);
+            }
+            if let Some(ref mut ctor) = class.constructor {
+                widening.apply(&mut ctor.body);
+            }
         }
     }
 

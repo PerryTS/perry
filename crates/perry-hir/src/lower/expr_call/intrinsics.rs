@@ -1238,20 +1238,37 @@ pub(super) fn try_iife_call_rewrite(
                             let lowered_callee = lower_expr(ctx, inner)?;
                             if let Expr::Closure {
                                 captures_this: false,
+                                is_arrow,
+                                body,
                                 ..
                             } = &lowered_callee
                             {
-                                let rest_args = call
-                                    .args
-                                    .iter()
-                                    .skip(1)
-                                    .map(|arg| lower_expr(ctx, &arg.expr))
-                                    .collect::<Result<Vec<_>>>()?;
-                                return Ok(Some(Expr::Call {
-                                    callee: Box::new(lowered_callee),
-                                    args: rest_args,
-                                    type_args: Vec::new(),
-                                }));
+                                // Dropping the `.call` thisArg is only sound
+                                // when the body never observes `this`. An arrow
+                                // (captures_this == false) has no own `this`. A
+                                // regular function expression ALSO reports
+                                // captures_this == false (it has its own dynamic
+                                // `this`, not a captured one — expr_function.rs),
+                                // so its body may still read `this`; folding
+                                // `(function(){ "use strict"; return this })
+                                // .call(null)` to `fn()` would lose the bound
+                                // receiver (the body would see undefined, not
+                                // null). Require a this-free body there. #3576.
+                                let drops_this_safely =
+                                    *is_arrow || !crate::analysis::closure_uses_this(body);
+                                if drops_this_safely {
+                                    let rest_args = call
+                                        .args
+                                        .iter()
+                                        .skip(1)
+                                        .map(|arg| lower_expr(ctx, &arg.expr))
+                                        .collect::<Result<Vec<_>>>()?;
+                                    return Ok(Some(Expr::Call {
+                                        callee: Box::new(lowered_callee),
+                                        args: rest_args,
+                                        type_args: Vec::new(),
+                                    }));
+                                }
                             }
                         }
                     }
@@ -1336,6 +1353,47 @@ pub(super) fn try_native_module_method_apply_call(
         || matches!(ctx.lookup_native_module(ns_name), Some((_, None)));
     if !is_module_ns {
         return Ok(None);
+    }
+
+    // #4973: `http.Server.call(this, handler)` — the util.inherits-era
+    // subclass pattern. For native CLASS exports the thisArg is NOT
+    // irrelevant: Node initializes `this` as the server. Route to the
+    // construct-with-this extern (which constructs the server AND aliases
+    // `this` → handle) instead of dropping the receiver below.
+    if !is_apply && !call.args.is_empty() {
+        let module = ctx
+            .lookup_builtin_module_alias(ns_name)
+            .map(str::to_string)
+            .or_else(|| {
+                ctx.lookup_native_module(ns_name)
+                    .map(|(m, _)| m.to_string())
+            });
+        if let (Some(module), ast::MemberProp::Ident(method_ident)) = (module, &inner.prop) {
+            let normalized = module.strip_prefix("node:").unwrap_or(&module);
+            if matches!(normalized, "http" | "https") && method_ident.sym.as_ref() == "Server" {
+                let mut lowered: Vec<Expr> = call
+                    .args
+                    .iter()
+                    .map(|a| lower_expr(ctx, &a.expr))
+                    .collect::<Result<Vec<_>>>()?;
+                // (this, options?, listener?) — fixed 3-arg extern ABI.
+                lowered.resize(3, Expr::Undefined);
+                let extern_name = if normalized == "https" {
+                    "js_https_server_construct_with_this"
+                } else {
+                    "js_http_server_construct_with_this"
+                };
+                return Ok(Some(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: extern_name.to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: lowered,
+                    type_args: Vec::new(),
+                }));
+            }
+        }
     }
 
     // Build the synthesized direct-call argument list at the AST level.
@@ -1789,6 +1847,14 @@ fn try_arraylike_receiver_method(
             | "slice"
             | "at"
             | "join"
+            // Generic mutators with dedicated runtime engines (#4597
+            // extension): `sort` sorts the receiver in place via
+            // Get/HasProperty/Set/Delete; `splice`/`concat` apply the spec
+            // algorithms over the array-like (test262 sort/call-with-primitive,
+            // splice/set_length_no_args, concat/call-with-boolean).
+            | "sort"
+            | "splice"
+            | "concat"
     );
     if generic {
         // Receiver lowers before the positional args, matching source order.

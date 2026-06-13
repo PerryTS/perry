@@ -876,7 +876,12 @@ pub extern "C" fn js_date_apply_setter(
     if t.is_nan() && !is_full_year {
         return f64::NAN;
     }
-    let base = if t.is_nan() { 0.0 } else { t };
+    // #4927: a NaN time value is passed through to the rebuild AS NaN — its
+    // NaN branch seeds the spec's `t = +0` substitution from the RAW +0
+    // components (1970-01-01 00:00:00), per Date.prototype.setFullYear step 2,
+    // which skips LocalTime(t). Substituting 0.0 here ran the epoch through
+    // timestamp_to_local_components, so a CET process revived
+    // `new Date(NaN).setFullYear(2020)` to local 01:00 instead of 00:00.
     // The leading component is required: an omitted call (`setHours()`) coerces
     // `undefined` → NaN, so the leading slot is always `Some`.
     let lead = Some(coerced.first().copied().unwrap_or(f64::NAN));
@@ -895,9 +900,9 @@ pub extern "C" fn js_date_apply_setter(
         _ => return date_cell_store(date, f64::NAN),
     };
     if is_utc != 0 {
-        rebuild_with(date, base, year, month0, day, hour, minute, second, ms)
+        rebuild_with(date, t, year, month0, day, hour, minute, second, ms)
     } else {
-        rebuild_local_with(date, base, year, month0, day, hour, minute, second, ms)
+        rebuild_local_with(date, t, year, month0, day, hour, minute, second, ms)
     }
 }
 

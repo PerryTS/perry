@@ -175,11 +175,16 @@ fn is_canonical_numeric_index_name(name: &str) -> bool {
     if !value.is_finite() {
         return false;
     }
-    if value.fract() == 0.0 && value.abs() <= i64::MAX as f64 {
-        format!("{}", value as i64) == name
-    } else {
-        format!("{value}") == name
+    // CanonicalNumericIndexString requires `ToString(ToNumber(name)) == name`
+    // with the JS Number→String rendering — Rust's `format!` prints `1e21` as
+    // `1000000000000000000000` and `1e-7` as `0.0000001`, which wrongly
+    // classified those keys as canonical (JS renders `1e+21` / `1e-7`, so
+    // they are ORDINARY keys).
+    let rendered = crate::string::js_number_to_string(value);
+    if rendered.is_null() {
+        return false;
     }
+    unsafe { string_header_str(rendered as *const crate::string::StringHeader) == Some(name) }
 }
 
 fn typed_array_string_key_kind(name: &str, len: u32) -> TypedArrayStringKeyKind {
@@ -307,6 +312,36 @@ fn throw_typed_array_define_error(message: String) -> ! {
     throw_type_error(message.as_bytes())
 }
 
+thread_local! {
+    /// Typed arrays marked non-extensible by `Object.preventExtensions`.
+    /// A SIDE TABLE, not the GC-header flag: small typed arrays are plain
+    /// `alloc`ed without a `GcHeader`, so flag reads/writes at `addr - 8`
+    /// would touch allocator metadata (observed as random `NO_EXTEND` reads
+    /// and heap corruption).
+    static TYPED_ARRAY_NO_EXTEND: RefCell<std::collections::HashSet<usize>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// Mark a typed array non-extensible (`Object.preventExtensions(ta)`).
+pub(crate) fn typed_array_mark_no_extend(owner: usize) {
+    TYPED_ARRAY_NO_EXTEND.with(|s| {
+        s.borrow_mut().insert(owner);
+    });
+}
+
+/// Has `Object.preventExtensions(ta)` run for this typed array?
+pub(crate) fn typed_array_owner_no_extend(owner: usize) -> bool {
+    TYPED_ARRAY_NO_EXTEND.with(|s| s.borrow().contains(&owner))
+}
+
+/// Drop the non-extensible mark when a typed array is collected (called from
+/// `unregister_typed_array`, mirroring the own-props cleanup).
+pub(crate) fn typed_array_clear_no_extend(owner: usize) {
+    TYPED_ARRAY_NO_EXTEND.with(|s| {
+        s.borrow_mut().remove(&owner);
+    });
+}
+
 #[cold]
 fn throw_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -353,6 +388,17 @@ pub(crate) unsafe fn typed_array_define_own_property(
             throw_type_error(b"Invalid typed array index");
         }
         TypedArrayStringKeyKind::Ordinary => {
+            // OrdinaryDefineOwnProperty step 2: a brand-new key on a
+            // non-extensible typed array is rejected (`Object.defineProperty`
+            // throws; the `Reflect` path pre-checks extensibility itself and
+            // returns false before reaching here).
+            if !typed_array_has_ordinary_own_prop(owner, key_name)
+                && typed_array_owner_no_extend(owner)
+            {
+                throw_typed_array_define_error(format!(
+                    "Cannot define property {key_name}, object is not extensible"
+                ));
+            }
             let has_get = descriptor_has(desc_ptr, b"get");
             let has_set = descriptor_has(desc_ptr, b"set");
             let has_accessor = has_get || has_set;
@@ -618,6 +664,150 @@ pub(crate) unsafe fn typed_array_has_own_property(
         TypedArrayStringKeyKind::IntegerIndex => false,
         TypedArrayStringKeyKind::Ordinary => typed_array_has_ordinary_own_prop(owner, name),
     }
+}
+
+/// Full `[[HasProperty]]` for a TypedArray (`key in ta`): a canonical numeric
+/// index resolves by bounds only (never the prototype chain), while an
+/// ordinary key falls back to OrdinaryHasProperty — own expandos, then the
+/// `[[Prototype]]` chain (`%TypedArray%.prototype` methods/accessors, the
+/// per-kind prototype, then `Object.prototype`).
+pub(crate) unsafe fn typed_array_has_property(
+    ta: *const TypedArrayHeader,
+    key: *const crate::string::StringHeader,
+) -> bool {
+    if ta.is_null() || key.is_null() {
+        return false;
+    }
+    let Some(name) = string_header_str(key) else {
+        return false;
+    };
+    let owner = ta as usize;
+    match typed_array_string_key_kind(name, typed_array_owner_length(owner)) {
+        TypedArrayStringKeyKind::InBoundsIndex(_) => true,
+        TypedArrayStringKeyKind::IntegerIndex => false,
+        TypedArrayStringKeyKind::Ordinary => {
+            typed_array_has_ordinary_own_prop(owner, name)
+                || typed_array_prototype_chain_has(owner, name)
+        }
+    }
+}
+
+/// Would an ordinary string key resolve somewhere on a typed array's
+/// `[[Prototype]]` chain? Checks the shared `%TypedArray%.prototype` intrinsic
+/// object (spec methods + the reflectable accessors), the per-kind prototype
+/// object (`Float64Array.prototype` — `constructor` and any user patches),
+/// and finally `Object.prototype` (its universal methods + user expandos).
+unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -> bool {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    // %TypedArray%.prototype intrinsic.
+    let intrinsic = crate::object::typed_array_intrinsic_proto_ptr();
+    if !intrinsic.is_null() {
+        if crate::object::own_key_present(intrinsic, key) {
+            return true;
+        }
+        if crate::object::get_accessor_descriptor(intrinsic as usize, name).is_some() {
+            return true;
+        }
+    }
+    // Per-kind prototype object (constructor, user patches).
+    if name == "constructor" {
+        return true;
+    }
+    if let Some(kind) = typed_array_owner_kind_id(owner) {
+        let ctor_name = crate::typedarray::name_for_kind(kind);
+        let ctor =
+            crate::object::js_get_global_this_builtin_value(ctor_name.as_ptr(), ctor_name.len());
+        let raw = crate::value::js_nanbox_get_pointer(ctor) as usize;
+        if raw >= 0x10000 {
+            let proto = crate::closure::closure_get_dynamic_prop(raw, "prototype");
+            let proto_raw = crate::value::js_nanbox_get_pointer(proto) as usize;
+            if proto_raw >= 0x10000 {
+                if crate::object::own_key_present(
+                    proto_raw as *mut crate::object::ObjectHeader,
+                    key,
+                ) {
+                    return true;
+                }
+                if crate::object::get_accessor_descriptor(proto_raw, name).is_some() {
+                    return true;
+                }
+            }
+        }
+    }
+    // Object.prototype: universal methods plus user expandos.
+    if matches!(
+        name,
+        "toString"
+            | "toLocaleString"
+            | "valueOf"
+            | "hasOwnProperty"
+            | "isPrototypeOf"
+            | "propertyIsEnumerable"
+            | "__proto__"
+    ) {
+        return true;
+    }
+    let obj_proto = crate::object::builtin_prototype_value("Object");
+    let obj_proto_raw = crate::value::js_nanbox_get_pointer(obj_proto) as usize;
+    if obj_proto_raw >= 0x10000 {
+        if crate::object::own_key_present(obj_proto_raw as *mut crate::object::ObjectHeader, key) {
+            return true;
+        }
+        if crate::object::get_accessor_descriptor(obj_proto_raw, name).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+/// The element kind for a TypedArray owner address (`None` for the
+/// `BufferHeader`-backed `Uint8Array` representation).
+fn typed_array_owner_kind_id(owner: usize) -> Option<u8> {
+    lookup_typed_array_kind(owner)
+}
+
+/// Classify a string key against a typed array's CanonicalNumericIndexString
+/// rule: `Some(true)` = valid in-bounds integer index, `Some(false)` =
+/// canonical numeric index that is NOT a valid index (out of bounds, `-1`,
+/// `1.5`, `-0`, …), `None` = ordinary key. Used by the exotic `[[Set]]`
+/// interception (a canonical index never consults the prototype chain).
+pub(crate) fn typed_array_canonical_index_validity(owner: usize, name: &str) -> Option<bool> {
+    let len = unsafe { typed_array_owner_length(owner) };
+    match typed_array_string_key_kind(name, len) {
+        TypedArrayStringKeyKind::InBoundsIndex(_) => Some(true),
+        TypedArrayStringKeyKind::IntegerIndex => Some(false),
+        TypedArrayStringKeyKind::Ordinary => None,
+    }
+}
+
+/// `OrdinaryToPrimitive(O, number)` own-expando probe for a typed array used
+/// as a *coercion source*: a patched own `valueOf`/`toString` (stored in the
+/// typed-array own-props side table, invisible to the generic object helpers)
+/// runs with `this` = the view, propagating abrupt completions. Returns
+/// `Some(primitive)` when a patched method produced a non-object; `None` when
+/// no own patch applies (caller falls back to its default coercion).
+pub(crate) unsafe fn typed_array_own_to_primitive_number(owner: usize, value: f64) -> Option<f64> {
+    for name in ["valueOf", "toString"] {
+        let Some(m) = typed_array_get_property_value_by_name(owner, name) else {
+            continue;
+        };
+        let mbits = m.to_bits();
+        if (mbits >> 48) != 0x7FFD
+            || !crate::closure::is_closure_ptr((mbits & crate::value::POINTER_MASK) as usize)
+        {
+            continue;
+        }
+        let bound = crate::closure::clone_closure_rebind_this(mbits, value);
+        let r = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+        let rb = r.to_bits();
+        let is_object = (rb >> 48) == 0x7FFD
+            && crate::symbol::js_is_symbol(r) == 0
+            && (rb & crate::value::POINTER_MASK) >= 0x10000;
+        if !is_object {
+            return Some(r);
+        }
+    }
+    None
 }
 
 pub(crate) unsafe fn typed_array_property_is_enumerable(

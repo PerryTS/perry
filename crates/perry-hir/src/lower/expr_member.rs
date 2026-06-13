@@ -17,6 +17,19 @@ use crate::ir::Expr;
 
 use super::{lower_expr, LoweringContext};
 
+/// #5009: resolve a build-time `perry.define` of `process.env.<name>` to the
+/// HIR literal it should fold to, if one is configured for this build. Returns
+/// `None` when there is no define for `name` (the caller then emits the normal
+/// runtime `EnvGet`).
+fn env_define_literal(name: &str) -> Option<Expr> {
+    crate::ir::env_define_lookup(name).map(|d| match d {
+        crate::ir::EnvDefine::Str(s) => Expr::String(s),
+        crate::ir::EnvDefine::Bool(b) => Expr::Bool(b),
+        crate::ir::EnvDefine::Num(n) => Expr::Number(n),
+        crate::ir::EnvDefine::Null => Expr::Null,
+    })
+}
+
 pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
     // #1723: when THIS access is the auditable `ns[dynamicKey].staticMember`
     // shape — a dynamic stdlib SUB-namespace selection (`path.win32` /
@@ -197,18 +210,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if matches!(mp.kind, ast::MetaPropKind::NewTarget) {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop_name = prop_ident.sym.as_ref();
-                if let Some(class_name) = ctx.in_constructor_class.clone() {
-                    return Ok(match prop_name {
-                        "name" => Expr::String(class_name),
-                        // Other props on a class reference (`prototype`,
-                        // arbitrary) — undefined is the safe fallback;
-                        // adding `prototype` would need a real class
-                        // reference, not in scope for #449.
-                        _ => Expr::Undefined,
-                    });
-                }
-                // Outside a constructor: `new.target` is undefined and
-                // ordinary functions resolve it dynamically at runtime.
+                // #2768: read the property off the RUNTIME `new.target`, which
+                // codegen resolves to the active constructor's leaf class ref
+                // (`INT32_TAG | class_id`). `.name` / `.prototype` /
+                // `=== SomeClass` then all reflect the actual constructed
+                // class. The old fold returned the *enclosing* class name
+                // string (wrong leaf for `super()`-inlined bodies) and made
+                // `new.target.prototype` undefined. Outside a constructor
+                // `new.target` is `undefined`, so the runtime read yields
+                // `undefined.<prop>` semantics via the same PropertyGet.
                 return Ok(Expr::PropertyGet {
                     object: Box::new(Expr::NewTarget),
                     property: prop_name.to_string(),
@@ -748,6 +758,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             ast::MemberProp::Ident(var_ident) => {
                                 // process.env.VARNAME (static key)
                                 let var_name = var_ident.sym.to_string();
+                                // #5009: honor a build-time `perry.define` of
+                                // `process.env.<NAME>` by substituting the
+                                // literal here — before `EnvGet` (a live
+                                // runtime env lookup) is emitted. esbuild-style
+                                // define semantics: the define wins over the
+                                // runtime environment, in every context and
+                                // regardless of tree-shaking.
+                                if let Some(lit) = env_define_literal(&var_name) {
+                                    return Ok(lit);
+                                }
                                 return Ok(Expr::EnvGet(var_name));
                             }
                             ast::MemberProp::Computed(computed) => {
@@ -758,6 +778,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 // dynamic.
                                 if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
                                     if let Some(name) = s.value.as_str() {
+                                        // #5009: same define substitution as the
+                                        // dot form above.
+                                        if let Some(lit) = env_define_literal(name) {
+                                            return Ok(lit);
+                                        }
                                         return Ok(Expr::EnvGet(name.to_string()));
                                     }
                                 }
@@ -1205,10 +1230,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         property: property_name,
                     });
                 } else if module_name == "events"
+                    // Any native instance registered under module `events` is
+                    // an emitter; the class name can be an alias of the
+                    // constructor binding rather than the canonical
+                    // "EventEmitter" — `var EE = require('events'); new EE()`
+                    // registers class "EE" (#4995). Gating on the canonical
+                    // names sent alias reads down the zero-arg
+                    // NativeMethodCall path, so `typeof emitter.on` CALLED
+                    // `events.on()` and threw ERR_INVALID_ARG_TYPE.
                     && (matches!(
-                        class_name.as_str(),
-                        "EventEmitter" | "EventEmitterAsyncResource"
-                    ) && (matches!(
                         property_name.as_str(),
                         "on" | "addListener"
                             | "once"
@@ -1225,7 +1255,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | "setMaxListeners"
                             | "getMaxListeners"
                     ) || (class_name == "EventEmitterAsyncResource"
-                        && property_name == "emitDestroy")))
+                        && property_name == "emitDestroy"))
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
@@ -1464,7 +1494,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // Getter properties keep the 0-arg NativeMethodCall below
                     // (they really are getters); everything else here is a
                     // callable method.
-                    "locked" | "desiredSize" | "closed" | "ready" | "readable" | "writable"
+                    "locked"
+                        | "desiredSize"
+                        | "closed"
+                        | "ready"
+                        | "readable"
+                        | "writable"
+                        | "byobRequest"
                 ) {
                     // #1642: a value-read of a Web Streams *method* (not a
                     // getter) must yield a callable bound-method reference, not
@@ -1555,6 +1591,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             | ("IncomingMessage", "method")
                             | ("IncomingMessage", "url")
                             | ("IncomingMessage", "httpVersion")
+                            | ("IncomingMessage", "httpVersionMajor")
+                            | ("IncomingMessage", "httpVersionMinor")
                             | ("IncomingMessage", "complete")
                             | ("IncomingMessage", "aborted")
                             | ("IncomingMessage", "destroyed")
@@ -2662,6 +2700,7 @@ fn is_stream_api_member(module: &str, prop: &str) -> bool {
                 | "close"
                 | "error"
                 | "desiredSize"
+                | "byobRequest"
         ),
         "readable_stream_reader" => {
             matches!(prop, "read" | "releaseLock" | "cancel" | "closed")
@@ -2767,6 +2806,8 @@ fn is_http_incoming_message_runtime_property_name(prop: &str) -> bool {
         "method"
             | "url"
             | "httpVersion"
+            | "httpVersionMajor"
+            | "httpVersionMinor"
             | "headers"
             | "rawHeaders"
             | "headersDistinct"

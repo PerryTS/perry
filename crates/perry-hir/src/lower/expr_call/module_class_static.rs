@@ -119,6 +119,43 @@ pub(super) fn try_module_class_static(
                         if !is_sub_namespace {
                             if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
                                 let method_name = method_ident.sym.to_string();
+                                // #4973: util.inherits-era subclassing —
+                                // `http.Server.call(this, handler)` inside a
+                                // function constructor. The generic
+                                // NativeMethodCall arm below loses `this`
+                                // (the dispatcher just constructs a server
+                                // from the args), so the instance never
+                                // becomes server-backed. Route to a dedicated
+                                // runtime extern that constructs the server
+                                // AND aliases `this` to the handle.
+                                let normalized =
+                                    module_name.strip_prefix("node:").unwrap_or(module_name);
+                                if matches!(normalized, "http" | "https")
+                                    && class_name == "Server"
+                                    && method_name == "call"
+                                    && !args.is_empty()
+                                {
+                                    let mut it = args.into_iter();
+                                    let this_arg = it.next().unwrap();
+                                    let mut rest: Vec<Expr> = it.collect();
+                                    rest.resize(2, Expr::Undefined);
+                                    let mut call_args = vec![this_arg];
+                                    call_args.extend(rest);
+                                    let extern_name = if normalized == "https" {
+                                        "js_https_server_construct_with_this"
+                                    } else {
+                                        "js_http_server_construct_with_this"
+                                    };
+                                    return Ok(Ok(Expr::Call {
+                                        callee: Box::new(Expr::ExternFuncRef {
+                                            name: extern_name.to_string(),
+                                            param_types: Vec::new(),
+                                            return_type: Type::Any,
+                                        }),
+                                        args: call_args,
+                                        type_args: Vec::new(),
+                                    }));
+                                }
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: module_name.to_string(),
                                     class_name: Some(class_name),

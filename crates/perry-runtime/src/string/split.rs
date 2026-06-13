@@ -3,6 +3,76 @@
 use super::*;
 use crate::array::ArrayHeader;
 
+/// Advance to the next UTF-8 character boundary strictly after `i`.
+fn next_char_boundary(s: &str, i: usize) -> usize {
+    let mut j = i + 1;
+    while j < s.len() && !s.is_char_boundary(j) {
+        j += 1;
+    }
+    j
+}
+
+/// JS-spec `RegExp.prototype[Symbol.split]` (21.2.5.11) for the standard
+/// `regex` engine. Walks the subject with a *sticky* match at each position,
+/// applies the `e == p` empty-match skip (so a zero-width match at the current
+/// segment start does not emit an empty string), and splices captured groups
+/// (unmatched groups → `undefined`/`None`) after each segment. Honors `limit`
+/// (`< 0` ⇒ unbounded) by stopping once `limit` elements have been produced.
+/// Each element is `Some(substring)` or `None` for a spliced unmatched group.
+pub(crate) fn spec_regex_split(regex: &regex::Regex, s: &str, limit: i32) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = Vec::new();
+    let unbounded = limit < 0;
+    // Returns true once the limit is reached (caller must stop).
+    let mut push = |out: &mut Vec<Option<String>>, v: Option<String>| -> bool {
+        out.push(v);
+        !unbounded && out.len() as i32 >= limit
+    };
+    let size = s.len();
+    if size == 0 {
+        // Empty subject: `[""]` unless the pattern matches the empty string.
+        if regex.find(s).is_none() {
+            out.push(Some(String::new()));
+        }
+        return out;
+    }
+    let mut p = 0usize; // start of the pending segment
+    let mut q = 0usize; // scan cursor
+    while q < size {
+        match regex.find_at(s, q) {
+            // Sticky: a match must begin exactly at `q`.
+            Some(m) if m.start() == q => {
+                let e = m.end().min(size);
+                if e == p {
+                    // Zero-width match at the segment start: skip it.
+                    q = next_char_boundary(s, q);
+                } else {
+                    if push(&mut out, Some(s[p..q].to_string())) {
+                        return out;
+                    }
+                    if let Some(caps) = regex.captures_at(s, q) {
+                        for i in 1..caps.len() {
+                            let g = caps.get(i).map(|gm| gm.as_str().to_string());
+                            if push(&mut out, g) {
+                                return out;
+                            }
+                        }
+                    }
+                    p = e;
+                    q = p;
+                }
+            }
+            // Leftmost match lies to the right of `q`; no match (and thus no
+            // zero-width match) exists in between, so jump straight to it.
+            Some(m) => q = m.start(),
+            None => break,
+        }
+    }
+    if unbounded || (out.len() as i32) < limit {
+        out.push(Some(s[p..size].to_string()));
+    }
+    out
+}
+
 /// Split a string by a delimiter
 /// Returns an array of string pointers (stored as f64 bit patterns)
 #[no_mangle]

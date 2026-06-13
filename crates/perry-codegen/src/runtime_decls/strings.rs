@@ -1206,6 +1206,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Iterator-protocol result validation (for-of lazy loop).
     module.declare_function("js_iterator_result_validate", DOUBLE, &[DOUBLE]);
     module.declare_function("js_global_get_or_throw_unresolved", DOUBLE, &[DOUBLE]);
+    // Non-throwing global read for `typeof <unresolved>` + global read-modify-
+    // write for `i++`/`i--` on a sloppy implicit global (#3575).
+    module.declare_function("js_global_get_optional", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_global_update", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_throw_reference_error_this_before_super", DOUBLE, &[]);
     module.declare_function("js_throw_reference_error_super_delete", DOUBLE, &[]);
     module.declare_function(

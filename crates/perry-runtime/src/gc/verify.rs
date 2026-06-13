@@ -162,6 +162,84 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
     });
 }
 
+/// Post-cycle remembered-set repair (#5029): after `remembered_set_clear` +
+/// sticky restore, rescan every PRE-cycle dirty page (and external dirty
+/// entry) with the same slot predicate `verify_old_to_young_edges_covered`
+/// uses, and re-remember any slot that still points into the nursery. The
+/// from-scratch rebuild can disagree with the verifier across the cycle
+/// boundary (measured: ~130 covered pages at cycle entry, ~10 after the
+/// rebuild, verifier missing_edges=7710 on the next minor while the swept
+/// children were still referenced); deriving the kept set from the SAME walk
+/// the verifier performs makes dropping a still-needed page impossible by
+/// construction. Pages whose every slot now points old (the common case
+/// after evacuation rewrites) are still dropped, so the remembered set keeps
+/// shrinking as before.
+pub(super) fn restore_surviving_dirty_coverage(snapshot: &RememberedDirtySnapshot) {
+    let mut sticky = StickyRememberedSet::default();
+    // Mirror scan_remembered_dirty_slots_copying's scan_header guards: the
+    // external dirty entries can carry headers the harness seeded
+    // synthetically, and a dead entry may point at reclaimed memory — never
+    // dereference before the plausibility check.
+    let mut visit_parent = |header: *mut GcHeader| unsafe {
+        if header.is_null() {
+            return;
+        }
+        let arena_parent = plausible_gc_header(header, true);
+        let malloc_parent = !arena_parent && plausible_gc_header(header, false);
+        if !arena_parent && !malloc_parent {
+            return;
+        }
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            return;
+        }
+        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        if arena_parent
+            && !matches!(
+                crate::arena::classify_heap_generation(user),
+                crate::arena::HeapGeneration::Old
+            )
+        {
+            return;
+        }
+        visit_gc_rewrite_slots(header, |slot| unsafe {
+            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+                return;
+            }
+            slot.record_layout_read();
+            remember_evacuated_old_to_young_slot(&mut sticky, header, slot.slot);
+        });
+    };
+    if !snapshot.dirty_old_pages.is_empty() {
+        crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |hp| {
+            visit_parent(hp as *mut GcHeader);
+        });
+    }
+    let mut seen_external = crate::fast_hash::new_ptr_hash_set();
+    for &(_, header_addr) in &snapshot.external_dirty_entries {
+        if !seen_external.insert(header_addr) {
+            continue;
+        }
+        // External entries may be stale (or, in the GC unit tests,
+        // synthetic). Establish that the address is dereference-safe
+        // WITHOUT touching it: old/longlived arena pages are always
+        // mapped; anything else must still be a registered malloc GC
+        // object.
+        let deref_safe = matches!(
+            crate::arena::classify_heap_generation(header_addr),
+            crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
+        ) || MALLOC_STATE.with(|s| {
+            s.borrow()
+                .objects
+                .iter()
+                .any(|&h| h as usize == header_addr)
+        });
+        if deref_safe {
+            visit_parent(header_addr as *mut GcHeader);
+        }
+    }
+    sticky.restore();
+}
+
 pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
     evacuated_headers: &[*mut GcHeader],
 ) -> StickyRememberedSet {
@@ -556,9 +634,22 @@ pub(super) fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
             if flags & GC_FLAG_FORWARDED != 0 {
                 return;
             }
-            // Skip dead objects — sweep is about to free them.
+            // Skip dead NURSERY objects — this cycle's sweep frees them.
+            // An UNMARKED object outside the nursery is NOT dead: a minor
+            // cycle neither traces nor sweeps the old generation, so being
+            // unmarked is the normal state of a live old object whose pages
+            // are clean. Old→old references have no dirty-page coverage
+            // (barriers only track old→young), which makes this walk the
+            // ONLY pass that re-points an old referrer at an old-page
+            // evacuation target. Skipping unmarked old objects left their
+            // slots aimed at forwarding stubs that
+            // `release_evacuated_original_forwarding_stubs` then released —
+            // dangling pointers into reused memory (#5029).
             if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
-                return;
+                let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+                if crate::arena::pointer_in_nursery(user) {
+                    return;
+                }
             }
             rewrite_heap_object_fields(header, valid_ptrs);
         }
@@ -751,8 +842,16 @@ pub(super) fn verify_heap_objects(valid_ptrs: &ValidPointerSet) {
         if flags & GC_FLAG_FORWARDED != 0 {
             return;
         }
+        // Mirror rewrite_heap_objects: only unmarked NURSERY objects are
+        // dead this cycle. Unmarked old/longlived/malloc objects survive a
+        // minor and must hold no stale forwarded references either — this
+        // gate previously hid exactly the #5029 dangling old→old slots from
+        // PERRY_GC_VERIFY_EVACUATION.
         if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
-            return;
+            let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+            if crate::arena::pointer_in_nursery(user) {
+                return;
+            }
         }
         verify_heap_object_fields(header, valid_ptrs, "heap fields");
     };

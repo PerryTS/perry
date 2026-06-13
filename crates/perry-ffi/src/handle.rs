@@ -105,6 +105,32 @@ extern "C" {
         scanner_id: usize,
         scanner: PerryFfiNamedMutableRootScanner,
     );
+    /// perry-runtime hook: register a probe the runtime's generic method
+    /// dispatcher consults to tell a `register_handle` id apart from a Node
+    /// timer id (both occupy the pointer-tagged small-integer band). Resolved
+    /// at final link (perry-runtime is always linked into the binary).
+    fn js_register_ffi_handle_exists_probe(probe: extern "C" fn(handle: i64) -> bool);
+}
+
+/// Probe handed to perry-runtime: is `handle` a live entry in this registry?
+/// Used to disambiguate a `POINTER_TAG | id` value that names both a live
+/// handle and a live timer (e.g. HTTP/2 server handle 1 vs `setTimeout` id 1),
+/// so the runtime routes `server.close()` to the handle rather than swallowing
+/// it as `clearTimeout`. See `class_handles::ffi_handle_exists`.
+extern "C" fn ffi_handle_exists_probe(handle: Handle) -> bool {
+    HANDLES.contains_key(&handle)
+}
+
+/// Register [`ffi_handle_exists_probe`] with perry-runtime exactly once, the
+/// first time any handle is created. Done lazily (rather than at an init entry
+/// point perry-ffi doesn't own) so it is wired up before any handle value can
+/// reach the runtime's generic dispatcher.
+fn ensure_handle_exists_probe_registered() {
+    use std::sync::Once;
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| unsafe {
+        js_register_ffi_handle_exists_probe(ffi_handle_exists_probe);
+    });
 }
 
 /// Function pointer type for native wrappers that expose mutable GC root slots.
@@ -193,6 +219,7 @@ impl<'a> GcRootVisitor<'a> {
 /// across threads (tokio workers may resolve promises that touch
 /// handle data while the main thread is also touching it).
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
+    ensure_handle_exists_probe_registered();
     let handle = next_handle_id();
     HANDLES.insert(handle, Box::new(value));
     handle

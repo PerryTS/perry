@@ -100,6 +100,12 @@ pub(crate) fn dispatch_request(
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
             }
+            // Node's default agent is keep-alive (v19+) and sends the
+            // header explicitly; servers reading `req.headers.connection`
+            // expect it.
+            if !headers.keys().any(|k| k.eq_ignore_ascii_case("connection")) {
+                req = req.header("Connection", "keep-alive");
+            }
             if let Some(ms) = timeout_ms {
                 req = req.timeout(std::time::Duration::from_millis(ms));
             } else {
@@ -109,7 +115,7 @@ pub(crate) fn dispatch_request(
                 req = req.body(body);
             }
             match req.send().await {
-                Ok(response) => {
+                Ok(mut response) => {
                     let status = response.status().as_u16();
                     let status_message = response
                         .status()
@@ -122,25 +128,61 @@ pub(crate) fn dispatch_request(
                             hdrs.push((k.to_string(), s.to_string()));
                         }
                     }
-                    let body = response
-                        .bytes()
-                        .await
-                        .map(|b| b.to_vec())
-                        .unwrap_or_default();
-                    push_event(PendingHttpEvent::Response {
+                    // Streaming delivery: hand the head to the main thread
+                    // as soon as it arrives, then pump body chunks as they
+                    // come off the socket. Client code can react to the
+                    // headers (timers, destroy, data listeners) while the
+                    // server is still producing the body — Node's model.
+                    push_event(PendingHttpEvent::ResponseHead {
                         request_handle,
                         status,
                         status_message,
                         headers: hdrs,
-                        trailers: Vec::new(),
-                        body,
                     });
+                    loop {
+                        match response.chunk().await {
+                            Ok(Some(bytes)) => {
+                                push_event(PendingHttpEvent::ResponseChunk {
+                                    request_handle,
+                                    chunk: bytes.to_vec(),
+                                });
+                            }
+                            Ok(None) => {
+                                push_event(PendingHttpEvent::ResponseEnd { request_handle });
+                                break;
+                            }
+                            Err(e) => {
+                                if e.is_timeout() {
+                                    push_event(PendingHttpEvent::Timeout { request_handle });
+                                } else {
+                                    push_event(PendingHttpEvent::Error {
+                                        request_handle,
+                                        error_message: e.to_string(),
+                                    });
+                                }
+                                break;
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     // #4905: surface transport deadlines as the 'timeout'
                     // event instead of a generic error.
                     if e.is_timeout() {
                         push_event(PendingHttpEvent::Timeout { request_handle });
+                    } else if let Some((message, code, syscall, errno)) =
+                        crate::transport_error::classify_reqwest(&e, &url)
+                    {
+                        // A recognized transport failure (connect refused, DNS
+                        // lookup failure, …) — hand listeners the real coded
+                        // Node Error instead of a bare string.
+                        push_event(PendingHttpEvent::TransportError {
+                            request_handle,
+                            message,
+                            code,
+                            syscall,
+                            errno,
+                        });
                     } else {
                         push_event(PendingHttpEvent::Error {
                             request_handle,

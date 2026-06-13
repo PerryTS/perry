@@ -337,6 +337,32 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_PTR],
         ret: NR_PTR,
     },
+    // `server.ref()` / `server.unref()` — EventEmitter chainables that
+    // return `this`. Without these rows they fell through to a generic
+    // handler that yielded the receiver *handle* as a raw number, so
+    // `createServer(cb).unref().listen(...)` broke with `(number).listen
+    // is not a function` (#5011). Mirrors the `listen` NR_PTR fix (#2129):
+    // the runtime returns the server handle so chaining works. `unref()`
+    // also clears the loop-keepalive flag so the process can exit (Node
+    // semantics); `ref()` restores it.
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "ref",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_ref",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "unref",
+        class_filter: Some("HttpServer"),
+        runtime: "js_node_http_server_unref",
+        args: &[],
+        ret: NR_PTR,
+    },
     // IncomingMessage instance methods
     NativeModSig {
         module: "http",
@@ -506,9 +532,14 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "write",
         class_filter: Some("ServerResponse"),
-        runtime: "js_node_http_res_write",
-        args: &[NA_F64],
-        ret: NR_I32,
+        // #4909: pass the trailing `(encoding?, callback?)` args as raw
+        // JSValues so the runtime can fire the write callback and return a
+        // real boolean (NR_F64 → NaN-boxed bool) for backpressure. The
+        // previous `js_node_http_res_write` (NA_F64 only / NR_I32→undefined)
+        // silently dropped the callback and returned `undefined`.
+        runtime: "js_node_http_res_write_full",
+        args: &[NA_F64, NA_JSV, NA_JSV],
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -524,8 +555,11 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "end",
         class_filter: Some("ServerResponse"),
-        runtime: "js_node_http_res_end",
-        args: &[NA_F64],
+        // #4909: route to the callback-aware end so `res.end(chunk, cb)` /
+        // `res.end(cb)` fire their callback (and the queued write callbacks)
+        // before `'finish'`. arg2/arg3 carry the `(encoding?, callback?)` tail.
+        runtime: "js_node_http_res_end_full",
+        args: &[NA_F64, NA_JSV, NA_JSV],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -686,6 +720,24 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         runtime: "js_node_http_im_http_version",
         args: &[],
         ret: NR_STR,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_httpVersionMajor",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_node_http_im_http_version_major",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_httpVersionMinor",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_node_http_im_http_version_minor",
+        args: &[],
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -965,6 +1017,26 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         runtime: "js_node_https_server_close_idle_connections",
         args: &[],
         ret: NR_VOID,
+    },
+    // `server.ref()` / `server.unref()` for the https server — return
+    // `this` (NR_PTR) so chaining works, matching the http rows. #5011.
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "ref",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_ref",
+        args: &[],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "https",
+        has_receiver: true,
+        method: "unref",
+        class_filter: Some("HttpsServer"),
+        runtime: "js_node_https_server_unref",
+        args: &[],
+        ret: NR_PTR,
     },
     NativeModSig {
         module: "https",

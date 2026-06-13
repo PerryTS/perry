@@ -517,6 +517,14 @@ extern "C" fn global_this_eval_thunk(
     _closure: *const crate::closure::ClosureHeader,
     source: f64,
 ) -> f64 {
+    // PerformEval step: "If Type(x) is not String, return x." A non-string
+    // argument (number, boolean, null, undefined, or a String/Number/Boolean
+    // *wrapper object*) is returned unchanged — eval does not evaluate it. This
+    // must run before any ToString coercion. (test262
+    // language/eval-code/indirect/non-string-{object,primitive})
+    if !crate::value::JSValue::from_bits(source.to_bits()).is_string() {
+        return source;
+    }
     let source = crate::builtins::js_string_coerce(source);
     let Some(body) = (unsafe { super::has_own_helpers::str_from_string_header(source) }) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -1403,9 +1411,15 @@ extern "C" fn object_prototype_is_prototype_of_thunk(
     value: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
-    // RequireObjectCoercible(this): `Object.prototype.isPrototypeOf.call(null)`
-    // / `.call(undefined)` must throw a TypeError (spec step 1), matching the
-    // sibling Object.prototype methods. Pre-fix this silently returned false.
+    // Spec 20.1.3.3 step order: if V is not an Object, return false FIRST —
+    // `Object.prototype.isPrototypeOf.call(undefined, 1)` is `false`, not a
+    // TypeError. Symbols are POINTER_TAG'd in Perry but are primitives.
+    let value_jsv = JSValue::from_bits(value.to_bits());
+    if !value_jsv.is_pointer() || unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return f64::from_bits(JSValue::bool(false).bits());
+    }
+    // Step 2, ToObject(this): `.call(null, obj)` / `.call(undefined, obj)`
+    // must throw a TypeError, matching the sibling Object.prototype methods.
     let this_jsv = JSValue::from_bits(this_value.to_bits());
     if this_jsv.is_null() || this_jsv.is_undefined() {
         super::object_ops::throw_object_type_error(
@@ -1764,6 +1778,127 @@ extern "C" fn array_prototype_splice_thunk(
     let this = crate::object::js_implicit_this_get();
     let args = global_this_rest_array_values(rest);
     crate::array::array_proto_mutator(this, "splice", args.as_ptr(), args.len())
+}
+extern "C" fn array_prototype_sort_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    comparator: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::js_arraylike_sort(this, comparator)
+}
+
+/// Real thunks for the generic `Array.prototype` iteration / search methods,
+/// each routing the call-site receiver (IMPLICIT_THIS) through the
+/// `js_arraylike_*` engine. These replace the previous noop thunks so a
+/// reflective resolution — `Array.prototype.map.call(x, …)` through a stored
+/// reference, or a method reached through an object whose [[Prototype]] chain
+/// contains a real array (`foo.prototype = new Array(…)`; test262
+/// filter/15.4.4.20-6-*, some/15.4.4.17-8-*) — runs the real algorithm
+/// instead of returning garbage. Rest-arg shape (like `push`/`splice` above)
+/// keeps the closure call convention independent of the spec `.length`.
+macro_rules! array_proto_arraylike_cb_thunk {
+    ($name:ident, $engine:path) => {
+        extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+            let this = crate::object::js_implicit_this_get();
+            let args = global_this_rest_array_values(rest);
+            let a = |i: usize| {
+                args.get(i)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+            };
+            $engine(this, a(0), a(1))
+        }
+    };
+}
+array_proto_arraylike_cb_thunk!(
+    array_proto_forEach_thunk,
+    crate::array::js_arraylike_forEach
+);
+array_proto_arraylike_cb_thunk!(array_proto_map_thunk, crate::array::js_arraylike_map);
+array_proto_arraylike_cb_thunk!(array_proto_filter_thunk, crate::array::js_arraylike_filter);
+array_proto_arraylike_cb_thunk!(array_proto_some_thunk, crate::array::js_arraylike_some);
+array_proto_arraylike_cb_thunk!(array_proto_every_thunk, crate::array::js_arraylike_every);
+array_proto_arraylike_cb_thunk!(array_proto_find_thunk, crate::array::js_arraylike_find);
+array_proto_arraylike_cb_thunk!(
+    array_proto_findIndex_thunk,
+    crate::array::js_arraylike_findIndex
+);
+array_proto_arraylike_cb_thunk!(
+    array_proto_findLast_thunk,
+    crate::array::js_arraylike_findLast
+);
+array_proto_arraylike_cb_thunk!(
+    array_proto_findLastIndex_thunk,
+    crate::array::js_arraylike_findLastIndex
+);
+
+macro_rules! array_proto_arraylike_optarg_thunk {
+    ($name:ident, $engine:path) => {
+        extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+            let this = crate::object::js_implicit_this_get();
+            let args = global_this_rest_array_values(rest);
+            let a = |i: usize| {
+                args.get(i)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+            };
+            $engine(this, a(0), (args.len() > 1) as i32, a(1))
+        }
+    };
+}
+array_proto_arraylike_optarg_thunk!(array_proto_reduce_thunk, reduce_engine);
+array_proto_arraylike_optarg_thunk!(array_proto_reduceRight_thunk, reduce_right_engine);
+
+// `js_arraylike_reduce*` take (recv, cb, has_init, init) — adapt arg order.
+fn reduce_engine(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
+    crate::array::js_arraylike_reduce(recv, cb, has_init, init)
+}
+fn reduce_right_engine(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
+    crate::array::js_arraylike_reduceRight(recv, cb, has_init, init)
+}
+
+macro_rules! array_proto_arraylike_search_thunk {
+    ($name:ident, $engine:path) => {
+        extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+            let this = crate::object::js_implicit_this_get();
+            let args = global_this_rest_array_values(rest);
+            let a = |i: usize| {
+                args.get(i)
+                    .copied()
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+            };
+            $engine(this, a(0), a(1), (args.len() > 1) as i32)
+        }
+    };
+}
+array_proto_arraylike_search_thunk!(
+    array_proto_indexOf_thunk,
+    crate::array::js_arraylike_indexOf
+);
+array_proto_arraylike_search_thunk!(
+    array_proto_lastIndexOf_thunk,
+    crate::array::js_arraylike_lastIndexOf
+);
+array_proto_arraylike_search_thunk!(
+    array_proto_includes_thunk,
+    crate::array::js_arraylike_includes
+);
+
+extern "C" fn array_proto_at_thunk(_c: *const crate::closure::ClosureHeader, idx: f64) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::js_arraylike_at(this, idx)
+}
+extern "C" fn array_proto_join_thunk(_c: *const crate::closure::ClosureHeader, sep: f64) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::array::js_arraylike_join(this, sep)
+}
+extern "C" fn array_prototype_concat_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    let args = global_this_rest_array_values(rest);
+    crate::array::js_arraylike_concat(this, args.as_ptr(), args.len() as i32)
 }
 
 fn array_buffer_receiver_addr() -> Option<usize> {
@@ -5401,17 +5536,64 @@ extern "C" fn typed_array_from_thunk(
     if kind_opt.is_none() {
         require_typed_array_from_of_constructor();
     }
-    // Past the constructor check, the source is read — its `@@iterator` invoked,
-    // or its `length` getter + indexed elements evaluated — and any throwing
-    // user iterator/getter propagates. The map callback is validated up front by
-    // `js_array_from_mapped`.
+    // Spec order: validate the map callback BEFORE the source is read.
     let mapped = map_fn.to_bits() != crate::value::TAG_UNDEFINED;
-    let arr = if mapped {
-        crate::array::js_array_from_mapped(source, map_fn, this_arg)
+    let map_closure = if mapped {
+        crate::array::js_validate_array_callback(map_fn) as *const crate::closure::ClosureHeader
     } else {
-        crate::array::js_array_from_value(source)
+        std::ptr::null()
     };
-    typed_array_create_from_values(kind_opt, arr)
+    // Read the source's RAW kValues — its `@@iterator` invoked, or its
+    // `ToLength(length)` + indexed elements evaluated — any throwing user
+    // iterator/getter propagates (test262 from/arylk-*-error).
+    let raw = unsafe { crate::typedarray::typed_array_from_source_raw_values(source) };
+    // Per-element `mappedValue = Call(mapfn, T, «kValue, k»)` then
+    // `Set(target, k, mappedValue)` — the map call and the (observable,
+    // possibly throwing) element coercion INTERLEAVE per spec, so an abrupt
+    // coercion at element k means the map callback never ran for k+1
+    // (test262 from/set-value-abrupt-completion).
+    let map_at = |k: usize, v: f64| -> f64 {
+        if map_closure.is_null() {
+            return v;
+        }
+        let prev = crate::object::js_implicit_this_set(this_arg);
+        let r = crate::closure::js_closure_call2(map_closure, v, k as f64);
+        crate::object::js_implicit_this_set(prev);
+        r
+    };
+    if let Some(kind) = kind_opt {
+        let out = crate::typedarray::typed_array_alloc(kind, raw.len() as u32);
+        for (k, &v) in raw.iter().enumerate() {
+            let m = map_at(k, v);
+            unsafe { crate::typedarray_props::species_result_store(out as usize, k, m) };
+        }
+        return crate::value::js_nanbox_pointer(out as i64);
+    }
+    // Custom `this` constructor: TypedArrayCreate(C, «len») then per-element
+    // [[Set]] (same interleave).
+    let len = raw.len();
+    let len_arg = [f64::from_bits(
+        crate::value::JSValue::number(len as f64).bits(),
+    )];
+    let ctor = crate::object::js_implicit_this_get();
+    let target = unsafe { super::js_new_function_construct(ctor, len_arg.as_ptr(), 1) };
+    let addr = crate::typedarray_props::typed_array_addr_from_value(target).unwrap_or_else(|| {
+        super::object_ops::throw_object_type_error(
+            b"TypedArray.from/of constructor did not return a TypedArray",
+        )
+    });
+    let ta_ptr = addr as *mut crate::typedarray::TypedArrayHeader;
+    let target_len = unsafe { crate::typedarray::js_typed_array_length(ta_ptr) } as usize;
+    if target_len < len {
+        super::object_ops::throw_object_type_error(
+            b"Derived TypedArray constructor created an array which was too small",
+        );
+    }
+    for (k, &v) in raw.iter().enumerate() {
+        let m = map_at(k, v);
+        unsafe { crate::typedarray_props::species_result_store(addr, k, m) };
+    }
+    target
 }
 
 /// `%TypedArray%.from`/`.of` step "If IsConstructor(`this`) is false, throw a
@@ -6448,30 +6630,12 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("at", 1),
-                    ("concat", 1),
                     ("copyWithin", 2),
                     ("entries", 0),
-                    ("every", 1),
                     ("fill", 1),
-                    ("filter", 1),
-                    ("find", 1),
-                    ("findIndex", 1),
-                    ("findLast", 1),
-                    ("findLastIndex", 1),
                     ("flat", 0),
                     ("flatMap", 1),
-                    ("forEach", 1),
-                    ("includes", 1),
-                    ("indexOf", 1),
-                    ("join", 1),
                     ("keys", 0),
-                    ("lastIndexOf", 1),
-                    ("map", 1),
-                    ("reduce", 1),
-                    ("reduceRight", 1),
-                    ("some", 1),
-                    ("sort", 1),
                     ("toLocaleString", 0),
                     ("toReversed", 0),
                     ("toSorted", 1),
@@ -6517,6 +6681,48 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
                 "splice",
                 array_prototype_splice_thunk as *const u8,
                 2,
+                0,
+            );
+            // `sort` / `concat` get real thunks too: a borrowed
+            // `obj.sort = Array.prototype.sort; obj.sort()` must run the
+            // generic engine on the receiver (test262 sort/S15.4.4.11_A3_T1,
+            // A4_T3, concat/S15.4.4.4_A2_T1) — the previous noop thunk
+            // silently returned undefined.
+            install_proto_method(
+                proto_obj,
+                "sort",
+                array_prototype_sort_thunk as *const u8,
+                1,
+            );
+            // Iteration / search methods: real generic-engine thunks (rest
+            // shape — spec `.length` recorded separately below).
+            type RestThunk = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
+            let arraylike_thunks: [(&str, RestThunk, u32); 14] = [
+                ("forEach", array_proto_forEach_thunk, 1),
+                ("map", array_proto_map_thunk, 1),
+                ("filter", array_proto_filter_thunk, 1),
+                ("some", array_proto_some_thunk, 1),
+                ("every", array_proto_every_thunk, 1),
+                ("find", array_proto_find_thunk, 1),
+                ("findIndex", array_proto_findIndex_thunk, 1),
+                ("findLast", array_proto_findLast_thunk, 1),
+                ("findLastIndex", array_proto_findLastIndex_thunk, 1),
+                ("reduce", array_proto_reduce_thunk, 1),
+                ("reduceRight", array_proto_reduceRight_thunk, 1),
+                ("indexOf", array_proto_indexOf_thunk, 1),
+                ("lastIndexOf", array_proto_lastIndexOf_thunk, 1),
+                ("includes", array_proto_includes_thunk, 1),
+            ];
+            for (name, thunk, len) in arraylike_thunks {
+                install_proto_method_rest_with_length(proto_obj, name, thunk as *const u8, len, 0);
+            }
+            install_proto_method(proto_obj, "at", array_proto_at_thunk as *const u8, 1);
+            install_proto_method(proto_obj, "join", array_proto_join_thunk as *const u8, 1);
+            install_proto_method_rest_with_length(
+                proto_obj,
+                "concat",
+                array_prototype_concat_thunk as *const u8,
+                1,
                 0,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);

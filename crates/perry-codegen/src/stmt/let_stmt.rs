@@ -571,6 +571,26 @@ pub(crate) fn lower_let(
                 let dummy_this = ctx.func.alloca_entry(DOUBLE);
                 ctx.this_stack.push(dummy_this);
 
+                // #2768/new.target: scalar replacement inlines the (own or
+                // inherited) constructor here without going through
+                // `lower_new`, so mirror its `new_target_stack` setup — bind
+                // `new.target` in the inlined body to this leaf class's ref
+                // (`INT32_TAG | class_id`). Without this a `new.target` read in
+                // the ctor (notably `const t = new.target`) fell through to the
+                // runtime cell, which this path never sets, yielding undefined.
+                let new_target_bits = ctx
+                    .class_ids
+                    .get(class_name)
+                    .map(|&cid| crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF))
+                    .unwrap_or(crate::nanbox::TAG_UNDEFINED);
+                let new_target_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.block().store(
+                    DOUBLE,
+                    &crate::nanbox::double_literal(f64::from_bits(new_target_bits)),
+                    &new_target_slot,
+                );
+                ctx.new_target_stack.push(new_target_slot);
+
                 // Stage field initializers around any parent body chain.
                 // Refs #420: leaf field inits may reference state set by
                 // parent body (e.g. drizzle's
@@ -690,6 +710,7 @@ pub(crate) fn lower_let(
                     )?;
                 }
 
+                ctx.new_target_stack.pop();
                 ctx.this_stack.pop();
                 ctx.class_stack.pop();
                 ctx.scalar_ctor_target.pop();

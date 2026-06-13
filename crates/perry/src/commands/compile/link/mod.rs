@@ -40,6 +40,8 @@ use super::{
 };
 
 mod link_cache;
+mod native_features;
+mod pkg_config;
 mod platform_cmd;
 mod windows_link;
 
@@ -1247,7 +1249,7 @@ pub(super) fn build_and_run_link(
             let (lib_name, build_cmd) = if is_watchos {
                 (
                     "libperry_ui_watchos.a",
-                    "cargo build --release -p perry-ui-watchos --target arm64_32-apple-watchos",
+                    "cargo +nightly build -Z build-std=std,panic_abort --release -p perry-ui-watchos --target aarch64-apple-watchos (or --target aarch64-apple-watchos-sim for the simulator)",
                 )
             } else if is_tvos {
                 (
@@ -1434,6 +1436,15 @@ pub(super) fn build_and_run_link(
                         .arg("--release")
                         .arg("--manifest-path")
                         .arg(&cargo_toml);
+
+                    // perry.toml `[native-library."<pkg>"]` feature
+                    // forwarding — see native_features.rs.
+                    native_features::apply_native_library_override(
+                        &mut cargo_cmd,
+                        &ctx.project_root,
+                        &native_lib.module,
+                        matches!(format, OutputFormat::Text),
+                    );
 
                     if let Some(triple) = rust_target_triple(target) {
                         cargo_cmd.arg("--target").arg(triple);
@@ -1660,6 +1671,7 @@ pub(super) fn build_and_run_link(
 
             // Add pkg-config libraries
             for pkg in &target_config.pkg_config {
+                pkg_config::validate_pkg_config_name(pkg)?;
                 if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
@@ -1727,6 +1739,7 @@ pub(super) fn build_and_run_link(
                     }
                 }
                 for pkg in &backend.pkg_config {
+                    pkg_config::validate_pkg_config_name(pkg)?;
                     if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                         if output.status.success() {
                             let libs = String::from_utf8_lossy(&output.stdout);
@@ -1752,10 +1765,21 @@ pub(super) fn build_and_run_link(
                 } else {
                     "watchos"
                 };
+                // arm64_32 watchOS (Series 4-8 / SE): opt-in, matches the app
+                // binary's triple in platform_cmd.rs so the native @main lib
+                // links against the same arch.
+                let swift_arm64_32 =
+                    target == Some("watchos") && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
+                let swift_watchos_min =
+                    std::env::var("PERRY_WATCHOS_MIN").unwrap_or_else(|_| "11.0".to_string());
+                let swift_triple_owned;
                 let swift_triple = if target == Some("watchos-simulator") {
                     "arm64-apple-watchos10.0-simulator"
+                } else if swift_arm64_32 {
+                    swift_triple_owned = format!("arm64_32-apple-watchos{}", swift_watchos_min);
+                    swift_triple_owned.as_str()
                 } else {
-                    "arm64_32-apple-watchos10.0"
+                    "arm64-apple-watchos26.0"
                 };
                 let swift_sysroot = String::from_utf8(
                     Command::new("xcrun")
@@ -1941,56 +1965,4 @@ pub(super) fn build_and_run_link(
 }
 
 #[cfg(test)]
-mod optional_framework_dir_tests {
-    use super::*;
-
-    /// Lay out a temp project: `<root>/perry.toml` + `<root>/src/main.ts`,
-    /// with the perry.toml `[google_auth]` table set to `toml_body`.
-    /// Returns (tempdir, entry-ts-path).
-    fn scaffold(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("perry.toml"), toml_body).unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        let entry = src.join("main.ts");
-        fs::write(&entry, "export {}\n").unwrap();
-        (dir, entry)
-    }
-
-    #[test]
-    fn resolves_framework_dir_relative_to_project_root() {
-        let (dir, entry) =
-            scaffold("[google_auth]\nframework_dir = \"vendor/google-sign-in/frameworks\"\n");
-        // Use a uniquely-named env var that is guaranteed unset.
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_A";
-        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
-        // Compare against the canonicalized root — `find_project_root_for`
-        // canonicalizes the entry, so the resolved path is symlink-resolved
-        // (e.g. /var/folders → /private/var on macOS).
-        assert_eq!(
-            resolved,
-            dir.path()
-                .canonicalize()
-                .unwrap()
-                .join("vendor/google-sign-in/frameworks")
-        );
-    }
-
-    #[test]
-    fn returns_none_when_no_framework_dir_key() {
-        let (_dir, entry) = scaffold("[google_auth]\nios_client_id = \"abc\"\n");
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_B";
-        assert!(resolve_optional_framework_dir(env_name, &entry).is_none());
-    }
-
-    #[test]
-    fn env_var_takes_precedence_over_perry_toml() {
-        let (_dir, entry) = scaffold("[google_auth]\nframework_dir = \"vendor/from-toml\"\n");
-        // Unique name so we don't race other tests sharing process env.
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_SET_C";
-        std::env::set_var(env_name, "/absolute/from/env");
-        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
-        std::env::remove_var(env_name);
-        assert_eq!(resolved, PathBuf::from("/absolute/from/env"));
-    }
-}
+mod optional_framework_dir_tests;

@@ -169,6 +169,13 @@ pub(crate) unsafe fn dispatch_stream_method(
     let is_reader = READERS.lock().unwrap().contains_key(&id);
     if is_reader {
         match method {
+            // BYOB readers fill the caller-supplied view (#4915); default
+            // readers ignore the argument inside read_with_view.
+            "read" if !args.is_empty() => {
+                return Some(box_promise(super::byob::js_reader_read_with_view(
+                    handle, arg0,
+                )))
+            }
             "read" => return Some(box_promise(js_reader_read(handle))),
             "releaseLock" => return Some(js_reader_release_lock(handle)),
             "cancel" => return Some(box_promise(js_reader_cancel(handle, arg0))),
@@ -243,6 +250,11 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
     // undefined). `locked` is the one #1670 exercises (`res.body.locked`).
     match (kind, name) {
         (1, "locked") => return js_readable_stream_locked(handle),
+        (1, "desiredSize") => return js_readable_stream_controller_desired_size(handle),
+        // Non-null only while a BYOB read is parked on this byte stream (#4915).
+        (1, "byobRequest") => {
+            return super::byob::js_readable_stream_controller_byob_request(handle)
+        }
         (2, "locked") => return js_writable_stream_locked(handle),
         (3, "closed") => return box_promise(js_reader_closed(handle)),
         _ => {}
@@ -348,6 +360,7 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
         transform_bits,
         flush_bits,
         hwm,
+        hwm,
     );
     attach_handle_to_this(this_bits, handle as usize);
     f64::from_bits(TAG_UNDEFINED)
@@ -364,7 +377,7 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) => {
-                let drained: Vec<u64> = s.chunks.drain(..).collect();
+                let drained = s.drain_chunks();
                 s.state = ReadableState::Closed;
                 drained
             }

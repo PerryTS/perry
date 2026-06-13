@@ -30,17 +30,42 @@ use super::{
     parse_package_specifier, CompilationContext, JsModule, ParseCache,
 };
 
+mod create_require_transform;
 mod crypto_ns;
 mod dynamic_glob;
 mod parse_error;
 #[cfg(test)]
 mod tests;
 
+use create_require_transform::transform_create_require_literal_requires;
 use crypto_ns::module_uses_global_crypto_namespace;
 use dynamic_glob::expand_dynamic_import_glob;
 use parse_error::annotate_parse_error;
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
+
+/// #5009: build the bare-name → literal map perry-hir lowering consults to fold
+/// `process.env.<NAME>` reads (`perry_hir::env_define_lookup`). Strips the
+/// `process.env.` prefix the `perry.define` keys carry and converts each
+/// [`super::DefineValue`] to the matching [`perry_hir::EnvDefine`]. Keys that
+/// aren't `process.env.*` are skipped (only env defines are honored today).
+fn env_defines_for_lowering(
+    define: &HashMap<String, super::DefineValue>,
+) -> HashMap<String, perry_hir::EnvDefine> {
+    define
+        .iter()
+        .filter_map(|(key, val)| {
+            let name = key.strip_prefix("process.env.")?;
+            let ev = match val {
+                super::DefineValue::Str(s) => perry_hir::EnvDefine::Str(s.clone()),
+                super::DefineValue::Bool(b) => perry_hir::EnvDefine::Bool(*b),
+                super::DefineValue::Number(n) => perry_hir::EnvDefine::Num(*n),
+                super::DefineValue::Null => perry_hir::EnvDefine::Null,
+            };
+            Some((name.to_string(), ev))
+        })
+        .collect()
+}
 
 /// Issue #818: scan a JS module's source for static ESM imports /
 /// re-exports / string-literal dynamic imports, resolve each one
@@ -189,6 +214,150 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
     }
 }
 
+fn nearest_package_root(path: &std::path::Path) -> Option<PathBuf> {
+    let mut dir = path.parent();
+    while let Some(candidate) = dir {
+        if candidate.join("package.json").exists() {
+            return Some(candidate.to_path_buf());
+        }
+        dir = candidate.parent();
+    }
+    None
+}
+
+fn package_root_for_compile_package(
+    ctx: &CompilationContext,
+    path: &std::path::Path,
+) -> Option<PathBuf> {
+    ctx.compile_package_dirs
+        .values()
+        .filter(|dir| path.starts_with(dir))
+        .max_by_key(|dir| dir.components().count())
+        .cloned()
+        .or_else(|| nearest_package_root(path))
+}
+
+fn package_name_from_package_json(package_root: &std::path::Path) -> Option<String> {
+    let package_json = fs::read_to_string(package_root.join("package.json")).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&package_json).ok()?;
+    parsed
+        .get("name")
+        .and_then(|name| name.as_str())
+        .map(str::to_string)
+}
+
+fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 {
+        return None;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return None;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if file_name == "node_modules" || file_name == ".git" {
+            continue;
+        }
+        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("node") {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(found) = find_node_addon_file(&path, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, String)> {
+    let binding_gyp = package_root.join("binding.gyp");
+    if binding_gyp.exists() {
+        return Some(("binding.gyp", binding_gyp.display().to_string()));
+    }
+    let prebuilds = package_root.join("prebuilds");
+    if prebuilds.is_dir() {
+        return Some(("prebuilds/", prebuilds.display().to_string()));
+    }
+    let package_json_path = package_root.join("package.json");
+    if let Ok(package_json) = fs::read_to_string(&package_json_path) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&package_json) {
+            if parsed
+                .get("gypfile")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                return Some((
+                    "package.json gypfile",
+                    package_json_path.display().to_string(),
+                ));
+            }
+            if package_json_dependency_uses_native_addon_loader(&parsed, "node-gyp-build")
+                || package_json_dependency_uses_native_addon_loader(&parsed, "bindings")
+            {
+                return Some((
+                    "native addon loader dependency",
+                    package_json_path.display().to_string(),
+                ));
+            }
+        }
+    }
+    if let Some(node_file) = find_node_addon_file(package_root, 5) {
+        return Some(("*.node", node_file.display().to_string()));
+    }
+    None
+}
+
+fn package_json_dependency_uses_native_addon_loader(
+    package_json: &serde_json::Value,
+    loader_name: &str,
+) -> bool {
+    ["dependencies", "optionalDependencies"]
+        .iter()
+        .any(|section| {
+            package_json
+                .get(section)
+                .and_then(|deps| deps.as_object())
+                .is_some_and(|deps| deps.contains_key(loader_name))
+        })
+}
+
+fn refuse_compile_package_native_addon(
+    ctx: &mut CompilationContext,
+    canonical: &std::path::Path,
+) -> Result<()> {
+    let Some(package_root) = package_root_for_compile_package(ctx, canonical) else {
+        return Ok(());
+    };
+    if !ctx
+        .checked_compile_package_native_addon_roots
+        .insert(package_root.clone())
+    {
+        return Ok(());
+    }
+    if has_perry_native_library(&package_root) {
+        return Ok(());
+    }
+    let Some((marker, marker_path)) = node_addon_marker(&package_root) else {
+        return Ok(());
+    };
+    let package_name = package_name_from_package_json(&package_root)
+        .unwrap_or_else(|| package_root.display().to_string());
+    anyhow::bail!(
+        "package `{}` is in `perry.compilePackages` but uses a Node native addon ({}) at {}.\n\
+         Perry cannot load Node `.node` / N-API addons inside a native Perry binary. \
+         Remove `{}` from `perry.compilePackages`, choose a pure JS/TS package, \
+         or replace the native boundary with a Perry native binding \
+         (`perry.nativeLibrary` / perry-ffi).",
+        package_name,
+        marker,
+        marker_path,
+        package_name
+    );
+}
+
 /// Collect all modules to compile (transitive closure of imports)
 pub(super) fn collect_modules(
     entry_path: &PathBuf,
@@ -332,16 +501,15 @@ fn collect_module_one(
     // surfaces as an unsupported-module error rather than silently running).
     let should_use_js_runtime =
         (is_js_file(&canonical) && !is_in_compiled_pkg && is_in_node_modules)
-            || is_declaration_file(&canonical)
-            || is_json;
+            || is_declaration_file(&canonical);
 
-    // Skip JSON files — they're data, not code (imported via `with { type: "json" }`)
-    if is_json {
-        return Ok(ModuleDiscovery {
-            finish: None,
-            children: pending,
-        });
-    }
+    // #348 follow-up: JSON module imports (`import data from "./x.json"`,
+    // optionally with `with { type: "json" }`) are NOT skipped — they compile
+    // to a native module whose default export is the parsed data (synthesized
+    // as `export default <json>;` just below). Previously JSON was handed to
+    // the (now-removed) JS runtime / skipped outright, leaving the default
+    // import bound to the empty-module sentinel — which broke cli-boxes (and
+    // thus ink's `borderStyle` box-drawing).
 
     if should_use_js_runtime {
         // Skip declaration files - they're just type information
@@ -438,6 +606,26 @@ fn collect_module_one(
     // It's a TypeScript file to compile natively
     let raw_source = fs::read_to_string(&canonical)
         .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+    // JSON module import: turn the data file into a native ESM module whose
+    // default export is the parsed value. JSON is a syntactic subset of a JS
+    // expression, so `export default <json>;` parses and lowers like any other
+    // module. Validate as JSON first so a malformed file yields a clear error
+    // rather than a confusing TS parse failure on the synthesized source.
+    let raw_source = if is_json {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&raw_source) {
+            return Err(anyhow!(
+                "Failed to parse JSON module {}: {}",
+                canonical.display(),
+                e
+            ));
+        }
+        format!("export default {};\n", raw_source.trim())
+    } else {
+        raw_source
+    };
+    if is_in_compiled_pkg {
+        refuse_compile_package_native_addon(ctx, &canonical)?;
+    }
 
     // Issue #348: when a `compilePackages` target ships CommonJS (e.g. React
     // 18's `module.exports = require('./cjs/react.production.min.js')`),
@@ -459,6 +647,7 @@ fn collect_module_one(
     } else {
         raw_source
     };
+    let source = transform_create_require_literal_requires(&source, &ctx.compile_packages);
 
     // Note (#686): we no longer hash source bytes here. The object cache key
     // is now keyed on a post-transform HIR fingerprint computed inside the
@@ -592,6 +781,14 @@ fn collect_module_one(
     // immediately after the lower call so it can't leak to subsequent
     // unrelated work on the same thread.
     perry_hir::set_compile_packages_override(ctx.compile_packages.clone());
+    // #5009: install the `process.env.<NAME>` build-time defines so a static
+    // `process.env.X` read folds to its `perry.define` literal at lowering —
+    // esbuild-style, in every context and independent of tree-shaking. Keyed
+    // by the bare env var name (the `process.env.` prefix stripped). Cleared
+    // after the lower below (rayon-safe). The runtime-env default
+    // (`NODE_ENV → "production"` for node_modules) stays in the tree-shake
+    // `env_fold` pass; only explicit defines are folded here.
+    perry_hir::set_env_defines(env_defines_for_lowering(&ctx.define));
     // #503: re-install the dynamic-stdlib-dispatch config on the current
     // thread before each lower. Driver may be a rayon worker that didn't
     // inherit the thread-local set on the main thread by `compile.rs`.
@@ -648,6 +845,7 @@ fn collect_module_one(
     perry_hir::clear_compile_packages_override();
     perry_hir::clear_current_module_source();
     perry_hir::clear_precompile_state();
+    perry_hir::clear_env_defines();
     // #2309: drain refusals deferred during this lower and tag them with the
     // canonical module path so the post-collection prune can decide whether
     // they survive. Done before the `?` below so a non-deferrable error can't

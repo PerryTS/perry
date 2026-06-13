@@ -153,6 +153,16 @@ pub(crate) type JsNativeTlsDispatchFn =
 /// http2. Stays null when the http ext crate isn't linked. (#2533)
 pub(crate) type JsNativeHttpDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const u8, usize, *const f64, usize) -> f64;
+/// node:events class-constructor dispatcher (registered by perry-stdlib under
+/// `bundled-events`, or by perry-ext-events). Lets `new` on a bound
+/// `events.EventEmitter` / `events.EventEmitterAsyncResource` export value —
+/// reached via `require('events')`, a default import, or a namespace property
+/// read — construct a real emitter instead of falling through to the generic
+/// empty-object path. Takes (class_name_ptr, class_name_len, args_ptr,
+/// args_len) and returns the NaN-boxed instance. Stays null when no events
+/// impl is linked. (#4995)
+pub(crate) type JsNativeEventsConstructFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 
 // ----- JS handle dispatch atomics (shared between handle.rs and consumers) -----
 
@@ -173,3 +183,4 @@ pub static JS_NATIVE_SQLITE_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::n
 pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_EVENTS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

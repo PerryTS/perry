@@ -742,6 +742,60 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                             0x7FFD_0000_0000_0000u64 | (new_re as u64 & 0x0000_FFFF_FFFF_FFFF);
                         return f64::from_bits(new_bits);
                     }
+                    // #4879: properties that live outside the inline field
+                    // region (OVERFLOW_FIELDS of a dict-grown object, or every
+                    // prop of a `{}`-born object with no inline capacity) are
+                    // invisible to the clone_with_extra fast path below — it
+                    // copies only the inline `field_count` slots and truncates
+                    // the keys array to match. When the keys array is longer
+                    // than the inline region, rebuild the clone key-by-key via
+                    // js_object_get_field (which resolves inline vs overflow
+                    // per index) + js_object_set_field_by_name.
+                    let src_obj = ptr as *const crate::object::ObjectHeader;
+                    let src_keys = (*src_obj).keys_array;
+                    let key_count = if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
+                        crate::array::js_array_length(src_keys) as usize
+                    } else {
+                        0
+                    };
+                    if key_count > (*src_obj).field_count as usize {
+                        let scope = crate::gc::RuntimeHandleScope::new();
+                        let src_handle = scope.root_raw_const_ptr(src_obj);
+                        let new_obj = crate::object::js_object_alloc(0, key_count as u32);
+                        let new_handle = scope.root_raw_mut_ptr(new_obj);
+                        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                        for i in 0..key_count {
+                            let src_now =
+                                src_handle.get_raw_const_ptr::<crate::object::ObjectHeader>();
+                            let keys_now = (*src_now).keys_array;
+                            if keys_now.is_null()
+                                || i >= crate::array::js_array_length(keys_now) as usize
+                            {
+                                break;
+                            }
+                            let key_val = crate::array::js_array_get(keys_now, i as u32);
+                            // Own the key bytes before the recursive clone —
+                            // it can run a GC cycle.
+                            let key_bytes =
+                                match crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+                                    Some(b) => b.to_vec(),
+                                    None => continue,
+                                };
+                            let field = crate::object::js_object_get_field(src_now, i as u32);
+                            let cloned = js_structured_clone(f64::from_bits(field.bits()));
+                            let key_ptr = crate::string::js_string_from_bytes(
+                                key_bytes.as_ptr(),
+                                key_bytes.len() as u32,
+                            );
+                            let new_now =
+                                new_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                            crate::object::js_object_set_field_by_name(new_now, key_ptr, cloned);
+                        }
+                        let new_now = new_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                        let new_bits =
+                            0x7FFD_0000_0000_0000u64 | (new_now as u64 & 0x0000_FFFF_FFFF_FFFF);
+                        return f64::from_bits(new_bits);
+                    }
                     // Clone object using clone_with_extra (0 extra fields, no static keys)
                     let cloned_obj =
                         crate::object::js_object_clone_with_extra(value, 0, std::ptr::null(), 0);
@@ -1081,4 +1135,44 @@ pub(crate) fn test_queued_microtask_snapshot() -> (usize, u64, u64) {
         });
         (callback, store_bits, previous_store_bits)
     })
+}
+
+#[cfg(test)]
+mod structured_clone_tests {
+    use super::*;
+
+    /// #4879: properties past the inline field region (overflow side table /
+    /// `{}`-born objects with no inline capacity) must survive structuredClone.
+    #[test]
+    fn structured_clone_keeps_overflow_properties() {
+        unsafe {
+            let src = crate::object::js_object_alloc(0, 0);
+            let mut names = Vec::new();
+            for i in 0..50 {
+                names.push(format!("f{}", i));
+            }
+            for (i, name) in names.iter().enumerate() {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::object::js_object_set_field_by_name(src, key, i as f64);
+            }
+            let src_v = crate::value::js_nanbox_pointer(src as i64);
+            let cloned_v = js_structured_clone(src_v);
+            let cloned =
+                crate::value::js_nanbox_get_pointer(cloned_v) as *const crate::object::ObjectHeader;
+            assert!(!cloned.is_null());
+            assert_ne!(cloned as usize, src as usize);
+            let cloned_keys = crate::object::js_object_keys(cloned);
+            assert_eq!(crate::array::js_array_length(cloned_keys), 50);
+            for (i, name) in names.iter().enumerate() {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let v = crate::object::js_object_get_field_by_name(cloned, key);
+                assert_eq!(
+                    f64::from_bits(v.bits()),
+                    i as f64,
+                    "property {} lost or wrong in clone",
+                    name
+                );
+            }
+        }
+    }
 }

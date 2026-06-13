@@ -6,8 +6,10 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
@@ -18,6 +20,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -107,6 +110,20 @@ pub struct HttpServer {
     pub no_delay: bool,
     pub keep_alive: bool,
     pub keep_alive_initial_delay: f64,
+    /// #4974 — mirrors Node's `server[kConnectionsCheckingInterval]`
+    /// timer state: Node creates the interval in the `Server`
+    /// constructor and `clearInterval`s it in `close()`, so the timer's
+    /// `_destroyed` flips to `true` once the server closes. Perry has
+    /// no such timer (the hyper accept loop owns connection lifecycle),
+    /// so we track just the flag the `_http_server` introspection key
+    /// exposes.
+    pub connections_checking_interval_destroyed: bool,
+    /// #5011 — mirrors Node's `server.unref()` / `server.ref()`. When
+    /// `unref()`ed, a listening server no longer keeps the event loop
+    /// alive, so the process can exit even while it's still bound. Starts
+    /// `true` (refed), matching Node where a fresh server holds the loop
+    /// open once it's listening.
+    pub refed: bool,
 }
 
 impl HttpServer {
@@ -136,6 +153,8 @@ impl HttpServer {
             no_delay: true,
             keep_alive: false,
             keep_alive_initial_delay: 0.0,
+            connections_checking_interval_destroyed: false,
+            refed: true,
         }
     }
 }
@@ -161,7 +180,15 @@ pub struct HttpPendingRequest {
 pub struct HttpPendingUpgrade {
     pub server_handle: i64,
     pub request_handle: i64,
+    /// WebSocket path (real handshakes with a `Sec-WebSocket-Key`): the
+    /// perry-ext-ws connection id. 0 on the raw path.
     pub ws_id: i64,
+    /// #4973 raw path (keyless Upgrade requests): the perry-ext-net socket
+    /// id adopted from the connection. 0 on the WebSocket path.
+    pub raw_socket_id: i64,
+    /// #4973 raw path: unconsumed bytes that followed the request head —
+    /// Node's `upgradeHead` argument.
+    pub head: Vec<u8>,
 }
 
 // ============================================================================
@@ -171,19 +198,83 @@ pub struct HttpPendingUpgrade {
 /// Live HTTP/1.1 connection tracked so `server.closeAllConnections()` /
 /// `server.closeIdleConnections()` can reach into the per-connection
 /// tokio task. `busy` counts in-flight requests on the connection (0
-/// between keep-alive requests); `close` wakes the connection task's
-/// `select!`, which drops the hyper connection and closes the socket.
-struct TrackedConnection {
-    server_handle: i64,
-    close: Arc<tokio::sync::Notify>,
-    busy: Arc<AtomicUsize>,
+/// between keep-alive requests); `read_active` flags request bytes
+/// received since the last dispatched request (a half-sent request head
+/// is "currently sending a request" in Node's idleness terms even
+/// though nothing has reached the service yet — #4971); `close` wakes
+/// the connection task's `select!`, which drops the hyper connection
+/// and closes the socket. Shared with the HTTPS accept loop in
+/// `https_server.rs`.
+pub(crate) struct TrackedConnection {
+    pub(crate) server_handle: i64,
+    pub(crate) close: Arc<tokio::sync::Notify>,
+    pub(crate) busy: Arc<AtomicUsize>,
+    pub(crate) read_active: Arc<AtomicBool>,
 }
 
 lazy_static! {
-    static ref CONNECTIONS: Mutex<HashMap<u64, TrackedConnection>> = Mutex::new(HashMap::new());
+    pub(crate) static ref CONNECTIONS: Mutex<HashMap<u64, TrackedConnection>> =
+        Mutex::new(HashMap::new());
 }
 
-static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+pub(crate) static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// AsyncRead/AsyncWrite passthrough that flips `saw_bytes` on every
+/// read that produces data. Wrapped around the server-side stream (the
+/// decrypted one, for HTTPS — handshake traffic must not count) so
+/// idleness can see "client started sending a request whose head hasn't
+/// parsed yet": hyper only invokes the service (and bumps `busy`) once
+/// a complete head arrives. The flag resets at service entry; while a
+/// request is in flight `busy > 0` covers activity, and a quiet
+/// keep-alive socket after the response reads as idle again. #4971.
+pub(crate) struct ReadActivity<S> {
+    inner: S,
+    saw_bytes: Arc<AtomicBool>,
+}
+
+impl<S> ReadActivity<S> {
+    pub(crate) fn new(inner: S, saw_bytes: Arc<AtomicBool>) -> Self {
+        Self { inner, saw_bytes }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for ReadActivity<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let poll = Pin::new(&mut this.inner).poll_read(cx, buf);
+        if matches!(poll, Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            this.saw_bytes.store(true, Ordering::SeqCst);
+        }
+        poll
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
 
 /// Server handles whose accept loop saw a new connection since the last
 /// pump tick. Drained by `js_node_http_server_process_pending` to fire
@@ -191,17 +282,20 @@ static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 /// socket as the listener argument; we don't model a net.Socket for
 /// hyper connections yet, so listeners fire with no args — enough for
 /// the canonical connection-counting idiom.
-static PENDING_CONNECTION_EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+pub(crate) static PENDING_CONNECTION_EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 
 /// Signal tracked connections of `server_handle` to close. With
-/// `only_idle`, connections currently processing a request are left
-/// alone (Node's `closeIdleConnections` semantics; `server.close()`
-/// also closes idle keep-alive sockets since Node 19).
-fn signal_connections_close(server_handle: i64, only_idle: bool) {
+/// `only_idle`, connections currently processing a request — or mid-way
+/// through sending one (`read_active`, #4971) — are left alone (Node's
+/// `closeIdleConnections` semantics; `server.close()` also closes idle
+/// keep-alive sockets since Node 19).
+pub(crate) fn signal_connections_close(server_handle: i64, only_idle: bool) {
     let conns = CONNECTIONS.lock().unwrap();
     for entry in conns.values() {
         if entry.server_handle == server_handle
-            && (!only_idle || entry.busy.load(Ordering::SeqCst) == 0)
+            && (!only_idle
+                || (entry.busy.load(Ordering::SeqCst) == 0
+                    && !entry.read_active.load(Ordering::SeqCst)))
         {
             entry.close.notify_one();
         }
@@ -405,6 +499,31 @@ pub extern "C" fn js_node_http_server_set_timeout_method(
     handle
 }
 
+/// `server.ref()` — mark the server as keeping the event loop alive
+/// (the default) and return the receiver handle so chains like
+/// `server.ref().listen(...)` work. #5011 — without this row the call
+/// fell through to a generic handler that returned the handle as a raw
+/// number, so `s.ref() === s` was false and chaining broke.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_ref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        s.refed = true;
+    }
+    handle
+}
+
+/// `server.unref()` — stop the server from keeping the process alive and
+/// return the receiver handle (Node returns `this`). Clearing `refed`
+/// drops the server out of `server_is_active`, so the event loop can
+/// exit even while the server is still bound. #5011.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_unref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        s.refed = false;
+    }
+    handle
+}
+
 /// `server.listen(port?, host?, backlog?, cb?)` — bind + start accepting.
 /// Returns immediately after spawning the accept loop on the tokio runtime
 /// (non-blocking since #604); requests are drained from the main thread by
@@ -449,7 +568,9 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         Ok(a) => a,
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
-    let std_listener = match std::net::TcpListener::bind(addr) {
+    // #4914 — cluster workers bind with SO_REUSEPORT so N workers share
+    // the port; `bind_listener` falls through to a plain bind otherwise.
+    let std_listener = match crate::cluster_bind::bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("[node:http] bind {}:{} failed: {}", host, port, e);
@@ -461,6 +582,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         eprintln!("[node:http] set_nonblocking failed: {}", e);
         return server_handle;
     }
+    crate::cluster_bind::notify_listening(&host, actual_port);
 
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.bound_port = actual_port;
@@ -504,7 +626,6 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, peer)) => {
-                                let io = TokioIo::new(stream);
                                 let request_tx = request_tx_for_spawn.clone();
                                 let upgrade_tx = upgrade_tx_for_spawn.clone();
                                 let server_handle = server_handle;
@@ -513,25 +634,68 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                                 // reach this task from the main thread.
                                 let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
                                 let busy = Arc::new(AtomicUsize::new(0));
+                                let read_active = Arc::new(AtomicBool::new(false));
                                 let close = Arc::new(tokio::sync::Notify::new());
+                                let read_active_for_io = read_active.clone();
+                                let upgrade_tx_peek = upgrade_tx_for_spawn.clone();
                                 CONNECTIONS.lock().unwrap().insert(
                                     conn_id,
                                     TrackedConnection {
                                         server_handle,
                                         close: close.clone(),
                                         busy: busy.clone(),
+                                        read_active: read_active.clone(),
                                     },
                                 );
                                 if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
                                     q.push(server_handle);
                                 }
                                 tokio::spawn(async move {
+                                    // #4973 — when `'upgrade'` listeners exist, peek the
+                                    // request head before hyper writes anything: a keyless
+                                    // Upgrade request must reach JS as a raw net.Socket
+                                    // with NO response on the wire (Node semantics). Other
+                                    // connections replay the peeked bytes to hyper.
+                                    let has_upgrade_listeners =
+                                        get_handle::<HttpServer>(server_handle)
+                                            .map(|s| {
+                                                s.listeners
+                                                    .get("upgrade")
+                                                    .map(|v| !v.is_empty())
+                                                    .unwrap_or(false)
+                                            })
+                                            .unwrap_or(false);
+                                    let stream = if has_upgrade_listeners {
+                                        match crate::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
+                                            server_handle,
+                                            peer,
+                                            stream,
+                                            &upgrade_tx_peek,
+                                        )
+                                        .await
+                                        {
+                                            crate::raw_upgrade::PeekResult::Handled => {
+                                                CONNECTIONS.lock().unwrap().remove(&conn_id);
+                                                return;
+                                            }
+                                            crate::raw_upgrade::PeekResult::Passthrough(s) => s,
+                                        }
+                                    } else {
+                                        crate::raw_upgrade::PrefixedStream::empty(stream)
+                                    };
+                                    let io =
+                                        TokioIo::new(ReadActivity::new(stream, read_active_for_io));
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
                                         let upgrade_tx = upgrade_tx.clone();
                                         let busy = busy.clone();
+                                        let read_active = read_active.clone();
                                         async move {
                                             busy.fetch_add(1, Ordering::SeqCst);
+                                            // The pending head is now an in-flight
+                                            // request; `busy` covers activity until
+                                            // the response ships (#4971).
+                                            read_active.store(false, Ordering::SeqCst);
                                             let res = handle_request(server_handle, peer, req, request_tx, upgrade_tx).await;
                                             busy.fetch_sub(1, Ordering::SeqCst);
                                             res
@@ -598,6 +762,7 @@ pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback:
     let close_listeners;
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.listening = false;
+        s.connections_checking_interval_destroyed = true;
         s.shutdown_tx.take();
         close_listeners = s.listeners.get("close").cloned().unwrap_or_default();
     } else {
@@ -711,6 +876,50 @@ pub unsafe extern "C" fn js_node_http_server_on(
     handle_to_pointer_f64(handle)
 }
 
+/// `server.removeAllListeners([event])` — drop every listener for `event`,
+/// or every listener for every event when `event_name_ptr` is null (#4973:
+/// test-http-upgrade-server clears its `'upgrade'` listeners between
+/// phases so the next Upgrade request falls through to `'request'`).
+///
+/// # Safety
+/// FFI entry; `event_name_ptr` is either null or a valid StringHeader.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_server_remove_all_listeners(
+    handle: i64,
+    event_name_ptr: *const StringHeader,
+) -> f64 {
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        if event_name_ptr.is_null() {
+            s.listeners.clear();
+        } else if let Some(event) = read_string_header(event_name_ptr as *mut _) {
+            s.listeners.remove(&event);
+        }
+    }
+    handle_to_pointer_f64(handle)
+}
+
+/// `server.removeListener(event, cb)` / `server.off(event, cb)` — remove one
+/// registration of `cb` for `event` (last-registered first, matching Node).
+///
+/// # Safety
+/// FFI entry; pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_server_remove_listener(
+    handle: i64,
+    event_name_ptr: *const StringHeader,
+    callback: i64,
+) -> f64 {
+    let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        if let Some(cbs) = s.listeners.get_mut(&event) {
+            if let Some(pos) = cbs.iter().rposition(|&c| c == callback) {
+                cbs.remove(pos);
+            }
+        }
+    }
+    handle_to_pointer_f64(handle)
+}
+
 // ============================================================================
 // Request dispatch — hyper service fn + main-thread event loop
 // ============================================================================
@@ -749,18 +958,36 @@ async fn handle_request(
     // task that awaits hyper's upgraded stream + completes the
     // tungstenite server handshake + registers the resulting
     // WebSocketStream with perry-ext-ws.
+    //
+    // #4973 gates: (a) Node dispatches an Upgrade request as a normal
+    // `'request'` when the server has no `'upgrade'` listeners — the
+    // unconditional branch used to hijack it into a bogus 101; (b) only a
+    // real WebSocket handshake (`Sec-WebSocket-Key` present) belongs on the
+    // tungstenite path — keyless Upgrade requests are served Node-style by
+    // the raw peek path in raw_upgrade.rs and only reach hyper when no
+    // listener was attached at accept time.
     if crate::upgrade::is_websocket_upgrade(&req) {
-        return handle_websocket_upgrade(
-            server_handle,
-            peer,
-            req,
-            method,
-            url,
-            headers_lower,
-            raw_headers,
-            upgrade_tx,
-        )
-        .await;
+        let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
+            .map(|s| {
+                s.listeners
+                    .get("upgrade")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if has_upgrade_listeners && req.headers().contains_key("sec-websocket-key") {
+            return handle_websocket_upgrade(
+                server_handle,
+                peer,
+                req,
+                method,
+                url,
+                headers_lower,
+                raw_headers,
+                upgrade_tx,
+            )
+            .await;
+        }
     }
 
     let body_bytes = match req.collect().await {
@@ -768,7 +995,7 @@ async fn handle_request(
         Err(_) => Vec::new(),
     };
 
-    let im = IncomingMessage::new(
+    let mut im = IncomingMessage::new(
         method,
         url,
         headers_lower,
@@ -777,6 +1004,14 @@ async fn handle_request(
         peer.ip().to_string(),
         peer.port(),
     );
+    // `req.httpVersion` reflects the wire version, not a constant — an
+    // HTTP/1.0 request must read "1.0" (test-http-1.0 asserts all three
+    // httpVersion fields).
+    im.http_version = match http_version {
+        hyper::Version::HTTP_10 => "1.0".to_string(),
+        hyper::Version::HTTP_2 => "2.0".to_string(),
+        _ => "1.1".to_string(),
+    };
     let im_handle = alloc_incoming_message(im);
 
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
@@ -891,6 +1126,8 @@ async fn handle_websocket_upgrade(
             server_handle,
             request_handle: im_handle,
             ws_id,
+            raw_socket_id: 0,
+            head: Vec::new(),
         };
         let _ = upgrade_tx.send(pending).await;
         perry_ffi::notify_main_thread();
@@ -1043,6 +1280,7 @@ fn has_in_flight_requests() -> bool {
 fn reap_in_flight_requests() {
     // (request_handle, response_handle, needs_synthesize)
     let mut to_finalize: Vec<(i64, i64, bool)> = Vec::new();
+    let mut drain_listeners: Vec<Vec<i64>> = Vec::new();
     {
         let mut guard = match IN_FLIGHT.lock() {
             Ok(g) => g,
@@ -1054,14 +1292,24 @@ fn reap_in_flight_requests() {
         let now = Instant::now();
         guard.retain(|e| {
             let ended = response_writable_ended(e.response_handle);
+            if !ended {
+                // Streaming backpressure cleared — fire `'drain'` (outside
+                // the lock) so `res.on('drain')` producer loops resume.
+                let ls = crate::response::take_drain_listeners_if_ready(e.response_handle);
+                if !ls.is_empty() {
+                    drain_listeners.push(ls);
+                }
+            }
             // #4905: the per-request oneshot receiver died with its
             // connection task (client disconnected / closeAllConnections)
             // — the response can never be flushed, so don't pin the event
-            // loop for the rest of the grace window.
+            // loop for the rest of the grace window. A streaming response
+            // whose body receiver dropped is the same edge.
             let peer_gone = get_handle::<ServerResponse>(e.response_handle)
                 .and_then(|sr| sr.response_tx.as_ref())
                 .map(|tx| tx.is_closed())
-                .unwrap_or(false);
+                .unwrap_or(false)
+                || crate::response::stream_receiver_gone(e.response_handle);
             let expired = now >= e.deadline;
             if ended || expired || peer_gone {
                 to_finalize.push((
@@ -1078,6 +1326,9 @@ fn reap_in_flight_requests() {
                 true
             }
         });
+    }
+    for ls in drain_listeners {
+        crate::request::emit_no_arg_to_listeners(&ls);
     }
     // Finalize outside the lock — `synthesize_default_response_if_needed`
     // and `drop_handle` don't touch `IN_FLIGHT`, but keeping them off the
@@ -1237,8 +1488,14 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         .map(|mut q| q.drain(..).collect())
         .unwrap_or_default();
     for server_handle in connection_events {
+        // The handle may back an HttpServer or an HttpsServer (whose
+        // accept loop pushes here too since #4971) — probe both.
         let listeners = get_handle::<HttpServer>(server_handle)
             .and_then(|s| s.listeners.get("connection").cloned())
+            .or_else(|| {
+                get_handle::<crate::https_server::HttpsServer>(server_handle)
+                    .and_then(|s| s.base.listeners.get("connection").cloned())
+            })
             .unwrap_or_default();
         if listeners.is_empty() {
             continue;
@@ -1261,12 +1518,25 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
         while let Some(up) = try_recv_upgrade(h) {
-            crate::upgrade::fire_upgrade_listeners(
-                up.server_handle,
-                up.request_handle,
-                up.ws_id,
-                Vec::new(),
-            );
+            if up.raw_socket_id != 0 {
+                // #4973 raw path: make sure the adopted net.Socket's
+                // dispatch extensions + GC scanner are registered on the
+                // main thread before user code touches the socket.
+                perry_ext_net::ensure_adopted_socket_dispatch();
+                crate::upgrade::fire_upgrade_listeners(
+                    up.server_handle,
+                    up.request_handle,
+                    up.raw_socket_id,
+                    up.head,
+                );
+            } else {
+                crate::upgrade::fire_upgrade_listeners(
+                    up.server_handle,
+                    up.request_handle,
+                    up.ws_id,
+                    Vec::new(),
+                );
+            }
             count += 1;
         }
         while let Some(p) = try_recv_pending_nonblocking(h) {
@@ -1305,11 +1575,30 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     }
     count += crate::http2_server::process_pending_h2_events();
 
+    // #5010 — drain perry-ext-net's own pending-event queue. A raw
+    // `'upgrade'` (#4973) hands the listener a real `net.Socket` adopted into
+    // perry-ext-net (`adopt_upgraded_tcp_stream`); when user code destroys it,
+    // the socket task queues a `Close` event in perry-ext-net's queue. For an
+    // http-only program perry-stdlib runs with its OWN bundled net (so its
+    // `external-net-pump` arm is OFF and never touches ext-net's queue), and
+    // the perry-ext-net aux pump proved unreliable across workspace link
+    // layouts. The http-server pump, by contrast, runs every tick
+    // (external-http-server-pump) and directly depends on perry-ext-net, so
+    // draining here — through the UNIQUE `js_ext_net_drain_pending` symbol
+    // (no stdlib twin) — reliably empties that queue so the destroyed upgrade
+    // socket stops pinning the event loop. Cheap (one mutex peek) when empty.
+    count += unsafe { perry_ext_net::js_ext_net_drain_pending() };
+
     count
 }
 
 fn server_is_active(s: &HttpServer) -> bool {
-    if s.listening {
+    // #5011 — an `unref()`ed server no longer keeps the event loop alive
+    // just by being bound, so a quietly-listening unref'd server lets the
+    // process exit (Node semantics). Pending listen callbacks and queued
+    // requests below still keep the loop alive long enough to flush any
+    // in-flight work.
+    if s.listening && s.refed {
         return true;
     }
     // #4903 — a queued `'listening'` emit / listen callback must keep the
@@ -1435,6 +1724,12 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
             sr.writable_ended = true;
             sr.headers_sent = true;
             sr.writable_finished = true;
+            // Streaming response whose handler never called `.end()`: the
+            // head is already on the wire — just close the body channel.
+            if sr.stream_tx.take().is_some() {
+                sr.needs_drain = false;
+                return;
+            }
             let body = std::mem::take(&mut sr.buffered_body);
             // `snapshot_headers` expands array-valued headers (e.g.
             // Set-Cookie) into one entry per element so they emit a separate
@@ -1450,7 +1745,7 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 status_message: sr.status_message.clone(),
                 headers,
                 trailers: Vec::new(),
-                body,
+                body: crate::response::ShapeBody::Full(body),
             };
             if let Some(tx) = sr.response_tx.take() {
                 let _ = tx.send(shape);

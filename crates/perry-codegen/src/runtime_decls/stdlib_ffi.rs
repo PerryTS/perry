@@ -55,6 +55,19 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // ========== HTTP server ==========
     module.declare_function("js_http_client_request_end", I64, &[I64, DOUBLE]);
     module.declare_function("js_http_client_request_write", I64, &[I64, DOUBLE]);
+    // #4909 — callback-aware client write/end/setTimeout (the `(encoding?,
+    // callback?)` tail rides as raw NaN-boxed JSValues).
+    module.declare_function(
+        "js_http_client_request_end_full",
+        I64,
+        &[I64, DOUBLE, I64, I64],
+    );
+    module.declare_function(
+        "js_http_client_request_write_full",
+        DOUBLE,
+        &[I64, DOUBLE, I64, I64],
+    );
+    module.declare_function("js_http_set_timeout_full", I64, &[I64, DOUBLE, I64]);
     module.declare_function("js_http_client_request_method", I64, &[I64]);
     module.declare_function("js_http_client_request_protocol", I64, &[I64]);
     module.declare_function("js_http_client_request_host", I64, &[I64]);
@@ -181,6 +194,8 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_server_listening", I32, &[I64]);
     module.declare_function("js_node_http_server_listening_value", DOUBLE, &[I64]);
     module.declare_function("js_node_http_server_on", DOUBLE, &[I64, I64, I64]);
+    // #4973 http(s).Server.call(this,…) + net socket.setEncoding decls live in
+    // objects.rs's declare chain to keep this file under the 2000-line gate.
     // IncomingMessage:
     module.declare_function("js_node_http_im_method", I64, &[I64]);
     module.declare_function("js_node_http_im_url", I64, &[I64]);
@@ -236,8 +251,16 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         &[I64, DOUBLE, I64, I64],
     );
     module.declare_function("js_node_http_res_write", I32, &[I64, DOUBLE]);
+    // #4909: callback-aware write/end. chunk + raw (encoding?, callback?) tail;
+    // write returns a NaN-boxed bool (DOUBLE) for backpressure.
+    module.declare_function(
+        "js_node_http_res_write_full",
+        DOUBLE,
+        &[I64, DOUBLE, I64, I64],
+    );
     module.declare_function("js_node_http_res_add_trailers", VOID, &[I64, DOUBLE]);
     module.declare_function("js_node_http_res_end", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_node_http_res_end_full", VOID, &[I64, DOUBLE, I64, I64]);
     module.declare_function("js_node_http_res_flush_headers", VOID, &[I64]);
     module.declare_function("js_node_http_res_cork", VOID, &[I64]);
     module.declare_function("js_node_http_res_uncork", VOID, &[I64]);
@@ -575,7 +598,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_raw_sync", I64, &[DOUBLE]);
     module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE]);
@@ -1861,6 +1884,12 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_implicit_this_get", DOUBLE, &[]);
     module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
     module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
+    // Static-method prologue `this`: takes the one-shot receiver override
+    // armed by dynamic static dispatch / call/apply, else returns the
+    // lexical class-ref argument.
+    module.declare_function("js_static_this_resolve", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_static_this_arm_classref", VOID, &[I32]);
+    module.declare_function("js_static_this_arm_value", VOID, &[DOUBLE]);
     module.declare_function("js_ctor_return_override", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_new_target_get", DOUBLE, &[]);
     module.declare_function("js_new_target_set", DOUBLE, &[DOUBLE]);

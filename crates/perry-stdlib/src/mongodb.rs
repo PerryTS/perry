@@ -308,16 +308,20 @@ pub unsafe extern "C" fn js_mongodb_collection_find_one(
             }
         },
         |result: Option<String>| {
-            // Pre-existing limitation: findOne resolves with a JSON STRING
-            // (not a parsed object). Tried converting via js_json_parse
-            // here, but a separate Perry-wide JSON-parse-then-property-
-            // access bug surfaced (`JSON.parse('{"foo":"perry"}').foo` ->
-            // NaN), so leaving the string return for now. Users do
-            // `JSON.parse(await coll.findOne(...))` once that's fixed.
+            // #4917: resolve a real document object (`doc.field` works), not
+            // a JSON string. This converter runs on the main thread, so
+            // parsing may allocate JSValues. The JSON comes straight from
+            // serde so it always parses; on the off chance it doesn't, fall
+            // back to the raw string rather than throwing from inside the
+            // resolution pump. BSON-specific types surface in their relaxed
+            // extended-JSON shape (e.g. `_id.$oid`).
             match result {
                 Some(json) => {
                     let ptr = js_string_from_bytes(json.as_ptr(), json.len() as u32);
-                    JSValue::string_ptr(ptr).bits()
+                    match unsafe { perry_runtime::json::js_json_parse_result(ptr) } {
+                        Ok(value) => value.bits(),
+                        Err(_) => JSValue::string_ptr(ptr).bits(),
+                    }
                 }
                 None => JSValue::null().bits(),
             }

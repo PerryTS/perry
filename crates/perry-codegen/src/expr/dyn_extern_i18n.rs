@@ -531,6 +531,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .block()
                     .call(DOUBLE, "js_unresolved_namespace_stub", &[]));
             }
+            // #4950: built-in globals that HIR lowers to `ExternFuncRef` even
+            // in VALUE position (the `is_builtin_function` timer set —
+            // `setTimeout`, `setImmediate`, …) used to fall through to the
+            // TAG_TRUE sentinel, so `var localSetImmediate = setImmediate`
+            // read a boolean and calling through it threw `value is not a
+            // function` (scheduler's host-callback setup, → react-reconciler
+            // → every React renderer). Resolve them to the same
+            // `populate_global_this_builtins` closure `globalThis.<name>`
+            // reads, which is callable through the dynamic dispatch path.
+            if is_global_this_builtin_name(name) {
+                let name_idx = ctx.strings.intern(name);
+                let name_bytes_global = format!("@{}", ctx.strings.entry(name_idx).bytes_global);
+                let name_len = name.len().to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_get_global_this_builtin_value",
+                    &[(PTR, &name_bytes_global), (I64, &name_len)],
+                ));
+            }
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)))
         }
 

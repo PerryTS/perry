@@ -207,6 +207,40 @@ pub extern "C" fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader
     alloc_string(&s).as_raw()
 }
 
+/// `req.httpVersionMajor` — numeric major half of `httpVersion`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_http_version_major(handle: i64) -> f64 {
+    incoming_http_version_part(handle, false)
+}
+
+/// `req.httpVersionMinor` — numeric minor half of `httpVersion`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_http_version_minor(handle: i64) -> f64 {
+    incoming_http_version_part(handle, true)
+}
+
+/// `req.httpVersionMajor` / `req.httpVersionMinor` — numeric halves of
+/// `httpVersion` ("1.0" → 1 / 0).
+pub(crate) fn incoming_http_version_part(handle: i64, minor: bool) -> f64 {
+    let version = get_handle::<IncomingMessage>(handle)
+        .map(|im| im.http_version.clone())
+        .unwrap_or_else(|| "1.1".to_string());
+    let mut parts = version.split('.');
+    let major = parts
+        .next()
+        .and_then(|p| p.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    let minor_v = parts
+        .next()
+        .and_then(|p| p.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    if minor {
+        minor_v
+    } else {
+        major
+    }
+}
+
 /// `req.headers` — JSON-stringify the lowercase-keyed header map.
 /// Returned as a NaN-boxed STRING — TS-side parses with `JSON.parse`
 /// at the binding wrapper. (Returning a runtime ObjectHeader directly
@@ -391,20 +425,22 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     let encoding;
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.paused = false;
-        if !im.data_emitted && !im.body_bytes.is_empty() {
-            should_emit_data = true;
-        }
-        if !im.end_emitted {
-            should_emit_end = true;
-        }
         body_bytes = im.body_bytes.clone();
         data_listeners = im.listeners.get("data").cloned().unwrap_or_default();
         end_listeners = im.listeners.get("end").cloned().unwrap_or_default();
         encoding = im.encoding.clone();
-        if should_emit_data {
+        // #4909 — only consume the one-shot emit flags when a listener is
+        // actually present. `req.resume(); req.on('end', cb)` (the canonical
+        // body-drain pattern) registers the listener one statement AFTER
+        // resume; marking `end_emitted` here meant `im_on`'s sync-emit arm
+        // saw the event as already delivered and the server hung without
+        // ever responding.
+        if !im.data_emitted && !im.body_bytes.is_empty() && !data_listeners.is_empty() {
+            should_emit_data = true;
             im.data_emitted = true;
         }
-        if should_emit_end {
+        if !im.end_emitted && !end_listeners.is_empty() {
+            should_emit_end = true;
             im.end_emitted = true;
             im.complete = true;
         }

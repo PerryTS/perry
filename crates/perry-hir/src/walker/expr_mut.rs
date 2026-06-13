@@ -1708,10 +1708,16 @@ where
             f(target);
             f(key);
         }
-        Expr::ReflectSet { target, key, value } => {
+        Expr::ReflectSet {
+            target,
+            key,
+            value,
+            receiver,
+        } => {
             f(target);
             f(key);
             f(value);
+            f(receiver);
         }
         Expr::PutValueSet {
             target,

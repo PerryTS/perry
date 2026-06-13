@@ -376,8 +376,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "setEncoding",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
+        // #4973: real setEncoding — switches 'data' delivery to strings.
+        runtime: "js_net_socket_set_encoding",
+        args: &[NA_STR],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -721,17 +722,22 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_F64],
         ret: NR_PROMISE,
     },
-    // Factory: `tls.connect(host, port, servername, verify)` opens plain TCP
-    // then runs a full TLS handshake before firing 'connect'. Returns a Socket
-    // handle that behaves identically to one produced by net.createConnection
-    // (same write/end/destroy/on surface).
+    // Factory: `tls.connect(...)` opens plain TCP then runs a full TLS
+    // handshake before firing 'connect'. Returns a Socket handle that behaves
+    // identically to one produced by net.createConnection (same
+    // write/end/destroy/on surface). All four args pass through as raw
+    // NaN-boxed values so the runtime can resolve Node's overloads —
+    // `connect(options[, cb])`, `connect(port[, host][, options][, cb])` —
+    // plus Perry's legacy positional `connect(host, port, servername, verify)`
+    // (#4971: the old NA_STR first arg string-coerced the options object, so
+    // `tls.connect({ port })` returned a null handle).
     NativeModSig {
         module: "tls",
         has_receiver: false,
         method: "connect",
         class_filter: None,
         runtime: "js_tls_connect",
-        args: &[NA_STR, NA_F64, NA_STR, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // ========== net.Server (issue #1123 followup) ==========

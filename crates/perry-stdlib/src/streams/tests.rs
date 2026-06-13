@@ -24,6 +24,8 @@ fn root_scanner_emits_callbacks_chunks_and_promises() {
             ReadableStreamData {
                 state: ReadableState::Errored,
                 chunks: VecDeque::from([0x7FFD_0000_0000_1234]),
+                chunk_sizes: VecDeque::from([1.0]),
+                queue_total_size: 1.0,
                 pending_reads: VecDeque::from([0x2345_6780 as *mut Promise]),
                 start_cb: 0x3456_7890,
                 pull_cb: 0,

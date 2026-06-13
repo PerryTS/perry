@@ -85,6 +85,22 @@ fn workspace_root_from_exe(exe: &Path) -> Option<PathBuf> {
 
 /// Find the Perry workspace root by searching upward from the executable location.
 pub fn find_perry_workspace_root() -> Option<PathBuf> {
+    // Explicit override: npm/homebrew installs place the perry binary
+    // outside the workspace, so neither the exe walk nor the cwd walk
+    // below can ever find the source tree — auto-optimize then silently
+    // falls back to the prebuilt full-feature runtime/stdlib and every
+    // binary ships the whole stdlib (sqlite, crypto, tokio, …). Users
+    // who keep a workspace checkout can point at it explicitly.
+    if let Ok(root) = std::env::var("PERRY_WORKSPACE_ROOT") {
+        let path = PathBuf::from(root);
+        if is_perry_workspace_root(&path) {
+            return Some(path);
+        }
+        eprintln!(
+            "warning: PERRY_WORKSPACE_ROOT is set but does not look like a \
+             Perry workspace (missing crates/perry-runtime); ignoring it"
+        );
+    }
     // First try: relative to the perry executable
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = workspace_root_from_exe(&exe) {
@@ -151,24 +167,44 @@ pub(super) fn extract_compile_package_dir(
     resolved_path: &Path,
     package_name: &str,
 ) -> Option<PathBuf> {
-    let path_str = resolved_path.to_string_lossy();
-    let needle = format!("node_modules/{}", package_name);
-    // Use rfind to handle deeply nested node_modules
-    path_str
-        .rfind(&needle)
-        .map(|idx| PathBuf::from(&path_str[..idx + needle.len()]))
+    resolved_path
+        .ancestors()
+        .find(|candidate| is_compile_package_dir(candidate, package_name))
+        .map(Path::to_path_buf)
 }
 
 /// Check if a file path is inside a package listed in compile_packages
 pub(super) fn is_in_compile_package(path: &Path, compile_packages: &HashSet<String>) -> bool {
-    let path_str = path.to_string_lossy();
-    for pkg_name in compile_packages {
-        let pattern = format!("node_modules/{}/", pkg_name);
-        if path_str.contains(&pattern) {
-            return true;
+    compile_packages.iter().any(|pkg_name| {
+        path.ancestors()
+            .any(|candidate| is_compile_package_dir(candidate, pkg_name))
+    })
+}
+
+fn is_compile_package_dir(candidate: &Path, package_name: &str) -> bool {
+    let parts: Vec<&str> = package_name.split('/').collect();
+    match parts.as_slice() {
+        [name] => {
+            candidate.file_name().is_some_and(|part| part == *name)
+                && candidate
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|part| part == "node_modules")
         }
+        [scope, name] => {
+            candidate.file_name().is_some_and(|part| part == *name)
+                && candidate
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|part| part == *scope)
+                && candidate
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::file_name)
+                    .is_some_and(|part| part == "node_modules")
+        }
+        _ => false,
     }
-    false
 }
 
 /// Enumerate every installed package name reachable from `project_root`'s
@@ -587,6 +623,39 @@ pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Opt
     )
 }
 
+/// Node subpath imports (#5039): resolve a `#`-prefixed specifier through the
+/// importing package's own `package.json` `"imports"` map
+/// (https://nodejs.org/api/packages.html#imports). chalk 5 loads its vendored
+/// dependencies this way (`import ansiStyles from '#ansi-styles'` →
+/// `./source/vendor/ansi-styles/index.js`), so without this every compiled
+/// chalk style table came up empty. The map shares the `exports` value shape
+/// (string / conditional object / `*` patterns), so the same resolver is
+/// reused — with `node` ranked above `default` so conditional pairs like
+/// chalk's `#supports-color` `{ node, default: browser }` pick the node build
+/// for native compilation. Per Node's package-scope rule, only the NEAREST
+/// `package.json` up from the importer is consulted.
+fn resolve_subpath_import(import_source: &str, importer_path: &Path) -> Option<PathBuf> {
+    let mut dir = importer_path.parent();
+    while let Some(d) = dir {
+        let pkg_json = d.join("package.json");
+        if pkg_json.is_file() {
+            let content = std::fs::read_to_string(&pkg_json).ok()?;
+            let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+            let target = resolve_exports_with_conditions(
+                json.get("imports")?,
+                import_source,
+                &["perry", "node", "import", "module", "default", "require"],
+            )?;
+            let base = d.join(target.trim_start_matches("./"));
+            return resolve_with_extensions(&base)
+                .and_then(|p| p.canonicalize().ok())
+                .or_else(|| base.canonicalize().ok());
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 fn canonical_existing_declaration(path: PathBuf) -> Option<PathBuf> {
     if path.exists() && is_declaration_file(&path) {
         Some(path.canonicalize().unwrap_or(path))
@@ -768,9 +837,26 @@ pub(super) fn resolve_import(
         return None; // Native modules are handled by stdlib, not file imports
     }
 
+    // Node subpath imports (`#…`, #5039) resolve through the importing
+    // package's own `"imports"` map and then classify exactly like a relative
+    // import to the mapped file.
+    let subpath_import_target = if import_source.starts_with('#') {
+        match resolve_subpath_import(import_source, importer_path) {
+            Some(canonical) => Some(canonical),
+            None => return None,
+        }
+    } else {
+        None
+    };
+
     // Handle relative imports (./ or ../)
-    if import_source.starts_with("./") || import_source.starts_with("../") {
-        if let Some(canonical) = resolve_relative_import_path(import_source, importer_path) {
+    if import_source.starts_with("./")
+        || import_source.starts_with("../")
+        || subpath_import_target.is_some()
+    {
+        if let Some(canonical) = subpath_import_target
+            .or_else(|| resolve_relative_import_path(import_source, importer_path))
+        {
             // Refs #486: a relative `import './foo.js'` from inside a compile
             // package must classify as NativeCompiled even when the resolved
             // file lives outside the literal `node_modules/<pkg>/` substring

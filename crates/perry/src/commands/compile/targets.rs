@@ -554,7 +554,9 @@ pub(super) fn compile_for_watchos_widget(
     let target_triple = if is_simulator {
         "arm64-apple-watchos10.0-simulator"
     } else {
-        "arm64_32-apple-watchos10.0"
+        // Device builds are arm64-only (S9+ / watchOS 26), matching the app
+        // target: Perry's NaN-boxed values need 64-bit pointers.
+        "arm64-apple-watchos26.0"
     };
     let mut frameworks = vec!["WidgetKit", "SwiftUI"];
     if uses_app_intents {

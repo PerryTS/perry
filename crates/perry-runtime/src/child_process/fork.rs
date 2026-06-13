@@ -67,7 +67,17 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let stdout_obj = cp_build_readable();
     let stderr_obj = cp_build_readable();
     let stdin_obj = cp_build_writable();
-    let stdio_kinds = cp_read_stdio(opts_val, 3);
+    let mut stdio_kinds = cp_read_stdio(opts_val, 3);
+    // Node fork semantics: `silent: false` (cluster.fork's default) inherits
+    // stdin/stdout/stderr from the parent; `silent: true` pipes them. Only an
+    // explicit `silent: false` overrides — an absent `silent` keeps Perry's
+    // historical pipe default, and an explicit `stdio` option wins (#4914).
+    let stdio_field = cp_get_field(opts_val, b"stdio");
+    if crate::value::JSValue::from_bits(stdio_field.to_bits()).is_undefined()
+        && cp_get_field(opts_val, b"silent").to_bits() == crate::value::TAG_FALSE
+    {
+        stdio_kinds.fill(CpStdio::Inherit);
+    }
     let timeout = cp_read_timeout(opts_val);
     let kill_signal = cp_read_kill_signal(opts_val);
 

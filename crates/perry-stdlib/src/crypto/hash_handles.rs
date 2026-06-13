@@ -3,6 +3,24 @@ use perry_runtime::{js_closure_call0, js_closure_call1, ClosureHeader};
 use std::collections::HashMap;
 use std::sync::{Mutex, Once};
 
+/// node validates the `data` arg of `hash.update`/`hmac.update` is a string
+/// or `Buffer`/`TypedArray`/`DataView` before touching it. Without this a
+/// number/null has its bit pattern masked into a bogus pointer and
+/// dereferenced (segfault on `createHash('sha256').update(123)`). Returns the
+/// validated value so the caller can decode it.
+fn validate_update_data(args: &[f64]) -> f64 {
+    let data = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| f64::from_bits(0x7FFC_0000_0000_0001));
+    perry_runtime::validators::validate_string_or_buffer_view(
+        data,
+        "data",
+        "of type string or an instance of Buffer, TypedArray, or DataView",
+    );
+    data
+}
+
 #[derive(Default)]
 struct CryptoDigestStream {
     listeners: HashMap<String, Vec<i64>>,
@@ -426,9 +444,10 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
         );
     }
     match method {
-        "update" if !args.is_empty() => {
+        "update" => {
+            let data = validate_update_data(args);
             let encoding = arg_string(args, 1);
-            let bytes = decode_hash_update_value(args[0], &encoding);
+            let bytes = decode_hash_update_value(data, &encoding);
             let mut guard = h.state.lock().unwrap();
             if let Some(state) = guard.as_mut() {
                 update_hash_state(state, &bytes);
@@ -687,9 +706,10 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
         );
     }
     match method {
-        "update" if !args.is_empty() => {
+        "update" => {
+            let data = validate_update_data(args);
             let encoding = arg_string(args, 1);
-            let bytes = decode_hash_update_value(args[0], &encoding);
+            let bytes = decode_hash_update_value(data, &encoding);
             let mut guard = h.state.lock().unwrap();
             if let Some(state) = guard.as_mut() {
                 update_hmac_state(state, &bytes);

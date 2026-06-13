@@ -191,6 +191,7 @@ pub(super) fn compile_method(
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
         imported_func_has_rest: &cross_module.imported_func_has_rest,
@@ -592,7 +593,18 @@ pub(super) fn compile_static_method(
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
-        blk.store(DOUBLE, &class_ref_lit, &this_slot);
+        // Receiver-sensitive `this`: dynamic dispatch paths (inherited
+        // `D.m()`, `C.m.call(x)` / `.apply(x)`) arm a one-shot override that
+        // this prologue call consumes; direct calls fall back to the lexical
+        // class-ref, preserving the prior `this === C` behavior. Needed so
+        // static private brand checks (`this.#x` in a static method) see the
+        // real receiver (test262 class/elements static-private-*).
+        let resolved_this = blk.call(
+            DOUBLE,
+            "js_static_this_resolve",
+            &[(DOUBLE, &class_ref_lit)],
+        );
+        blk.store(DOUBLE, &resolved_this, &this_slot);
         let mut map = HashMap::new();
         for p in &f.params {
             let arg_name = format!("%arg{}", p.id);
@@ -686,6 +698,7 @@ pub(super) fn compile_static_method(
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
         imported_func_has_rest: &cross_module.imported_func_has_rest,

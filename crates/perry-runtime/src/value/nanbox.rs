@@ -311,6 +311,14 @@ pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
 /// - everything else (undefined/null/bool/pointers) → bit identity
 #[no_mangle]
 pub extern "C" fn js_switch_strict_equals(a: f64, b: f64) -> i32 {
+    // Raw module-slot object pointers (top16 == 0) must compare identical to
+    // their POINTER_TAG'd form — see normalize_raw_object_bits.
+    let a = f64::from_bits(crate::value::equality::normalize_raw_object_bits(
+        a.to_bits(),
+    ));
+    let b = f64::from_bits(crate::value::equality::normalize_raw_object_bits(
+        b.to_bits(),
+    ));
     let av = JSValue::from_bits(a.to_bits());
     let bv = JSValue::from_bits(b.to_bits());
     let a_str = av.is_any_string();

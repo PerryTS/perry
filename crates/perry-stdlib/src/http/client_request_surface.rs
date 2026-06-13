@@ -246,6 +246,19 @@ pub extern "C" fn js_http_client_request_noop_undefined(
     undefined_value()
 }
 
+/// Twin of perry-ext-http's `js_http_client_request_flush_headers` for
+/// non-auto-optimize links: the stdlib client dispatches the whole exchange
+/// at `end()`, so flushHeaders stays a no-op here.
+#[no_mangle]
+pub extern "C" fn js_http_client_request_flush_headers(
+    handle: Handle,
+    _arg0: f64,
+    _arg1: f64,
+) -> f64 {
+    let _ = handle;
+    undefined_value()
+}
+
 #[no_mangle]
 pub extern "C" fn js_http_client_request_aborted(handle: Handle) -> f64 {
     state_bool(handle, "aborted")

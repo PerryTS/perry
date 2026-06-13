@@ -50,6 +50,7 @@ pub(super) async fn run_security_audit_step(
             | Some(Platform::Android)
             | Some(Platform::Macos)
             | Some(Platform::Tvos)
+            | Some(Platform::Watchos)
             | Some(Platform::Web)
             | Some(Platform::Windows) => "gui",
             _ => "server",

@@ -313,6 +313,16 @@ pub struct LoweringContext {
     pub(crate) uses_fetch: bool,
     /// Issue #76 — set when any `WebAssembly.*` HIR variant is lowered.
     pub(crate) uses_webassembly: bool,
+    /// #4950: local binding name of a default import from the npm `react`
+    /// package (`import React from 'react'`). When set, JSX lowers to
+    /// `<local>.createElement(type, props)` so REACT controls when function
+    /// components run (the reconciler installs the hooks dispatcher first).
+    /// Perry's native `js_jsx` adapter calls function components EAGERLY
+    /// (SSR-to-HTML semantics, hono-style) — under a real React renderer
+    /// (ink, react-three-fiber, …) that ran `<Text>`'s `useContext` outside
+    /// any render and threw React's "Invalid hook call" / null-dispatcher
+    /// TypeError.
+    pub(crate) react_default_import_local: Option<String>,
     /// #1723 — one-shot flag set by an enclosing `ns[dynamicKey].staticMember`
     /// access to tell the *immediately-nested* computed-member lowering to skip
     /// the #503 dynamic-stdlib-dispatch refusal. The dynamic index there only
@@ -339,6 +349,15 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// #4973: top-of-function-body `let`/`const` Ident bindings pre-registered
+    /// by the function-body hoist pass so hoisted sibling FUNCTIONS that
+    /// reference them before their lexical position bind the (boxed) local
+    /// instead of falling through to a global read (the classic Node test
+    /// shape: `function t() { server.close(); }` … `const server = …`).
+    /// Keyed by the declarator-ident span (`span.lo.0`) so ONLY the exact
+    /// declarator reuses the id at its Let site — a shadowing `const` in an
+    /// inner block still lowers a fresh binding.
+    pub(crate) lexical_forward_decls: HashMap<u32, LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec

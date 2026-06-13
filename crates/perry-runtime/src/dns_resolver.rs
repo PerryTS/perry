@@ -182,6 +182,83 @@ pub fn system_nameservers() -> Vec<SocketAddr> {
     ]
 }
 
+/// One merged hosts-file entry. c-ares merges `/etc/hosts` lines that share
+/// an address or a hostname into a single entry (so `127.0.0.1 localhost`
+/// and `::1 localhost` become one entry with both addresses); the first name
+/// is the canonical hostname and the rest are aliases.
+struct HostsEntry {
+    addrs: Vec<IpAddr>,
+    names: Vec<String>,
+}
+
+impl HostsEntry {
+    fn has_name(&self, name: &str) -> bool {
+        self.names.iter().any(|n| n.eq_ignore_ascii_case(name))
+    }
+}
+
+fn parse_hosts_file(content: &str) -> Vec<HostsEntry> {
+    let mut entries: Vec<HostsEntry> = Vec::new();
+    for line in content.lines() {
+        let line = line.split('#').next().unwrap_or("");
+        let mut tokens = line.split_whitespace();
+        let Some(addr_token) = tokens.next() else {
+            continue;
+        };
+        let Ok(addr) = addr_token.parse::<IpAddr>() else {
+            continue;
+        };
+        let names: Vec<&str> = tokens.collect();
+        if names.is_empty() {
+            continue;
+        }
+        let target = entries
+            .iter()
+            .position(|e| e.addrs.contains(&addr) || names.iter().any(|n| e.has_name(n)));
+        match target {
+            Some(i) => {
+                let entry = &mut entries[i];
+                if !entry.addrs.contains(&addr) {
+                    entry.addrs.push(addr);
+                }
+                for name in names {
+                    if !entry.has_name(name) {
+                        entry.names.push(name.to_string());
+                    }
+                }
+            }
+            None => entries.push(HostsEntry {
+                addrs: vec![addr],
+                names: names.iter().map(|s| s.to_string()).collect(),
+            }),
+        }
+    }
+    entries
+}
+
+fn hosts_file_path() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        return std::path::PathBuf::from(format!("{root}\\System32\\drivers\\etc\\hosts"));
+    }
+    #[cfg(not(windows))]
+    std::path::PathBuf::from("/etc/hosts")
+}
+
+/// The hosts-file names for `ip`, mirroring c-ares's "files first" lookup
+/// order for `gethostbyaddr` (which backs `dns.reverse`). Returns the merged
+/// entry's full name list (canonical name first), or `None` when the file
+/// has no entry for the address — the caller then falls through to a real
+/// PTR query like c-ares does.
+pub fn hosts_file_names(ip: IpAddr) -> Option<Vec<String>> {
+    let content = std::fs::read_to_string(hosts_file_path()).ok()?;
+    parse_hosts_file(&content)
+        .into_iter()
+        .find(|e| e.addrs.contains(&ip))
+        .map(|e| e.names)
+}
+
 fn rcode_to_error(code: ResponseCode) -> Option<DnsError> {
     match code {
         ResponseCode::NoError => None,
@@ -462,4 +539,48 @@ pub fn reverse(ip: IpAddr, servers: &[SocketAddr]) -> Result<Vec<String>, DnsErr
         return Err(DnsError::NotFound);
     }
     Ok(names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosts_merge_by_address_and_name() {
+        // 127.0.0.1 lines merge by address; the ::1 line merges into the same
+        // entry through the shared "localhost" name (c-ares semantics).
+        let entries = parse_hosts_file(
+            "127.0.0.1 localhost\n\
+             127.0.0.1 proxy.dev # trailing comment\n\
+             ::1 localhost\n\
+             127.0.0.1 alias.local\n",
+        );
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert!(entry.addrs.contains(&"127.0.0.1".parse().unwrap()));
+        assert!(entry.addrs.contains(&"::1".parse().unwrap()));
+        assert_eq!(entry.names, vec!["localhost", "proxy.dev", "alias.local"]);
+    }
+
+    #[test]
+    fn hosts_separate_entries_stay_separate() {
+        let entries = parse_hosts_file(
+            "# comment line\n\
+             1.2.3.4 www.example.com example.com\n\
+             \n\
+             5.6.7.8 other.test\n\
+             not-an-ip ignored.example\n",
+        );
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].names, vec!["www.example.com", "example.com"]);
+        assert_eq!(entries[1].names, vec!["other.test"]);
+    }
+
+    #[test]
+    fn hosts_name_matching_is_case_insensitive() {
+        let entries = parse_hosts_file("1.2.3.4 Example.COM\n5.6.7.8 example.com\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].names, vec!["Example.COM"]);
+        assert_eq!(entries[0].addrs.len(), 2);
+    }
 }

@@ -168,11 +168,15 @@ pub(super) struct AndroidConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct WatchosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) entry: Option<String>,
     pub(super) deployment_target: Option<String>,
     pub(super) encryption_exempt: Option<bool>,
     pub(super) info_plist: Option<std::collections::HashMap<String, String>>,
     pub(super) team_id: Option<String>,
     pub(super) signing_identity: Option<String>,
+    /// `appstore` / `testflight` — upload the signed watchOS app to App Store
+    /// Connect. A standalone watchOS app uploads exactly like iOS.
+    pub(super) distribute: Option<String>,
 }
 
 // #854: deserialized [tvos] table; not every key is read.
@@ -186,6 +190,9 @@ pub(super) struct TvosConfig {
     pub(super) info_plist: Option<std::collections::HashMap<String, String>>,
     pub(super) team_id: Option<String>,
     pub(super) signing_identity: Option<String>,
+    /// `appstore` / `testflight` — upload the signed tvOS app to App Store
+    /// Connect. tvOS signs/packages exactly like iOS.
+    pub(super) distribute: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

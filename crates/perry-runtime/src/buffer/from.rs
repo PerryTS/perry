@@ -693,12 +693,24 @@ pub extern "C" fn js_array_buffer_new_value(size_value: f64) -> *mut BufferHeade
     js_array_buffer_new(array_buffer_to_index(size_value))
 }
 
-/// `new SharedArrayBuffer(size)` — same BufferHeader backing store as
-/// ArrayBuffer, tracked in a distinct side registry for util.types predicates.
+/// `new SharedArrayBuffer(size)` — same `BufferHeader` shape as ArrayBuffer,
+/// tracked in a distinct side registry for util.types predicates.
+///
+/// Unlike a plain ArrayBuffer, the backing store is allocated process-globally
+/// (never freed, stable address valid from every thread — see
+/// `crate::shared_sab`) instead of from the thread-local slab. That is what
+/// lets the same SAB alias the same physical bytes across `perry/thread`
+/// agents, so cross-agent `Atomics.wait`/`notify` actually coordinate (#4913).
 #[no_mangle]
 pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
-    let buf = zeroed_array_buffer_storage(size);
-    mark_as_shared_array_buffer(buf as usize);
+    let size = size.max(0) as u32;
+    let buf = crate::shared_sab::alloc_shared_sab(size);
+    let addr = buf as usize;
+    // Register in the creating thread's tables too so local predicates
+    // (`is_registered_buffer`, `is_shared_array_buffer`, views) work without a
+    // round-trip through the process-global registry.
+    register_buffer(buf);
+    mark_as_shared_array_buffer(addr);
     buf
 }
 

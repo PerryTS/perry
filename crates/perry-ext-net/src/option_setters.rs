@@ -94,3 +94,27 @@ pub extern "C" fn js_net_socket_set_type_of_service(handle: i64, tos: f64) -> i6
     }
     handle
 }
+
+/// #4973: `socket.setEncoding(enc?)` — record the read encoding so the
+/// main-thread pump delivers `'data'` events as decoded strings (Node
+/// readable-stream semantics). Calling with no/nullish arg clears it
+/// (back to Buffers). Recognized text encodings decode as UTF-8 (lossy);
+/// 'hex'/'base64' render their respective text forms in the pump.
+///
+/// # Safety
+/// `enc_ptr` is either 0 or a StringHeader pointer (codegen NA_STR slot).
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_set_encoding(handle: i64, enc_ptr: i64) -> i64 {
+    match crate::string_from_header_i64(enc_ptr) {
+        Some(enc) if !enc.is_empty() => {
+            crate::statics::encodings()
+                .lock()
+                .unwrap()
+                .insert(handle, enc.to_ascii_lowercase());
+        }
+        _ => {
+            crate::statics::encodings().lock().unwrap().remove(&handle);
+        }
+    }
+    handle
+}

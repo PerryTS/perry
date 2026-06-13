@@ -228,6 +228,13 @@ fn read_js_string(value: f64) -> String {
     string_header_to_string(ptr)
 }
 
+/// Public accessor for [`read_js_string`] so the shared `validators` module
+/// can render a string value's contents in an `ERR_INVALID_ARG_VALUE` /
+/// `validateOneOf` message.
+pub fn read_js_string_pub(value: f64) -> String {
+    read_js_string(value)
+}
+
 /// Render a string the way Node's `determineSpecificType` does for the
 /// `Received …` clause: single-quoted (switched to double quotes when the
 /// content has a single quote but no double quote), then truncated to 25

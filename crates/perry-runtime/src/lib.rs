@@ -29,6 +29,7 @@ pub mod array;
 pub mod async_context;
 pub mod async_hooks;
 pub mod atomics;
+pub mod atomics_futex;
 pub mod bigint;
 pub mod r#box;
 pub mod buffer;
@@ -73,6 +74,7 @@ pub mod node_sea;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
+pub mod yoga;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
 pub mod node_v8;
 // #3127/#3128/#3130/#3283: public `node:vm` import/require and narrowed execution.
@@ -94,6 +96,7 @@ pub mod readline_helpers;
 pub mod regex;
 pub mod safe_area;
 pub mod set;
+pub mod shared_sab;
 pub mod string;
 pub mod symbol;
 /// TC39 Temporal API (#4686): `Temporal.Duration`, `Temporal.Instant`,
@@ -108,6 +111,7 @@ pub(crate) mod typedarray_props;
 pub mod typedarray_view;
 pub mod url;
 pub mod v8;
+pub mod validators;
 pub mod value;
 pub mod wasi;
 pub mod web_storage;
@@ -231,7 +235,8 @@ pub use object::{
 };
 pub use promise::{js_is_promise, js_promise_run_microtasks, js_promise_state, js_promise_value};
 pub use promise::{
-    js_promise_new, js_promise_reject, js_promise_rejected, js_promise_resolve, js_promise_resolved,
+    js_promise_mark_internally_handled, js_promise_new, js_promise_reject, js_promise_rejected,
+    js_promise_resolve, js_promise_resolved,
 };
 pub use string::js_string_from_bytes;
 pub use value::{
@@ -241,10 +246,10 @@ pub use value::{
 pub use value::{
     js_set_handle_array_get, js_set_handle_array_length, js_set_handle_call_method,
     js_set_handle_object_get_property, js_set_handle_to_string, js_set_handle_typeof,
-    js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_http_dispatch,
-    js_set_native_module_js_loader, js_set_native_querystring_dispatch,
-    js_set_native_sqlite_dispatch, js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch,
-    js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
+    js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_events_construct,
+    js_set_native_http_dispatch, js_set_native_module_js_loader,
+    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_tls_dispatch,
+    js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
 };
 
 // Extension pump registration — allows extensions to register pump functions

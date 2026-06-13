@@ -137,7 +137,14 @@ pub fn mark_as_shared_array_buffer(addr: usize) {
 }
 
 pub fn is_shared_array_buffer(addr: usize) -> bool {
-    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+    if SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+        return true;
+    }
+    // #4913: a SAB backing is process-global. If this thread received it as a
+    // module-level value (not a serialized `perry/thread` capture, which would
+    // have re-registered it locally) the thread-local set misses, so fall back
+    // to the process-global registry. Slow path only — thread-local hits first.
+    crate::shared_sab::is_shared_sab(addr)
 }
 
 pub fn is_any_array_buffer(addr: usize) -> bool {
@@ -243,28 +250,45 @@ fn buffer_alloc_small(capacity: u32) -> *mut BufferHeader {
     })
 }
 
+/// True when `addr` lies inside a small-buffer slab block. Slab allocations
+/// carry NO GcHeader, so reading `addr - GC_HEADER_SIZE` there yields the
+/// previous allocation's trailing data bytes — a content-dependent fake
+/// header. `addr_class::try_read_gc_header` consults this before any deref so
+/// brand probes (Temporal/Date/Map/Set) can't misroute a small Buffer whose
+/// payload happens to spell a matching `obj_type`.
+pub(crate) fn is_small_buf_slab_addr(addr: usize) -> bool {
+    SMALL_BUF_SLAB.with(|slab_ref| {
+        slab_ref
+            .borrow()
+            .ranges
+            .iter()
+            .any(|&(start, end)| addr >= start && addr < end)
+    })
+}
+
 /// Check if a pointer is a registered buffer (for instanceof Uint8Array)
 pub fn is_registered_buffer(addr: usize) -> bool {
     // Fast path: address falls within a small-buffer slab block.  All bytes in
     // a slab block belong exclusively to BufferHeader allocations, so any match
     // is definitively a buffer pointer.
-    let in_slab = SMALL_BUF_SLAB.with(|slab_ref| {
-        let slab = slab_ref.borrow();
-        slab.ranges
-            .iter()
-            .any(|&(start, end)| addr >= start && addr < end)
-    });
-    if in_slab {
+    if is_small_buf_slab_addr(addr) {
         return true;
     }
     // Slow path: large buffers tracked in the HashSet registry.
     if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
         return true;
     }
-    external_buffers()
+    if external_buffers()
         .lock()
         .map(|r| r.contains(&addr))
         .unwrap_or(false)
+    {
+        return true;
+    }
+    // #4913: recognise a process-global SAB backing reached as a module-level
+    // value on a thread that never locally registered it (see
+    // `is_shared_array_buffer`).
+    crate::shared_sab::is_shared_sab(addr)
 }
 
 /// Mark this buffer as one that came from `new Uint8Array(...)` so it

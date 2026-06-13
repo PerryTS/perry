@@ -92,6 +92,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 crate::codegen::static_method_registry_key(method_name),
             );
             if let Some(fn_name) = ctx.methods.get(&key).cloned() {
+                // Inherited static (`D.f()` resolving to a parent's body): arm
+                // the one-shot static-`this` override with the DISPATCH base
+                // class-ref so the body's `js_static_this_resolve` prologue
+                // sees `this === D` (spec OrdinaryCallBindThis), not the
+                // lexical defining class. Own methods skip the arm — the
+                // prologue's lexical fallback is already the right receiver.
+                let owns_method = ctx
+                    .classes
+                    .get(class_name)
+                    .map(|c| c.static_methods.iter().any(|m| m.name == *method_name))
+                    .unwrap_or(true);
+                if !owns_method {
+                    if let Some(&cid) = ctx.class_ids.get(class_name) {
+                        let cid_str = cid.to_string();
+                        ctx.block()
+                            .call_void("js_static_this_arm_classref", &[(I32, &cid_str)]);
+                    }
+                }
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);

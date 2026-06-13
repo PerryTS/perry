@@ -47,7 +47,18 @@ extern "C" {
         event_name_ptr: *const StringHeader,
         callback: i64,
     ) -> f64;
+    fn js_node_http_server_remove_all_listeners(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+    ) -> f64;
+    fn js_node_http_server_remove_listener(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+        callback: i64,
+    ) -> f64;
     fn js_node_http_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
+    fn js_node_http_server_ref(handle: i64) -> i64;
+    fn js_node_http_server_unref(handle: i64) -> i64;
     fn js_node_https_server_listen(server_handle: i64, args_array: i64) -> i64;
     fn js_node_https_server_close(server_handle: i64, callback: i64);
     fn js_node_https_server_close_all_connections(handle: i64);
@@ -59,6 +70,8 @@ extern "C" {
         callback: i64,
     ) -> f64;
     fn js_node_https_server_set_timeout_method(handle: i64, msecs: f64, callback: i64) -> i64;
+    fn js_node_https_server_ref(handle: i64) -> i64;
+    fn js_node_https_server_unref(handle: i64) -> i64;
     fn js_node_http2_server_listen(server_handle: i64, args_array: i64) -> i64;
     fn js_node_http2_server_close(server_handle: i64, callback: i64);
     fn js_node_http2_server_address_json(handle: i64) -> *mut StringHeader;
@@ -198,7 +211,12 @@ pub const HTTP_SERVER_METHODS: &[&str] = &[
     "address",
     "on",
     "addListener",
+    "removeAllListeners",
+    "removeListener",
+    "off",
     "setTimeout",
+    "ref",
+    "unref",
     "@@__perry_wk_asyncDispose",
 ];
 
@@ -211,7 +229,12 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
         "address" => Some(b"address"),
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "removeAllListeners" => Some(b"removeAllListeners"),
+        "removeListener" => Some(b"removeListener"),
+        "off" => Some(b"off"),
         "setTimeout" => Some(b"setTimeout"),
+        "ref" => Some(b"ref"),
+        "unref" => Some(b"unref"),
         "@@__perry_wk_asyncDispose" => Some(b"@@__perry_wk_asyncDispose"),
         _ => None,
     }
@@ -348,6 +371,30 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             }
             self_ref
         }
+        // #4973: `server.removeAllListeners([event])` — http/1 only for now
+        // (https/h2 listener registries wrap an HttpServer base; the http
+        // entry covers the plain `node:http` surface the upgrade tests use).
+        "removeAllListeners" => {
+            let event_ptr = args
+                .first()
+                .map(|&a| string_arg(a))
+                .unwrap_or(std::ptr::null());
+            if !is_h2 && !is_https {
+                js_node_http_server_remove_all_listeners(handle, event_ptr);
+            }
+            self_ref
+        }
+        "removeListener" | "off" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            let cb = closure_arg(Some(args[1]));
+            if !is_h2 && !is_https {
+                js_node_http_server_remove_listener(handle, event_ptr, cb);
+            }
+            self_ref
+        }
         "setTimeout" => {
             let msecs = args.first().copied().unwrap_or(0.0);
             let cb = closure_arg(args.get(1).copied());
@@ -357,6 +404,26 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 js_node_https_server_set_timeout_method(handle, msecs, cb);
             } else {
                 js_node_http_server_set_timeout_method(handle, msecs, cb);
+            }
+            self_ref
+        }
+        // #5011 — `server.ref()` / `server.unref()` return `this` (the
+        // server) for chaining; `unref()` drops the server out of the
+        // event-loop keepalive set. h2's keepalive is tracked separately
+        // (`has_active_h2_clients`), so for h2 we just return the receiver.
+        "ref" => {
+            if is_https {
+                js_node_https_server_ref(handle);
+            } else if !is_h2 {
+                js_node_http_server_ref(handle);
+            }
+            self_ref
+        }
+        "unref" => {
+            if is_https {
+                js_node_https_server_unref(handle);
+            } else if !is_h2 {
+                js_node_http_server_unref(handle);
             }
             self_ref
         }
@@ -401,6 +468,29 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_property(
     let is_h2 = get_handle::<Http2SecureServer>(handle).is_some();
     match property.as_str() {
         "listening" => bool_value(server_is_listening(handle, is_https, is_h2)),
+        // #4974: `server[kConnectionsCheckingInterval]` — the
+        // `_http_server` introspection key resolves to Node's
+        // connections-checking interval timer; tests assert on its
+        // `_destroyed` flag after `close()`. Perry has no such timer,
+        // so synthesize the minimal Timeout shape from the tracked flag.
+        "@@kConnectionsCheckingInterval" => {
+            let destroyed = if is_h2 {
+                get_handle::<Http2SecureServer>(handle)
+                    .map(|s| s.base.connections_checking_interval_destroyed)
+            } else if is_https {
+                get_handle::<HttpsServer>(handle)
+                    .map(|s| s.base.connections_checking_interval_destroyed)
+            } else {
+                get_handle::<HttpServer>(handle).map(|s| s.connections_checking_interval_destroyed)
+            };
+            match destroyed {
+                Some(d) => {
+                    let json = format!("{{\"_destroyed\":{}}}", d);
+                    json_string_value(alloc_string(&json).as_raw())
+                }
+                None => undef,
+            }
+        }
         "headersTimeout" => {
             server_base_property(handle, is_https, is_h2, |s| s.headers_timeout).unwrap_or(undef)
         }
@@ -489,6 +579,12 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
         "url" | "__get_url" => string_ptr_value(js_node_http_im_url(handle)),
         "httpVersion" | "__get_httpVersion" => {
             string_ptr_value(js_node_http_im_http_version(handle))
+        }
+        "httpVersionMajor" | "__get_httpVersionMajor" => {
+            crate::request::incoming_http_version_part(handle, false)
+        }
+        "httpVersionMinor" | "__get_httpVersionMinor" => {
+            crate::request::incoming_http_version_part(handle, true)
         }
         "__get_complete" => bool_value(js_node_http_im_complete(handle) != 0),
         "__get_aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
@@ -760,6 +856,8 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "method" => string_ptr_value(js_node_http_im_method(handle)),
         "url" => string_ptr_value(js_node_http_im_url(handle)),
         "httpVersion" => string_ptr_value(js_node_http_im_http_version(handle)),
+        "httpVersionMajor" => crate::request::incoming_http_version_part(handle, false),
+        "httpVersionMinor" => crate::request::incoming_http_version_part(handle, true),
         "headers" => json_string_value(js_node_http_im_headers_json(handle)),
         "rawHeaders" => json_string_value(js_node_http_im_raw_headers_json(handle)),
         "headersDistinct" => json_string_value(js_node_http_im_headers_distinct_json(handle)),
@@ -777,6 +875,7 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
         "remotePort" => js_node_http_im_remote_port(handle),
         "rawBody" => js_node_http_im_raw_body(handle),
+        "constructor" => constructor_object("IncomingMessage"),
         _ => undef,
     }
 }
@@ -819,8 +918,28 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "strictContentLength" => bool_value(js_node_http_res_strict_content_length(handle) != 0),
         "req" => handle_value_or_undefined(js_node_http_res_req_handle(handle)),
         "socket" | "connection" => response_socket_value(handle),
+        // #4909 — `out.constructor.name` discrimination (corpus
+        // outgoing-message tests branch on it).
+        "constructor" => constructor_object("ServerResponse"),
         _ => undef,
     }
+}
+
+/// `{ name: <class name> }` — stands in for `<handle>.constructor` so
+/// `out.constructor.name` reads "ServerResponse"/"IncomingMessage" the way
+/// the corpus outgoing-message tests expect (#4909).
+fn constructor_object(name: &str) -> f64 {
+    let (packed, shape_id) = perry_ffi::build_object_shape(&["name"]);
+    let obj =
+        unsafe { js_object_alloc_with_shape(shape_id, 1, packed.as_ptr(), packed.len() as u32) };
+    if obj.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let value = JsValue::from_string_ptr(alloc_string(name).as_raw());
+    unsafe {
+        perry_ffi::js_object_set_field(obj, 0, value);
+    }
+    f64::from_bits(JsValue::from_object_ptr(obj as *mut u8).bits())
 }
 
 /// Dispatch a property write on a registered server-side `ServerResponse`.
@@ -1095,6 +1214,12 @@ fn closure_arg(value: Option<f64>) -> i64 {
     let bits = v.to_bits();
     let tag = bits >> 48;
     if tag != 0x7FFD {
+        return 0;
+    }
+    // #4909 — a Buffer chunk is POINTER_TAG too; `end(buf, cb)` used to
+    // treat the buffer as the `end(cb)` callback form, drop the chunk, and
+    // then call the buffer ("TypeError: value is not a function").
+    if unsafe { crate::types::js_value_is_closure(bits as i64) } == 0 {
         return 0;
     }
     (bits & PTR_MASK) as i64

@@ -47,6 +47,65 @@ use super::{
     I18nLowerCtx,
 };
 
+/// #2013/#3146: emit a setup-time `validateString` call. `value_box` is the
+/// original NaN-boxed value; `name` is the static argument name node uses in
+/// the error (`"algorithm"` for `createHash`, `"hmac"` for `createHmac`'s
+/// algorithm, `"digest"` for `pbkdf2`). The runtime throws `TypeError
+/// [ERR_INVALID_ARG_TYPE]` on a non-string value, so this is emitted BEFORE the
+/// value is unboxed to a raw pointer (a number would otherwise mask into a
+/// bogus pointer and segfault `bytes_from_ptr`).
+fn emit_validate_string_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str) {
+    let name_label = emit_string_literal_global(ctx, name);
+    let name_len = name.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_runtime_validate_string_arg",
+        &[
+            (DOUBLE, value_box),
+            (PTR, &name_label),
+            (I32, &name_len.to_string()),
+        ],
+    );
+}
+
+/// #2013/#3146: emit a setup-time validation for a `node:crypto` key-material
+/// argument (`createHmac` key). Accepts a string or `Buffer`/`TypedArray`/
+/// `DataView`/`ArrayBuffer`; throws `TypeError [ERR_INVALID_ARG_TYPE]`
+/// otherwise. Emitted before the value is unboxed.
+fn emit_validate_crypto_key_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str) {
+    let name_label = emit_string_literal_global(ctx, name);
+    let name_len = name.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_runtime_validate_crypto_key_arg",
+        &[
+            (DOUBLE, value_box),
+            (PTR, &name_label),
+            (I32, &name_len.to_string()),
+        ],
+    );
+}
+
+/// #2013/#3146: emit a setup-time `validateInteger(value, name, min, max)`
+/// call. Used for `pbkdf2*` iterations/keylen and `scryptSync` keylen, which
+/// node validates as integers in a fixed range before deriving. Emitted in
+/// node's argument order so the first bad argument reports the matching error.
+fn emit_validate_integer_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str, min: f64, max: f64) {
+    let name_label = emit_string_literal_global(ctx, name);
+    let name_len = name.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_runtime_validate_integer_arg",
+        &[
+            (DOUBLE, value_box),
+            (PTR, &name_label),
+            (I32, &name_len.to_string()),
+            (DOUBLE, &double_literal(min)),
+            (DOUBLE, &double_literal(max)),
+        ],
+    );
+}
+
 /// Whether a `createHash(...).update(e)` / `createHmac(alg, e)` argument is a
 /// Buffer / Uint8Array — either a direct buffer-producing expression or a
 /// local/field whose static type is `Buffer` / `Uint8Array`. Such inputs must
@@ -365,6 +424,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Some(lower_expr(ctx, &digest_args[0])?)
                     };
 
+                    // #2013/#3146: validate the algorithm (and HMAC key) BEFORE
+                    // unboxing — a non-string would mask into a bogus pointer
+                    // and segfault `bytes_from_ptr`. node validates the
+                    // algorithm first, then the key.
+                    let is_hmac = create_method == "createHmac" || create_method == "Hmac";
+                    emit_validate_string_arg(
+                        ctx,
+                        &alg_box,
+                        if is_hmac { "hmac" } else { "algorithm" },
+                    );
+                    if is_hmac {
+                        if let Some(kb) = &key_box_opt {
+                            emit_validate_crypto_key_arg(ctx, kb, "key");
+                        }
+                    }
                     let blk = ctx.block();
                     let alg_handle = unbox_to_i64(blk, &alg_box);
                     // Allocate the handle. Both helpers return f64 already
@@ -494,6 +568,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 None
             };
+            // #2013/#3146: reject a non-string algorithm before unboxing.
+            emit_validate_string_arg(ctx, &alg_box, "algorithm");
             let blk = ctx.block();
             let alg_handle = unbox_to_i64(blk, &alg_box);
             // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
@@ -816,6 +892,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             let alg_box = lower_expr(ctx, &args[0])?;
             let key_box = lower_expr(ctx, &args[1])?;
+            // #2013/#3146: validate algorithm (then key) before unboxing.
+            emit_validate_string_arg(ctx, &alg_box, "hmac");
+            emit_validate_crypto_key_arg(ctx, &key_box, "key");
             let blk = ctx.block();
             let alg_handle = unbox_to_i64(blk, &alg_box);
             let key_handle = unbox_to_i64(blk, &key_box);
@@ -1701,6 +1780,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 None
             };
+            // #2013/#3146: node validates iterations (int >= 1), keylen
+            // (int >= 0), then the digest (string) before deriving — and a
+            // non-string digest would otherwise mask into a bogus pointer and
+            // segfault `bytes_from_ptr`.
+            emit_validate_integer_arg(ctx, &iter_box, "iterations", 1.0, i32::MAX as f64);
+            emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
+            if let Some(db) = &digest_box {
+                emit_validate_string_arg(ctx, db, "digest");
+            }
             let blk = ctx.block();
             let pwd_handle = unbox_to_i64(blk, &pwd_box);
             let salt_handle = unbox_to_i64(blk, &salt_box);
@@ -1784,6 +1872,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 None
             };
+            // #2013/#3146: node validates keylen as an integer in [0, 2^31-1].
+            emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
             let blk = ctx.block();
             let pwd_handle = unbox_to_i64(blk, &pwd_box);
             let salt_handle = unbox_to_i64(blk, &salt_box);

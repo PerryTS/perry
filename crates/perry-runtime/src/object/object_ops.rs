@@ -889,7 +889,8 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                 .as_deref()
                 .zip(super::has_own_helpers::str_from_string_header(key_str))
                 .map(|(module, key)| {
-                    super::native_module::native_module_has_enumerable_key(module, key)
+                    super::native_module::native_module_vtable()
+                        .is_some_and(|vt| (vt.has_enumerable_key)(module, key))
                 })
                 .unwrap_or(false);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
@@ -913,7 +914,10 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             };
             let present = read_native_module_name(obj)
                 .as_deref()
-                .is_some_and(|module_name| native_module_has_enumerable_key(module_name, key_name));
+                .is_some_and(|module_name| {
+                    super::native_module::native_module_vtable()
+                        .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
+                });
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
@@ -969,9 +973,47 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             );
         }
 
+        // Symbol-keyed lookup: route through the SYMBOL_PROPERTIES side
+        // table (mirrors js_object_has_own) — string-coercing a Symbol key
+        // below would never match and reported every symbol prop as
+        // non-enumerable.
+        if crate::symbol::js_is_symbol(key_value) != 0 {
+            let bits = obj_value.to_bits();
+            if (bits >> 48) == 0x7FFE {
+                // ClassRef receivers: statics live in the class registry and
+                // are non-enumerable like builtin statics.
+                return f64::from_bits(TAG_FALSE);
+            }
+            if !crate::symbol::js_object_has_own_symbol(obj_value, key_value) {
+                return f64::from_bits(TAG_FALSE);
+            }
+            let owner = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+            let sym = (key_value.to_bits() & crate::value::POINTER_MASK) as usize;
+            let enumerable = crate::symbol::symbol_property_is_enumerable(owner, sym);
+            return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
+        }
+
         let key_str = crate::builtins::js_string_coerce(key_value);
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);
+        }
+
+        // ClassRef receiver (INT32-tagged constructor, not a heap object): the
+        // only enumerable own string keys are the static FIELDS recorded in
+        // CLASS_DYNAMIC_PROPS — `length`/`name`/`prototype` and static
+        // methods/accessors are non-enumerable. `extract_obj_ptr` below would
+        // null out on the INT32 payload and report every key non-enumerable, so
+        // `verifyProperty(C, "f", …)`'s isEnumerable check failed (test262
+        // class/elements static-field-declaration & friends).
+        if let Some(class_id) = super::class_ref_id(obj_value) {
+            if super::class_prototype_ref_id(obj_value).is_none() {
+                if let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) {
+                    let is_static_field = !key_name.starts_with('#')
+                        && super::class_registry::class_own_static_field_value(class_id, key_name)
+                            .is_some();
+                    return f64::from_bits(if is_static_field { TAG_TRUE } else { TAG_FALSE });
+                }
+            }
         }
 
         // String primitives: index keys in range are enumerable own props;
@@ -1014,7 +1056,9 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             }
             let enumerable = super::get_property_attrs(addr, key_name)
                 .map(|a| a.enumerable())
-                .unwrap_or(true);
+                .unwrap_or_else(|| {
+                    super::exotic_expando::exotic_default_enumerable(kind, key_name)
+                });
             return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
         }
 
@@ -1161,7 +1205,15 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
         let closure = ptr as *const ClosureHeader;
         if (*closure).type_tag == CLOSURE_MAGIC && (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
             let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
-            if let Some(source_cid) = super::class_ref_id(recv) {
+            let recv_value = crate::JSValue::from_bits(recv.to_bits());
+            let source_cid = super::class_ref_id(recv).or_else(|| {
+                recv_value.is_pointer().then(|| {
+                    super::class_registry::class_id_for_decl_prototype_object(
+                        recv_value.as_pointer::<u8>() as usize,
+                    )
+                })?
+            });
+            if let Some(source_cid) = source_cid {
                 if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                     super::lookup_class_method_in_chain(source_cid, name)
                 {
@@ -1240,6 +1292,29 @@ pub extern "C" fn js_object_define_property(
                 throw_object_type_error(b"'defineProperty' on proxy: trap returned falsish");
             }
             return obj_value;
+        }
+
+        // A numeric key defined on `Object.prototype` (data or accessor) shows
+        // through array hole/OOB reads — flip the global flag.
+        {
+            let kb = key_value.to_bits();
+            let is_numeric_key =
+                (kb >> 48) == 0x7FFE || crate::value::JSValue::from_bits(kb).is_number() || {
+                    let sp = crate::value::js_get_string_pointer_unified(key_value)
+                        as *const crate::StringHeader;
+                    !sp.is_null()
+                        && super::has_own_helpers::str_from_string_header(sp)
+                            .map(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                            .unwrap_or(false)
+                };
+            if is_numeric_key {
+                let ob = obj_value.to_bits();
+                if (ob >> 48) == 0x7FFD {
+                    crate::array::note_object_prototype_index_write(
+                        (ob & crate::value::POINTER_MASK) as usize,
+                    );
+                }
+            }
         }
 
         // #2817: ES Object.defineProperty validation.
@@ -1462,6 +1537,64 @@ pub extern "C" fn js_object_define_property(
         }
 
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+            // A Symbol key on a TypedArray is an ORDINARY define — store it in
+            // the symbol side tables (string-coercing it would file the value
+            // under a "Symbol(x)" string name, unreachable via `ta[sym]`),
+            // honoring accessor descriptors and recording the attributes
+            // (defineProperty defaults absent fields to false, unlike a plain
+            // `ta[sym] = v` write). Mirrors the generic symbol-define block.
+            if crate::symbol::js_is_symbol(key_value) != 0 {
+                let desc_ptr = extract_obj_ptr(descriptor_value);
+                if desc_ptr.is_null() {
+                    return obj_value;
+                }
+                let has_get = desc_has_field(descriptor_value, b"get");
+                let has_set = desc_has_field(descriptor_value, b"set");
+                let has_accessor = has_get || has_set;
+                if has_accessor {
+                    let get_field = desc_read_field(descriptor_value, b"get");
+                    let set_field = desc_read_field(descriptor_value, b"set");
+                    let get_bits = if !has_get || get_field.is_undefined() {
+                        0
+                    } else {
+                        crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+                    };
+                    let set_bits = if !has_set || set_field.is_undefined() {
+                        0
+                    } else {
+                        crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+                    };
+                    crate::symbol::set_symbol_accessor_property(
+                        obj_value, key_value, get_bits, set_bits,
+                    );
+                } else {
+                    let value_field = desc_read_field(descriptor_value, b"value");
+                    crate::symbol::js_object_set_symbol_property(
+                        obj_value,
+                        key_value,
+                        f64::from_bits(value_field.bits()),
+                    );
+                }
+                let read_flag = |name: &[u8]| -> Option<bool> {
+                    if !desc_has_field(descriptor_value, name) {
+                        return None;
+                    }
+                    let v = desc_read_field(descriptor_value, name);
+                    Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+                };
+                let owner = crate::symbol::obj_key_from_f64(obj_value);
+                let sym_key = crate::symbol::sym_key_from_f64(key_value);
+                crate::symbol::set_symbol_property_attrs(
+                    owner,
+                    sym_key,
+                    PropertyAttrs::new(
+                        read_flag(b"writable").unwrap_or(has_accessor),
+                        read_flag(b"enumerable").unwrap_or(false),
+                        read_flag(b"configurable").unwrap_or(false),
+                    ),
+                );
+                return obj_value;
+            }
             let key_str = crate::builtins::js_string_coerce(key_value);
             if key_str.is_null() {
                 return obj_value;
@@ -1576,6 +1709,23 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
+        // #4949 / #2159 follow-up: `ClassExprFresh.prototype` now materializes
+        // the declared-class prototype object. Keep `Object.defineProperty` on
+        // that live object wired to the same prototype-method side tables used
+        // by the historical ClassRef path, so instances observe decorator/mixin
+        // method replacements.
+        if let Some(target_cid) =
+            super::class_registry::class_id_for_decl_prototype_object(obj as usize)
+        {
+            if let Some(ref name) = key_rust {
+                if desc_has_field(descriptor_value, b"value") {
+                    let value_field = desc_read_field(descriptor_value, b"value");
+                    if !value_field.is_undefined() {
+                        define_class_prototype_method(target_cid, name, value_field.bits());
+                    }
+                }
+            }
+        }
         if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(
@@ -2868,6 +3018,24 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         && is_valid_obj_ptr(obj_ptr_for_record as *const u8)
     {
         super::prototype_chain::object_set_static_prototype(obj_ptr_for_record, proto_bits);
+        // A grown array's local may still hold the FORWARDED (old) pointer;
+        // the spec [[HasProperty]]/[[Get]] helpers look the prototype up by
+        // the CLEANED address. Record under both keys so either resolves
+        // (test262 copyWithin/coerced-values-start-change-* second case).
+        unsafe {
+            let hdr = (obj_ptr_for_record as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+                || (*hdr).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            {
+                let cleaned = crate::array::clean_arr_ptr(
+                    obj_ptr_for_record as *const crate::array::ArrayHeader,
+                ) as usize;
+                if cleaned != 0 && cleaned != obj_ptr_for_record {
+                    super::prototype_chain::object_set_static_prototype(cleaned, proto_bits);
+                }
+            }
+        }
     }
 
     // Spec: `Object.setPrototypeOf(O, proto)` returns O.

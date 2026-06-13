@@ -457,6 +457,30 @@ pub(crate) fn lower_string_method(
             let repl_box = lower_expr(ctx, &args[1])?;
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
+            // #4871: a `searchValue` codegen can't type (an object-property
+            // read, a destructured loop binding, a call result) may still be
+            // a RegExp at runtime. ToString-coercing it here turned
+            // `str.replace(obj.regex, …)` into a literal search for "/foo/g"
+            // — a silent no-op. Route through the runtime search dispatcher,
+            // which checks the registered-RegExp set before coercing (and
+            // handles every replacement shape via the `_dyn` family).
+            if !needle_is_regex && !needle_is_str {
+                let runtime_fn = if property == "replaceAll" {
+                    "js_string_replace_all_search_dyn"
+                } else {
+                    "js_string_replace_search_dyn"
+                };
+                let result = blk.call(
+                    I64,
+                    runtime_fn,
+                    &[
+                        (I64, &recv_handle),
+                        (DOUBLE, &needle_box),
+                        (DOUBLE, &repl_box),
+                    ],
+                );
+                return Ok(nanbox_string_inline(blk, &result));
+            }
             let needle_handle = if needle_is_regex || needle_is_str {
                 unbox_str_handle(blk, &needle_box)
             } else {
@@ -470,6 +494,30 @@ pub(crate) fn lower_string_method(
                     (true, _) => "js_string_replace_regex_fn",
                     (false, "replaceAll") => "js_string_replace_all_string_fn",
                     (false, _) => "js_string_replace_string_fn",
+                };
+                let result = blk.call(
+                    I64,
+                    runtime_fn,
+                    &[
+                        (I64, &recv_handle),
+                        (I64, &needle_handle),
+                        (DOUBLE, &repl_box),
+                    ],
+                );
+                return Ok(nanbox_string_inline(blk, &result));
+            }
+            // A replacement whose shape codegen can't prove (not a Closure
+            // literal/FuncRef/function-typed local AND not a static string)
+            // may still be a FUNCTION at runtime — an IIFE-returned closure,
+            // a call result, a property read (test262 10.4.3-1-102-s). Route
+            // those through the `_dyn` runtime dispatchers, which check
+            // callability before ToString-coercing.
+            if !repl_is_str {
+                let runtime_fn = match (needle_is_regex, property) {
+                    (true, "replaceAll") => "js_string_replace_all_regex_dyn",
+                    (true, _) => "js_string_replace_regex_dyn",
+                    (false, "replaceAll") => "js_string_replace_all_string_dyn",
+                    (false, _) => "js_string_replace_string_dyn",
                 };
                 let result = blk.call(
                     I64,

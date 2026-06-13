@@ -132,7 +132,15 @@ pub(super) fn compile_module_entry(
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
-            llmod.define_function("main", I32, vec![])
+            // Allow the host build to override the C entry symbol. On arm64_32
+            // watchOS we can't rename `_main → __perry_user_main` after the
+            // fact (rust-objcopy's MachOWriter crashes on arm64_32 objects), so
+            // we emit the final symbol directly. Pass e.g. `_perry_user_main`
+            // (the leading underscore yields Mach-O `__perry_user_main`, which
+            // the Swift `@main` shell references via @_silgen_name).
+            let entry_name =
+                std::env::var("PERRY_ENTRY_SYMBOL").unwrap_or_else(|_| "main".to_string());
+            llmod.define_function(&entry_name, I32, vec![])
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
@@ -301,6 +309,7 @@ pub(super) fn compile_module_entry(
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
             local_generator_funcs: &cross_module.local_generator_funcs,
+            funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
             type_aliases: &cross_module.type_aliases,
             imported_func_param_counts: &cross_module.imported_func_param_counts,
             imported_func_has_rest: &cross_module.imported_func_has_rest,
@@ -384,6 +393,14 @@ pub(super) fn compile_module_entry(
         // fallback both validate against the known-heap-pointer set and
         // discard non-matching bits.
         register_module_globals_as_gc_roots(&mut ctx, module_globals);
+        // ESM entry (import/export syntax or top-level await — Node's module
+        // detection): mark the pending module-evaluation checkpoint so the
+        // first microtask drain finishes promise/queueMicrotask jobs before
+        // the nextTick queue, matching Node's job-within-checkpoint ordering
+        // for ESM evaluation (#788). CJS-style entries keep ticks-first.
+        if !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await {
+            ctx.block().call_void("js_mark_entry_module_esm", &[]);
+        }
         // Initialize static class fields with their declared init
         // expressions. Runs once at the top of main, before user code.
         //
@@ -730,6 +747,7 @@ pub(super) fn compile_module_entry(
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
             local_generator_funcs: &cross_module.local_generator_funcs,
+            funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
             type_aliases: &cross_module.type_aliases,
             imported_func_param_counts: &cross_module.imported_func_param_counts,
             imported_func_has_rest: &cross_module.imported_func_has_rest,

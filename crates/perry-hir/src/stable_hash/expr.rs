@@ -598,7 +598,7 @@ impl SH for Expr {
             Expr::ProxyRevocable { target, handler } => { tag(h, 431); target.as_ref().hash(h); handler.as_ref().hash(h); }
             Expr::ProxyRevoke(e) => { tag(h, 432); e.as_ref().hash(h); }
             Expr::ReflectGet { target, key, receiver } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
-            Expr::ReflectSet { target, key, value } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::ReflectSet { target, key, value, receiver } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::PutValueSet { target, key, value, receiver, strict } => { tag(h, 12235); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); strict.hash(h); }
             Expr::WithGet { object, property, fallback } => { tag(h, 12236); object.as_ref().hash(h); property.hash(h); fallback.as_ref().hash(h); }
             Expr::WithSet { object, property, value, fallback, strict } => { tag(h, 12237); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); hash_with_set_fallback(h, fallback); strict.hash(h); }

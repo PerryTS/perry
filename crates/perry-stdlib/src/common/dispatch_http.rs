@@ -27,6 +27,16 @@ pub(super) unsafe fn dispatch_client_request_method(
             | "uncork"
             | "setNoDelay"
             | "setSocketKeepAlive"
+            // #4909 — listener management: `.on('finish'|'timeout'|…, cb)`
+            // on an untyped receiver silently dropped the listener (the
+            // ext dispatcher handles these now; the gate hid them).
+            | "on"
+            | "once"
+            | "addListener"
+            | "prependListener"
+            | "removeListener"
+            | "off"
+            | "removeAllListeners"
     ) {
         return None;
     }
@@ -95,6 +105,14 @@ pub(super) unsafe fn dispatch_client_request_property(
             | "writableFinished"
             | "socket"
             | "connection"
+            // #4909 — listener management binds + `constructor.name`.
+            | "once"
+            | "addListener"
+            | "prependListener"
+            | "removeListener"
+            | "off"
+            | "removeAllListeners"
+            | "constructor"
     ) {
         return None;
     }

@@ -333,6 +333,8 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
             b'\n' => Some("\\n"),
             b'\r' => Some("\\r"),
             b'\t' => Some("\\t"),
+            0x08 => Some("\\b"),
+            0x0c => Some("\\f"),
             0..=0x1f => {
                 if start < i {
                     buf_vec.extend_from_slice(&bytes[start..i]);

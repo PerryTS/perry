@@ -53,6 +53,26 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "some" | "every" => {
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = if property == "some" {
+                    "js_arraylike_some"
+                } else {
+                    "js_arraylike_every"
+                };
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
+            }
+
             // `arr.some()` / `arr.every()` with no callback must throw a
             // runtime TypeError ("undefined is not a function"), not fail to
             // compile — pad a missing callback with `undefined` and let
@@ -251,6 +271,22 @@ pub(crate) fn lower_array_method(
         // as HIR variants but may reach here as generic MethodCall when
         // the HIR lowering doesn't recognize the pattern.
         "find" => {
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_find";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
+            }
+
             // 0-arg → runtime TypeError (pad undefined), not compile-fail.
             let cb_box = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
@@ -268,6 +304,22 @@ pub(crate) fn lower_array_method(
             ))
         }
         "findIndex" => {
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_findIndex";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
+            }
+
             // 0-arg → runtime TypeError (pad undefined), not compile-fail.
             let cb_box = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
@@ -393,6 +445,22 @@ pub(crate) fn lower_array_method(
             ))
         }
         "map" => {
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_map";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
+            }
+
             // 0-arg → runtime TypeError (pad undefined), not compile-fail.
             let cb_box = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
@@ -417,6 +485,22 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "filter" => {
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_filter";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
+            }
+
             // 0-arg → runtime TypeError (pad undefined), not compile-fail.
             let cb_box = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
@@ -435,6 +519,22 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "forEach" => {
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_forEach";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
+            }
+
             // 0-arg → runtime TypeError (pad undefined), not compile-fail.
             let cb_box = if let Some(arg) = args.first() {
                 lower_expr(ctx, arg)?
@@ -759,7 +859,12 @@ pub(crate) fn lower_array_method(
             let out_slot = blk.alloca(I64);
             blk.store(I64, "0", &out_slot);
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
+            // ToIntegerOrInfinity via the clamping helper: `fptosi` on
+            // ±Infinity/NaN is LLVM poison — `splice(Infinity, 3)` deleted
+            // from index 0 (test262 splice/S15.4.4.12_A2.1_T3). The helper
+            // clamps +Inf → i32::MAX (→ len downstream), -Inf → i32::MIN
+            // (→ 0 after relative-index resolution), NaN → 0.
+            let start_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &start_d)]);
             let count_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
             let (items_ptr, items_count_str) = if item_vals.is_empty() {
                 ("null".to_string(), "0".to_string())

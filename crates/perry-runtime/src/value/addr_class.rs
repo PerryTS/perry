@@ -194,6 +194,14 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
     if !is_plausible_heap_addr(addr) {
         return None;
     }
+    // Small-buffer slab allocations are heap-plausible but carry NO GcHeader —
+    // `addr - GC_HEADER_SIZE` is the previous slab entry's data bytes, so a
+    // brand probe (Temporal/Date/Map/Set `obj_type` check) would read a
+    // content-dependent fake header and misroute (observed: `String(buffer)`
+    // on a zlib result took the Temporal path and deref'd buffer bytes).
+    if crate::buffer::is_small_buf_slab_addr(addr) {
+        return None;
+    }
     Some(&*((addr - GC_HEADER_SIZE) as *const GcHeader))
 }
 

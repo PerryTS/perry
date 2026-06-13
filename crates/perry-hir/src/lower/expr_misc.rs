@@ -135,20 +135,30 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
             let Some(id) = ctx.lookup_local(&name) else {
-                // `++x` / `x--` on a name that resolves to no binding is an
-                // unresolvable reference: GetValue throws a ReferenceError
-                // before any write happens (test262 prefix/postfix
-                // S11.4.4_A2.1_T2; `if (false) { ++arguments }` must still
-                // *compile* — flagging this at compile time rejected the whole
-                // program). Emit a runtime ReferenceError throw instead of
-                // failing the build. #4918 non-class language remnant.
+                // `++x` / `x--` on a name with no lexical binding is a (sloppy)
+                // global property reference: read-modify-write globalThis[x] at
+                // runtime (`for (i = 0; i < n; i++)` with an undeclared `i` —
+                // #3575). The helper throws the spec ReferenceError only when
+                // the property is genuinely absent (`++neverDeclared` —
+                // test262 prefix/postfix S11.4.4_A2.1_T2), so this still both
+                // compiles and throws at the right time; `if (false) { ++x }`
+                // never reaches the helper at runtime.
+                let is_increment = matches!(update.op, ast::UpdateOp::PlusPlus);
                 return Ok(Expr::Call {
                     callee: Box::new(Expr::ExternFuncRef {
-                        name: "js_throw_reference_error_unresolvable_assignment".to_string(),
-                        param_types: vec![perry_types::Type::String],
+                        name: "js_global_update".to_string(),
+                        param_types: vec![
+                            perry_types::Type::Any,
+                            perry_types::Type::Any,
+                            perry_types::Type::Any,
+                        ],
                         return_type: perry_types::Type::Any,
                     }),
-                    args: vec![Expr::String(name)],
+                    args: vec![
+                        Expr::String(name),
+                        Expr::Bool(is_increment),
+                        Expr::Bool(update.prefix),
+                    ],
                     type_args: vec![],
                 });
             };
@@ -286,22 +296,19 @@ pub(super) fn lower_meta_prop(
             ]))
         }
         ast::MetaPropKind::NewTarget => {
-            // Inside a class constructor, `new.target` evaluates to the
-            // class itself. We approximate this with a small object
-            // literal `{ name: <class_name> }` so:
-            //   - `new.target ? a : b` is truthy → takes the `a` branch
-            //   - `new.target.name` returns the class name string
-            // Outside a class constructor, ordinary function bodies read it
-            // dynamically from the constructor-call slot. Arrow closures can
-            // capture that value lexically during closure creation.
-            if let Some(class_name) = ctx.in_constructor_class.clone() {
-                Ok(Expr::Object(vec![(
-                    "name".to_string(),
-                    Expr::String(class_name),
-                )]))
-            } else {
-                Ok(Expr::NewTarget)
-            }
+            // `new.target` always lowers to the runtime meta-property read
+            // (#2768). Codegen resolves it to the active constructor's leaf
+            // class ref: for an inlined `new C()` via a `new_target_stack`
+            // slot holding `C`'s class ref, and for dynamic dispatch
+            // (`Reflect.construct`, imported classes) via the `js_new_target_*`
+            // cell the construct path sets. The previous in-constructor
+            // approximation hardcoded `{ name: <enclosing-class> }`, which made
+            // `new.target` the class whose BODY runs (a base class via super())
+            // rather than the actual constructed class, and broke
+            // `new.target === C` identity (a fresh object never equals the
+            // class ref). `ctx.in_constructor_class` is no longer consulted
+            // here.
+            Ok(Expr::NewTarget)
         }
     }
 }

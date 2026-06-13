@@ -101,6 +101,15 @@ pub type EventEmitterSetDomainFn = unsafe extern "C" fn(handle: i64, domain: i64
 /// pointer-tagged small integer handles, not heap objects with class ids.
 pub type NetSocketHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 
+/// Probe for live `perry-ffi` registry handles. `register_handle`-issued ids
+/// and Node timer ids both occupy the pointer-tagged small-integer band and
+/// both count from 1, so a bare id is ambiguous between (say) an HTTP/2 server
+/// handle and a `setTimeout` id. The timer-method dispatch arm consults this
+/// probe to yield to an authoritative registered handle when the id is one,
+/// so `server.close()` (handle 1) is not swallowed by `clearTimeout(1)` when a
+/// timer with the colliding id also happens to be alive.
+pub type FfiHandleExistsProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+
 /// Narrow registration hook for runtime code that needs to attach an
 /// EventEmitter listener without routing through the generic handle dispatcher.
 pub type EventEmitterOnFn =
@@ -143,6 +152,7 @@ static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
 static EVENT_EMITTER_GET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_SET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static FFI_HANDLE_EXISTS_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -274,6 +284,34 @@ pub fn handle_property_dispatch() -> Option<HandlePropertyDispatchFn> {
     if has_extension(&HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS) {
         return Some(composite_handle_property_dispatch);
     }
+    let p = HANDLE_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandlePropertyDispatchFn>(p) })
+    }
+}
+
+/// #4973: the PRIMARY (stdlib) handle method dispatcher only, skipping the
+/// extension dispatchers. The inherits-alias forwarding uses this because it
+/// KNOWS its handle is an http(s) server handle — going through the
+/// composite would let an id-colliding extension registry (an ext-net
+/// socket with the same small id) claim shared method names like
+/// `address`/`on` first and answer for the wrong object.
+#[inline]
+pub(crate) fn handle_method_dispatch_primary() -> Option<HandleMethodDispatchFn> {
+    let p = HANDLE_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandleMethodDispatchFn>(p) })
+    }
+}
+
+/// Primary-only sibling of `handle_property_dispatch` — see
+/// `handle_method_dispatch_primary`.
+#[inline]
+pub(crate) fn handle_property_dispatch_primary() -> Option<HandlePropertyDispatchFn> {
     let p = HANDLE_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
     if p.is_null() {
         None
@@ -457,6 +495,32 @@ pub fn net_socket_handle_probe() -> Option<NetSocketHandleProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_net_socket_handle_probe(f: NetSocketHandleProbeFn) {
     NET_SOCKET_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn ffi_handle_exists_probe() -> Option<FfiHandleExistsProbeFn> {
+    let p = FFI_HANDLE_EXISTS_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), FfiHandleExistsProbeFn>(p) })
+    }
+}
+
+/// Returns `true` only when a probe is registered AND it confirms `id` is a
+/// live `perry-ffi` registry handle. Absent a probe (no native wrapper linked)
+/// this is `false`, preserving the prior behavior.
+#[inline]
+pub fn ffi_handle_exists(id: i64) -> bool {
+    match ffi_handle_exists_probe() {
+        Some(probe) => unsafe { probe(id) },
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_ffi_handle_exists_probe(f: FfiHandleExistsProbeFn) {
+    FFI_HANDLE_EXISTS_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]

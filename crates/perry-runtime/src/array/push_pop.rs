@@ -20,7 +20,7 @@ fn throw_frozen_array_mutation() -> ! {
 /// this covers the non-writable-`length`-only case. (test262
 /// Array.prototype.{push,pop,shift,unshift}/set-length-*-non-writable.)
 #[inline]
-fn array_length_is_non_writable(arr: *const ArrayHeader) -> bool {
+pub(crate) fn array_length_is_non_writable(arr: *const ArrayHeader) -> bool {
     let flags = array_object_flags(arr);
     flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
         && crate::object::get_property_attrs(arr as usize, "length")
@@ -36,7 +36,7 @@ fn throw_non_writable_length() -> ! {
 }
 
 #[inline]
-fn guard_writable_length(arr: *const ArrayHeader) {
+pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
     if array_length_is_non_writable(arr) {
         throw_non_writable_length();
     }

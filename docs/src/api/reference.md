@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2781 entries across 114 modules.
+Total: 2802 entries across 115 modules.
 
 ## Modules
 
@@ -82,6 +82,7 @@ Total: 2781 entries across 114 modules.
 - [`perry/updater`](#perry-updater)
 - [`perry/widget`](#perry-widget)
 - [`perry/workloads`](#perry-workloads)
+- [`perry/yoga`](#perry-yoga)
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
@@ -372,9 +373,9 @@ Total: 2781 entries across 114 modules.
 ### Methods
 
 - `disconnect` — module
-- `fork` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
-- `setupMaster` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
-- `setupPrimary` — module ⚠ **stub** — no socket/listening-handle distribution; workers cannot share a port (#4914)
+- `fork` — module
+- `setupMaster` — module
+- `setupPrimary` — module
 
 ### Properties
 
@@ -1200,7 +1201,7 @@ Total: 2781 entries across 114 modules.
 
 ### Methods
 
-- `backOff` — module ⚠ **stub** — retry options ignored; hardcoded 3 attempts / 100ms / x2 (#4917)
+- `backOff` — module
 
 ## `fastify`
 
@@ -1454,6 +1455,8 @@ Total: 2781 entries across 114 modules.
 - `__get_headersTimeout` — instance *(class: `HttpServer`)*
 - `__get_host` — instance *(class: `ClientRequest`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
+- `__get_httpVersionMajor` — instance *(class: `IncomingMessage`)*
+- `__get_httpVersionMinor` — instance *(class: `IncomingMessage`)*
 - `__get_keepAlive` — instance *(class: `Agent`)*
 - `__get_keepAliveMsecs` — instance *(class: `Agent`)*
 - `__get_keepAliveTimeout` — instance *(class: `HttpServer`)*
@@ -1521,7 +1524,7 @@ Total: 2781 entries across 114 modules.
 - `createServer` — module
 - `createServer` — module
 - `defaultPort` — instance *(class: `Agent`)*
-- `destroy` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
+- `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
 - `destroy` — instance *(class: `ClientRequest`)*
 - `destroyed` — instance *(class: `Agent`)*
@@ -1548,7 +1551,7 @@ Total: 2781 entries across 114 modules.
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
 - `keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
-- `keepSocketAlive` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
+- `keepSocketAlive` — instance *(class: `Agent`)* ⚠ **stub** — reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)
 - `listen` — instance *(class: `HttpServer`)*
 - `listenerCount` — instance *(class: `ClientRequest`)*
 - `listening` — instance *(class: `HttpServer`)*
@@ -1564,13 +1567,14 @@ Total: 2781 entries across 114 modules.
 - `pause` — instance *(class: `IncomingMessage`)*
 - `protocol` — instance *(class: `Agent`)*
 - `read` — instance *(class: `IncomingMessage`)*
+- `ref` — instance *(class: `HttpServer`)*
 - `removeHeader` — instance *(class: `ClientRequest`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
 - `requestTimeout` — instance *(class: `HttpServer`)*
 - `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
-- `reuseSocket` — instance *(class: `Agent`)* ⚠ **stub** — real Agent object, but Perry does not pool sockets; this is a no-op (#4917)
+- `reuseSocket` — instance *(class: `Agent`)* ⚠ **stub** — reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)
 - `setEncoding` — instance *(class: `IncomingMessage`)*
 - `setGlobalProxyFromEnv` — module
 - `setHeader` — instance *(class: `ClientRequest`)*
@@ -1591,6 +1595,7 @@ Total: 2781 entries across 114 modules.
 - `trailers` — instance *(class: `IncomingMessage`)*
 - `uncork` — instance *(class: `ClientRequest`)*
 - `uncork` — instance *(class: `ServerResponse`)*
+- `unref` — instance *(class: `HttpServer`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `validateHeaderName` — module
 - `validateHeaderValue` — module
@@ -1605,6 +1610,7 @@ Total: 2781 entries across 114 modules.
 - `METHODS`
 - `STATUS_CODES`
 - `globalAgent`
+- `kConnectionsCheckingInterval`
 - `maxHeaderSize`
 
 ## `http2`
@@ -1673,10 +1679,12 @@ Total: 2781 entries across 114 modules.
 - `maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `on` — instance *(class: `HttpsServer`)*
+- `ref` — instance *(class: `HttpsServer`)*
 - `request` — module
 - `requestTimeout` — instance *(class: `HttpsServer`)*
 - `setTimeout` — instance *(class: `HttpsServer`)*
 - `timeout` — instance *(class: `HttpsServer`)*
+- `unref` — instance *(class: `HttpsServer`)*
 
 ### Properties
 
@@ -1697,10 +1705,10 @@ Total: 2781 entries across 114 modules.
 - `disconnect` — instance *(class: `Session`)*
 - `on` — instance *(class: `Session`)*
 - `once` — instance *(class: `Session`)*
-- `open` — module
-- `post` — instance *(class: `Session`)*
-- `url` — module
-- `waitForDebugger` — module
+- `open` — module ⚠ **stub** — accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916)
+- `post` — instance *(class: `Session`)* ⚠ **stub** — only Runtime.enable and a canned Runtime.evaluate subset respond; every other protocol method throws Inspector error -32601 (#4916)
+- `url` — module ⚠ **stub** — always undefined: Perry never exposes a real inspector endpoint (#4916)
+- `waitForDebugger` — module ⚠ **stub** — returns immediately after open(); there is no debugger to wait for (#4916)
 
 ### Properties
 
@@ -1882,7 +1890,7 @@ Total: 2781 entries across 114 modules.
 - `deleteMany` — instance
 - `deleteOne` — instance
 - `find` — instance
-- `findOne` — instance ⚠ **stub** — resolves a JSON string, not a document object (#4917)
+- `findOne` — instance
 - `insertMany` — instance
 - `insertOne` — instance
 - `updateMany` — instance
@@ -2665,6 +2673,25 @@ Total: 2781 entries across 114 modules.
 - `policy`
 - `runtime`
 
+## `perry/yoga`
+
+### Methods
+
+- `calculateLayout` — module
+- `childCount` — module
+- `getComputed` — module
+- `getComputedEdge` — module
+- `insertChild` — module
+- `nodeFree` — module
+- `nodeNew` — module
+- `removeChild` — module
+- `setEdge` — module
+- `setEnum` — module
+- `setGap` — module
+- `setMeasureFunc` — module
+- `setNumber` — module
+- `unsetMeasureFunc` — module
+
 ## `pg`
 
 ### Classes
@@ -2870,7 +2897,7 @@ Total: 2781 entries across 114 modules.
 
 ### Methods
 
-- `REPLServer` — module
+- `REPLServer` — module ⚠ **stub** — REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)
 - `Recoverable` — module
 - `addListener` — instance *(class: `REPLServer`)*
 - `clearBufferedCommand` — instance *(class: `REPLServer`)*
@@ -2880,7 +2907,7 @@ Total: 2781 entries across 114 modules.
 - `on` — instance *(class: `REPLServer`)*
 - `once` — instance *(class: `REPLServer`)*
 - `setupHistory` — instance *(class: `REPLServer`)*
-- `start` — module
+- `start` — module ⚠ **stub** — REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)
 - `write` — instance *(class: `REPLServer`)*
 
 ### Properties
@@ -3105,14 +3132,14 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ByteLengthQueuingStrategy`
 - `CompressionStream`
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableByteStreamController`
 - `ReadableStream`
-- `ReadableStreamBYOBReader` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
-- `ReadableStreamBYOBRequest` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ReadableStreamBYOBReader`
+- `ReadableStreamBYOBRequest`
 - `ReadableStreamDefaultController`
 - `ReadableStreamDefaultReader`
 - `TextDecoderStream`
@@ -3131,7 +3158,7 @@ Total: 2781 entries across 114 modules.
 
 ### Classes
 
-- `ByteLengthQueuingStrategy` ⚠ **stub** — constructor/use throws: not yet implemented (#4915)
+- `ByteLengthQueuingStrategy`
 - `CountQueuingStrategy`
 - `DecompressionStream`
 - `ReadableStream`
@@ -3514,10 +3541,10 @@ Total: 2781 entries across 114 modules.
 - `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
 - `getCppHeapStatistics` — module
-- `getHeapCodeStatistics` — module
-- `getHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
-- `getHeapSpaceStatistics` — module
-- `getHeapStatistics` — module
+- `getHeapCodeStatistics` — module ⚠ **stub** — all fields 0; Perry compiles AOT, there is no JIT code heap (#4916)
+- `getHeapSnapshot` — module
+- `getHeapSpaceStatistics` — module ⚠ **stub** — Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916)
+- `getHeapStatistics` — module ⚠ **stub** — Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916)
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
 - `isStringOneByteRepresentation` — module
 - `onAfter` — instance *(class: `promiseHooks`)*
@@ -3538,12 +3565,12 @@ Total: 2781 entries across 114 modules.
 - `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `startCpuProfile` — module
-- `stop` — instance *(class: `GCProfiler`)*
+- `stop` — instance *(class: `GCProfiler`)* ⚠ **stub** — report has the Node shape but the statistics array is always empty (#4916)
 - `stopCoverage` — module
 - `takeCoverage` — module
 - `writeDouble` — instance *(class: `Serializer`)*
 - `writeHeader` — instance *(class: `Serializer`)*
-- `writeHeapSnapshot` — module ⚠ **stub** — empty-but-valid V8 heap graph, not a real snapshot (#4916)
+- `writeHeapSnapshot` — module
 - `writeRawBytes` — instance *(class: `Serializer`)*
 - `writeUint32` — instance *(class: `Serializer`)*
 - `writeUint64` — instance *(class: `Serializer`)*
@@ -3644,12 +3671,12 @@ Total: 2781 entries across 114 modules.
 - `once` — instance *(class: `Worker`)*
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
-- `ref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
+- `ref` — instance *(class: `Worker`)*
 - `setEnvironmentData` — module
 - `startCpuProfile` — instance *(class: `Worker`)*
 - `startHeapProfile` — instance *(class: `Worker`)*
 - `terminate` — instance *(class: `Worker`)*
-- `unref` — instance *(class: `Worker`)* ⚠ **stub** — no-op; does not affect process event-loop ref-count (#4917)
+- `unref` — instance *(class: `Worker`)*
 
 ### Properties
 
@@ -3725,17 +3752,17 @@ Total: 2781 entries across 114 modules.
 - `brotliDecompress` — module
 - `brotliDecompressSync` — module
 - `crc32` — module
-- `createBrotliCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createBrotliDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createDeflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createDeflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createGunzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createGzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createInflate` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createInflateRaw` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createUnzip` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createZstdCompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
-- `createZstdDecompress` — module ⚠ **stub** — options (level/chunkSize/dictionary/...) accepted but ignored (#4917)
+- `createBrotliCompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createBrotliDecompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createDeflate` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
+- `createDeflateRaw` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
+- `createGunzip` — module
+- `createGzip` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
+- `createInflate` — module
+- `createInflateRaw` — module
+- `createUnzip` — module
+- `createZstdCompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createZstdDecompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
 - `deflate` — module
 - `deflateRaw` — module
 - `deflateRawSync` — module

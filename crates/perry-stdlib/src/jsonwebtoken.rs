@@ -353,9 +353,16 @@ unsafe fn verify_decode(
     debug: bool,
 ) -> *mut StringHeader {
     let mut validation = Validation::new(algorithm);
-    // Don't require exp claim - tokens may not have expiry set
+    // Match Node's `jsonwebtoken`: validate the `exp` claim whenever it is
+    // present (so expired tokens are rejected), but do not *require* exp — a
+    // token that legitimately omits expiry still verifies. `required_spec_claims`
+    // stays empty for the latter; `validate_exp = true` enforces the former.
+    //
+    // This previously read `validate_exp = false`, which disabled expiry
+    // enforcement for every JWT verification path in the stdlib — expired
+    // tokens were accepted indefinitely (GHSA-5324-c68v-8w62 / CVE-2026-53777).
     validation.required_spec_claims = std::collections::HashSet::new();
-    validation.validate_exp = false;
+    validation.validate_exp = true;
 
     match decode::<Claims>(token, key, &validation) {
         Ok(token_data) => {
@@ -843,5 +850,64 @@ mod tests {
             "PERRY_DEBUG=1 must restore verbose logging; got: {:?}",
             stderr
         );
+    }
+
+    // --- GHSA-5324-c68v-8w62 / CVE-2026-53777: exp must be enforced ---
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn hs256_token(claims: serde_json::Value, secret: &[u8]) -> String {
+        encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn expired_token_is_rejected() {
+        let secret = b"supersecret";
+        let token = hs256_token(
+            serde_json::json!({ "sub": "user123", "exp": now_secs() - 3600 }),
+            secret,
+        );
+        let key = DecodingKey::from_secret(secret);
+        unsafe {
+            let r = verify_decode(&token, &key, Algorithm::HS256, false);
+            assert!(r.is_null(), "expired token must be rejected by jwt.verify");
+        }
+    }
+
+    #[test]
+    fn unexpired_token_is_accepted() {
+        let secret = b"supersecret";
+        let token = hs256_token(
+            serde_json::json!({ "sub": "user123", "exp": now_secs() + 3600 }),
+            secret,
+        );
+        let key = DecodingKey::from_secret(secret);
+        unsafe {
+            let r = verify_decode(&token, &key, Algorithm::HS256, false);
+            assert!(!r.is_null(), "valid, unexpired token must be accepted");
+        }
+    }
+
+    #[test]
+    fn token_without_exp_is_still_accepted() {
+        // Node's jsonwebtoken does not *require* exp; a token that omits it
+        // verifies. We must not regress that while enforcing exp-if-present.
+        let secret = b"supersecret";
+        let token = hs256_token(serde_json::json!({ "sub": "user123" }), secret);
+        let key = DecodingKey::from_secret(secret);
+        unsafe {
+            let r = verify_decode(&token, &key, Algorithm::HS256, false);
+            assert!(!r.is_null(), "token without exp claim must still verify");
+        }
     }
 }

@@ -305,6 +305,15 @@ pub(crate) fn exotic_has_own_property(kind: ExoticKind, addr: usize, name: &str)
         || (super::descriptors_in_use() && super::get_accessor_descriptor(addr, name).is_some())
 }
 
+/// Default enumerability for an exotic instance's own key when no explicit
+/// attribute entry exists. A built-in slot that the spec defines as
+/// non-enumerable (Error's `message`/`stack`) stays non-enumerable even after a
+/// plain `err.message = x` write (which is a `[[Set]]` — it never changes
+/// attributes); a user-added expando (`err.foo = 1`) defaults to enumerable.
+pub(crate) fn exotic_default_enumerable(kind: ExoticKind, name: &str) -> bool {
+    !(kind == ExoticKind::Error && matches!(name, "message" | "stack"))
+}
+
 /// Own expando string keys: data props in insertion order, then
 /// accessor-only keys. Optionally filtered to enumerable ones.
 pub(crate) fn exotic_own_keys(kind: ExoticKind, addr: usize, enumerable_only: bool) -> Vec<String> {
@@ -320,7 +329,7 @@ pub(crate) fn exotic_own_keys(kind: ExoticKind, addr: usize, enumerable_only: bo
         keys.retain(|k| {
             super::get_property_attrs(addr, k)
                 .map(|a| a.enumerable())
-                .unwrap_or(true)
+                .unwrap_or_else(|| exotic_default_enumerable(kind, k))
         });
     }
     keys

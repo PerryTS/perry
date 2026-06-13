@@ -499,6 +499,8 @@ pub struct CompilationContext {
     pub app_metadata: perry_codegen::AppMetadata,
     /// First-resolved directory for each compile package (deduplication across nested node_modules)
     pub compile_package_dirs: HashMap<String, PathBuf>,
+    /// Compile package roots already checked for unsupported Node native addon markers.
+    pub checked_compile_package_native_addon_roots: HashSet<PathBuf>,
     /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
     /// host `package.json` `perry.codegen`. Each is a shell command run
     /// (in `codegen_dir`) before module collection, so a codegen library
@@ -770,6 +772,7 @@ impl CompilationContext {
             fp_contract_mode: perry_codegen::FpContractMode::Off,
             app_metadata: perry_codegen::AppMetadata::default(),
             compile_package_dirs: HashMap::new(),
+            checked_compile_package_native_addon_roots: HashSet::new(),
             codegen_steps: Vec::new(),
             codegen_dir: None,
             type_checker: None,

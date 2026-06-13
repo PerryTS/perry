@@ -47,44 +47,38 @@ npm install
   overload-signature miscount (rxjs `Notification` rejected with "may only
   have one constructor") was fixed alongside. The fixture now **links**:
   `Wrote executable` (~41 MB).
+- **Wall 2 (resolved, #4949)** — `.prototype` on a capturing class expression
+  (`ClassExprFresh`) now resolves to a live declared-class prototype object.
+  This unblocks the original `@nestjs/common/services/logger.service.js`
+  decorator shape where tsc/tslib calls
+  `Object.getOwnPropertyDescriptor(Logger.prototype, "error")`; the previous
+  failure was `TypeError: Cannot convert undefined or null to object` because
+  `Logger.prototype` read as `undefined`.
 
 ## Open
 
-### Wall 2 - `.prototype` of a capturing class expression is undefined (tslib `__decorate`)
+### Wall 3 - decorator descriptor read now reaches an undefined descriptor value
 
-The binary now links but the server dies during module init with
-`TypeError: Cannot convert undefined or null to object`. Root cause, bisected
-to `@nestjs/common/services/logger.service.js`: tsc's class-decorator output
+The binary still links and now gets past the missing-`.prototype` wall, but the
+server dies during module init with:
 
-```js
-let Logger = Logger_1 = class Logger { ... };
-tslib_1.__decorate([Logger.WrapBuffer, ...], Logger.prototype, "error", null);
+```text
+TypeError: Cannot read properties of undefined (reading 'value')
+    at <anonymous>
 ```
 
-calls `Object.getOwnPropertyDescriptor(Logger.prototype, "error")`, and
-`Logger.prototype` reads as `undefined` (while `typeof Logger` is
-`"function"`). Minimal repro — no CJS wrap needed; the trigger is a class
-EXPRESSION inside a closure whose **getter captures an outer variable**,
-which routes the class through the `ClassExprFresh` lowering
-(`captured_args: [LocalGet(..)]` in HIR), and `.prototype` on a
-`ClassExprFresh` value is not wired:
+Reproduce with:
 
-```ts
-const r = (function() {
-  var L_1: any;
-  let L: any = L_1 = class L {
-    get gi() { return L_1.staticRef; }  // getter capture → ClassExprFresh
-    e(m: any) { return m; }
-  };
-  return [typeof L, typeof L.prototype];
-})();
-// Perry: ["function", "undefined"] — node: ["function", "object"]
+```sh
+cd tests/release/packages/nestjs-hello
+npm install
+PERRY_BIN=../../../../target/release/perry ./fixture.sh
 ```
 
-Without the capturing getter the same shape keeps a real `.prototype`. The
-next focused fix should give `ClassExprFresh` values a live `.prototype`
-object (tslib `__decorate` then mutates it via `defineProperty`, so instances
-must observe the decorated methods).
+The next focused investigation should locate which decorated member now
+produces an undefined descriptor/value after `Logger.prototype` itself is an
+object. This is a later NestJS bootstrap wall, not the original #4949
+`ClassExprFresh.prototype === undefined` failure.
 
 ## When this fixture flips to PASS
 

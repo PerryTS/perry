@@ -19,7 +19,19 @@
 //! when the *owner* object itself is evacuated.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+/// Set when `Object.setPrototypeOf` has retargeted a REAL ARRAY's
+/// [[Prototype]] anywhere in the program. The typed-feedback array guards
+/// consult it (one relaxed load) so the inline raw-slot fast path stands
+/// down: holes/OOB reads must then walk the custom chain (test262
+/// copyWithin/coerced-values-start-change-*).
+static ARRAY_TARGET_PROTO_RECORDED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn array_static_proto_recorded() -> bool {
+    ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
+}
 
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
@@ -35,6 +47,20 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
     if obj_ptr == 0 {
         return;
+    }
+    if !ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
+        && obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
+        && crate::value::addr_class::is_above_handle_band(obj_ptr)
+        && crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
+    {
+        let obj_type = unsafe {
+            let hdr =
+                (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            (*hdr).obj_type
+        };
+        if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
+        }
     }
     let mut slot_addr = 0usize;
     if let Ok(mut map) = get_object_prototypes().lock() {

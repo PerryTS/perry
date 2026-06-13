@@ -111,8 +111,8 @@ pub fn deterministic_net_enabled() -> bool {
 }
 
 /// First-call diagnostic for a *runtime* API stub (dns/dgram loopback
-/// fakes, `child_process.spawn`, Atomics wait/notify, v8 heap snapshots,
-/// stdlib-adapter no-ops, …) — the manifest-flagged clusters from the
+/// fakes, v8 heap snapshots, stdlib-adapter no-ops, …) — the
+/// manifest-flagged clusters from the
 /// stub-elimination epic (#4919). Unlike [`perry_stub_warn`], whose
 /// message says "on this platform" (for the harmonyos UI stubs), this
 /// says the API itself is registered-but-fake regardless of target.

@@ -642,3 +642,119 @@ fn transition_cache_lookup_rejects_mutated_edge_target() {
         };
     });
 }
+
+#[test]
+fn entries_and_values_skip_non_enumerable_descriptor_slots() {
+    // #5046: Object.defineProperty(o, 'hidden', { value: 1 }) defaults to
+    // enumerable: false. Object.keys filtered it; entries/values did not.
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        let hidden_key = crate::string::js_string_from_bytes(b"hidden".as_ptr(), 6);
+        let shown_key = crate::string::js_string_from_bytes(b"shown".as_ptr(), 5);
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+
+        let descriptor = js_object_alloc(0, 0);
+        js_object_set_field_by_name(descriptor, value_key, 1.0);
+
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let hidden_value = f64::from_bits(JSValue::string_ptr(hidden_key).bits());
+        let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+        js_object_define_property(obj_value, hidden_value, descriptor_value);
+        js_object_set_field_by_name(obj as *mut ObjectHeader, shown_key, 2.0);
+
+        let keys = js_object_keys(obj);
+        assert_eq!(crate::array::js_array_length(keys), 1);
+        assert_eq!(
+            js_string_to_rust(crate::array::js_array_get(keys, 0).into()),
+            "shown"
+        );
+
+        let values = js_object_values(obj);
+        assert_eq!(crate::array::js_array_length(values), 1);
+        assert_eq!(
+            crate::array::js_array_get(values, 0).bits(),
+            2.0f64.to_bits()
+        );
+
+        let entries = js_object_entries(obj);
+        assert_eq!(crate::array::js_array_length(entries), 1);
+        let pair = crate::value::js_nanbox_get_pointer(f64::from_bits(
+            crate::array::js_array_get(entries, 0).bits(),
+        )) as *const crate::array::ArrayHeader;
+        assert_eq!(
+            js_string_to_rust(crate::array::js_array_get(pair, 0).into()),
+            "shown"
+        );
+        assert_eq!(crate::array::js_array_get(pair, 1).bits(), 2.0f64.to_bits());
+    }
+}
+
+/// #5054: wide objects (≥257 keys) read through the validated key→index map;
+/// the dynamic-write fast path must still respect descriptors installed later.
+#[test]
+fn wide_object_index_reads_and_descriptor_writes() {
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        let n = 600u32;
+        for i in 0..n {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(obj, key, i as f64);
+        }
+        for i in 0..n {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let v = js_object_get_field_by_name(obj as *const ObjectHeader, key);
+            assert_eq!(f64::from_bits(v.bits()), i as f64, "read-back of {}", name);
+        }
+        // Missing key stays undefined (index miss → scan → not found).
+        let missing = crate::string::js_string_from_bytes(b"nope".as_ptr(), 4);
+        assert!(crate::value::JSValue::from_bits(
+            js_object_get_field_by_name(obj as *const ObjectHeader, missing).bits()
+        )
+        .is_undefined());
+
+        // Install a non-writable descriptor on one key; the put_value_set
+        // fast path must bail to the descriptor-aware walk and reject the
+        // write (sloppy mode: value unchanged, no throw).
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let target_name = b"w42";
+        let target_key = crate::string::js_string_from_bytes(target_name.as_ptr(), 3);
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+        let descriptor = js_object_alloc(0, 0);
+        js_object_set_field_by_name(descriptor, value_key, 42.0);
+        js_object_set_field_by_name(
+            descriptor,
+            writable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        crate::object::object_ops::js_object_define_property(
+            obj_value,
+            f64::from_bits(JSValue::string_ptr(target_key).bits()),
+            crate::value::js_nanbox_pointer(descriptor as i64),
+        );
+        crate::proxy::js_put_value_set(
+            obj_value,
+            f64::from_bits(JSValue::string_ptr(target_key).bits()),
+            777.0,
+            obj_value,
+            0,
+        );
+        let after = js_object_get_field_by_name(obj as *const ObjectHeader, target_key);
+        assert_eq!(f64::from_bits(after.bits()), 42.0);
+
+        // Writes to other keys still go through (fast path off for this
+        // object now — but correctness preserved either way).
+        let other_key = crate::string::js_string_from_bytes(b"w43".as_ptr(), 3);
+        crate::proxy::js_put_value_set(
+            obj_value,
+            f64::from_bits(JSValue::string_ptr(other_key).bits()),
+            4343.0,
+            obj_value,
+            0,
+        );
+        let v43 = js_object_get_field_by_name(obj as *const ObjectHeader, other_key);
+        assert_eq!(f64::from_bits(v43.bits()), 4343.0);
+    }
+}

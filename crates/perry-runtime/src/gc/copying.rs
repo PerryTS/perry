@@ -994,6 +994,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     }
     remembered_set_clear();
     collector.sticky.restore();
+    restore_surviving_dirty_coverage(&snapshot);
     let malloc_freed_bytes = if malloc_sweep_due {
         let phase_start = trace_phase_start(trace);
         let freed = sweep_malloc_objects();

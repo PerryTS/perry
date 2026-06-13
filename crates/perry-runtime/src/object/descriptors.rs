@@ -17,7 +17,7 @@ fn property_name_array_index(name: &str) -> Option<u32> {
     Some(value)
 }
 
-fn sort_property_names_ecma(names: &mut Vec<String>) {
+pub(crate) fn sort_property_names_ecma(names: &mut Vec<String>) {
     let mut indexed = Vec::new();
     let mut rest = Vec::new();
     for name in names.drain(..) {
@@ -371,6 +371,17 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let value =
                         super::js_class_method_bind(obj_value, leaked.as_ptr(), leaked.len());
                     return build_data_descriptor(value, true, false, true);
+                }
+                // Static FIELDS are own data properties of the constructor,
+                // created via CreateDataPropertyOrThrow → writable, enumerable,
+                // configurable all true. Codegen registers each declared
+                // static field in CLASS_DYNAMIC_PROPS at module init.
+                if super::class_prototype_ref_id(obj_value).is_none() {
+                    if let Some(v) =
+                        super::class_registry::class_own_static_field_value(class_id, &method_name)
+                    {
+                        return build_data_descriptor(v, true, true, true);
+                    }
                 }
             }
             return f64::from_bits(crate::value::TAG_UNDEFINED);

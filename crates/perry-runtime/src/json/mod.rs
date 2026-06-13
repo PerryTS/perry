@@ -758,4 +758,19 @@ mod tests {
         let output = unsafe { js_json_stringify(outer_boxed, TYPE_UNKNOWN) };
         assert_eq!(unsafe { str_from_header(output).unwrap() }, r#"{"o":{}}"#);
     }
+
+    #[test]
+    fn stringify_uses_two_char_short_forms_for_backspace_and_formfeed() {
+        // #5047: QuoteJSONString mandates the two-character escapes for
+        // U+0008 (\b) and U+000C (\f); Perry emitted the 4-hex-digit form for both. Other
+        // control characters keep the 4-hex-digit form.
+        let input = b"a\x08b\x0cc\x0bd";
+        let s = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let boxed = f64::from_bits(STRING_TAG | (s as u64 & POINTER_MASK));
+        let output = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
+        assert_eq!(
+            unsafe { str_from_header(output).unwrap() },
+            "\"a\\bb\\fc\\u000bd\""
+        );
+    }
 }

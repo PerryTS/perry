@@ -68,6 +68,7 @@
 - [visionOS](platforms/visionos.md)
 - [tvOS](platforms/tvos.md)
 - [watchOS](platforms/watchos.md)
+  - [Publishing to the App Store](platforms/watchos-app-store.md)
 - [Android](platforms/android.md)
 - [HarmonyOS NEXT](platforms/harmonyos.md)
 - [Windows](platforms/windows.md)

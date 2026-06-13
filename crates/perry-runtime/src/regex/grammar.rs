@@ -323,6 +323,83 @@ fn emit_astral_class(out: &mut String, ranges: &[(u32, u32)]) {
     out.push(']');
 }
 
+/// Parse a character-class member at `chars[i]` that is a lone-surrogate
+/// `\uXXXX` escape or a `\uXXXX-\uYYYY` range of them. Returns the astral
+/// scalar ranges the member matches (see `surrogate_units_to_astral`) and the
+/// index just past the member. `None` leaves the escape untouched.
+fn parse_class_surrogate_member(chars: &[char], i: usize) -> Option<(Vec<(u32, u32)>, usize)> {
+    let (lo, j) = parse_u4_escape(chars, i)?;
+    if !is_surrogate(lo) {
+        return None;
+    }
+    if chars.get(j) == Some(&'-') && chars.get(j + 1) != Some(&']') {
+        // Range form: only rewrite when the upper bound is also a surrogate
+        // escape; a mixed `\ud800-z` range passes through unchanged (and fails
+        // downstream exactly as before) rather than mis-translating.
+        let (hi, k) = parse_u4_escape(chars, j + 1)?;
+        if !is_surrogate(hi) || lo > hi {
+            return None;
+        }
+        return Some((surrogate_units_to_astral(lo, hi), k));
+    }
+    Some((surrogate_units_to_astral(lo, lo), j))
+}
+
+/// Map a UTF-16 surrogate code-unit range `[a, b]` to the Unicode scalar
+/// values whose UTF-16 encoding contains a unit in that range — the set a
+/// non-`u` JS class member like `[\ud800-\udfff]` matches when run over a
+/// well-formed string. A unit in the high half (`D800-DBFF`) selects the
+/// contiguous astral block it leads; a unit in the low half (`DC00-DFFF`)
+/// selects one offset out of every 0x400-wide astral block (a striped set,
+/// emitted exactly; the full low half collapses to "all astral"). Lone
+/// surrogates in the *subject* string remain unmatchable — the Rust `regex`
+/// crate only matches scalar values (the WTF-8 categorical gap).
+fn surrogate_units_to_astral(a: u32, b: u32) -> Vec<(u32, u32)> {
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    let (h1, h2) = (a.max(0xD800), b.min(0xDBFF));
+    if h1 <= h2 {
+        out.push((
+            0x10000 + (h1 - 0xD800) * 0x400,
+            0x10000 + (h2 - 0xD800) * 0x400 + 0x3FF,
+        ));
+    }
+    let (l1, l2) = (a.max(0xDC00), b.min(0xDFFF));
+    if l1 <= l2 {
+        if (l1, l2) == (0xDC00, 0xDFFF) {
+            out.push((0x10000, 0x10FFFF));
+        } else {
+            for block in 0..0x400u32 {
+                let base = 0x10000 + block * 0x400;
+                out.push((base + (l1 - 0xDC00), base + (l2 - 0xDC00)));
+            }
+        }
+    }
+    out.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::new();
+    for (x, y) in out {
+        match merged.last_mut() {
+            Some(last) if x <= last.1.saturating_add(1) => {
+                if y > last.1 {
+                    last.1 = y;
+                }
+            }
+            _ => merged.push((x, y)),
+        }
+    }
+    merged
+}
+
+/// Emit astral ranges as members of an already-open character class.
+fn emit_astral_class_members(out: &mut String, ranges: &[(u32, u32)]) {
+    for &(x, y) in ranges {
+        if x == y {
+            out.push_str(&format!("\\x{{{x:x}}}"));
+        } else {
+            out.push_str(&format!("\\x{{{x:x}}}-\\x{{{y:x}}}"));
+        }
+    }
+}
+
 /// Rewrite UTF-16 surrogate-pair escape sequences into the astral scalar values
 /// they encode, so the Rust `regex` crate (which works on Unicode scalars and
 /// rejects lone-surrogate code points) can compile them.
@@ -566,6 +643,24 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                         }
                     }
                 }
+                // A lone-surrogate `\uXXXX` (or `\uXXXX-\uYYYY` range) inside a
+                // character class: the crate rejects surrogate code points, so
+                // rewrite to the astral scalars whose UTF-16 encoding contains
+                // such a unit. es-toolkit's `truncate.js` builds
+                // `[‍\ud800-\udfff̀-...]` at module init (→ ink/#348);
+                // before this rewrite importing it threw `SyntaxError: invalid
+                // pattern`. Pairs (`💍`) were already folded by
+                // `fold_surrogate_pairs` and never reach this arm.
+                'u' if in_class => {
+                    if let Some((ranges, end)) = parse_class_surrogate_member(&chars, i) {
+                        emit_astral_class_members(&mut result, &ranges);
+                        i = end;
+                    } else {
+                        result.push('\\');
+                        result.push('u');
+                        i += 2;
+                    }
+                }
                 ch if is_regex_identity_escape(ch) => {
                     // Inside a character class an escaped hyphen `\-` is always a
                     // literal hyphen, but the Rust `regex` crate reads a bare `-`
@@ -688,6 +783,46 @@ mod tests {
                 "string-width pattern failed to compile: {pat} -> {translated}"
             );
         }
+    }
+
+    #[test]
+    fn class_lone_surrogate_range_rewrites_to_astral() {
+        // es-toolkit `truncate.js` (→ ink, #348/#4950 verification): a class
+        // mixing BMP members with the full surrogate range must compile and
+        // detect astral characters like Node does (over well-formed strings).
+        let pat =
+            "[\\u200d\\ud800-\\udfff\\u0300-\\u036f\\ufe20-\\ufe2f\\u20d0-\\u20ff\\ufe0e\\ufe0f]";
+        let translated = js_regex_to_rust(pat);
+        let re = regex::Regex::new(&translated)
+            .unwrap_or_else(|e| panic!("es-toolkit class failed to compile: {translated}: {e}"));
+        assert!(re.is_match("a\u{1F48D}b"), "astral char must match");
+        assert!(re.is_match("a\u{200D}b"), "ZWJ member must still match");
+        assert!(!re.is_match("plain ascii"), "ASCII must not match");
+
+        // Full surrogate range alone → all astral scalars.
+        assert_eq!(
+            js_regex_to_rust("[\\ud800-\\udfff]"),
+            "[\\x{10000}-\\x{10ffff}]"
+        );
+        // High-only subrange → the contiguous astral block(s) it leads.
+        assert_eq!(
+            js_regex_to_rust("[\\ud800-\\ud801]"),
+            "[\\x{10000}-\\x{107ff}]"
+        );
+        // A high singleton matches the astral block led by that unit:
+        // `/[\ud83d]/.test("💍")` is true in JS.
+        let high_single = js_regex_to_rust("[\\ud83d]");
+        let re = regex::Regex::new(&high_single).unwrap();
+        assert!(re.is_match("\u{1F48D}"));
+        assert!(!re.is_match("\u{10000}"));
+        // Low-only subranges are striped sets, emitted exactly:
+        // `/[\udc8d]/.test("💍")` is true in JS (matches the low unit).
+        let low_single = js_regex_to_rust("[\\udc8d]");
+        let re = regex::Regex::new(&low_single).unwrap();
+        assert!(re.is_match("\u{1F48D}"));
+        assert!(!re.is_match("\u{1F48E}"));
+        // Surrogate-to-nonsurrogate ranges stay untouched (still invalid).
+        assert_eq!(js_regex_to_rust("[\\ud800-z]"), "[\\ud800-z]");
     }
 
     #[test]

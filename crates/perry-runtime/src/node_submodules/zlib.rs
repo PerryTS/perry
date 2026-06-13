@@ -219,6 +219,20 @@ pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
     validate_option_range(ptr, b"strategy", "options.strategy", 0, 4);
     validate_option_chunk_size(ptr);
     validate_option_range(ptr, b"flush", "options.flush", 0, 5);
+
+    // #4917: `level` is honored and the ranged options above are validated,
+    // but a preset `dictionary` is not threaded through flate2. Silently
+    // dropping it would mis-compress against peers that expect it to apply,
+    // so warn once instead.
+    let dict = read_option_field(ptr, b"dictionary");
+    let dv = crate::value::JSValue::from_bits(dict.to_bits());
+    if !dv.is_undefined() && !dv.is_null() {
+        crate::stub_diag::perry_stub_warn(
+            "zlib options.dictionary",
+            "the preset dictionary option is accepted but not applied",
+            Some("#4917"),
+        );
+    }
 }
 
 /// Validate the `buffer` argument to a one-shot zlib codec (`gzipSync`,

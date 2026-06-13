@@ -66,6 +66,24 @@ fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
     path
 }
 
+#[cfg(windows)]
+fn cargo_target_dir_env_path(_target_dir: &Path, relative_target_dir: &Path) -> PathBuf {
+    relative_target_dir.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn cargo_target_dir_env_path(target_dir: &Path, _relative_target_dir: &Path) -> PathBuf {
+    target_dir.to_path_buf()
+}
+
+fn auto_target_dir_paths(workspace_root: &Path, hash: u64) -> (PathBuf, PathBuf) {
+    let workspace_root = cargo_target_dir_path(workspace_root.to_path_buf());
+    let relative_target_dir = PathBuf::from("target").join(format!("perry-auto-{:016x}", hash));
+    let target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
+    let cargo_env_dir = cargo_target_dir_env_path(&target_dir, &relative_target_dir);
+    (target_dir, cargo_env_dir)
+}
+
 pub struct OptimizedLibs {
     /// Path to the rebuilt `libperry_runtime.a` (or `perry_runtime.lib`).
     /// `None` means "fall back to the prebuilt one in target/release/".
@@ -496,6 +514,17 @@ pub(super) fn build_optimized_libs(
             if matches!(module_normalized, "http" | "https") {
                 features.insert("external-http-client-pump");
             }
+            // Issue #4995 — when `node:events` routes to perry-ext-events,
+            // have js_stdlib_init_dispatch eagerly register the ext crate's
+            // EventEmitter constructor as the runtime's events construct
+            // dispatcher. Without this, a dynamic `new` on the bound
+            // `events.EventEmitter` export value (`require('events')`,
+            // default import, aliased ctor) falls through to the
+            // empty-object path until the first static construction has
+            // lazily registered the hooks.
+            if module_normalized == "events" {
+                features.insert("external-events-construct");
+            }
         }
     }
 
@@ -547,6 +576,18 @@ pub(super) fn build_optimized_libs(
     let workspace_root = match find_perry_workspace_root() {
         Some(p) => p,
         None => {
+            // Not verbose-gated: the fallback links the full-feature
+            // prebuilt stdlib (sqlite/crypto/tokio/…), which typically
+            // adds 5MB+ of code the linker cannot dead-strip (the
+            // dynamic dispatch table pins every module). Users should
+            // know why the binary is big and how to opt back in.
+            if matches!(format, OutputFormat::Text) && verbose == 0 {
+                eprintln!(
+                    "  note: Perry workspace source not found — linking the prebuilt \
+                     full stdlib (larger binary). Set PERRY_WORKSPACE_ROOT to a \
+                     source checkout to enable size-optimized rebuilds."
+                );
+            }
             if matches!(format, OutputFormat::Text) && verbose > 0 {
                 let (rt_name, std_name) = match target {
                     Some("windows") | Some("windows-winui") => {
@@ -581,13 +622,33 @@ pub(super) fn build_optimized_libs(
             } else {
                 Vec::new()
             };
+            // Out-of-tree size salvage: release packaging ships a
+            // panic=abort prebuilt runtime variant alongside the unwind
+            // one (stage-npm.sh / release-packages.yml). When the app
+            // links runtime-only (no stdlib) and pulls in nothing that
+            // needs `catch_unwind`, prefer it — same ~12-18% saving the
+            // workspace rebuild gets from panic=abort, no source needed.
+            // Unix-only by construction: Windows always links stdlib
+            // (codegen declares all stdlib externs there), and mixing an
+            // abort runtime with the unwind stdlib is not supported.
+            let runtime = if panic_abort_safe && !ctx.needs_stdlib {
+                let found = super::library_search::find_runtime_abort_library(target);
+                if found.is_some() && matches!(format, OutputFormat::Text) && verbose > 0 {
+                    eprintln!("  auto-optimize: using prebuilt panic=abort runtime");
+                }
+                found
+            } else {
+                None
+            };
             return OptimizedLibs {
+                runtime,
                 prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
                 well_known_libs,
                 ..OptimizedLibs::empty()
             };
         }
     };
+    let workspace_root = cargo_target_dir_path(workspace_root);
 
     // Hash the (features, panic_mode, target, wasm-host) tuple into the
     // target dir name so cargo treats each combination as its own
@@ -596,18 +657,31 @@ pub(super) fn build_optimized_libs(
     // separately so a wasm program's build doesn't get served from a
     // cached non-wasm dir (which would lack `js_webassembly_*` symbols)
     // and vice versa (would carry unresolved `perry_wasm_host_*` refs).
+    //
+    // The compiler version is part of the key too. Codegen emits calls to
+    // runtime entrypoints (e.g. `js_promise_run_promise_jobs`,
+    // `js_mark_entry_module_esm`) that grow with each release; the object
+    // cache is already version-invalidated (see build_cache.rs — it misses on
+    // `perry_version != CARGO_PKG_VERSION`), so on a persistent build host a
+    // newer compiler emits the new calls while this version-blind dir would
+    // hand back a stale `libperry_runtime.a` lacking those symbols — an
+    // "undefined symbol" link failure for exactly the newly-added entrypoints.
+    // Keying on the version forces a matching rebuild whenever perry upgrades.
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
     let key_input = format!(
-        "{}|{}|{}|wasm={}",
-        feature_arg, panic_abort_safe, target_str, ctx.needs_wasm_runtime
+        "{}|{}|{}|wasm={}|v={}",
+        feature_arg,
+        panic_abort_safe,
+        target_str,
+        ctx.needs_wasm_runtime,
+        env!("CARGO_PKG_VERSION"),
     );
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
     }
-    let target_dir =
-        cargo_target_dir_path(workspace_root.join(format!("target/perry-auto-{:016x}", hash)));
+    let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace_root, hash);
 
     if matches!(format, OutputFormat::Text) {
         let panic_str = if panic_abort_safe { "abort" } else { "unwind" };
@@ -636,7 +710,10 @@ pub(super) fn build_optimized_libs(
     }
     cargo_cmd
         .current_dir(&workspace_root)
-        .env("CARGO_TARGET_DIR", &target_dir)
+        // Keep Windows auto-target paths in the non-verbatim form before
+        // handing them to Cargo or downstream MSVC tools. Other platforms
+        // keep the previous absolute env path behavior.
+        .env("CARGO_TARGET_DIR", &cargo_env_dir)
         .arg("build")
         .arg("--release")
         .arg("-p")
@@ -930,7 +1007,7 @@ pub(super) fn build_optimized_libs(
         let emit_bc = |crate_name: &str| -> Option<PathBuf> {
             let mut cmd = Command::new("cargo");
             cmd.current_dir(&workspace_root)
-                .env("CARGO_TARGET_DIR", &target_dir)
+                .env("CARGO_TARGET_DIR", &cargo_env_dir)
                 .env("RUSTFLAGS", &bc_rustflags)
                 .arg("rustc")
                 .arg("--release")
@@ -1490,6 +1567,39 @@ mod tests {
             unc,
             PathBuf::from(r"\\server\share\perry\target\perry-auto-deadbeef")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn auto_target_dir_uses_relative_cargo_env_path_on_windows() {
+        let workspace = PathBuf::from(r"\\?\D:\Projects\perry");
+        let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace, 0xdeadbeef);
+
+        assert!(
+            !cargo_env_dir.is_absolute(),
+            "CARGO_TARGET_DIR should stay relative so Cargo build scripts do not receive verbatim Windows paths"
+        );
+        assert_eq!(
+            cargo_env_dir,
+            PathBuf::from("target").join("perry-auto-00000000deadbeef")
+        );
+        assert_eq!(
+            target_dir,
+            PathBuf::from(r"D:\Projects\perry\target\perry-auto-00000000deadbeef")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn auto_target_dir_keeps_absolute_cargo_env_path_off_windows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (target_dir, cargo_env_dir) = auto_target_dir_paths(dir.path(), 0xdeadbeef);
+
+        assert!(
+            cargo_env_dir.is_absolute(),
+            "non-Windows hosts should keep the previous absolute CARGO_TARGET_DIR behavior"
+        );
+        assert_eq!(target_dir, cargo_env_dir);
     }
 
     #[cfg(unix)]

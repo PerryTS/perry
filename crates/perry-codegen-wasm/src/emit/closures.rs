@@ -169,6 +169,21 @@ pub(super) fn collect_closures_from_expr(
             collect_closures_from_expr(index, out);
             collect_closures_from_expr(value, out);
         }
+        // #5016: PutValueSet is the lowered form of `obj.prop = v` / `obj[i] = v`.
+        // Recurse into all operands so a closure used as a value/key/target
+        // (e.g. `obj.handler = () => {}`) is collected and emitted.
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            collect_closures_from_expr(target, out);
+            collect_closures_from_expr(key, out);
+            collect_closures_from_expr(value, out);
+            collect_closures_from_expr(receiver, out);
+        }
         Expr::NativeMethodCall { args, object, .. } => {
             if let Some(o) = object {
                 collect_closures_from_expr(o, out);

@@ -74,7 +74,16 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
         let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): sorted clone copy initializes a fresh array rebuilt below.
-        std::ptr::copy_nonoverlapping(src, dst, len);
+        // toSorted reads via Get (no HasProperty skip): holes become present
+        // `undefined` elements in the dense copy (ECMA-262 §23.1.3.34).
+        for i in 0..len {
+            let v = *src.add(i);
+            *dst.add(i) = if v.to_bits() == crate::value::TAG_HOLE {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                v
+            };
+        }
         rebuild_array_layout(new_arr);
         // Sort the copy in-place using default sort
         js_array_sort_default(new_arr);
@@ -111,7 +120,16 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
         let src = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let dst = (new_arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): comparator sorted clone copy initializes a fresh array rebuilt below.
-        std::ptr::copy_nonoverlapping(src, dst, len);
+        // toSorted reads via Get (no HasProperty skip): holes become present
+        // `undefined` elements in the dense copy (ECMA-262 §23.1.3.34).
+        for i in 0..len {
+            let v = *src.add(i);
+            *dst.add(i) = if v.to_bits() == crate::value::TAG_HOLE {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                v
+            };
+        }
         rebuild_array_layout(new_arr);
         // Sort the copy in-place
         js_array_sort_with_comparator(new_arr, comparator);
@@ -298,6 +316,16 @@ pub extern "C" fn js_array_copy_within(
         len_i64
     };
     unsafe {
+        // A side-effecting `valueOf` in the index coercions above may have
+        // mutated the array (e.g. shrunk `length` — test262
+        // copyWithin/coerced-values-start-change-*). The raw memmove below
+        // would then copy stale storage; run the per-index spec loop
+        // (HasProperty / Get / Set / Delete against the CURRENT state, with
+        // the ORIGINAL captured len driving the bounds) instead.
+        if (*arr).length as i64 != len_i64 {
+            copy_within_spec_dense(arr, len_i64, t, s, e);
+            return arr;
+        }
         let len = len_i64 as isize;
         let (t, s, e) = (t as isize, s as isize, e as isize);
         let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
@@ -319,6 +347,38 @@ pub extern "C" fn js_array_copy_within(
     }
 }
 
+/// ECMA-262 §23.1.3.4 steps 11-12 over a real-array receiver whose state
+/// changed during index coercion: per-index HasProperty (own + inherited) /
+/// Get / Set / Delete against the live array, bounds driven by the originally
+/// captured `len`.
+unsafe fn copy_within_spec_dense(arr: *mut ArrayHeader, len: i64, t: i64, s: i64, e: i64) {
+    let count = (e - s).min(len - t);
+    if count <= 0 {
+        return;
+    }
+    let (mut from, mut to, dir) = if s < t && t < s + count {
+        (s + count - 1, t + count - 1, -1i64)
+    } else {
+        (s, t, 1i64)
+    };
+    let mut cur = arr;
+    let mut remaining = count;
+    while remaining > 0 {
+        let from_present = from >= 0
+            && from <= u32::MAX as i64
+            && crate::array::array_spec_has_index(cur, from as u32);
+        if from_present {
+            let v = crate::array::array_spec_get(cur, from as u32);
+            cur = js_array_set_f64_extend(cur, to as u32, v);
+        } else if to >= 0 && to <= u32::MAX as i64 {
+            crate::array::js_array_delete(cur, to as u32);
+        }
+        from += dir;
+        to += dir;
+        remaining -= 1;
+    }
+}
+
 #[cold]
 fn throw_copy_within_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -337,18 +397,22 @@ fn copy_within_to_integer_or_infinity(value: f64) -> f64 {
     }
 }
 
-fn copy_within_to_length(value: f64) -> u32 {
+fn copy_within_to_length(value: f64) -> i64 {
+    // `ToLength` clamps to 2^53-1, not u32::MAX — an array-like with
+    // `length: Number.MAX_SAFE_INTEGER` keeps near-limit indices addressable
+    // (test262 copyWithin/length-near-integer-limit).
+    const MAX_LENGTH: f64 = 9_007_199_254_740_991.0;
     let number = crate::builtins::js_number_coerce(value);
     if number.is_nan() || number <= 0.0 {
         0
     } else if number.is_infinite() {
         if number.is_sign_positive() {
-            u32::MAX
+            MAX_LENGTH as i64
         } else {
             0
         }
     } else {
-        number.trunc().min(u32::MAX as f64) as u32
+        number.trunc().min(MAX_LENGTH) as i64
     }
 }
 
@@ -363,14 +427,40 @@ fn copy_within_relative_index(value: f64, len: i64) -> i64 {
     }
 }
 
-fn copy_within_length_of_array_like(receiver: f64) -> u32 {
-    let length = unsafe {
-        crate::value::js_dynamic_object_get_property(receiver, b"length".as_ptr() as *const i8, 6)
+fn copy_within_length_of_array_like(receiver: f64) -> i64 {
+    // A Proxy receiver resolves `length` through its `get` trap (falling back
+    // to the target when untrapped) — the raw dynamic read doesn't route
+    // proxies (test262 copyWithin/return-abrupt-from-has-start needs the
+    // subsequent HasProperty trap to fire, which requires a real `len` here).
+    let length = if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+        let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let key_v = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
+        crate::proxy::js_proxy_get(receiver, key_v)
+    } else {
+        unsafe {
+            crate::value::js_dynamic_object_get_property(
+                receiver,
+                b"length".as_ptr() as *const i8,
+                6,
+            )
+        }
     };
     copy_within_to_length(length)
 }
 
+fn copy_within_index_key(index: i64) -> f64 {
+    let s = index.to_string();
+    let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(crate::value::JSValue::string_ptr(key).bits())
+}
+
 fn copy_within_has_property(receiver: f64, index: i64) -> bool {
+    // `HasProperty(O, fromKey)` fires a Proxy `has` trap, propagating its
+    // throw (test262 copyWithin/return-abrupt-from-has-start).
+    if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+        let v = crate::proxy::js_proxy_has(receiver, copy_within_index_key(index));
+        return crate::value::js_is_truthy(v) != 0;
+    }
     crate::value::js_is_truthy(crate::object::js_object_has_own(receiver, index as f64)) != 0
 }
 
@@ -393,7 +483,7 @@ pub extern "C" fn js_array_copy_within_value(
     }
 
     let receiver = crate::object::js_object_coerce(receiver);
-    let len = copy_within_length_of_array_like(receiver) as i64;
+    let len = copy_within_length_of_array_like(receiver);
     let to = copy_within_relative_index(target, len);
     let from = copy_within_relative_index(start, len);
     let final_index = if has_end != 0 {
@@ -421,11 +511,26 @@ pub extern "C" fn js_array_copy_within_value(
     };
 
     let receiver_bits = receiver.to_bits() as i64;
+    let is_proxy = crate::proxy::js_proxy_is_proxy(receiver) != 0;
     for _ in 0..count {
         if copy_within_has_property(receiver, from_idx) {
-            let value =
-                crate::object::js_object_get_index_polymorphic(receiver_bits, from_idx as f64);
-            crate::object::js_object_set_index_polymorphic(receiver_bits, to_idx as f64, value);
+            let value = if is_proxy {
+                crate::proxy::js_proxy_get(receiver, copy_within_index_key(from_idx))
+            } else {
+                crate::object::js_object_get_index_polymorphic(receiver_bits, from_idx as f64)
+            };
+            if is_proxy {
+                crate::proxy::js_proxy_set(receiver, copy_within_index_key(to_idx), value);
+            } else {
+                crate::object::js_object_set_index_polymorphic(receiver_bits, to_idx as f64, value);
+            }
+        } else if is_proxy {
+            // `DeletePropertyOrThrow` through the Proxy `deleteProperty` trap
+            // (test262 copyWithin/return-abrupt-from-delete-proxy-target).
+            let ok = crate::proxy::js_proxy_delete(receiver, copy_within_index_key(to_idx));
+            if crate::value::js_is_truthy(ok) == 0 {
+                throw_copy_within_type_error(b"Cannot delete property");
+            }
         } else {
             let obj = unsafe { crate::object::extract_obj_ptr(receiver) };
             if !obj.is_null() && crate::object::js_object_delete_dynamic(obj, to_idx as f64) == 0 {

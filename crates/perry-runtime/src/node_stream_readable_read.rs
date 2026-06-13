@@ -30,10 +30,13 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         return read_stream_object_mode_chunk(stream);
     }
 
-    // `read()` with no size argument drains the entire internal buffer and
-    // returns it as a single value (Node semantics). The chunks are stored as
-    // separate entries to preserve boundaries for sized `read(n)` calls, so we
-    // gather them all here and concatenate before clearing the buffer.
+    // `read()` with no size argument mirrors Node's `howMuchToRead(NaN)`:
+    // a FLOWING stream consumes ONE chunk (the buffer head) so 'data'
+    // emission preserves chunk boundaries, while a paused stream drains the
+    // entire internal buffer and returns it as a single value — Node only
+    // takes `state.buffer.first()` when `state.flowing && state.length`.
+    // Sized `read(n)` (read_stream_exact_size) still spans chunks.
+    // (#1545, #2484)
     let mut values = Vec::new();
     if let Some(chunks) = readable_hidden_chunks(stream) {
         push_chunk_values(chunks, &mut values, 0);
@@ -46,6 +49,39 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         return f64::from_bits(TAG_NULL);
     }
 
+    if !readable_is_flowing(stream) {
+        return drain_whole_buffer(stream, values);
+    }
+
+    let head = values.remove(0);
+    let mut remaining_len = 0usize;
+    for value in &values {
+        let mut bytes = Vec::new();
+        append_chunk_bytes(*value, &mut bytes, 0);
+        remaining_len += bytes.len();
+    }
+    set_readable_buffer_values(stream, &values, remaining_len);
+    mark_disturbed(stream);
+    if stream_hidden_ended(stream) && remaining_len == 0 {
+        clear_pending_readable_chunks(stream);
+        queue_readable_event(stream);
+        schedule_readable_end(stream);
+    }
+
+    if readable_encoding_tag(stream).is_some() {
+        return super::decode_readable_chunk_for_encoding(stream, head)
+            .unwrap_or(f64::from_bits(TAG_NULL));
+    }
+
+    let mut bytes = Vec::new();
+    append_chunk_bytes(head, &mut bytes, 0);
+    buffer_value_from_bytes(&bytes)
+}
+
+/// Paused-mode `read()` with no size: consume every buffered chunk and return
+/// them as one concatenated value (Node's `howMuchToRead(NaN)` returns
+/// `state.length` when the stream is not flowing).
+fn drain_whole_buffer(stream: f64, mut values: Vec<f64>) -> f64 {
     clear_readable_buffer(stream);
     mark_disturbed(stream);
     clear_pending_readable_chunks(stream);
@@ -54,8 +90,7 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         schedule_readable_end(stream);
     }
 
-    let encoded = readable_encoding_tag(stream).is_some();
-    if encoded {
+    if readable_encoding_tag(stream).is_some() {
         let mut decoded = Vec::with_capacity(values.len());
         for value in values {
             if let Some(value) = super::decode_readable_chunk_for_encoding(stream, value) {

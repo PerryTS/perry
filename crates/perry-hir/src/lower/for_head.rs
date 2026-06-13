@@ -167,8 +167,23 @@ pub(crate) fn for_head_binding_stmts(
                     index: Box::new(lower_expr(ctx, &c.expr)?),
                     value: Box::new(source),
                 },
-                ast::MemberProp::PrivateName(_) => {
-                    return Err(anyhow!("private member as for-loop head not supported"))
+                ast::MemberProp::PrivateName(p) => {
+                    // `for (o.#f of iter)` — assign each iteration value to the
+                    // private field, brand-guarding the receiver (write op) so a
+                    // receiver without the field throws TypeError per spec
+                    // (test262 elements/privatefieldset-typeerror-6/7).
+                    let property = format!("#{}", p.name);
+                    let object = crate::lower::expr_member::wrap_private_guard(
+                        ctx,
+                        object,
+                        &property,
+                        crate::lower::expr_member::PRIV_OP_WRITE,
+                    );
+                    Expr::PropertySet {
+                        object,
+                        property,
+                        value: Box::new(source),
+                    }
                 }
             };
             Ok(vec![Stmt::Expr(assign)])

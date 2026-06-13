@@ -62,6 +62,24 @@ fn is_inherited_object_prototype_method(name: &str) -> bool {
     )
 }
 
+fn class_chain_has_field_named(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        let Some(class) = ctx.classes.get(&name) else {
+            return true;
+        };
+        if class
+            .fields
+            .iter()
+            .any(|field| field.key_expr.is_some() || (!field.is_private && field.name == property))
+        {
+            return true;
+        }
+        current = class.extends_name.clone();
+    }
+    false
+}
+
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
 /// string/array/class/Map/Set/Promise/fetch/static/instance dispatch tower.
 pub fn try_lower_property_get_method_call(
@@ -311,10 +329,14 @@ pub fn try_lower_property_get_method_call(
             "split" | "charCodeAt" | "charAt" | "trim" | "trimStart" | "trimEnd" | "substring"
             | "substr" | "toLowerCase" | "toUpperCase" | "toLocaleLowerCase"
             | "toLocaleUpperCase" | "replaceAll" | "padStart" | "padEnd" | "repeat"
-            | "normalize" | "codePointAt" | "localeCompare"
-            // Annex B §B.2.2 HTML wrappers — string-only, no array/map/set form.
-            | "anchor" | "big" | "blink" | "bold" | "fixed" | "fontcolor" | "fontsize"
-            | "italics" | "link" | "small" | "strike" | "sub" | "sup" => true,
+            | "normalize" | "codePointAt" | "localeCompare" => true,
+            // Annex B §B.2.2 HTML wrappers (`bold`, `link`, `anchor`, …) are
+            // string-only in the spec but collide with common user method
+            // names — chalk's `chalk.bold(s)` is a styled-string builder
+            // (#5039). Forcing the string path here coerced the chalk closure
+            // to its source text and wrapped it in `<b>…</b>`. An Any-typed
+            // receiver that really is a string still gets them via the
+            // `jsval.is_string()` arm of `js_native_call_method`.
             // Issue #638: `replace` is also string-exclusive, but routing
             // it here unconditionally caused regressions in async dispatch
             // pathways. Only fire when args[1] is statically detectable as
@@ -1127,6 +1149,21 @@ pub fn try_lower_property_get_method_call(
             let prev_this =
                 ctx.block()
                     .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &recv_box)]);
+            // Receiver-sensitive static `this` for plain class-ref receivers:
+            // `D.f()` resolving to a parent's body at compile time must run
+            // with `this === D` (the prologue's `js_static_this_resolve`
+            // consumes this one-shot arm). Dynamic-value receiver shapes
+            // (ClassExprFresh / factory Call / LocalGet) keep their prior
+            // implicit-this-only behavior to avoid disturbing effect's
+            // per-evaluation class-object statics.
+            let plain_class_receiver = matches!(
+                object.as_ref(),
+                Expr::ClassRef(_) | Expr::ExternFuncRef { .. }
+            );
+            if plain_class_receiver {
+                ctx.block()
+                    .call_void("js_static_this_arm_value", &[(DOUBLE, &recv_box)]);
+            }
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
             let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
@@ -1906,6 +1943,8 @@ pub fn try_lower_property_get_method_call(
                 lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             if !method_has_rest {
+                let shape_only_guard =
+                    !class_chain_has_field_named(ctx, &class_name, property.as_str());
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
@@ -1914,6 +1953,7 @@ pub fn try_lower_property_get_method_call(
                     &fallback_fn,
                     &arg_slices,
                     &fallback_user_args,
+                    shape_only_guard,
                 ) {
                     return Ok(Some(guarded));
                 }

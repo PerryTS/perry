@@ -2,13 +2,16 @@ use super::*;
 
 /// Prompt for target platform selection.
 pub(super) fn prompt_target(default: Option<&str>) -> String {
-    let options = &["macOS", "iOS", "visionOS", "tvOS", "Android", "Linux"];
+    let options = &[
+        "macOS", "iOS", "visionOS", "tvOS", "watchOS", "Android", "Linux",
+    ];
     let default_idx = match default {
         Some("ios") => 1,
         Some("visionos") => 2,
         Some("tvos") => 3,
-        Some("android") => 4,
-        Some("linux") => 5,
+        Some("watchos") => 4,
+        Some("android") => 5,
+        Some("linux") => 6,
         _ => 0,
     };
     let selection = Select::new()
@@ -21,8 +24,9 @@ pub(super) fn prompt_target(default: Option<&str>) -> String {
         1 => "ios".into(),
         2 => "visionos".into(),
         3 => "tvos".into(),
-        4 => "android".into(),
-        5 => "linux".into(),
+        4 => "watchos".into(),
+        5 => "android".into(),
+        6 => "linux".into(),
         _ => "macos".into(),
     }
 }
@@ -257,6 +261,10 @@ pub(super) fn validate_credentials_for_distribute(
     p8_key_content: Option<&str>,
     is_macos: bool,
     macos_distribute: Option<&str>,
+    is_tvos: bool,
+    tvos_distribute: Option<&str>,
+    is_watchos: bool,
+    watchos_distribute: Option<&str>,
 ) -> Result<()> {
     // Android + playstore
     if is_android {
@@ -300,6 +308,56 @@ pub(super) fn validate_credentials_for_distribute(
                     "ios.distribute = \"{distribute}\" requires App Store Connect API credentials.\n\
                      Missing: {}\n\
                      Run `perry setup ios` or pass the missing flags.",
+                    missing.join(", ")
+                );
+            }
+        }
+    }
+
+    // tvOS + appstore/testflight (signs/packages exactly like iOS)
+    if is_tvos {
+        let distribute = tvos_distribute.unwrap_or("");
+        if distribute == "appstore" || distribute == "testflight" {
+            let mut missing = Vec::new();
+            if apple_key_id.is_none() {
+                missing.push("Key ID (--apple-key-id / PERRY_APPLE_KEY_ID)");
+            }
+            if apple_issuer_id.is_none() {
+                missing.push("Issuer ID (--apple-issuer-id / PERRY_APPLE_ISSUER_ID)");
+            }
+            if p8_key_content.is_none() {
+                missing.push(".p8 key (--apple-p8-key / PERRY_APPLE_P8_KEY)");
+            }
+            if !missing.is_empty() {
+                bail!(
+                    "tvos.distribute = \"{distribute}\" requires App Store Connect API credentials.\n\
+                     Missing: {}\n\
+                     Run `perry setup tvos` or pass the missing flags.",
+                    missing.join(", ")
+                );
+            }
+        }
+    }
+
+    // watchOS + appstore/testflight (standalone watch app, uploads like iOS)
+    if is_watchos {
+        let distribute = watchos_distribute.unwrap_or("");
+        if distribute == "appstore" || distribute == "testflight" {
+            let mut missing = Vec::new();
+            if apple_key_id.is_none() {
+                missing.push("Key ID (--apple-key-id / PERRY_APPLE_KEY_ID)");
+            }
+            if apple_issuer_id.is_none() {
+                missing.push("Issuer ID (--apple-issuer-id / PERRY_APPLE_ISSUER_ID)");
+            }
+            if p8_key_content.is_none() {
+                missing.push(".p8 key (--apple-p8-key / PERRY_APPLE_P8_KEY)");
+            }
+            if !missing.is_empty() {
+                bail!(
+                    "watchos.distribute = \"{distribute}\" requires App Store Connect API credentials.\n\
+                     Missing: {}\n\
+                     Run `perry setup watchos` or pass the missing flags.",
                     missing.join(", ")
                 );
             }

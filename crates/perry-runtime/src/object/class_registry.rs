@@ -79,6 +79,41 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: String, value: 
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
 }
 
+/// Own static-field value for a class (no parent-chain walk) — the
+/// CLASS_DYNAMIC_PROPS entry codegen registers at module init for every
+/// declared static field. Consulted by `getOwnPropertyDescriptor` on a class
+/// constructor ref so `verifyProperty(C, "field", …)` sees a real data
+/// descriptor (test262 class/elements static-field-declaration & friends).
+pub(crate) fn class_own_static_field_value(class_id: u32, name: &str) -> Option<f64> {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .and_then(|props| props.get(name).copied())
+    })
+}
+
+/// Enumerable own string keys of a class constructor: the static fields (and
+/// runtime `C.x = …` assignments) recorded in CLASS_DYNAMIC_PROPS. The built-in
+/// `length`/`name`/`prototype` slots and static *methods*/*accessors* are
+/// non-enumerable, so they are intentionally excluded — this is exactly the set
+/// `Object.keys(C)` / `for (k in C)` must yield. Private (`#`) keys are filtered
+/// here too (never reflectable). Returned unsorted; the caller applies ECMA
+/// ordering. (test262 class/elements static-field-declaration & friends.)
+pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .map(|props| {
+                props
+                    .keys()
+                    .filter(|k| !k.starts_with('#'))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     CLASS_DYNAMIC_PROPS.with(|m| {
         if let Some(props) = m.borrow_mut().get_mut(&class_id) {
@@ -330,6 +365,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    invalidate_class_prototype_fast_guards();
     class_decl_prototype_object_root_store(class_id, proto);
 
     let constructor_key =
@@ -444,6 +480,23 @@ pub(crate) fn ensure_function_prototype_object(
 
     class_prototype_object_root_store(class_id, proto);
 
+    // #5024: methods registered before the prototype object materialized
+    // (`F.prototype.m = v` typically runs long before any reflective
+    // `F.prototype` read) live only in CLASS_PROTOTYPE_METHODS. Backfill
+    // them as ordinary own properties so enumeration sees them; later
+    // registrations write through via class_prototype_method_root_store.
+    let registered: Vec<(String, u64)> = {
+        let guard = CLASS_PROTOTYPE_METHODS.read().unwrap();
+        guard
+            .as_ref()
+            .and_then(|map| map.get(&class_id))
+            .map(|per_class| per_class.iter().map(|(k, &v)| (k.clone(), v)).collect())
+            .unwrap_or_default()
+    };
+    for (name, value_bits) in registered {
+        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits) };
+    }
+
     let func_bits = func_value.to_bits();
     if (func_bits >> 48) == 0x7FFD {
         let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
@@ -530,7 +583,25 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         }
         let gc_header =
             (proto_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        let obj_type = (*gc_header).obj_type;
+        // `foo.prototype = new Array(...)` — a real-array prototype can't join
+        // the class-id machinery (it has no ObjectHeader), but it must not be
+        // DROPPED: store it as the closure's `prototype` dynamic prop so reads
+        // reflect it and `js_new_function_construct` links instances to it
+        // (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*, map/15.4.4.19-9-3).
+        if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
+            if func_ptr != 0 && crate::closure::is_closure_ptr(func_ptr) {
+                crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);
+                set_builtin_property_attrs(
+                    func_ptr,
+                    "prototype".to_string(),
+                    PropertyAttrs::new(true, false, false),
+                );
+            }
+            return 0;
+        }
+        if obj_type != crate::gc::GC_TYPE_OBJECT {
             return 0;
         }
     }
@@ -1207,19 +1278,57 @@ pub unsafe extern "C" fn js_class_register_static_field(
 /// `*ClosureHeader` shapes.
 pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
     RwLock::new(None);
+static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn invalidate_class_prototype_fast_guards() {
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
+}
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
-    let mut guard = CLASS_PROTOTYPE_METHODS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(HashMap::new());
+    {
+        let mut guard = CLASS_PROTOTYPE_METHODS.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .entry(class_id)
+            .or_insert_with(HashMap::new)
+            .insert(name.clone(), value_bits);
     }
-    guard
-        .as_mut()
-        .unwrap()
-        .entry(class_id)
-        .or_insert_with(HashMap::new)
-        .insert(name, value_bits);
+    invalidate_class_prototype_fast_guards();
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);
+    // #5024: the side table makes the method dispatchable, but own-key
+    // enumeration on the prototype OBJECT (Object.keys / getOwnPropertyNames /
+    // `in` / hasOwnProperty / for-in / Object.assign) consults the object's
+    // keys_array, which the side table never touched — React's
+    // `Object.assign(PureComponent.prototype, Component.prototype)` copied
+    // nothing, so `isReactComponent` vanished and every `extends PureComponent`
+    // class rendered as a function component. Mirror the write onto the
+    // materialized prototype object as an ordinary enumerable own property.
+    let proto = class_prototype_object(class_id);
+    if !proto.is_null() {
+        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits) };
+    }
+}
+
+/// #5024: write a side-table-registered prototype method onto the
+/// materialized prototype object so the key lands in its `keys_array`
+/// (assignment semantics: enumerable data property). Values keep their
+/// full NaN-boxed bits; dispatch paths that find the property on the
+/// object see the same value the side table holds.
+unsafe fn mirror_prototype_method_on_object(proto: *mut ObjectHeader, name: &str, value_bits: u64) {
+    if proto.is_null() || name.is_empty() {
+        return;
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(proto, key, f64::from_bits(value_bits));
 }
 
 /// Register a JS-classic prototype-method assignment on a class.
@@ -1234,6 +1343,7 @@ pub unsafe extern "C" fn js_register_prototype_method(
     name_len: usize,
     value: f64,
 ) {
+    invalidate_class_prototype_fast_guards();
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }
@@ -1361,7 +1471,27 @@ pub unsafe extern "C" fn js_get_function_prototype_method(
             let method = js_class_method_bind(receiver, name_ptr, name_len);
             f64::from_bits(method.to_bits())
         }
-        None => undef,
+        None => {
+            // #5024: properties can land on the prototype OBJECT without a
+            // side-table registration — `Object.assign(F.prototype, src)`
+            // (React's PureComponent setup), a replaced `F.prototype = obj`,
+            // or any generic dynamic write. Read the real prototype value
+            // (replaced object, or the materialized auto-created one) so
+            // the recognised `<func>.prototype.<name>` read shape agrees
+            // with the generic property-get path.
+            let proto_val = js_function_prototype_value_for_read(func_value);
+            let jv = crate::value::JSValue::from_bits(proto_val.to_bits());
+            if !jv.is_pointer() {
+                return undef;
+            }
+            let pptr = jv.as_pointer::<ObjectHeader>();
+            if pptr.is_null() {
+                return undef;
+            }
+            let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+            let v = js_object_get_field_by_name(pptr, key);
+            f64::from_bits(v.bits())
+        }
     }
 }
 
@@ -1679,6 +1809,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                     args_ptr,
                     args_len,
                 );
+            }
+        }
+        // #4995: `new EE()` where `EE = require('events')` or came in as a
+        // default / namespace import (`import EE from 'events'`, `import * as
+        // ev from 'events'; new ev.EventEmitter()`). The callee is the bound
+        // `events.EventEmitter` export value; without this arm construction
+        // fell through to the generic empty-object path, so the instance had
+        // no `.on`/`.emit`/`.setMaxListeners` (signal-exit's init throws).
+        // Route to the linked emitter impl (perry-stdlib `bundled-events` or
+        // perry-ext-events) via the construct dispatcher registered at
+        // startup — this crate can't call the constructors directly.
+        if module == "events"
+            && matches!(
+                method.as_str(),
+                "EventEmitter" | "EventEmitterAsyncResource"
+            )
+        {
+            let ptr =
+                crate::value::JS_NATIVE_EVENTS_CONSTRUCT.load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeEventsConstructFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
             }
         }
         if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
@@ -2040,6 +2192,15 @@ pub unsafe extern "C" fn js_new_function_construct(
                     CLASS_ID_DECOMPRESSION_STREAM,
                 );
             }
+            // #4950 (secondary note): react-reconciler captures the global
+            // `AbortController` into a local (`AbortControllerLocal = typeof
+            // AbortController !== "undefined" ? AbortController : <shim>`) and
+            // constructs through the variable. Without this arm the dynamic
+            // `new` fell through and threw "AbortController is not a function".
+            "AbortController" => {
+                let controller = crate::url::js_abort_controller_new();
+                return crate::value::js_nanbox_pointer(controller as i64);
+            }
             "MessageChannel" => {
                 return crate::messaging::js_message_channel_new();
             }
@@ -2165,12 +2326,44 @@ pub unsafe extern "C" fn js_new_function_construct(
     // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
     let obj_ptr = js_object_alloc(cid, 0);
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
-    let proto = ensure_function_prototype_object(func_value, cid);
-    if !proto.is_null() {
-        super::prototype_chain::object_set_static_prototype(
-            obj_ptr as usize,
-            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
-        );
+    // A user-assigned `foo.prototype = <obj/array>` lives as the closure's
+    // "prototype" dynamic prop; the instance's [[Prototype]] must be THAT
+    // value — notably a real array (`foo.prototype = new Array(1,2,3)`),
+    // which `ensure_function_prototype_object` would shadow with a fresh
+    // empty object (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*).
+    let mut linked_user_proto = false;
+    {
+        let fp = (func_value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if fp != 0 && crate::closure::is_closure_ptr(fp) {
+            let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
+            let dp = JSValue::from_bits(dyn_proto.to_bits());
+            if dp.is_pointer() {
+                let raw = dp.as_pointer::<u8>() as usize;
+                let is_array = raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
+                    let hdr = unsafe {
+                        &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+                    };
+                    hdr.obj_type == crate::gc::GC_TYPE_ARRAY
+                        || hdr.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+                };
+                if is_array {
+                    super::prototype_chain::object_set_static_prototype(
+                        obj_ptr as usize,
+                        dyn_proto.to_bits(),
+                    );
+                    linked_user_proto = true;
+                }
+            }
+        }
+    }
+    if !linked_user_proto {
+        let proto = ensure_function_prototype_object(func_value, cid);
+        if !proto.is_null() {
+            super::prototype_chain::object_set_static_prototype(
+                obj_ptr as usize,
+                crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+            );
+        }
     }
     // Only run the constructor body when the callee is recognised as
     // a closure shape. The codegen LocalGet path widens the route to
@@ -2657,6 +2850,15 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     // and have NO `prototype` own property (`C.prototype.m.prototype === undefined`,
     // `'prototype' in C.prototype.m === false`). (Test262 definition method/accessor
     // prop-desc.)
+    //
+    // #4973 exception: bound NATIVE-MODULE *class* exports (`http.Server`,
+    // `https.Server`) are constructors in Node, and the util.inherits-era
+    // subclass pattern reads their `.prototype` as a setPrototypeOf operand
+    // (`Object.setPrototypeOf(testServer.prototype, http.Server.prototype)`).
+    // Returning None here made that read `undefined` and the setPrototypeOf
+    // threw "Object prototype may only be an Object or null". These exports
+    // are cached singleton closures (NATIVE_CALLABLE_EXPORTS), so the
+    // synthetic-class path below gives them a stable prototype object.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
         if jv.is_pointer() {
@@ -2665,7 +2867,16 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
                 && is_valid_obj_ptr(cptr as *const u8)
                 && crate::closure::closure_is_bound_method(cptr)
             {
-                return None;
+                let is_native_class_export = unsafe {
+                    super::native_module::bound_native_callable_module_and_method(func_value)
+                }
+                .map(|(module, method)| {
+                    matches!(module.as_str(), "http" | "https") && method == "Server"
+                })
+                .unwrap_or(false);
+                if !is_native_class_export {
+                    return None;
+                }
             }
         }
     }
@@ -3165,6 +3376,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
     if let Ok(mut guard) = CLASS_PROTOTYPE_METHODS.write() {
         *guard = None;
     }
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(false, std::sync::atomic::Ordering::Release);
     if let Ok(mut guard) = FUNCTION_CLASS_IDS.write() {
         *guard = None;
     }
@@ -4966,7 +5178,9 @@ unsafe fn try_native_static_method_in_proto_chain(
                 let module = b"buffer.Buffer";
                 let ns = js_create_native_module_namespace(module.as_ptr(), module.len());
                 let ns_obj = JSValue::from_bits(ns.to_bits()).as_pointer::<ObjectHeader>();
-                let result = dispatch_native_module_method(ns_obj, name, args_ptr, args_len);
+                let result = crate::object::native_module::call_native_module_dispatch_hook(
+                    ns_obj, name, args_ptr, args_len,
+                );
                 if !JSValue::from_bits(result.to_bits()).is_undefined() {
                     return Some(result);
                 }
@@ -4977,7 +5191,9 @@ unsafe fn try_native_static_method_in_proto_chain(
             if read_native_module_name(proto_obj as *const ObjectHeader).as_deref()
                 == Some("buffer.Buffer")
             {
-                let result = dispatch_native_module_method(proto_obj, name, args_ptr, args_len);
+                let result = crate::object::native_module::call_native_module_dispatch_hook(
+                    proto_obj, name, args_ptr, args_len,
+                );
                 if !JSValue::from_bits(result.to_bits()).is_undefined() {
                     return Some(result);
                 }
@@ -5028,6 +5244,11 @@ pub unsafe extern "C" fn js_class_static_method_call(
     }
     if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
         let prev_this = crate::object::js_implicit_this_set(receiver);
+        // Receiver-sensitive static `this`: arm the one-shot override so the
+        // method prologue (`js_static_this_resolve`) sees the DYNAMIC receiver
+        // (e.g. subclass `D` for an inherited `D.f()`). If an outer
+        // call/apply already armed an explicit thisArg, that wins.
+        crate::object::static_this_arm_if_unarmed(receiver);
         let result = if has_rest {
             // `static foo(a, b, ...rest)` / `static pipe(...args)` (effect's
             // `pipe`/`dual`): pass the first `param_count-1` positional args
@@ -5057,6 +5278,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
         } else {
             call_static_method(func_ptr, args_ptr, args_len, param_count)
         };
+        crate::object::static_this_disarm();
         crate::object::js_implicit_this_set(prev_this);
         return result;
     }

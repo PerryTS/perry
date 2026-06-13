@@ -48,6 +48,55 @@ fn supported_integer_kind(kind: u8) -> bool {
     numeric_integer_kind(kind) || bigint_integer_kind(kind)
 }
 
+/// Element size in bytes for the wait/notify-eligible kinds (Int32 / BigInt64).
+fn atomic_elem_size(kind: u8) -> usize {
+    match kind {
+        KIND_BIGINT64 | KIND_BIGUINT64 => 8,
+        _ => 4,
+    }
+}
+
+/// Translate an already-`ToNumber`'d Atomics timeout (milliseconds) into a
+/// futex deadline. Per spec: `undefined`/`NaN` and `+Infinity` mean "block
+/// forever" (`None`); a non-positive value means "poll, return immediately"
+/// (`Some(ZERO)`); otherwise the millisecond duration. Absurdly large finite
+/// timeouts that would overflow `Duration` are treated as infinite.
+fn timeout_to_deadline(timeout_ms: f64) -> Option<std::time::Duration> {
+    if timeout_ms.is_nan() || timeout_ms == f64::INFINITY {
+        return None;
+    }
+    if timeout_ms <= 0.0 {
+        return Some(std::time::Duration::ZERO);
+    }
+    let secs = timeout_ms / 1000.0;
+    if secs > 1.0e9 {
+        return None;
+    }
+    Some(std::time::Duration::from_secs_f64(secs))
+}
+
+/// `Atomics.notify` count argument → number of waiters to wake. `undefined`
+/// means `+Infinity` (wake all). Otherwise `ToIntegerOrInfinity` clamped to
+/// `[0, usize::MAX]`. `number_arg` runs the full `ToNumber` (object `valueOf`,
+/// BigInt → TypeError) before truncation.
+fn notify_count_arg(count: f64) -> usize {
+    if JSValue::from_bits(count.to_bits()).is_undefined() {
+        return usize::MAX;
+    }
+    let n = number_arg(count);
+    if n.is_nan() {
+        0
+    } else if n == f64::INFINITY {
+        usize::MAX
+    } else if n <= 0.0 {
+        0
+    } else if n >= usize::MAX as f64 {
+        usize::MAX
+    } else {
+        n.trunc() as usize
+    }
+}
+
 enum AtomicView {
     TypedArray {
         ptr: *mut TypedArrayHeader,
@@ -101,6 +150,34 @@ impl AtomicView {
             AtomicView::TypedArray { ptr, .. } => js_typed_array_set(*ptr, index, value),
             AtomicView::Uint8ArrayBuffer(ptr) => {
                 crate::buffer::js_buffer_set(*ptr, index, value as i32);
+            }
+        }
+    }
+
+    /// Absolute physical byte address of element `index`'s storage. For a
+    /// `SharedArrayBuffer`-backed view this resolves (through the view-meta
+    /// aliasing in `typed_array_bytes`) into the process-global backing store,
+    /// so the same SAB index yields the same address on every agent — the futex
+    /// table key that lets cross-thread `wait`/`notify` rendezvous (#4913).
+    /// Returns 0 if the backing pointer can't be resolved.
+    fn slot_addr(&self, index: i32) -> usize {
+        match self {
+            AtomicView::TypedArray { ptr, kind } => unsafe {
+                let base = crate::typedarray::typed_array_bytes(*ptr)
+                    .map(|b| b.as_ptr() as usize)
+                    .unwrap_or(0);
+                if base == 0 {
+                    return 0;
+                }
+                base + (index.max(0) as usize) * atomic_elem_size(*kind)
+            },
+            AtomicView::Uint8ArrayBuffer(ptr) => {
+                let base =
+                    crate::buffer::buffer_data(*ptr as *const crate::buffer::BufferHeader) as usize;
+                if base == 0 {
+                    return 0;
+                }
+                base + index.max(0) as usize
             }
         }
     }
@@ -556,12 +633,19 @@ pub extern "C" fn js_atomics_notify(
     index: f64,
     count: f64,
 ) -> f64 {
-    let (view, _idx) = wait_notify_slot(view, index);
-    let _ = numeric_arg(count);
+    let (view, idx) = wait_notify_slot(view, index);
+    // Coerce the count for its observable side effects even on a non-shared
+    // buffer (spec runs ToIntegerOrInfinity before the shared check returns 0).
+    let count = notify_count_arg(count);
     if !view.has_shared_backing() {
+        // A non-shared buffer can have no parked agents — spec returns 0.
         return 0.0;
     }
-    0.0
+    let addr = view.slot_addr(idx);
+    if addr == 0 {
+        return 0.0;
+    }
+    crate::atomics_futex::notify(addr, count) as f64
 }
 
 #[no_mangle]
@@ -580,32 +664,42 @@ pub extern "C" fn js_atomics_wait(
         throw_type_error(b"Atomics.wait requires a shared typed array");
     }
     let idx = atomics_to_index(index, view.length());
-    if view.kind() == KIND_BIGINT64 {
-        let expected = bigint_bits(expected);
-        if view.get_bigint_bits(idx) != expected {
-            return string_value(b"not-equal");
-        }
+    let kind = view.kind();
+    // Coerce expected (and timeout) before parking, observing `valueOf` once.
+    let expected_bits = if kind == KIND_BIGINT64 {
+        bigint_bits(expected)
     } else {
-        let expected = coerce_for_kind(KIND_INT32, expected);
-        if view.get_numeric(idx) != expected {
-            return string_value(b"not-equal");
-        }
+        0
+    };
+    let expected_num = if kind == KIND_BIGINT64 {
+        0.0
+    } else {
+        coerce_for_kind(KIND_INT32, expected)
+    };
+    let deadline = timeout_to_deadline(number_arg(timeout));
+    let addr = view.slot_addr(idx);
+    if addr == 0 {
+        return string_value(b"not-equal");
     }
 
-    // Value matched: a spec-compliant agent blocks here until a matching
-    // `Atomics.notify` or the timeout elapses. Perry has no cross-agent
-    // blocking yet (`perry/thread` deep-copies, so SABs don't alias), so a
-    // non-zero timeout silently degrades to an immediate "timed-out" — the
-    // #4913 lie. A `timeout === 0` poll legitimately returns "timed-out".
-    let timeout = number_arg(timeout);
-    if timeout != 0.0 {
-        crate::error::stub_warn_or_throw(
-            "Atomics.wait",
-            "does not block; returns \"timed-out\" immediately (no cross-agent wakeups)",
-            Some("#4913"),
-        );
+    // Real futex park (#4913). The value re-check runs under the wait table's
+    // lock (atomic with the enqueue), so a `notify` from another agent that
+    // races this call is never lost: the agent either sees the changed value
+    // and returns "not-equal", or parks and is woken. A `timeout === 0` poll
+    // enqueues then immediately times out → "timed-out". An `undefined`/
+    // Infinity timeout blocks until notified.
+    let still_equal = || {
+        if kind == KIND_BIGINT64 {
+            view.get_bigint_bits(idx) == expected_bits
+        } else {
+            view.get_numeric(idx) == expected_num
+        }
+    };
+    match crate::atomics_futex::wait(addr, deadline, still_equal) {
+        crate::atomics_futex::WaitOutcome::NotEqual => string_value(b"not-equal"),
+        crate::atomics_futex::WaitOutcome::Ok => string_value(b"ok"),
+        crate::atomics_futex::WaitOutcome::TimedOut => string_value(b"timed-out"),
     }
-    string_value(b"timed-out")
 }
 
 #[no_mangle]
@@ -639,23 +733,51 @@ pub extern "C" fn js_atomics_wait_async(
         view.get_numeric(idx) != expected_i32
     };
     if mismatched {
+        // Value already differs → synchronous, non-async "not-equal".
         return wait_async_result(false, string_value(b"not-equal"));
     }
     if timeout <= 0.0 {
+        // A zero/negative timeout returns synchronously (no promise).
         return wait_async_result(false, string_value(b"timed-out"));
     }
 
-    // Non-zero timeout + matching value: Node returns a promise that
-    // resolves on a matching `notify` or when the timeout elapses. Perry
-    // resolves "timed-out" immediately — the #4913 lie. Warn/throw before
-    // fabricating the already-resolved promise.
-    crate::error::stub_warn_or_throw(
-        "Atomics.waitAsync",
-        "resolves \"timed-out\" immediately; no real timer/notify wakeups",
-        Some("#4913"),
-    );
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let timed_out = scope.root_nanbox_f64(string_value(b"timed-out"));
-    let promise = crate::promise::js_promise_resolved(timed_out.get_nanbox_f64());
+    // Matching value + positive (possibly Infinity/NaN) timeout: enqueue a
+    // waiter synchronously (atomic with the value check, so a racing `notify`
+    // is not lost), then resolve the promise from a background thread when a
+    // matching `notify` arrives or the timeout elapses (#4913, Stage 2).
+    let still_equal = || {
+        if kind == KIND_BIGINT64 {
+            view.get_bigint_bits(idx) == expected_bigint_bits
+        } else {
+            view.get_numeric(idx) == expected_i32
+        }
+    };
+    let addr = view.slot_addr(idx);
+    let handle = if addr == 0 {
+        None
+    } else {
+        crate::atomics_futex::enqueue(addr, still_equal)
+    };
+    let Some(handle) = handle else {
+        // Value changed at the atomic enqueue point → synchronous "not-equal".
+        return wait_async_result(false, string_value(b"not-equal"));
+    };
+
+    let deadline = timeout_to_deadline(timeout);
+    let promise = crate::promise::js_promise_new();
+    // Pin the promise + keep the event loop alive until the async result lands.
+    unsafe {
+        crate::thread::pin_promise(promise);
+    }
+    crate::thread::thread_job_begin();
+    let promise_usize = promise as usize;
+    std::thread::spawn(move || {
+        let outcome = crate::atomics_futex::block(handle, deadline);
+        let result = match outcome {
+            crate::atomics_futex::WaitOutcome::Ok => "ok",
+            _ => "timed-out",
+        };
+        crate::thread::queue_promise_string_result(promise_usize, result);
+    });
     wait_async_result(true, crate::value::js_nanbox_pointer(promise as i64))
 }

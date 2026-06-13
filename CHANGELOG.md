@@ -1,3 +1,320 @@
+## v0.5.1164 — perf(codegen): integer-specialize `i < n` loop guards when the bound is `any`/untyped
+
+Tight integer loops whose bound is **not statically typed `number`** — most
+commonly an `any`-typed or un-annotated value (e.g. a count out of
+`JSON.parse`) — compiled their `i < n` / `i <= n` guard to a generic
+per-iteration comparison: `sitofp` the i32 counter back to a double, keep `n`
+as a NaN-boxed f64 on the stack, and `call @js_rel_lt` every iteration. On the
+hot path of a compute kernel this is ~50× slower than an integer induction
+variable + `icmp`, and it blocks SCEV / the loop vectorizer.
+
+It presented as an x86_64-vs-arm64 divergence, but the emitted LLVM IR is
+**identical** across both targets (only the `target triple` header differs).
+The difference was downstream, in the link pipeline: `js_rel_lt` is a
+`#[no_mangle] extern "C"` runtime function in a separate compilation unit. The
+macOS default **auto-optimize** build rebuilds + inlines the runtime so LLVM
+folds the call away (making it *look* optimized), whereas the `--target linux`
+build links a **prebuilt `libperry_runtime.a`** with no cross-module inlining,
+so the per-iteration `callq` survives — the entire cause of poor compute
+throughput on Lambda.
+
+**Fix** (`crates/perry-codegen`): a runtime-guarded i32 specialization that
+extends the existing `i < arr.length` / `i < n` (number-typed) peepholes to
+`any`/untyped bounds. New `classify_for_local_bound_dynamic` matches the shape;
+the loop head hoists, **once**, an `is-number` check (NaN-box tag test
+mirroring `JSValue::is_number`) plus `fptosi(n)`; the cond block branches on
+that loop-invariant flag into `for.cond.fast` (`icmp slt i32`, no per-iteration
+`sitofp`/`call`) and `for.cond.slow` (the generic `js_rel_lt` path, preserving
+full JS coercion semantics for non-number values). LLVM's LoopUnswitch peels
+the invariant branch into two loops at -O2+; even unswitched, the hot
+(is-number) path runs pure integer compares. When the bound *is* a primitive
+number, hoisting `fptosi(n)` once carries the same documented trust-types
+trade-off as the static `number`-typed path (a non-integer float bound shifts
+the trip count by at most one). Added the `SHORT_STRING_TAG` ABI-mirror
+constant to codegen's `nanbox.rs`.
+
+Verified: `any`-bound loop guards now lower to `icmp slt i32` with no
+per-iteration call; numeric `any` bounds compute the correct result via the
+fast path, while string/`<=` cases keep correct coercion semantics via the slow
+path. `perry-codegen` (16/16), `perry-hir` + `perry` (522/0 + integration
+suites) green; the residual `perry-runtime` date/url failures and the
+`issue_4909` HTTP-timeout test are pre-existing load/timezone flakes
+(unchanged with this patch stashed; pass in isolation).
+
+## v0.5.1163 — fix: chalk boolean style modifiers — `<Text dimColor>` no longer renders `[object Object]` (#5039)
+
+Fixes #5039 — ink's `<Text dimColor>` (and `bold`/`italic`/`underline`/…)
+rendered `[object Object]` instead of the styled text. chalk 5's style
+modifiers are **getter accessors on a function prototype chain**
+(`Object.defineProperties(createChalk.prototype, styles)` reached through
+`Object.setPrototypeOf(chalk, createChalk.prototype)` where `chalk` is itself
+a function), and four independent Perry gaps conspired so `chalk.dim` never
+resolved:
+
+1. **runtime** (`closure/dynamic_props.rs`): `closure_get_dynamic_prop`'s
+   static-prototype walk only consulted data properties. Both arms (closure
+   proto and plain-object proto) now resolve ACCESSOR descriptors, invoking
+   the getter with the ORIGINAL receiver (`clone_closure_rebind_this`) so
+   chalk's `Object.defineProperty(this, styleName, {value: builder})`
+   self-cache lands on the instance instead of throwing "Cannot redefine
+   property: dim" against the non-configurable accessor on the shared proto.
+2. **codegen** (`lower_call/property_get.rs`): Annex B HTML-wrapper names
+   (`bold`, `link`, `anchor`, `big`, …) on *any*-typed receivers were
+   force-routed to `String.prototype`, so `chalk.bold(s)` coerced the chalk
+   closure to its source text and returned `<b>(...strings) => strings.join(' ')</b>`.
+   Dropped from the force list; an Any receiver that really is a string still
+   resolves through the `jsval.is_string()` arm of `js_native_call_method`.
+3. **resolver** (`commands/compile/resolve.rs`): Node subpath imports
+   (`#`-prefixed specifiers via the package's own `package.json` `"imports"`
+   map) were unsupported, so chalk's `import ansiStyles from '#ansi-styles'`
+   (vendored dep) silently resolved to nothing and EVERY style table came up
+   empty — `color="cyan"` only *looked* fine because ink fell back to the
+   unstyled string. Conditional entries prefer `node` over `default` (chalk's
+   `#supports-color` ships a browser build as `default`).
+4. **HIR** (`lower_patterns.rs`): `unescape_template` didn't decode
+   `\xHH` / `\uHHHH` / `\u{…}` (plus `\b\f\v\0` and line continuations), so
+   ansi-styles' `` `\u001B[${code}m` `` template literals produced the
+   6-char literal text instead of ESC. Surrogate pairs combine; a lone
+   surrogate becomes U+FFFD (WTF-8 remains a categorical gap).
+
+Validation: new `test-files/test_gap_chalk_proto_styles_5039.ts` is
+byte-identical vs `node --experimental-strip-types`; real chalk 5 compiled
+via `perry.compilePackages` produces Node-identical ANSI output for
+`dim`/`bold`/`cyan` including nested `chalk.dim.bold`; the issue's ink repro
+(on top of #5038's yoga-taffy branch) renders all four lines correctly with
+real escape codes. 3 new resolver unit tests cover the imports map (exact,
+conditional node/default, unmapped). Touched-crate test suites green.
+
+Deferred (pre-existing, observed while validating): `Object.entries` on
+ansi-styles' assembled object returns 55 entries vs Node's 45
+(non-enumerable `defineProperty` slots leak into enumeration);
+`JSON.stringify` emits `\u000c`/`\u0008` instead of the `\f`/`\b` short
+forms.
+
+## v0.5.1162 — feat: native yoga-layout via taffy + JSON module imports + Context.Provider fix (ink #348 end-to-end)
+
+Makes `ink` (React-based TUI) compile **and render** fully natively — no WASM
+yoga, no V8. Three independent changes land together under #348.
+
+### 1. Native `perry/yoga` backend over taffy
+
+`yoga-layout` (the WASM flexbox engine ink depends on for geometry) is replaced
+by a native backend built on `taffy` 0.7 (already a `perry-runtime` dependency).
+
+- New `crates/perry-runtime/src/yoga.rs`: a handle-based node store
+  (`YOGA_NODES`) with the full FFI surface ink uses — node new/free,
+  insert/remove/child-count, set number/edge/gap/enum props, measure-func
+  register/unregister, `calculateLayout`, and computed-box/edge getters. Each
+  `calculateLayout` builds a fresh `TaffyTree`, wires per-node measure
+  callbacks back into JS via `js_native_call_value`, and computes layout with
+  `compute_layout_with_measure`. A GC root scanner marks the live measure
+  callbacks.
+- New `crates/perry-codegen/src/lower_call/native_table/yoga.rs`: 14
+  `NativeModSig` rows mapping the `perry/yoga` method names to the runtime
+  entry points; registered in `native_table/mod.rs`.
+- `perry/yoga` added to the perry-namespace module list in
+  `perry-api-manifest`.
+- `node_modules/yoga-layout`'s `src/index.ts` is a thin shim re-exporting the
+  native primitives behind the real yoga `Node`/`Config` API surface.
+
+### 2. JSON module imports compile to a native default export
+
+`import data from "./x.json"` (with or without `with { type: "json" }`) was
+previously **skipped entirely** during module collection, leaving the default
+import bound to the empty-module sentinel. ink's `cli-boxes` dependency
+(`import cliBoxes from "./boxes.json"`) therefore resolved to `undefined`, and
+any `<Box borderStyle="round">` threw `Cannot read properties of undefined
+(reading 'topLeft')`.
+
+`crates/perry/src/commands/compile/collect_modules.rs` now materializes a JSON
+import as a native ESM module: the file is validated as JSON, then compiled as
+`export default <json>;` (JSON being a syntactic subset of a JS expression) and
+flows through the normal parse → lower → codegen path. Non-JSON modules are
+unaffected (identical code path). Malformed JSON now fails with a clear
+`Failed to parse JSON module …` error instead of silently producing the
+sentinel.
+
+### 3. Labeled `break` from a nested `switch` resolves to the outer switch
+
+A labeled `switch` did not register its label as a break target, so a
+`break <label>;` from a *nested* switch (as in react-reconciler's
+`createFiberFromTypeAndProps`) escaped to the wrong exit — dropping
+`Context.Provider` children, so ink rendered nothing. `switch_stmt.rs` now
+registers the consumed label like loops already did.
+
+Result: `render(<App/>)` with nested Boxes, `flexDirection` row/column,
+`padding`/`margin`/`width`/`justifyContent`, and `borderStyle` all lay out via
+taffy and emit positioned ANSI from a single native executable.
+
+Known remaining follow-up (separate, minor): `<Text dimColor>` renders as
+`[object Object]` (boolean style-modifier handling in ink's Text); `color=`
+works.
+
+## v0.5.1161 — fix(http): `server.ref()`/`server.unref()` return `this` instead of a raw number (#5011)
+
+Fixes #5011 — `server.ref()` and `server.unref()` on a `node:http`/`node:https`
+server returned the receiver **handle as a raw number** instead of the server
+object. Node returns `this`, so `http.createServer(cb).unref().listen(...)` broke
+under Perry with `TypeError: (number).listen is not a function`
+(`test-http-request-method-delete-payload.js` and friends).
+
+Root cause: `crates/perry-codegen/src/lower_call/native_table/http_server.rs` had
+no `ref`/`unref` rows for the `HttpServer`/`HttpsServer` class filters, so the
+calls fell through to a generic handler that yielded the handle as a number —
+the same shape `listen` had before #2129.
+
+Fix:
+- Added `ref`/`unref` `NativeModSig` rows (`ret: NR_PTR`) for both the http and
+  https server tables, routing to new runtime entry points.
+- New `js_node_http_server_ref`/`_unref` and `js_node_https_server_ref`/`_unref`
+  return the receiver handle (so `s.ref() === s`) and toggle a new `refed` flag
+  on `HttpServer`. `server_is_active` now ignores a listening-but-`unref()`ed
+  server, so the event loop can exit while the server is still bound (Node
+  semantics) — pending listen callbacks and queued requests still keep the loop
+  alive long enough to flush in-flight work.
+- Mirrored the methods in the `server: any` dynamic dispatcher
+  (`handle_dispatch.rs`) and registered the externs in `ext_registry.rs`,
+  `runtime_decls/stdlib_ffi.rs`, and the `force_link_http_server` anchor table.
+
+Verified: `typeof s.unref()` → `object`, `s.unref() === s` → `true`,
+`s.ref() === s` → `true`, `createServer(cb).unref().listen(...)` works, and a
+listening unref'd server lets the process exit (exit 0, no hang). 0 regressions
+in the http/https server surface.
+
+Not in scope (separate `(number).<method>` cases tracked under #4975):
+`new http.Agent().createConnection(...)` returning a number
+(`test-http-socket-encoding-error`) and `server.ALPNProtocols` not being a
+Buffer (`test-https-argument-of-creating`).
+
+## v0.5.1160 — fix(hir): `queueMicrotask`/`structuredClone`/`atob`/`btoa` as first-class function values (#5015)
+
+Fixes #5015 — react-reconciler 0.33 production build threw `TypeError: value is
+not a function` inside `updateContainerSync` on the first render, blocking every
+custom React renderer (ink, react-three-fiber, react-pdf, …).
+
+**Root cause.** Four callable global helpers — `queueMicrotask`,
+`structuredClone`, `atob`, `btoa` — were callable directly
+(`queueMicrotask(fn)` is picked off in `expr_call/globals.rs`) but were never
+added to `is_builtin_global_value_name` in `crates/perry-hir/src/analysis/builtins.rs`.
+So a bare *value* read — `const m = queueMicrotask`, or the object-literal
+property `{ scheduleMicrotask: queueMicrotask }` — fell through the ident
+lowering to the `GlobalGet(0)` sentinel and evaluated to the **number `0`**.
+`typeof` reported `"number"` and calling the stored value threw "value is not a
+function". (The companion `typeof`-of-bare-ident fold and the
+`globalThis.<name>` thunk table already covered these names; only the value-read
+list was missing them — a gap left over from #3986.)
+
+react-reconciler stores the host config's `scheduleMicrotask: queueMicrotask`
+into a module var and later invokes it from
+`scheduleImmediateRootScheduleTask` (reached via `updateContainerSync →
+updateContainerImpl → scheduleUpdateOnFiber → ensureRootIsScheduled`). The
+stored `0` was the non-callable the issue's backtrace pinpointed.
+
+**Fix.** Add the four names to `is_builtin_global_value_name` so a bare value
+read lowers to `PropertyGet { GlobalGet(0), <name> }`, resolving through the
+existing globalThis thunk (the same path `fetch`/`parseInt`/`eval` already use).
+This fixes both the bare value read and the object-literal property form, and
+is value-read-only — direct calls are unaffected. Regression test:
+`test-files/test_gap_global_fn_values_5015.ts` (byte-for-byte vs Node).
+
+**Follow-up wall (separate bug, not in this PR).** With this fix
+`updateContainerSync` succeeds; the minimal repro's subsequent `flushSyncWork()`
+now reaches `commitRoot`, where `flushPendingEffects` — a forward-referenced,
+hoisted sibling function declaration captured by `commitRoot` inside the
+huge `module.exports = function($$$config){…}` factory — reads back as
+`undefined` (a distinct closure-capture/box issue, independent of
+`queueMicrotask`: it reproduces with an arrow `scheduleMicrotask` too). To be
+filed as its own issue.
+
+## v0.5.1159 — security: fix path traversal / arbitrary file write in `perry publish` (GHSA-x55v-q459-68ch)
+
+Security release. `perry publish` trusted the build server's
+`ArtifactReady.artifact_name` and `download_path` verbatim when constructing
+the local destination path, allowing a malicious/compromised hub to write
+downloaded content outside the output directory (arbitrary file write) and, in
+the self-hosted-hub local-copy path, copy out arbitrary local files. All
+versions through v0.5.1158 are affected. Upgrade to v0.5.1159.
+
+- fix(publish): sanitize server-controlled artifact path (GHSA-x55v-q459-68ch) (#4989)
+
+## v0.5.1158 — release roll-up: stub-elimination epic tail, React render walls, http/cluster/streams parity
+
+Version-bump + changelog roll-up for the 16 commits that landed after the
+v0.5.1157 bump without per-commit metadata (maintainer-folds-at-merge PRs).
+No code changes in this commit itself.
+
+- feat(runtime): real AsyncLocalStorage + async_hooks context propagation (#788/#789) (#4967)
+- feat(runtime): real child_process spawn/exec ChildProcess handle semantics (#2130/#1934) (#4968)
+- feat(streams): BYOB readers + real ByteLengthQueuingStrategy accounting (#4915) (#4966)
+- feat(cluster): workers share a listening port — SO_REUSEPORT + IPC 'listening' round-trip (#4914) (#4963)
+- feat(diagnostics): real v8 heap snapshot from GC heap walk + inspector/repl honesty (#4916) (#4979)
+- fix(hir,codegen,runtime): clear the #4950 React render-time walls — JSX createElement mode, nested-fn branch-var hoisting, timer/AbortController values, surrogate-range regex classes (#4969)
+- fix(http): client write/end callbacks + backpressure, real client timeouts, dynamic listener registration (#4909) (#4964)
+- fix(http): wire res.write/res.end callbacks + backpressure boolean into static dispatch (#4909) (#4954)
+- fix(http): falsy ClientRequest method defaults to GET instead of throwing (#4970) (#4978)
+- fix(net,ext-http): tls.connect Node overloads + https idle-connection close path (#4971) (#4983)
+- fix(hir): lower inline `export default class` bodies — methods/fields survive (#4976) (#4981)
+- fix(hir): synthesized capture ctor on a derived class must call super() (#4972) (#4980)
+- fix(hir): self-named native member base no longer OOM-loops codegen (#4908) (#4955)
+- fix(compile): support package createRequire interop (#4960)
+- perf(runtime): optimize numeric array raw payload helpers (#4957)
+- test(codegen): unbreak typed_shape_descriptors after #4957 bulk-fill lowering (#4984)
+
+## v0.5.1157 — feat(atomics): real cross-agent `Atomics.wait`/`notify`/`waitAsync` over a shared SAB (#4913)
+
+Stage 2 of #4913 (Stage 1 — the honesty floor — landed in #4929). `Atomics.wait`,
+`Atomics.notify`, and `Atomics.waitAsync` were non-blocking fakes: `wait` always
+returned `"timed-out"`, `notify` always returned `0`, and `waitAsync` resolved
+`"timed-out"` immediately. They now block and wake for real across `perry/thread`
+agents.
+
+**Shared backing that actually aliases across threads.** The prerequisite was a
+`SharedArrayBuffer` whose bytes are visible from every agent. Previously every
+value crossing a `perry/thread` boundary was deep-copied (`SerializedValue`), so a
+SAB lost its sharing. Now:
+
+- `new SharedArrayBuffer(n)` allocates its `BufferHeader + data` block from the
+  global allocator (`crate::shared_sab`) — a stable, process-wide address that is
+  never freed (matching Perry's "buffers live for the life of the process" model)
+  and is therefore valid and writable from any OS thread.
+- A new `SerializedValue::SharedArrayBuffer { addr }` variant carries the SAB
+  **by reference** across the thread boundary instead of copying it; the receiving
+  agent re-registers the same address in its thread-local buffer / SAB tables, so
+  `new Int32Array(sab)` there aliases the exact same physical bytes (via the
+  existing #4103 view-meta backing path). The serializer recognises a SAB before
+  the `GcHeader` dispatch (buffers carry no `GcHeader`).
+
+**Futex park/wake (`crate::atomics_futex`).** A process-global wait table keyed by
+the **absolute physical byte address** of the atomic slot. Because a SAB aliases
+the same bytes on every agent, two agents viewing the same index compute the same
+key.
+
+- `Atomics.wait` re-checks the slot value and enqueues a waiter **atomically under
+  the table lock**, then parks the OS thread on a `Condvar` until a matching
+  `notify` or the timeout deadline — so a `notify` racing the call is never lost
+  (the agent either sees the changed value and returns `"not-equal"`, or parks and
+  is woken). Returns the real `"ok"` / `"not-equal"` / `"timed-out"`. A
+  `timeout === 0` poll still returns immediately; an `undefined`/`Infinity` timeout
+  blocks until notified.
+- `Atomics.notify` wakes up to `count` parked agents (default `undefined` →
+  `+Infinity` → all) and returns the **actual** number woken.
+- `Atomics.waitAsync` enqueues the waiter synchronously (atomic with the value
+  check, so the wake can't be missed), then resolves its promise from a background
+  thread — `"ok"` on notify, `"timed-out"` on the deadline — via the same
+  pending-result → event-loop path `spawn` uses.
+
+The `perry_stub_warn` / `PERRY_STRICT_STUBS` honesty gates added in #4929 are
+removed from these three ops — they are no longer lies.
+
+Caveat: only the `SharedArrayBuffer` itself shares across agents; a typed-array
+*view* captured directly into a thread closure still deep-copies (build the view
+per-agent from the shared SAB). The agent-coordinated test262 cases
+(`$262.agent`) remain out of scope.
+
+New: `crates/perry-runtime/src/shared_sab.rs`, `crates/perry-runtime/src/atomics_futex.rs`,
+`crates/perry/tests/issue_4913_atomics_cross_thread.rs`,
+`test-files/test_issue_4913_atomics_cross_thread.ts`.
+
 ## v0.5.1156 — fix(fetch): send dynamically-built request headers (#4932)
 
 `fetch(url, { headers })` silently dropped **every** request header whenever the
