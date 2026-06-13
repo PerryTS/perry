@@ -258,7 +258,10 @@ fn loop_invariant_seed_facts(
     let mut mutated = std::collections::HashSet::new();
     collect_mutated_local_ids(body, &mut mutated);
     for e in extra_exprs {
-        collect_mutated_local_ids(std::slice::from_ref(&Stmt::Expr((*e).clone())), &mut mutated);
+        collect_mutated_local_ids(
+            std::slice::from_ref(&Stmt::Expr((*e).clone())),
+            &mut mutated,
+        );
     }
     outer
         .iter()

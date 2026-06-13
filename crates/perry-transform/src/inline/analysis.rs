@@ -164,8 +164,7 @@ pub fn is_inlinable_method(func: &Function) -> bool {
     if !has_simple_control_flow(&func.body) {
         return false;
     }
-    let param_ids: std::collections::HashSet<LocalId> =
-        func.params.iter().map(|p| p.id).collect();
+    let param_ids: std::collections::HashSet<LocalId> = func.params.iter().map(|p| p.id).collect();
     if body_contains_closure_capturing(&func.body, &param_ids) {
         return false;
     }
