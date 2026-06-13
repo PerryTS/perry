@@ -678,6 +678,39 @@ pub(crate) fn descriptors_in_use() -> bool {
     GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed)
 }
 
+/// #5054: a descriptor (any kind) has been installed on the canonical
+/// `Object.prototype` — inherited setters / non-writable data props there
+/// must intercept writes of keys missing on the receiver, so the dynamic
+/// plain-object write fast path is disabled process-wide once this flips.
+static OBJECT_PROTO_DESCRIPTORS: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn object_proto_descriptors_in_use() -> bool {
+    OBJECT_PROTO_DESCRIPTORS.load(Ordering::Relaxed)
+}
+
+/// #5054: record descriptor installation on the target object itself —
+/// `OBJ_FLAG_HAS_DESCRIPTORS` in its GcHeader (travels with the object on
+/// evacuation), plus the `Object.prototype` process-global above. Unlike
+/// `GLOBAL_DESCRIPTORS_IN_USE`, neither is poisoned by the runtime
+/// installing attrs on unrelated builtins (RegExp prototype etc.), so the
+/// dynamic-write fast path stays precise.
+pub(crate) fn note_descriptor_target(obj: usize) {
+    if crate::array::object_prototype_addr_matches(obj) {
+        OBJECT_PROTO_DESCRIPTORS.store(true, Ordering::Relaxed);
+    }
+    if crate::typedarray::lookup_typed_array_kind(obj).is_some() {
+        return;
+    }
+    unsafe {
+        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj) {
+            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                let header = header as *const crate::gc::GcHeader as *mut crate::gc::GcHeader;
+                (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+            }
+        }
+    }
+}
+
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
@@ -686,6 +719,7 @@ pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs>
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    note_descriptor_target(obj);
     PROPERTY_ATTRS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     PROPERTY_DESCRIPTORS.with(|m| {
@@ -790,6 +824,7 @@ pub(crate) unsafe fn json_object_getter_value(
 
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
+    note_descriptor_target(obj);
     ACCESSORS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     ACCESSOR_DESCRIPTORS.with(|m| {
@@ -849,6 +884,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
 /// `PROPERTY_DESCRIPTORS` per-object and unconditionally. The gate stays
 /// down, so the object get/set hot path is unaffected for every program.
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    note_descriptor_target(obj);
     PROPERTY_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), attrs);
     });

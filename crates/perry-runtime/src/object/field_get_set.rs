@@ -2713,6 +2713,122 @@ pub(super) unsafe fn native_module_own_field_by_key(
     None
 }
 
+// ─── #5054: wide-object key index ─────────────────────────────────────────────
+// A `{}`-born object grown to thousands of dynamic properties pays a linear
+// keys_array scan per `obj[key]` read once the 1024-entry FIELD_CACHE can't
+// hold its key set — O(N) per read, quadratic for read-everything loops. For
+// keys arrays past this threshold, build a key→index map once and validate
+// every hit against the actual slot (same trust model as FIELD_CACHE: a
+// reused keys-array address or a mutated slot fails validation and drops the
+// index). Misses still fall through to the linear scan — the index is an
+// accelerator, never authoritative — and a scan hit back-fills the map so
+// interleaved appends stay amortized O(1).
+const WIDE_KEY_INDEX_MIN_KEYS: usize = 257;
+const WIDE_KEY_INDEX_CAPACITY: usize = 4;
+
+struct WideKeyIndexEntry {
+    keys_id: usize,
+    indexed_len: u32,
+    map: std::collections::HashMap<Vec<u8>, u32>,
+}
+
+thread_local! {
+    static WIDE_KEY_INDEX: std::cell::RefCell<Vec<WideKeyIndexEntry>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Probe the wide-object index for `key_bytes` in the keys array identified by
+/// `keys_id`. Returns a slot index whose stored key has been re-validated
+/// against `key` — `None` means "not found via the index" (caller falls back
+/// to the linear scan).
+unsafe fn wide_key_index_lookup(
+    keys_id: usize,
+    key_bytes: &[u8],
+    key: *const crate::StringHeader,
+    keys: *const crate::array::ArrayHeader,
+    key_count: usize,
+) -> Option<u32> {
+    WIDE_KEY_INDEX.with(|cell| {
+        let mut table = cell.borrow_mut();
+        let pos = table.iter().position(|e| e.keys_id == keys_id);
+        let pos = match pos {
+            Some(p) => p,
+            None => {
+                // Build the full map once (first occurrence wins, matching
+                // linear-scan order).
+                let mut map = std::collections::HashMap::with_capacity(key_count);
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                for i in 0..key_count {
+                    let stored = crate::array::js_array_get(keys, i as u32);
+                    if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
+                        map.entry(b.to_vec()).or_insert(i as u32);
+                    }
+                }
+                if table.len() >= WIDE_KEY_INDEX_CAPACITY {
+                    table.pop();
+                }
+                table.insert(
+                    0,
+                    WideKeyIndexEntry {
+                        keys_id,
+                        indexed_len: key_count as u32,
+                        map,
+                    },
+                );
+                0
+            }
+        };
+        let entry = &mut table[pos];
+        if (key_count as u32) < entry.indexed_len {
+            // The keys array shrank (a delete compacted it) — slot indices
+            // are no longer trustworthy. Drop and let the next read rebuild.
+            table.remove(pos);
+            return None;
+        }
+        if (key_count as u32) > entry.indexed_len {
+            // Catch up on appended keys.
+            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            for i in entry.indexed_len as usize..key_count {
+                let stored = crate::array::js_array_get(keys, i as u32);
+                if let Some(b) = crate::string::js_string_key_bytes(stored, &mut sso) {
+                    entry.map.entry(b.to_vec()).or_insert(i as u32);
+                }
+            }
+            entry.indexed_len = key_count as u32;
+        }
+        let idx = entry.map.get(key_bytes).copied();
+        match idx {
+            Some(i) if (i as usize) < key_count => {
+                let stored = crate::array::js_array_get(keys, i);
+                if crate::string::js_string_key_matches(stored, key) {
+                    if pos != 0 {
+                        let e = table.remove(pos);
+                        table.insert(0, e);
+                    }
+                    Some(i)
+                } else {
+                    // Stale (address reuse or in-place mutation): drop the
+                    // whole entry rather than chase it.
+                    table.remove(pos);
+                    None
+                }
+            }
+            _ => None,
+        }
+    })
+}
+
+/// Back-fill a linear-scan hit into the wide-object index (no-op when the
+/// keys array has no entry — the next lookup builds it wholesale).
+fn wide_key_index_note_hit(keys_id: usize, key_bytes: &[u8], index: u32) {
+    WIDE_KEY_INDEX.with(|cell| {
+        let mut table = cell.borrow_mut();
+        if let Some(e) = table.iter_mut().find(|e| e.keys_id == keys_id) {
+            e.map.entry(key_bytes.to_vec()).or_insert(index);
+        }
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
@@ -5010,11 +5126,38 @@ pub extern "C" fn js_object_get_field_by_name(
         // Slow path: linear scan through keys array
         let _field_count = (*obj).field_count as usize;
 
+        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
+
+        // #5054: wide objects get a validated key→index map so per-key reads
+        // stay O(1) instead of O(key_count). A `None` falls through to the
+        // linear scan below (the index is an accelerator, not authoritative).
+        if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
+            if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
+                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                            if acc.get != 0 {
+                                let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                                return invoke_accessor_getter(acc.get, receiver);
+                            }
+                            return JSValue::undefined();
+                        }
+                    }
+                }
+                return if (i as usize) < alloc_limit {
+                    js_object_get_field(obj, i)
+                } else {
+                    match overflow_get(obj as usize, i as usize) {
+                        Some(bits) => JSValue::from_bits(bits),
+                        None => JSValue::undefined(),
+                    }
+                };
+            }
+        }
+
         if key_count > 65536 {
             return JSValue::undefined();
         }
-
-        let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
 
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(keys, i as u32);
@@ -5027,6 +5170,9 @@ pub extern "C" fn js_object_get_field_by_name(
                     let cache = &mut *c.get();
                     cache[cache_idx] = (keys_id, key_hash, i as u32);
                 });
+                if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
+                    wide_key_index_note_hit(keys_id, key_bytes, i as u32);
+                }
                 // Accessor short-circuit (see fast path above).
                 if ACCESSORS_IN_USE.with(|c| c.get()) {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
