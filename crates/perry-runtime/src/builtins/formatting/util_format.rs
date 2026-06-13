@@ -112,6 +112,22 @@ unsafe fn util_format_json_object_has_cycle(ptr: *const u8, stack: &mut Vec<usiz
     found
 }
 
+/// Render a `%o`/`%O` argument the way `util.inspect` does at the top
+/// level: a primitive string is **quoted** (`'hello'`), matching
+/// `js_util_inspect`. `format_jsvalue` alone leaves a top-level string
+/// unquoted (the `console.log(str)` bare-string behavior), so calling it
+/// directly for `%o`/`%O` diverged from Node, which routes the value
+/// through `util.inspect` (strings quoted at every depth).
+fn inspect_format_arg(val: f64) -> String {
+    let jv = crate::value::JSValue::from_bits(val.to_bits());
+    if jv.is_any_string() {
+        let s = jsvalue_string_content(val).unwrap_or_default();
+        format!("'{}'", escape_string(&s))
+    } else {
+        format_jsvalue(val, 0)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f64 {
     use crate::value::JSValue;
@@ -324,12 +340,12 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     let _depth_guard = InspectDepthLimitGuard::new(4);
                     let _hidden_guard = InspectShowHiddenGuard::new(true);
                     let _proxy_guard = InspectShowProxyGuard::new(true);
-                    out.push_str(&format_jsvalue(val, 0));
+                    out.push_str(&inspect_format_arg(val));
                 }
                 b'O' => {
                     // `%O` keeps the default depth cap (2) — matching
                     // Node's `util.inspect` default options.
-                    out.push_str(&format_jsvalue(val, 0));
+                    out.push_str(&inspect_format_arg(val));
                 }
                 b'c' => {
                     // Browser/Node console style marker. Consume the CSS
