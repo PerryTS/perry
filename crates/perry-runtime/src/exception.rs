@@ -37,8 +37,13 @@ extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
 }
 
-// Maximum nesting depth for try blocks
-const MAX_TRY_DEPTH: usize = 128;
+// Maximum nesting depth for try blocks. Backed by fixed-size per-thread
+// arrays (see ExceptionState), so this directly sizes thread-local memory:
+// jump_buffers is MAX_TRY_DEPTH * sizeof(JmpBuf) (256 B each). 1024 covers
+// deep-but-legal recursion-through-try; genuinely unbounded recursion hits a
+// native stack overflow well before this. Raised from 128 (#5065): 128
+// aborted the process via panic on legal deeply-nested try/catch.
+const MAX_TRY_DEPTH: usize = 1024;
 
 /// Per-thread exception state. Exception handling uses setjmp/longjmp,
 /// and a jmp_buf captured by setjmp on thread A is meaningless on thread
@@ -407,5 +412,28 @@ mod tests {
 
         js_shadow_frame_pop(run_frame);
         assert_eq!(shadow_stack_depth(), base_depth);
+    }
+
+    #[test]
+    fn try_push_pop_beyond_old_limit_does_not_panic() {
+        // Regression for #5065: old fixed limit was 128 and js_try_push panicked
+        // (aborting the process) at the 129th simultaneously-active try frame.
+        // Relative to the entry depth so it's robust under shared TLS
+        // (`--test-threads=1`) alongside the other tests in this module.
+        let base = current_try_depth();
+        let pushes = (MAX_TRY_DEPTH - base) - 1;
+        assert!(
+            pushes > 128,
+            "expected room for >128 frames beyond the old limit"
+        );
+        for _ in 0..pushes {
+            let p = js_try_push();
+            assert!(!p.is_null(), "js_try_push returned null jmp_buf");
+        }
+        assert_eq!(current_try_depth(), base + pushes);
+        for _ in 0..pushes {
+            js_try_end();
+        }
+        assert_eq!(current_try_depth(), base);
     }
 }
