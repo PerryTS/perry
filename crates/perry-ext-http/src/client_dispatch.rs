@@ -170,6 +170,19 @@ pub(crate) fn dispatch_request(
                     // event instead of a generic error.
                     if e.is_timeout() {
                         push_event(PendingHttpEvent::Timeout { request_handle });
+                    } else if let Some((message, code, syscall, errno)) =
+                        crate::transport_error::classify_reqwest(&e, &url)
+                    {
+                        // A recognized transport failure (connect refused, DNS
+                        // lookup failure, …) — hand listeners the real coded
+                        // Node Error instead of a bare string.
+                        push_event(PendingHttpEvent::TransportError {
+                            request_handle,
+                            message,
+                            code,
+                            syscall,
+                            errno,
+                        });
                     } else {
                         push_event(PendingHttpEvent::Error {
                             request_handle,

@@ -83,6 +83,10 @@ mod client_outgoing;
 mod validation;
 use validation::{validate_client_options, validate_client_url_string};
 
+// Classifies transport-layer client failures (connect refused, DNS lookup
+// failure, …) into the Node `Error` shape (`.code`/`.syscall`/`.errno`).
+mod transport_error;
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -138,6 +142,18 @@ pub(crate) enum PendingHttpEvent {
     Error {
         request_handle: Handle,
         error_message: String,
+    },
+    /// A classified transport failure (connect refused, DNS lookup failure,
+    /// connection reset, …). Unlike [`PendingHttpEvent::Error`] — which hands
+    /// listeners a bare string — this carries the Node error shape so the
+    /// drain builds a real coded `Error` with `.code`/`.syscall`/`.errno`,
+    /// matching what Node passes to `request.on('error')`.
+    TransportError {
+        request_handle: Handle,
+        message: String,
+        code: String,
+        syscall: String,
+        errno: i64,
     },
     /// #4905 — the transport deadline from `req.setTimeout(ms)` /
     /// `options.timeout` fired. Drains to the request's `'timeout'`
@@ -1576,6 +1592,21 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 error_message,
             } => {
                 client_events::handle_error_event(request_handle, &error_message);
+            }
+            PendingHttpEvent::TransportError {
+                request_handle,
+                message,
+                code,
+                syscall,
+                errno,
+            } => {
+                client_events::handle_transport_error_event(
+                    request_handle,
+                    &message,
+                    &code,
+                    &syscall,
+                    errno,
+                );
             }
             PendingHttpEvent::Timeout { request_handle } => {
                 client_events::handle_timeout_event(request_handle);

@@ -88,7 +88,9 @@ mod json;
 pub use json::json_stringify;
 
 mod error;
-pub use error::{error_value_with_code, throw_with_code, value_byte_slice, ErrorKind};
+pub use error::{
+    error_value_with_code, system_error_value, throw_with_code, value_byte_slice, ErrorKind,
+};
 
 mod event_pump;
 pub use event_pump::notify_main_thread;

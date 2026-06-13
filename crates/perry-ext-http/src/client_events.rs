@@ -384,6 +384,35 @@ pub(crate) unsafe fn handle_error_event(request_handle: Handle, error_message: &
     fire_request_close_once(request_handle);
 }
 
+/// Drain handler for `PendingHttpEvent::TransportError`: fire `'error'`
+/// listeners with a real Node-coded `Error` (`.code` / `.syscall` / `.errno`)
+/// then `'close'`. Suppressed once the request already completed (same race
+/// guard as [`handle_error_event`]).
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
+pub(crate) unsafe fn handle_transport_error_event(
+    request_handle: Handle,
+    message: &str,
+    code: &str,
+    syscall: &str,
+    errno: i64,
+) {
+    let already_done = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+        let was = req.completed;
+        req.completed = true;
+        was
+    })
+    .unwrap_or(false);
+    if already_done {
+        return;
+    }
+    let err = perry_ffi::system_error_value(message, code, syscall, errno);
+    fire_request_error_listeners(request_handle, f64::from_bits(err.bits()));
+    fire_request_close_once(request_handle);
+}
+
 /// #4905 / #4909 — drain handler for `PendingHttpEvent::Timeout`.
 ///
 /// `'timeout'` fires at most once per request and never after the
