@@ -1,3 +1,46 @@
+## v0.5.1164 — perf(codegen): integer-specialize `i < n` loop guards when the bound is `any`/untyped
+
+Tight integer loops whose bound is **not statically typed `number`** — most
+commonly an `any`-typed or un-annotated value (e.g. a count out of
+`JSON.parse`) — compiled their `i < n` / `i <= n` guard to a generic
+per-iteration comparison: `sitofp` the i32 counter back to a double, keep `n`
+as a NaN-boxed f64 on the stack, and `call @js_rel_lt` every iteration. On the
+hot path of a compute kernel this is ~50× slower than an integer induction
+variable + `icmp`, and it blocks SCEV / the loop vectorizer.
+
+It presented as an x86_64-vs-arm64 divergence, but the emitted LLVM IR is
+**identical** across both targets (only the `target triple` header differs).
+The difference was downstream, in the link pipeline: `js_rel_lt` is a
+`#[no_mangle] extern "C"` runtime function in a separate compilation unit. The
+macOS default **auto-optimize** build rebuilds + inlines the runtime so LLVM
+folds the call away (making it *look* optimized), whereas the `--target linux`
+build links a **prebuilt `libperry_runtime.a`** with no cross-module inlining,
+so the per-iteration `callq` survives — the entire cause of poor compute
+throughput on Lambda.
+
+**Fix** (`crates/perry-codegen`): a runtime-guarded i32 specialization that
+extends the existing `i < arr.length` / `i < n` (number-typed) peepholes to
+`any`/untyped bounds. New `classify_for_local_bound_dynamic` matches the shape;
+the loop head hoists, **once**, an `is-number` check (NaN-box tag test
+mirroring `JSValue::is_number`) plus `fptosi(n)`; the cond block branches on
+that loop-invariant flag into `for.cond.fast` (`icmp slt i32`, no per-iteration
+`sitofp`/`call`) and `for.cond.slow` (the generic `js_rel_lt` path, preserving
+full JS coercion semantics for non-number values). LLVM's LoopUnswitch peels
+the invariant branch into two loops at -O2+; even unswitched, the hot
+(is-number) path runs pure integer compares. When the bound *is* a primitive
+number, hoisting `fptosi(n)` once carries the same documented trust-types
+trade-off as the static `number`-typed path (a non-integer float bound shifts
+the trip count by at most one). Added the `SHORT_STRING_TAG` ABI-mirror
+constant to codegen's `nanbox.rs`.
+
+Verified: `any`-bound loop guards now lower to `icmp slt i32` with no
+per-iteration call; numeric `any` bounds compute the correct result via the
+fast path, while string/`<=` cases keep correct coercion semantics via the slow
+path. `perry-codegen` (16/16), `perry-hir` + `perry` (522/0 + integration
+suites) green; the residual `perry-runtime` date/url failures and the
+`issue_4909` HTTP-timeout test are pre-existing load/timezone flakes
+(unchanged with this patch stashed; pass in isolation).
+
 ## v0.5.1163 — fix: chalk boolean style modifiers — `<Text dimColor>` no longer renders `[object Object]` (#5039)
 
 Fixes #5039 — ink's `<Text dimColor>` (and `bold`/`italic`/`underline`/…)

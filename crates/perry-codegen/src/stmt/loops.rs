@@ -21,6 +21,22 @@ struct NumericBulkFillLoop {
     value: NumericBulkFillValue,
 }
 
+/// Runtime-guarded i32 specialization for `i < n` loops whose bound `n` is an
+/// `any`/untyped (non-`number`) local. The `is-number` flag and `fptosi(n)`
+/// value are both hoisted to stack slots once before the loop; the cond block
+/// branches on the (loop-invariant) flag to choose the `icmp slt i32` fast loop
+/// or the generic per-iteration comparison. See `classify_for_local_bound_dynamic`.
+struct DynamicI32Bound {
+    counter_id: u32,
+    op: perry_hir::CompareOp,
+    /// `i1` slot: true when `n` was a primitive number at loop entry.
+    flag_slot: String,
+    /// `i32` slot holding `fptosi(n)` (valid only when `flag_slot` is true).
+    bound_i32_slot: String,
+    /// Whether we allocated the counter's i32 slot (so we remove it at exit).
+    counter_i32_was_fresh: bool,
+}
+
 fn match_numeric_bulk_fill_loop(
     ctx: &FnCtx<'_>,
     init: Option<&Stmt>,
@@ -409,6 +425,73 @@ pub(crate) fn lower_for(
             local_bound_counter_i32_was_fresh = false;
             None
         };
+    // Issue #168 follow-up: when neither the `arr.length` hoist nor the static
+    // `i < n` (number-typed bound) peephole fired, try the runtime-guarded path
+    // for an `any`/untyped numeric bound. We hoist the `is-number` check and
+    // `fptosi(n)` once here, in the pre-loop block, so the cond block can pick
+    // an `icmp slt i32` fast loop (no per-iteration `sitofp` / `js_rel_*` call)
+    // when `n` was a primitive number at entry, and fall back to the generic
+    // comparison (full coercion semantics) otherwise.
+    let dynamic_i32_bound: Option<DynamicI32Bound> = if hoist_classification.is_none()
+        && local_bound_classification.is_none()
+    {
+        condition
+            .and_then(|cond| classify_for_local_bound_dynamic(cond, ctx))
+            .and_then(|(counter_id, bound_id, op)| {
+                let bound_slot = ctx.locals.get(&bound_id).cloned()?;
+                // Ensure an i32 counter slot exists (the Let site allocates
+                // one for `integer_locals`, but allocate here if absent so
+                // the fast path and Update stay in sync).
+                let counter_i32_was_fresh = if !ctx.i32_counter_slots.contains_key(&counter_id) {
+                    let counter_slot = ctx.locals.get(&counter_id).cloned()?;
+                    let i32_slot = ctx.func.alloca_entry(I32);
+                    let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
+                    let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
+                    ctx.block().store(I32, &cur_i32, &i32_slot);
+                    ctx.i32_counter_slots.insert(counter_id, i32_slot);
+                    true
+                } else {
+                    false
+                };
+                // One-time `is-number` test, mirroring runtime
+                // `JSValue::is_number`: a value is a number unless its tag
+                // bits fall in the Perry-owned band [SHORT_STRING_TAG,
+                // STRING_TAG].
+                let n_dbl = ctx.block().load(DOUBLE, &bound_slot);
+                let n_bits = ctx.block().bitcast_double_to_i64(&n_dbl);
+                let tag = ctx.block().and(
+                    I64,
+                    &n_bits,
+                    &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+                );
+                let below = ctx.block().icmp_ult(
+                    I64,
+                    &tag,
+                    &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+                );
+                let above = ctx.block().icmp_ugt(
+                    I64,
+                    &tag,
+                    &crate::nanbox::i64_literal(crate::nanbox::STRING_TAG),
+                );
+                let is_number = ctx.block().or(I1, &below, &above);
+                let flag_slot = ctx.func.alloca_entry(I1);
+                ctx.block().store(I1, &is_number, &flag_slot);
+                // `fptosi(n)` is valid only on the fast (is-number) path.
+                let bound_i32 = ctx.block().fptosi(DOUBLE, &n_dbl, I32);
+                let bound_i32_slot = ctx.func.alloca_entry(I32);
+                ctx.block().store(I32, &bound_i32, &bound_i32_slot);
+                Some(DynamicI32Bound {
+                    counter_id,
+                    op,
+                    flag_slot,
+                    bound_i32_slot,
+                    counter_i32_was_fresh,
+                })
+            })
+    } else {
+        None
+    };
     let local_bound_index_bounds_are_safe =
         local_bound_classification.is_some_and(|(counter_id, _, op)| {
             matches!(op, perry_hir::CompareOp::Lt)
@@ -509,6 +592,44 @@ pub(crate) fn lower_for(
         } else {
             false
         }
+    } else if let Some(ref dyn_bound) = dynamic_i32_bound {
+        // Issue #168 follow-up: `i < n` / `i <= n` where `n` is an `any`/untyped
+        // local. Branch on the one-time `is-number` flag hoisted above: the
+        // fast loop uses `icmp slt i32`; the slow loop keeps full JS comparison
+        // semantics. The branch is loop-invariant, so LLVM's LoopUnswitch peels
+        // it into two loops at -O2+; even unswitched, the hot (is-number) path
+        // executes pure integer compares with no per-iteration `sitofp` / call.
+        if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&dyn_bound.counter_id).cloned() {
+            let fast_idx = ctx.new_block("for.cond.fast");
+            let slow_idx = ctx.new_block("for.cond.slow");
+            let fast_label = ctx.block_label(fast_idx);
+            let slow_label = ctx.block_label(slow_idx);
+            let flag = ctx.block().load(I1, &dyn_bound.flag_slot);
+            ctx.block().cond_br(&flag, &fast_label, &slow_label);
+
+            // Fast path: integer induction variable + `icmp`.
+            ctx.current_block = fast_idx;
+            let ctr = ctx.block().load(I32, &ctr_i32_slot);
+            let bound = ctx.block().load(I32, &dyn_bound.bound_i32_slot);
+            let cmp = match dyn_bound.op {
+                perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
+                _ => ctx.block().icmp_slt(I32, &ctr, &bound),
+            };
+            ctx.block().cond_br(&cmp, &body_label, &exit_label);
+
+            // Slow path: generic per-iteration comparison (full coercion).
+            ctx.current_block = slow_idx;
+            if let Some(cond_expr) = condition {
+                let cv = lower_expr(ctx, cond_expr)?;
+                let i1 = lower_truthy(ctx, &cv, cond_expr);
+                ctx.block().cond_br(&i1, &body_label, &exit_label);
+            } else {
+                ctx.block().br(&body_label);
+            }
+            true
+        } else {
+            false
+        }
     } else {
         false
     };
@@ -596,6 +717,12 @@ pub(crate) fn lower_for(
         }
     }
     let _ = i32_local_bound_slot;
+    // Same cleanup for the runtime-guarded `any`-bound path.
+    if let Some(dyn_bound) = dynamic_i32_bound {
+        if dyn_bound.counter_i32_was_fresh {
+            ctx.i32_counter_slots.remove(&dyn_bound.counter_id);
+        }
+    }
     ctx.bounded_index_pairs
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
     ctx.bounded_buffer_index_pairs
@@ -721,6 +848,68 @@ pub(crate) fn classify_for_local_bound(
                 Some(perry_types::Type::Number | perry_types::Type::Int32)
             ));
     if !bound_is_integer_safe {
+        return None;
+    }
+    Some((counter_id, bound_id, op))
+}
+
+/// Like [`classify_for_local_bound`], but for the case the static classifier
+/// deliberately rejects: an `i < n` / `i <= n` loop whose bound `n` is an
+/// accessible (unboxed, non-module-global) local whose *static* type is **not**
+/// `number`/`int32` — most commonly an `any`-typed value or an un-annotated
+/// parameter (e.g. a count pulled out of `JSON.parse`).
+///
+/// We can't `fptosi` such a bound unconditionally: at runtime it may hold a
+/// non-number, and JS `<` would coerce it (`ToNumber`/`ToPrimitive`).  So this
+/// only reports the shape; the caller emits a **one-time** `is-number` guard at
+/// the loop head and runs the `icmp slt i32` fast loop when it holds, falling
+/// back to the generic per-iteration `js_rel_*` comparison otherwise.  This
+/// removes the per-iteration `sitofp` + runtime `callq` from the hot path for
+/// the extremely common untyped-count loop (issue #168 follow-up).
+///
+/// When the bound *is* a primitive number at runtime, hoisting `fptosi(n)` once
+/// is subject to the same documented trust-types trade-off as the static path
+/// (a non-integer float bound shifts the trip count by at most one).
+pub(crate) fn classify_for_local_bound_dynamic(
+    cond: &perry_hir::Expr,
+    ctx: &crate::expr::FnCtx<'_>,
+) -> Option<(u32, u32, perry_hir::CompareOp)> {
+    use perry_hir::{CompareOp, Expr};
+    let (op, left, right) = match cond {
+        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        _ => return None,
+    };
+    if !matches!(op, CompareOp::Lt | CompareOp::Le) {
+        return None;
+    }
+    let counter_id = match left {
+        Expr::LocalGet(id) => *id,
+        _ => return None,
+    };
+    let bound_id = match right {
+        Expr::LocalGet(id) => *id,
+        _ => return None,
+    };
+    if !ctx.integer_locals.contains(&counter_id) {
+        return None;
+    }
+    // Bound must be a directly-accessible slot — same load-path constraints as
+    // the static classifier (skip module globals and boxed/closure-captured
+    // variables, which load differently).
+    if !ctx.locals.contains_key(&bound_id)
+        || ctx.boxed_vars.contains(&bound_id)
+        || ctx.module_globals.contains_key(&bound_id)
+    {
+        return None;
+    }
+    // Defer to the static classifier for integer- and `number`-typed bounds;
+    // this path only handles the residual non-`number` (e.g. `any`) case.
+    if ctx.integer_locals.contains(&bound_id)
+        || matches!(
+            ctx.local_types.get(&bound_id),
+            Some(perry_types::Type::Number | perry_types::Type::Int32)
+        )
+    {
         return None;
     }
     Some((counter_id, bound_id, op))
