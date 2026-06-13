@@ -41,6 +41,7 @@ use super::{
 
 mod link_cache;
 mod native_features;
+mod pkg_config;
 mod platform_cmd;
 mod windows_link;
 
@@ -1670,6 +1671,7 @@ pub(super) fn build_and_run_link(
 
             // Add pkg-config libraries
             for pkg in &target_config.pkg_config {
+                pkg_config::validate_pkg_config_name(pkg)?;
                 if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
@@ -1737,6 +1739,7 @@ pub(super) fn build_and_run_link(
                     }
                 }
                 for pkg in &backend.pkg_config {
+                    pkg_config::validate_pkg_config_name(pkg)?;
                     if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                         if output.status.success() {
                             let libs = String::from_utf8_lossy(&output.stdout);
