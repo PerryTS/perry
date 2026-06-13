@@ -476,55 +476,6 @@ fn local_client_connect_ready(session_handle: i64) -> bool {
     has_active_server_session(server_handle)
 }
 
-thread_local! {
-    /// Client sessions whose `connect` event has already been emitted, so the
-    /// server-side `session` emit can stop deferring behind them.
-    static H2_CLIENT_CONNECT_EMITTED: std::cell::RefCell<std::collections::HashSet<i64>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
-}
-
-fn mark_client_connect_emitted(session_handle: i64) {
-    H2_CLIENT_CONNECT_EMITTED.with(|s| {
-        s.borrow_mut().insert(session_handle);
-    });
-}
-
-/// Whether the server-side `session` event may be emitted now. Node emits it
-/// AFTER the same-process client's `connect` event, so defer while any local
-/// client targeting this server is connected but has not yet fired `connect`.
-/// (A remote client — none in-process — never blocks, so real connections emit
-/// immediately.)
-fn local_server_session_ready(server_handle: i64) -> bool {
-    let mut ready = true;
-    iter_handle_ids_of::<Http2SessionHandle, _>(|client_id| {
-        if !ready {
-            return;
-        }
-        let Some(client) = get_handle::<Http2SessionHandle>(client_id) else {
-            return;
-        };
-        if client.session_type != 1 || client.closed || client.destroyed {
-            return;
-        }
-        // Only an in-flight client (still handshaking, or connected and about to
-        // fire `connect`) blocks. A failed client — neither connecting nor
-        // connected — must NOT defer the server `session` forever.
-        if !client.connecting && !client.connected {
-            return;
-        }
-        let targets = client.server_handle == server_handle
-            || h2_listening_server_for_authority(&client.authority) == Some(server_handle);
-        if !targets {
-            return;
-        }
-        let emitted = H2_CLIENT_CONNECT_EMITTED.with(|s| s.borrow().contains(&client_id));
-        if !emitted {
-            ready = false;
-        }
-    });
-    ready
-}
-
 /// `http2.createSecureServer(opts, handler)` — opts carries `{ key, cert }`
 /// PEM strings + the usual handler closure. ALPN advertises both
 /// `h2` and `http/1.1` so non-HTTP/2 clients are still served (matches
@@ -1000,13 +951,14 @@ pub(crate) fn process_pending_h2_events() -> i32 {
         Ok(mut q) => q.drain(..).collect(),
         Err(_) => return 0,
     };
-    // Node fires the client-side `connect` before the server-side `session`
-    // event (the server's `session` emit is deferred relative to the client
-    // handshake completing). Drain `ClientConnect` first so a single-process
-    // loopback observes `connect` then `session`, matching Node's ordering.
+    // Causally, the server creates its session and sends its SETTINGS frame
+    // before a client can complete its connect handshake, so the server-side
+    // `session` event fires BEFORE the client-side `connect` (Node on Linux:
+    // `server>client`). Drain `Session` first so a single-process loopback
+    // observes `session` then `connect`, matching the causal/Linux ordering.
     events.sort_by_key(|event| match event {
-        Http2PendingEvent::ClientConnect { .. } => 0,
-        Http2PendingEvent::Session { .. } => 1,
+        Http2PendingEvent::Session { .. } => 0,
+        Http2PendingEvent::ClientConnect { .. } => 1,
         _ => 2,
     });
     let count = events.len() as i32;
@@ -1016,14 +968,6 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 server_handle,
                 session_handle,
             } => {
-                // Defer behind a same-process client's `connect` (Node ordering).
-                if !local_server_session_ready(server_handle) {
-                    push_h2_event(Http2PendingEvent::Session {
-                        server_handle,
-                        session_handle,
-                    });
-                    continue;
-                }
                 let listeners = get_handle::<Http2SecureServer>(server_handle)
                     .and_then(|s| s.base.listeners.get("session").cloned())
                     .unwrap_or_default();
@@ -1043,7 +987,6 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     push_h2_event(Http2PendingEvent::ClientConnect { session_handle });
                     continue;
                 }
-                mark_client_connect_emitted(session_handle);
                 let listeners = get_handle::<Http2SessionHandle>(session_handle)
                     .and_then(|s| s.listeners.get("connect").cloned())
                     .unwrap_or_default();
