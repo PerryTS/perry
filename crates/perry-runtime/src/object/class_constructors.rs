@@ -317,7 +317,20 @@ pub(crate) unsafe fn replay_class_object_constructor(
         (std::ptr::null(), 0)
     };
 
-    let user_params = (total_params as usize).saturating_sub(n_caps as usize);
+    // A class DECLARATION reached as a heap class object (webpack interop:
+    // `t["default"] = PQueue` read back cross-module) has no per-evaluation
+    // `__perry_ctor_caps` array — fall back to the decl-site snapshot
+    // (CLASS_CAPTURE_VALUES), exactly like the ClassRef replay path. Without
+    // this, the trailing `__perry_cap_*` ctor params read the USER args
+    // (p-queue's `new PQueue({...})` left `i.default` undefined and
+    // `new e.queueClass` threw "undefined is not a constructor").
+    let snapshot_caps: Vec<u64> = if n_caps == 0 {
+        class_capture_values(class_cid).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let effective_caps = (n_caps as usize).max(snapshot_caps.len());
+    let user_params = (total_params as usize).saturating_sub(effective_caps);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
     for i in 0..user_params {
@@ -329,6 +342,9 @@ pub(crate) unsafe fn replay_class_object_constructor(
     }
     for j in 0..n_caps {
         final_args.push(crate::array::js_array_get_f64(caps_arr, j));
+    }
+    for bits in &snapshot_caps {
+        final_args.push(f64::from_bits(*bits));
     }
     let _ = call_vtable_method(
         ctor_ptr,

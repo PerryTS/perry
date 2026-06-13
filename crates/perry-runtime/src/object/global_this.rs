@@ -460,8 +460,45 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             undef
         }
         _ => {
+            // `class PQ extends t {}` nested inside another function (webpack/
+            // ncc inner modules — next/dist/compiled/p-queue extending
+            // eventemitter3): HIR lowers the heritage Ident at class-DECL
+            // scope, but codegen re-emits that expression inside the
+            // constructor, where the captured slot index is unrelated, so
+            // `parent_val` arrives stale (undefined). The decl-site
+            // `js_register_class_parent_dynamic` call DID see the live value
+            // and recorded it in CLASS_PARENT_CLOSURES — prefer that
+            // registration whenever `parent_val` isn't actually callable, so
+            // the parent function body still runs with `this` bound (sets
+            // `this._events` etc.). A valid closure / class-object parent
+            // value keeps the existing direct-dispatch path untouched.
+            let mut callee = parent_val;
+            let bits = parent_val.to_bits();
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+            const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+            let usable = if bits & TAG_MASK == POINTER_TAG {
+                let p = (bits & PTR_MASK) as usize;
+                crate::closure::is_closure_ptr(p)
+                    || crate::object::js_object_get_class_id(
+                        p as *const crate::object::ObjectHeader,
+                    ) != 0
+            } else {
+                // INT32-tagged ClassRefs route through the static super paths
+                // before reaching here; anything else (undefined / a stale
+                // numeric slot) is not a constructor.
+                bits & TAG_MASK == 0x7FFE_0000_0000_0000
+            };
+            if !usable {
+                if let Some(obj) = subclass_this_object_ptr(this_box) {
+                    let cid = crate::object::js_object_get_class_id(obj);
+                    if let Some(addr) = super::class_registry::parent_closure_in_chain(cid) {
+                        callee = f64::from_bits(POINTER_TAG | addr as u64);
+                    }
+                }
+            }
             let prev = crate::object::js_implicit_this_set(this_box);
-            let r = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+            let r = crate::closure::js_native_call_value(callee, args_ptr, args_len);
             crate::object::js_implicit_this_set(prev);
             r
         }

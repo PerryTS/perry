@@ -1257,6 +1257,34 @@ module.exports = SafeBuffer;"#;
     }
 
     #[test]
+    fn extract_exports_skips_inner_module_exports_param() {
+        // next/dist/compiled/p-queue: webpack/ncc inner modules write to their
+        // OWN exports object (`e.exports.X = …`), which is not a named export
+        // of the outer bundle. Pre-fix the dot-boundary regex matched it, the
+        // wrap emitted `export const TimeoutError = _cjs.TimeoutError;` at
+        // module scope, and that const shadowed the inner class binding —
+        // every inner reference to `TimeoutError` became undefined.
+        let src = "var mods = { 816: (e, t, n) => {\n\
+                       class TimeoutError extends Error {}\n\
+                       const pTimeout = (p) => p;\n\
+                       e.exports = pTimeout;\n\
+                       e.exports.str = 'hello';\n\
+                       e.exports.TimeoutError = TimeoutError;\n\
+                   }};\n\
+                   exports.real = 1;\n\
+                   module.exports.alsoReal = 2;\n";
+        let names = extract_exports_from_source(src);
+        assert!(
+            !names.contains(&"TimeoutError".to_string()),
+            "`e.exports.X` is an inner module's exports, not ours: {:?}",
+            names
+        );
+        assert!(!names.contains(&"str".to_string()), "got: {:?}", names);
+        assert!(names.contains(&"real".to_string()));
+        assert!(names.contains(&"alsoReal".to_string()));
+    }
+
+    #[test]
     fn wrap_pino_shape_parses_cleanly() {
         // Issue #845 — pino sub-bug: end-to-end check that a pino-shaped
         // CJS module produces parseable wrap output.

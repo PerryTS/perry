@@ -311,6 +311,28 @@ pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
         .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
 }
 
+/// Walk the class parent chain looking for a registered parent-closure edge.
+/// `super()` dispatch needs this because the instance's class_id is the
+/// MOST-DERIVED class, while the closure-parent edge is keyed by the class
+/// that directly `extends <function value>` — possibly an ancestor.
+pub(crate) fn parent_closure_in_chain(class_id: u32) -> Option<usize> {
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while depth < 32 && cid != 0 {
+        if let Some(addr) = class_parent_closure(cid) {
+            return Some(addr);
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Reverse lookup: which declared class's `.prototype` is this heap object?
 /// Used by `Object.getOwnPropertyDescriptor(C.prototype, name)` to surface
 /// vtable accessors as own properties of the prototype object. Linear scan —
@@ -1614,7 +1636,8 @@ pub unsafe extern "C" fn js_new_function_construct(
             || jv.is_any_string()
             || jv.is_bigint()
         {
-            super::object_ops::throw_object_type_error(b"is not a constructor");
+            let desc = unsafe { super::object_ops::describe_value_for_type_error(func_value) };
+            super::object_ops::throw_object_type_error_with_suffix(&format!("{desc} "), "is not a constructor");
         }
     }
     // `new (new String(""))` / `new (new Number(1))` — a boxed primitive WRAPPER
