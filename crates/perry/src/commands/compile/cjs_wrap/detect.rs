@@ -64,7 +64,7 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
 /// `/['"]/` in vendored minified bundles like comment-json) would otherwise
 /// desync the string state and mask the rest of the file, hiding a trailing
 /// `module.exports = …`.
-fn strip_comments_and_strings(source: &str) -> String {
+pub(crate) fn strip_comments_and_strings(source: &str) -> String {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
         Code,

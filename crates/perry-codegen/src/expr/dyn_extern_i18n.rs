@@ -391,6 +391,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
+                // Next.js lazy-require: a `_lazyreq_N` binding is the CJS require
+                // shim's handle to a FUNCTION-LOCAL `require('S')`. S is
+                // `Deferred` (never eager-initialized), so before reading its
+                // default-export getter, fire `<S>__init()` — idempotent, so
+                // re-reads cost a guard check. This is the moment Node would run
+                // S's module body: when `require('S')` is actually called.
+                if name.starts_with("_lazyreq_") {
+                    let init_fn = format!("{}__init", source_prefix);
+                    ctx.pending_declares
+                        .push((init_fn.clone(), crate::types::VOID, vec![]));
+                    ctx.block().call_void(&init_fn, &[]);
+                }
                 // Issue #678 followup: a V8-fallback import used as a value
                 // (rather than called directly) has no native singleton
                 // wrapper to point at — the `__perry_wrap_extern_*` for V8

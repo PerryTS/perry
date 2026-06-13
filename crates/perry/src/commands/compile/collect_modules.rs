@@ -1089,6 +1089,7 @@ fn collect_module_one(
             type_only: false,
             is_dynamic: true,
             is_dynamic_target: false,
+            is_deferred_require: false,
         });
     }
 
@@ -1545,6 +1546,38 @@ fn collect_module_one(
                     }
                     OutputFormat::Json => {}
                 }
+            }
+        }
+    }
+
+    // Next.js lazy-require: the CJS→ESM wrap names a binding `_lazyreq_N` when
+    // every `require('S')` call site is inside a function body (lazy in Node).
+    // Tag the import so `classify_eager_modules` leaves the target Deferred —
+    // matching Node, which only loads such a module when the enclosing function
+    // runs (e.g. jsonwebtoken, required only inside Next.js's request handlers).
+    // The require shim triggers the target's `__init` on first `require()`, so
+    // an over-eager classification is self-correcting at runtime. Limited to
+    // Perry-compiled (`NativeCompiled`) targets — native stdlib / V8 modules
+    // have their own init paths.
+    if was_cjs_wrapped {
+        for import in &mut hir_module.imports {
+            if import.type_only
+                || import.is_dynamic
+                || import.is_native
+                || import.module_kind != perry_hir::ModuleKind::NativeCompiled
+            {
+                continue;
+            }
+            let is_lazy = import.specifiers.iter().any(|s| {
+                let local = match s {
+                    perry_hir::ImportSpecifier::Default { local } => local,
+                    perry_hir::ImportSpecifier::Namespace { local } => local,
+                    perry_hir::ImportSpecifier::Named { local, .. } => local,
+                };
+                local.starts_with("_lazyreq_")
+            });
+            if is_lazy {
+                import.is_deferred_require = true;
             }
         }
     }

@@ -118,6 +118,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         }
         true
     };
+    // Next.js lazy-require: specifiers whose every `require('S')` call site is
+    // inside a function body (lazy in Node). Computed up front because it also
+    // suppresses alias ADOPTION below — a function-local `const dep =
+    // require('S')` is a function-scoped const, not a module binding, and
+    // adopting it would hoist `import dep from 'S'` to module scope (eager). We
+    // instead keep the synthetic binding and rename it `_lazyreq_N` so the
+    // target stays `Deferred` and inits only when the shim's
+    // `return _lazyreq_N` runs (i.e. when the function actually calls require).
+    let lazy_specs = function_local_specs(source);
+
     let mut import_local_names: Vec<String> = require_specs
         .iter()
         .enumerate()
@@ -127,6 +137,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         std::collections::HashSet::new();
     for (alias, spec, _) in &raw_aliases {
         if !alias_is_safe(alias) {
+            continue;
+        }
+        if lazy_specs.contains(spec) {
+            // Don't adopt a function-local alias — keep it lazy (see above).
             continue;
         }
         if import_local_names.iter().any(|n| n == alias) {
@@ -140,6 +154,17 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         }
         import_local_names[idx] = alias.clone();
         chosen_alias_per_spec.insert(spec.clone());
+    }
+
+    // Rename the surviving synthetic bindings for function-local specs so
+    // `collect_modules` can tag the import `is_deferred_require` by name and
+    // codegen can fire `<S>__init()` at the shim read site.
+    if !lazy_specs.is_empty() {
+        for (i, spec) in require_specs.iter().enumerate() {
+            if import_local_names[i] == format!("_req_{i}") && lazy_specs.contains(spec) {
+                import_local_names[i] = format!("_lazyreq_{i}");
+            }
+        }
     }
 
     // #1721: ranges of `const <alias> = require(<spec>)` lines whose alias we

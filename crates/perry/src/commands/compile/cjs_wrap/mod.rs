@@ -50,7 +50,7 @@ pub(self) use extract_exports::{
 };
 pub(self) use extract_requires::{
     extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
-    identifier_is_reassigned,
+    function_local_specs, identifier_is_reassigned,
 };
 pub(self) use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,

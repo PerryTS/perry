@@ -116,6 +116,14 @@ pub struct Import {
     /// Always `false` on `is_dynamic` synthetic edges (those are already
     /// dynamic targets by virtue of `is_dynamic`).
     pub is_dynamic_target: bool,
+    /// Next.js lazy-require: this `import _req_N from 'S'` was synthesized by
+    /// the CJS→ESM wrap from a `require('S')` whose every call site is inside a
+    /// FUNCTION body (never module top-level). Node loads such a module lazily
+    /// — only when the enclosing function runs — so it must NOT pin the target
+    /// eager. Like `is_dynamic`, the target still enters the compile graph but
+    /// is left `Deferred` unless some other (top-level) edge reaches it; the
+    /// require shim triggers the target's `__init` on first `require()` call.
+    pub is_deferred_require: bool,
 }
 
 /// Import specifier

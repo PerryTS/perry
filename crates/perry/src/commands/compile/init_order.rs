@@ -48,7 +48,7 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
             let static_targets: Vec<PathBuf> = module
                 .imports
                 .iter()
-                .filter(|i| !i.is_dynamic && !i.type_only)
+                .filter(|i| !i.is_dynamic && !i.type_only && !i.is_deferred_require)
                 .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
                 .collect();
             let reexport_sources: Vec<String> = module
@@ -136,7 +136,10 @@ pub(super) fn topo_sort_non_entry_modules(
             // (transitively reached via the same phony edge chain),
             // so tracer's top-level `Context.Reference()(...)` ran
             // against an uninitialized Context global and threw.
-            if import.type_only {
+            // `is_deferred_require`: a function-local `require('S')` is not an
+            // init-order edge — S inits lazily when the require shim runs, not
+            // as part of this module's eager init.
+            if import.type_only || import.is_deferred_require {
                 continue;
             }
             if let Some(ref resolved) = import.resolved_path {
