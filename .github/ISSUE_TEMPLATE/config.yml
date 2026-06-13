@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Join the Perry Discord
+    url: https://discord.gg/chEmpGdTtZ
+    about: Ask questions, get help, and meet the Perry community.
   - name: Question / design discussion
     url: https://github.com/PerryTS/perry/discussions
     about: Open-ended questions, "is Perry right for my use case", design proposals.
