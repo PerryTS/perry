@@ -279,6 +279,13 @@ crates/perry-transform/src/generator/lower.rs
 # server `session` event after the client `connect`. Splitting the session
 # event pump from the handle/settings surface is tracked under #1435.
 crates/perry-ext-http-server/src/http2_server.rs
+# node:events bundled module (EventEmitter handle surface, once/on helpers,
+# AbortSignal wiring, AsyncResource). Crossed the 2000-line gate after the
+# `events.on(...)` real async-iterator rewrite (proper { next, return } over a
+# buffered/pending-promise queue, replacing the bare-array stub). Splitting the
+# on/once iterator machinery into the existing `events/` submodule is tracked
+# under #1435 with the other module-size cleanups.
+crates/perry-stdlib/src/events.rs
 EOF
 )
 
