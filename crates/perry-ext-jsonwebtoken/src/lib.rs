@@ -190,8 +190,16 @@ pub unsafe extern "C" fn js_jwt_verify(
 
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
+    // Match Node's `jsonwebtoken`: validate the `exp` claim whenever it is
+    // present (so expired tokens are rejected), but do not *require* exp — a
+    // token that legitimately omits expiry still verifies. `required_spec_claims`
+    // stays empty for the latter; `validate_exp = true` enforces the former.
+    //
+    // This previously read `validate_exp = false`, which accepted expired
+    // tokens indefinitely (GHSA-5324-c68v-8w62 / CVE-2026-53777) — the same
+    // bug already fixed in crates/perry-stdlib/src/jsonwebtoken.rs.
     validation.required_spec_claims = std::collections::HashSet::new();
-    validation.validate_exp = false;
+    validation.validate_exp = true;
 
     match decode::<Claims>(&token, &key, &validation) {
         Ok(token_data) => {
@@ -325,5 +333,67 @@ mod tests {
         let result_ptr = unsafe { js_jwt_decode(alloc_string(&token).as_raw() as *const _) };
         let claims = ps(result_ptr).expect("decode non-null");
         assert!(claims.contains("\"role\":\"admin\""), "got: {}", claims);
+    }
+
+    #[test]
+    fn verify_rejects_expired_token() {
+        // Regression for #5066 / GHSA-5324-c68v-8w62: expired token must be rejected.
+        let secret = "supersecret";
+        let expired_claims = Claims {
+            data: std::collections::HashMap::new(),
+            exp: Some(1),
+            iat: None,
+            nbf: None,
+            sub: Some("1234".into()),
+            iss: None,
+            aud: None,
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &expired_claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("encode expired token");
+        let token_handle = alloc_string(&token);
+        let result = unsafe {
+            js_jwt_verify(
+                token_handle.as_raw() as *const _,
+                alloc_string(secret).as_raw() as *const _,
+            )
+        };
+        assert!(
+            result.is_null(),
+            "expired token must be rejected, got claims: {:?}",
+            ps(result)
+        );
+    }
+
+    #[test]
+    fn verify_accepts_token_without_exp() {
+        // Node parity: token omitting exp must still verify (required_spec_claims empty).
+        let secret = "supersecret";
+        let claims = Claims {
+            data: std::collections::HashMap::new(),
+            exp: None,
+            iat: None,
+            nbf: None,
+            sub: Some("1234".into()),
+            iss: None,
+            aud: None,
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("encode no-exp token");
+        let token_handle = alloc_string(&token);
+        let result = unsafe {
+            js_jwt_verify(
+                token_handle.as_raw() as *const _,
+                alloc_string(secret).as_raw() as *const _,
+            )
+        };
+        assert!(!result.is_null(), "token without exp must still verify");
     }
 }
