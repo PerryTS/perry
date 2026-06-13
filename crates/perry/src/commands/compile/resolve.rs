@@ -408,28 +408,57 @@ pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
         return Some(base.to_path_buf());
     }
 
-    // Try with extensions in order of preference (TS before JS)
+    // Try with extensions in order of preference (TS before JS).
+    //
+    // Node module resolution APPENDS the extension to the full specifier
+    // (`./stream-ops.web` -> `./stream-ops.web.js`); it never strips a dotted
+    // segment that isn't a real module extension. `Path::with_extension`
+    // REPLACES the last `.foo` segment, so on `stream-ops.web` it produces
+    // `stream-ops.js` — which, in Next.js's app-render dir, is the *requiring*
+    // module itself (`stream-ops.js` requires `./stream-ops.web`). Returning it
+    // makes the module self-require and its re-export getters recurse forever
+    // (`exports.chainStreams` -> `self.chainStreams` -> ... stack overflow).
+    //
+    // So: always try the APPEND form first. Only fall back to the REPLACE form
+    // when the specifier already ends in a recognized module extension — that
+    // path exists purely for Perry's TS-over-JS preference (`./foo.js` whose
+    // `.js` was pruned but `./foo.ts` is present), never to swap an arbitrary
+    // filename segment like `.web`.
+    let base_ext_is_module = base
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e,
+                "js" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts" | "json" | "node"
+            )
+        })
+        .unwrap_or(false);
+    let path_str = base.to_string_lossy().to_string();
     for ext in all_extensions {
-        let with_ext = base.with_extension(ext.trim_start_matches('.'));
-        if with_ext.exists() && with_ext.is_file() {
-            return Some(with_ext);
-        }
-
-        // Also try adding extension to full path (for paths like ./foo.js)
-        let path_str = base.to_string_lossy();
-        let with_ext = PathBuf::from(format!("{}{}", path_str, ext));
-        if with_ext.exists() && with_ext.is_file() {
-            // If we found a JS file, check for TS equivalent first
+        // APPEND: `./stream-ops.web` + `.js` -> `./stream-ops.web.js`.
+        let appended = PathBuf::from(format!("{}{}", path_str, ext));
+        if appended.exists() && appended.is_file() {
+            // If we landed on a JS file, prefer a co-located TS source.
             if matches!(ext, ".js" | ".mjs" | ".cjs") {
-                let stem_str = path_str.to_string();
                 for ts_ext in ts_extensions {
-                    let ts_path = PathBuf::from(format!("{}{}", stem_str, ts_ext));
+                    let ts_path = PathBuf::from(format!("{}{}", path_str, ts_ext));
                     if ts_path.exists() && ts_path.is_file() {
                         return Some(ts_path);
                     }
                 }
             }
-            return Some(with_ext);
+            return Some(appended);
+        }
+
+        // REPLACE: only safe when the specifier already carries a real module
+        // extension (e.g. `./foo.js` -> `./foo.ts`). Skipped for `.web`-style
+        // dotted filenames so we never resolve to a sibling module.
+        if base_ext_is_module {
+            let replaced = base.with_extension(ext.trim_start_matches('.'));
+            if replaced.exists() && replaced.is_file() {
+                return Some(replaced);
+            }
         }
     }
 

@@ -1327,6 +1327,41 @@ mod manifest_parse_tests {
         assert!(msg.contains("backends.vulkan.available"), "got: {msg}");
         assert!(msg.contains("expected boolean"), "got: {msg}");
     }
+
+    #[test]
+    fn dotted_specifier_appends_not_replaces_extension() {
+        // Next.js app-render dir: `stream-ops.js` and `stream-ops.web.js`
+        // coexist, and `stream-ops.js` does `require("./stream-ops.web")`.
+        // `Path::with_extension("js")` REPLACES `.web` → `stream-ops.js` (the
+        // requiring file itself); resolving to it makes the module self-require
+        // and its re-export getters recurse forever. The resolver must APPEND:
+        // `./stream-ops.web` → `./stream-ops.web.js`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("stream-ops.js"), "// requiring module\n").expect("write");
+        std::fs::write(root.join("stream-ops.web.js"), "// the real target\n").expect("write");
+
+        let resolved =
+            resolve_with_extensions(&root.join("stream-ops.web")).expect("must resolve");
+        assert_eq!(
+            resolved,
+            root.join("stream-ops.web.js"),
+            "must append `.js` to the full specifier, not strip `.web`"
+        );
+    }
+
+    #[test]
+    fn pruned_js_specifier_still_falls_back_to_ts_via_replace() {
+        // The REPLACE path is retained for Perry's TS-over-JS preference: a
+        // `require("./foo.js")` whose `.js` was pruned but whose `./foo.ts`
+        // source is present must still resolve to the TS file.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("foo.ts"), "export const x = 1;\n").expect("write");
+
+        let resolved = resolve_with_extensions(&root.join("foo.js")).expect("must resolve");
+        assert_eq!(resolved, root.join("foo.ts"));
+    }
 }
 
 #[cfg(test)]
