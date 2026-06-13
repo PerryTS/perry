@@ -270,137 +270,14 @@ pub fn synthesize_class_captures(
         class_name: &str,
         cap_args: &[(LocalId, LocalId)],
     ) {
-        if let Expr::New {
-            class_name: cn,
-            args,
-            ..
-        } = expr
-        {
-            if cn == class_name {
-                for (_, fresh) in cap_args {
-                    args.push(Expr::LocalGet(*fresh));
-                }
-            }
-        }
-        if let Expr::Closure { body, captures, .. } = expr {
-            for stmt in body.iter_mut() {
-                append_self_new_args_stmt(stmt, class_name, cap_args);
-            }
-            // The appended LocalGet reads the enclosing method's rebind
-            // slot — make sure the closure captures it.
-            let mut refs = Vec::new();
-            let mut visited = std::collections::HashSet::new();
-            for stmt in body.iter() {
-                crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
-            }
-            for (_, fresh) in cap_args {
-                if refs.contains(fresh) && !captures.contains(fresh) {
-                    captures.push(*fresh);
-                }
-            }
-            return;
-        }
-        crate::walker::walk_expr_children_mut(expr, &mut |child| {
-            append_self_new_args_expr(child, class_name, cap_args)
-        });
+        append_new_args_expr(expr, class_name, cap_args, false)
     }
     fn append_self_new_args_stmt(
         stmt: &mut Stmt,
         class_name: &str,
         cap_args: &[(LocalId, LocalId)],
     ) {
-        match stmt {
-            Stmt::Let { init, .. } => {
-                if let Some(e) = init {
-                    append_self_new_args_expr(e, class_name, cap_args);
-                }
-            }
-            Stmt::Expr(e) | Stmt::Throw(e) => append_self_new_args_expr(e, class_name, cap_args),
-            Stmt::Return(opt) => {
-                if let Some(e) = opt {
-                    append_self_new_args_expr(e, class_name, cap_args);
-                }
-            }
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                append_self_new_args_expr(condition, class_name, cap_args);
-                for s in then_branch {
-                    append_self_new_args_stmt(s, class_name, cap_args);
-                }
-                if let Some(eb) = else_branch {
-                    for s in eb {
-                        append_self_new_args_stmt(s, class_name, cap_args);
-                    }
-                }
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                append_self_new_args_expr(condition, class_name, cap_args);
-                for s in body {
-                    append_self_new_args_stmt(s, class_name, cap_args);
-                }
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                if let Some(s) = init {
-                    append_self_new_args_stmt(s, class_name, cap_args);
-                }
-                if let Some(e) = condition {
-                    append_self_new_args_expr(e, class_name, cap_args);
-                }
-                if let Some(e) = update {
-                    append_self_new_args_expr(e, class_name, cap_args);
-                }
-                for s in body {
-                    append_self_new_args_stmt(s, class_name, cap_args);
-                }
-            }
-            Stmt::Labeled { body, .. } => append_self_new_args_stmt(body, class_name, cap_args),
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                for s in body {
-                    append_self_new_args_stmt(s, class_name, cap_args);
-                }
-                if let Some(c) = catch {
-                    for s in &mut c.body {
-                        append_self_new_args_stmt(s, class_name, cap_args);
-                    }
-                }
-                if let Some(fb) = finally {
-                    for s in fb {
-                        append_self_new_args_stmt(s, class_name, cap_args);
-                    }
-                }
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } => {
-                append_self_new_args_expr(discriminant, class_name, cap_args);
-                for c in cases {
-                    if let Some(t) = &mut c.test {
-                        append_self_new_args_expr(t, class_name, cap_args);
-                    }
-                    for s in &mut c.body {
-                        append_self_new_args_stmt(s, class_name, cap_args);
-                    }
-                }
-            }
-            Stmt::Break
-            | Stmt::Continue
-            | Stmt::LabeledBreak(_)
-            | Stmt::LabeledContinue(_)
-            | Stmt::PreallocateBoxes(_) => {}
-        }
+        append_new_args_stmt(stmt, class_name, cap_args, false)
     }
 
     // 2. Methods / getters / setters. After each body's capture rebind,
@@ -615,4 +492,162 @@ pub fn synthesize_class_captures(
     //    `LocalGet(outer_id)` per captured outer id at every
     //    construction site.
     ctx.register_class_captures(name.to_string(), captures_vec);
+}
+
+/// Append `cap_args` (the `.1` ids) to every `new <class_name>(…)` site in
+/// `expr`, descending nested closures (patching their capture lists when the
+/// appended id is otherwise unreferenced). With `skip_if_present`, a site
+/// whose args already END with exactly the `.1` id sequence is left alone —
+/// used by the post-body pass, where sites lowered AFTER the class
+/// registered already carry the appends.
+pub(crate) fn append_new_args_expr(
+    expr: &mut Expr,
+    class_name: &str,
+    cap_args: &[(LocalId, LocalId)],
+    skip_if_present: bool,
+) {
+    if let Expr::New {
+        class_name: cn,
+        args,
+        ..
+    } = expr
+    {
+        if cn == class_name {
+            let already = skip_if_present
+                && args.len() >= cap_args.len()
+                && args[args.len() - cap_args.len()..]
+                    .iter()
+                    .zip(cap_args.iter())
+                    .all(|(a, (_, fresh))| matches!(a, Expr::LocalGet(id) if id == fresh));
+            if !already {
+                for (_, fresh) in cap_args {
+                    args.push(Expr::LocalGet(*fresh));
+                }
+            }
+        }
+    }
+    if let Expr::Closure { body, captures, .. } = expr {
+        for stmt in body.iter_mut() {
+            append_new_args_stmt(stmt, class_name, cap_args, skip_if_present);
+        }
+        let mut refs = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        for stmt in body.iter() {
+            crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+        }
+        for (_, fresh) in cap_args {
+            if refs.contains(fresh) && !captures.contains(fresh) {
+                captures.push(*fresh);
+            }
+        }
+        return;
+    }
+    crate::walker::walk_expr_children_mut(expr, &mut |child| {
+        append_new_args_expr(child, class_name, cap_args, skip_if_present)
+    });
+}
+
+/// Statement-level driver for [`append_new_args_expr`].
+pub(crate) fn append_new_args_stmt(
+    stmt: &mut Stmt,
+    class_name: &str,
+    cap_args: &[(LocalId, LocalId)],
+    skip_if_present: bool,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            append_new_args_expr(e, class_name, cap_args, skip_if_present)
+        }
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            append_new_args_expr(condition, class_name, cap_args, skip_if_present);
+            for s in then_branch {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            append_new_args_expr(condition, class_name, cap_args, skip_if_present);
+            for s in body {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(s) = init {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+            if let Some(e) = condition {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+            if let Some(e) = update {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+            for s in body {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            append_new_args_stmt(body, class_name, cap_args, skip_if_present)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+            if let Some(c) = catch {
+                for s in &mut c.body {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+            if let Some(fb) = finally {
+                for s in fb {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            append_new_args_expr(discriminant, class_name, cap_args, skip_if_present);
+            for c in cases {
+                if let Some(t) = &mut c.test {
+                    append_new_args_expr(t, class_name, cap_args, skip_if_present);
+                }
+                for s in &mut c.body {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
 }

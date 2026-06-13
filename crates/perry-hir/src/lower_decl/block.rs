@@ -247,6 +247,27 @@ pub fn lower_fn_body_block_stmt(
                     if !captured.is_empty() {
                         let captures: Vec<Expr> =
                             captured.iter().map(|id| Expr::LocalGet(*id)).collect();
+                        // Sibling code lowered BEFORE this class registered
+                        // its captures (forward refs — zod's
+                        // `function createZodEnum(...) { return new
+                        // ZodEnum({...}) }` declared above the class) has
+                        // `new <class>(…)` sites with NO cap args appended;
+                        // the inline binder then misfills the ctor params.
+                        // Append the raw outer ids now; sites lowered after
+                        // registration already end with exactly these ids
+                        // and are skipped (tail-match guard). Class members
+                        // were handled by `append_self_sites` with remapped
+                        // ids — their tails don't match the raw ids, but
+                        // they ALREADY carry appends; restrict this pass to
+                        // non-member code by walking the lowered body only
+                        // (member bodies live in pending_classes, not here).
+                        let cap_args: Vec<(perry_types::LocalId, perry_types::LocalId)> =
+                            captured.iter().map(|id| (*id, *id)).collect();
+                        for s in body.iter_mut() {
+                            super::class_captures::append_new_args_stmt(
+                                s, &cname, &cap_args, true,
+                            );
+                        }
                         re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
                             class_name: cname,
                             captures,
