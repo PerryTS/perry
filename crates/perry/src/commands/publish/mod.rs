@@ -22,6 +22,7 @@ mod args;
 mod config_types;
 mod credentials;
 mod preflight;
+mod resolve;
 mod saved_config;
 mod server_api;
 mod tarball;
@@ -45,6 +46,7 @@ use credentials::{
     validate_credentials_for_distribute,
 };
 use preflight::{ios_preflight_validation, macos_preflight_validation, run_security_audit_step};
+use resolve::{resolve_bundle_id, resolve_entry};
 use server_api::{
     BuildManifest, BuildResponse, CredentialsPayload, RegisterResponse, ServerMessage,
 };
@@ -210,54 +212,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         .unwrap_or_else(|| "https://hub.perryts.com".into());
 
     // --- Resolve entry point ---
-    let entry = if is_android {
-        config
-            .android
-            .as_ref()
-            .and_then(|a| a.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main.ts".into())
-    } else if is_ios {
-        config
-            .ios
-            .as_ref()
-            .and_then(|i| i.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main_ios.ts".into())
-    } else if is_visionos {
-        config
-            .visionos
-            .as_ref()
-            .and_then(|i| i.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main_visionos.ts".into())
-    } else if is_tvos {
-        config
-            .tvos
-            .as_ref()
-            .and_then(|t| t.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main_tvos.ts".into())
-    } else if is_watchos {
-        config
-            .watchos
-            .as_ref()
-            .and_then(|w| w.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main_watchos.ts".into())
-    } else {
-        config
-            .app
-            .as_ref()
-            .and_then(|a| a.entry.clone())
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main.ts".into())
-    };
+    let entry = resolve_entry(
+        &config,
+        is_ios,
+        is_visionos,
+        is_tvos,
+        is_watchos,
+        is_android,
+    );
 
     // --- Resolve version (allow override) ---
     let version = if interactive {
@@ -329,64 +291,17 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
     let app_bundle_id = config.app.as_ref().and_then(|a| a.bundle_id.clone());
     let project_bundle_id = config.project.as_ref().and_then(|p| p.bundle_id.clone());
-    let bundle_id = if is_android {
-        config
-            .android
-            .as_ref()
-            .and_then(|a| a.package_name.clone())
-            .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
-            .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else if is_ios {
-        config
-            .ios
-            .as_ref()
-            .and_then(|i| i.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else if is_visionos {
-        config
-            .visionos
-            .as_ref()
-            .and_then(|i| i.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
-            .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else if is_tvos {
-        config
-            .tvos
-            .as_ref()
-            .and_then(|t| t.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else if is_watchos {
-        // A standalone watchOS app must have its OWN unique bundle id — do NOT
-        // fall back to the iOS app's id (App Store Connect rejects duplicates).
-        // The appstore/testflight preflight below hard-requires [watchos] bundle_id.
-        config
-            .watchos
-            .as_ref()
-            .and_then(|w| w.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else {
-        config
-            .macos
-            .as_ref()
-            .and_then(|m| m.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    };
+    let bundle_id = resolve_bundle_id(
+        &config,
+        &app_name,
+        &app_bundle_id,
+        &project_bundle_id,
+        is_ios,
+        is_visionos,
+        is_tvos,
+        is_watchos,
+        is_android,
+    );
 
     let mut icon = config
         .project

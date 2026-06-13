@@ -257,6 +257,10 @@ fn test_config_file_write_and_read() {
     let _ = fs::remove_dir(&dir);
 }
 
+// The trailing `false, None, false, None` on each call is
+// (is_tvos, tvos_distribute, is_watchos, watchos_distribute) — not applicable
+// to the android/ios/macos cases below. tvOS/watchOS have dedicated tests.
+
 #[test]
 fn test_validate_android_playstore_requires_json() {
     let result = validate_credentials_for_distribute(
@@ -270,6 +274,10 @@ fn test_validate_android_playstore_requires_json() {
         None, // ios not applicable
         false,
         None, // macos not applicable
+        false,
+        None, // tvos not applicable
+        false,
+        None, // watchos not applicable
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -287,6 +295,10 @@ fn test_validate_android_playstore_invalid_track() {
         None,
         None,
         None,
+        None,
+        false,
+        None,
+        false,
         None,
         false,
         None,
@@ -313,6 +325,10 @@ fn test_validate_android_playstore_valid_tracks() {
             None,
             false,
             None,
+            false,
+            None,
+            false,
+            None,
         );
         assert!(result.is_ok(), "track={track} should be valid");
     }
@@ -329,6 +345,10 @@ fn test_validate_ios_appstore_requires_creds() {
         None,
         None,
         None, // ios, missing creds
+        false,
+        None,
+        false,
+        None,
         false,
         None,
     );
@@ -351,6 +371,10 @@ fn test_validate_ios_testflight_requires_creds() {
         Some("key_content"),
         false,
         None,
+        false,
+        None,
+        false,
+        None,
     );
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Issuer ID"));
@@ -360,7 +384,7 @@ fn test_validate_ios_testflight_requires_creds() {
 fn test_validate_ios_no_distribute_passes() {
     let result = validate_credentials_for_distribute(
         false, None, None, true, None, None, None, None, // ios but no distribute set
-        false, None,
+        false, None, false, None, false, None,
     );
     assert!(result.is_ok());
 }
@@ -378,6 +402,10 @@ fn test_validate_macos_appstore_requires_creds() {
         None,
         true,
         Some("appstore"), // macos appstore, no creds
+        false,
+        None,
+        false,
+        None,
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -398,6 +426,10 @@ fn test_validate_macos_testflight_requires_creds() {
         None,
         true,
         Some("testflight"), // macos testflight, no creds
+        false,
+        None,
+        false,
+        None,
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -417,6 +449,10 @@ fn test_validate_macos_notarize_requires_creds() {
         None,
         true,
         Some("notarize"), // macos notarize, no creds
+        false,
+        None,
+        false,
+        None,
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -436,6 +472,89 @@ fn test_validate_passes_when_all_present() {
         Some("p8"),
         false,
         None,
+        false,
+        None,
+        false,
+        None,
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_tvos_appstore_requires_creds() {
+    let result = validate_credentials_for_distribute(
+        false,
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        true,
+        Some("appstore"), // tvos appstore, no creds
+        false,
+        None,
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("App Store Connect API credentials"), "{msg}");
+    assert!(msg.contains("perry setup tvos"), "{msg}");
+}
+
+#[test]
+fn test_validate_watchos_appstore_requires_creds() {
+    let result = validate_credentials_for_distribute(
+        false,
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        false,
+        None,
+        true,
+        Some("appstore"), // watchos appstore, no creds
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("App Store Connect API credentials"), "{msg}");
+    assert!(msg.contains("perry setup watchos"), "{msg}");
+}
+
+#[test]
+fn test_validate_watchos_testflight_missing_issuer() {
+    let result = validate_credentials_for_distribute(
+        false,
+        None,
+        None,
+        false,
+        None,
+        Some("kid"),
+        None,
+        Some("p8"),
+        false,
+        None,
+        false,
+        None,
+        true,
+        Some("testflight"), // watchos testflight, issuer missing
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("Issuer ID"));
+}
+
+#[test]
+fn test_validate_watchos_no_distribute_passes() {
+    let result = validate_credentials_for_distribute(
+        false, None, None, false, None, None, None, None, false, None, false, None, true,
+        None, // watchos but no distribute set
     );
     assert!(result.is_ok());
 }
