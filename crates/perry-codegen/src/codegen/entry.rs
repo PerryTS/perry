@@ -138,8 +138,8 @@ pub(super) fn compile_module_entry(
             // we emit the final symbol directly. Pass e.g. `_perry_user_main`
             // (the leading underscore yields Mach-O `__perry_user_main`, which
             // the Swift `@main` shell references via @_silgen_name).
-            let entry_name = std::env::var("PERRY_ENTRY_SYMBOL")
-                .unwrap_or_else(|_| "main".to_string());
+            let entry_name =
+                std::env::var("PERRY_ENTRY_SYMBOL").unwrap_or_else(|_| "main".to_string());
             llmod.define_function(&entry_name, I32, vec![])
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");

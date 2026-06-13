@@ -1765,8 +1765,8 @@ pub(super) fn build_and_run_link(
                 // arm64_32 watchOS (Series 4-8 / SE): opt-in, matches the app
                 // binary's triple in platform_cmd.rs so the native @main lib
                 // links against the same arch.
-                let swift_arm64_32 = target == Some("watchos")
-                    && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
+                let swift_arm64_32 =
+                    target == Some("watchos") && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
                 let swift_watchos_min =
                     std::env::var("PERRY_WATCHOS_MIN").unwrap_or_else(|_| "11.0".to_string());
                 let swift_triple_owned;
