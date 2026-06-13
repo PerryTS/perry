@@ -120,9 +120,9 @@ pub(crate) use v8_interop::{
 };
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_layout_note_slot_on_block, emit_root_heap_word_store_on_block,
-    emit_root_nanbox_store_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
-    lower_node_stream_super_init, lower_stream_super_init,
+    emit_jsvalue_slot_store_scalar_aware_on_block, emit_layout_note_slot_on_block,
+    emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,
+    emit_write_barrier_slot_on_block, lower_node_stream_super_init, lower_stream_super_init,
 };
 
 /// One in-flight inline-constructor return target. See

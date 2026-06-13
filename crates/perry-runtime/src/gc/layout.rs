@@ -442,6 +442,33 @@ pub extern "C" fn js_gc_note_slot_layout(parent: u64, slot_index: u32, value_bit
     layout_note_slot(parent_user, slot_index as usize, value_bits);
 }
 
+/// Scalar-aware variant of [`js_gc_note_slot_layout`]: `old_bits` is the value
+/// previously held in the slot. When **neither** the new value nor the old
+/// value is a heap pointer, the slot's pointer-ness is unchanged, so the
+/// per-slot GC layout mask needs no update — the `SIDE_MASK`/typed path's
+/// thread-local hashmap touch is skipped. The mask invariant ("bit set ⟺ slot
+/// holds a pointer") is preserved because the full path still runs whenever a
+/// pointer is involved on either side (`new` is a pointer → set; `old` was a
+/// pointer → clear), which is exactly when the mask must change. This is the
+/// dominant per-write cost on heterogeneous `any[]` numeric write loops
+/// (stubbing `layout_note_slot` makes `bench_numeric_array_downgrade` 11×
+/// faster). `layout_pointer_bearing_bits` is the same predicate the layout
+/// machinery uses internally, so raw-pointer array slots are classified
+/// correctly (not just NaN-boxed tags).
+#[no_mangle]
+pub extern "C" fn js_gc_note_slot_layout_aware(
+    parent: u64,
+    slot_index: u32,
+    value_bits: u64,
+    old_bits: u64,
+) {
+    if !layout_pointer_bearing_bits(value_bits) && !layout_pointer_bearing_bits(old_bits) {
+        return;
+    }
+    let parent_user = strip_nanbox_user_ptr(parent);
+    layout_note_slot(parent_user, slot_index as usize, value_bits);
+}
+
 unsafe fn init_typed_shape_layout(
     user_ptr: usize,
     slot_count: usize,

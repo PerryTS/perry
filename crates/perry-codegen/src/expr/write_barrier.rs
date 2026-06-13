@@ -72,6 +72,28 @@ pub(crate) fn emit_layout_note_slot_on_block(
     );
 }
 
+/// Scalar-aware layout note: passes the slot's previous value (`old_bits`) so
+/// the runtime can skip the thread-local layout hashmap when the store does not
+/// change the slot's pointer-ness (scalar-over-scalar). See
+/// `js_gc_note_slot_layout_aware`.
+pub(crate) fn emit_layout_note_slot_aware_on_block(
+    blk: &mut LlBlock,
+    parent_bits: &str,
+    slot_index: &str,
+    value_bits: &str,
+    old_bits: &str,
+) {
+    blk.call_void(
+        "js_gc_note_slot_layout_aware",
+        &[
+            (I64, parent_bits),
+            (I32, slot_index),
+            (I64, value_bits),
+            (I64, old_bits),
+        ],
+    );
+}
+
 pub(crate) fn emit_array_numeric_write_note_on_block(
     blk: &mut LlBlock,
     array_bits: &str,
@@ -94,6 +116,78 @@ pub(crate) fn emit_jsvalue_slot_store_on_block(
     slot_addr: &str,
     write_barrier_needed: bool,
 ) -> Option<String> {
+    emit_jsvalue_slot_store_on_block_inner(
+        blk,
+        slot_ptr,
+        value_double,
+        layout_parent_bits,
+        slot_index,
+        layout_note_needed,
+        barrier_parent_bits,
+        slot_addr,
+        write_barrier_needed,
+        false,
+    )
+}
+
+/// As [`emit_jsvalue_slot_store_on_block`], but for an **in-place element
+/// overwrite** of a slot that already holds a valid value: routes the layout
+/// note through `js_gc_note_slot_layout_aware`, which loads the previous slot
+/// value and skips the thread-local layout hashmap when neither old nor new is
+/// a heap pointer. Use only where the slot is guaranteed initialized (array
+/// `arr[i] = …` overwrites), not for fresh-slot appends/literals or object
+/// field writes (which are POINTER_FREE-dominated and only pay the extra load).
+/// This is the dominant per-write cost on downgraded `any[]` numeric loops
+/// (#5094) and gives ~9× on `bench_numeric_array_downgrade` without regressing
+/// `bench_object_property`.
+pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
+    blk: &mut LlBlock,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+) -> Option<String> {
+    emit_jsvalue_slot_store_on_block_inner(
+        blk,
+        slot_ptr,
+        value_double,
+        layout_parent_bits,
+        slot_index,
+        layout_note_needed,
+        barrier_parent_bits,
+        slot_addr,
+        write_barrier_needed,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_jsvalue_slot_store_on_block_inner(
+    blk: &mut LlBlock,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+    scalar_aware: bool,
+) -> Option<String> {
+    // The scalar-aware layout note needs the slot's PREVIOUS value to decide
+    // whether the slot's pointer-ness actually changed; load it before the
+    // store overwrites it. Only when both a note is needed and the caller opted
+    // into the scalar-aware path (the slot is a valid in-place overwrite).
+    let old_bits = if scalar_aware && layout_note_needed {
+        let old_double = blk.load(DOUBLE, slot_ptr);
+        Some(blk.bitcast_double_to_i64(&old_double))
+    } else {
+        None
+    };
     // GC_STORE_AUDIT(BARRIERED): generated heap JSValue stores route through this shared emitter.
     blk.store(DOUBLE, value_double, slot_ptr);
     if !layout_note_needed && !write_barrier_needed {
@@ -101,7 +195,21 @@ pub(crate) fn emit_jsvalue_slot_store_on_block(
     }
     let value_bits = blk.bitcast_double_to_i64(value_double);
     if layout_note_needed {
-        emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits);
+        match old_bits.as_deref() {
+            // Scalar-over-scalar stores leave the GC slot layout unchanged — the
+            // aware note skips the thread-local layout hashmap when neither the
+            // new nor the old value is a heap pointer (#5094).
+            Some(old) => emit_layout_note_slot_aware_on_block(
+                blk,
+                layout_parent_bits,
+                slot_index,
+                &value_bits,
+                old,
+            ),
+            None => {
+                emit_layout_note_slot_on_block(blk, layout_parent_bits, slot_index, &value_bits)
+            }
+        }
     }
     if write_barrier_needed {
         emit_write_barrier_slot_on_block(blk, barrier_parent_bits, slot_addr, &value_bits);
