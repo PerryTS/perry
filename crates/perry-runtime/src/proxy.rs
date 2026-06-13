@@ -1107,6 +1107,60 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         return ok;
     }
 
+    // #5054 fast path: the spec walk below probes own_set_descriptor on the
+    // target, which ends in a LINEAR keys_array scan — so every dynamic
+    // `obj[key] = v` was O(own-key-count) and building a wide dynamic object
+    // quadratic (10k props ~ 12s). When nothing the walk models can apply —
+    // plain GC_TYPE_OBJECT receiver written as itself, no property/accessor
+    // descriptor ever installed in the process (monotonic global), no class
+    // machinery (class_id 0), no recorded setPrototypeOf target, extensible,
+    // string key — the write reduces to the ordinary data-property store.
+    // #5054 fast path: the spec walk below probes own_set_descriptor on the
+    // target, which ends in a LINEAR keys_array scan — so every dynamic
+    // `obj[key] = v` was O(own-key-count) and building a wide dynamic object
+    // quadratic (10k props ~ 12s). When nothing the walk models can apply,
+    // the write reduces to the ordinary data-property store:
+    //   - target written as itself (receiver bits identical),
+    //   - plain GC_TYPE_OBJECT with class_id 0 (no class setter machinery),
+    //   - no descriptor ever installed on THIS object
+    //     (OBJ_FLAG_HAS_DESCRIPTORS) and not frozen/sealed/non-extensible,
+    //   - no recorded setPrototypeOf target (prototype chain is exactly
+    //     Object.prototype) and no descriptor on Object.prototype,
+    //   - string key.
+    let target_top16 = target.to_bits() >> 48;
+    if target.to_bits() == receiver.to_bits()
+        // POINTER_TAG'd heap object, or a module-level slot's raw I64 pointer
+        // (top 16 bits zero).
+        && (target_top16 == 0x7FFD || target_top16 == 0)
+        && !crate::object::object_proto_descriptors_in_use()
+        && unsafe { crate::symbol::js_is_symbol(key) } == 0
+    {
+        let addr = extract_pointer(target.to_bits()) as usize;
+        // Typed arrays must be excluded before the header probe: small TAs
+        // are plain-alloc'd without a GcHeader.
+        if crate::typedarray::lookup_typed_array_kind(addr).is_none()
+            && crate::object::exotic_expando::exotic_expando_kind_of_value(target).is_none()
+            && !crate::closure::is_closure_ptr(addr)
+        {
+            unsafe {
+                if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
+                    const SLOW_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+                        | crate::gc::OBJ_FLAG_SEALED
+                        | crate::gc::OBJ_FLAG_NO_EXTEND
+                        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+                    if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                        && header._reserved & SLOW_FLAGS == 0
+                        && (*(addr as *const crate::ObjectHeader)).class_id == 0
+                        && crate::object::prototype_chain::object_static_prototype(addr).is_none()
+                    {
+                        target_set(target, key, value);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
     let mut current = target;
     for _ in 0..64 {
         // Integer-Indexed exotic [[Set]] (§10.4.5.5): a typed array in the
