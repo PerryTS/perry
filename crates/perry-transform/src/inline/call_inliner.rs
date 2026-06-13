@@ -715,6 +715,20 @@ pub fn inline_calls_in_stmts(
                 }
                 let mut body_facts =
                     loop_invariant_seed_facts(exact_receiver_facts, body, &for_extra);
+                // The for-init can also rebind a receiver local (e.g.
+                // `for (c = makeOther(); …)`), so drop facts it mutates too —
+                // otherwise a stale pre-loop class could survive into the body
+                // and allow an unsound inline. (`init` is a Stmt, not an Expr,
+                // so it can't go through `for_extra`.)
+                if let Some(init_stmt) = init.as_ref() {
+                    let mut init_mutated: std::collections::HashSet<LocalId> =
+                        std::collections::HashSet::new();
+                    collect_mutated_local_ids(
+                        std::slice::from_ref(init_stmt.as_ref()),
+                        &mut init_mutated,
+                    );
+                    body_facts.retain(|id, _| !init_mutated.contains(id));
+                }
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
