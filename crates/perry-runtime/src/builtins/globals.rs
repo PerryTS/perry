@@ -286,7 +286,9 @@ const ESCAPE_UNESCAPED: &[u8] =
 /// must reject rather than coerce to a `"Symbol(x)"` description string.
 fn throw_if_symbol(value: f64) {
     if (value.to_bits() & 0xFFFF_0000_0000_0000) == crate::value::POINTER_TAG
-        && crate::symbol::is_registered_symbol((value.to_bits() & crate::value::POINTER_MASK) as usize)
+        && crate::symbol::is_registered_symbol(
+            (value.to_bits() & crate::value::POINTER_MASK) as usize,
+        )
     {
         let msg = b"Cannot convert a Symbol value to a string";
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);

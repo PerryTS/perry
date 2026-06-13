@@ -1697,8 +1697,8 @@ extern "C" fn events_on_queue_listener(closure: *const ClosureHeader, arg0: f64)
 
         let pending = events_on_state_array(state, EVENTS_ON_PENDING);
         if !pending.is_null() && js_array_length(pending) > 0 {
-            let promise =
-                js_nanbox_get_pointer(perry_runtime::array::js_array_shift_f64(pending)) as *mut Promise;
+            let promise = js_nanbox_get_pointer(perry_runtime::array::js_array_shift_f64(pending))
+                as *mut Promise;
             if !promise.is_null() {
                 js_promise_resolve(promise, events_iter_result(args_val, false));
             }
@@ -1989,7 +1989,11 @@ pub unsafe extern "C" fn js_events_on(
 
     // Record the emitter handle + listener so `return()` can detach cleanly.
     events_on_state_set(state, EVENTS_ON_HANDLE, handle as f64);
-    events_on_state_set(state, EVENTS_ON_LISTENER, js_nanbox_pointer(listener as i64));
+    events_on_state_set(
+        state,
+        EVENTS_ON_LISTENER,
+        js_nanbox_pointer(listener as i64),
+    );
 
     if let Some(signal) = signal {
         if let Some(signal_ptr) = object_ptr_from_value(signal) {
