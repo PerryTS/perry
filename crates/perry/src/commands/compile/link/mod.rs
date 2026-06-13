@@ -330,7 +330,8 @@ pub(super) fn build_and_run_link(
     // When ios-game-loop is enabled, rename _main to _perry_user_main in the
     // entry object file so the perry runtime's main() (from ios_game_loop.rs)
     // becomes the process entry point. It spawns _perry_user_main on a game thread.
-    if (is_ios || is_tvos) && compiled_features.iter().any(|f| f == "ios-game-loop") {
+    if (is_ios || is_tvos || is_visionos) && compiled_features.iter().any(|f| f == "ios-game-loop")
+    {
         // Resolve an objcopy: rust-objcopy / llvm-objcopy from the host Rust
         // toolchain (macOS), then llvm-objcopy on Linux builders, then PATH.
         let objcopy = std::env::var("HOME").ok()

@@ -2,9 +2,13 @@
 
 **One codebase. Every platform. Native performance.**
 
+[![Join the Perry Discord community](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/chEmpGdTtZ)
+
 Perry is a native TypeScript compiler written in Rust. It takes your TypeScript and compiles it straight to native executables — no Node.js, no Electron, no browser engine. Just fast, small binaries that run anywhere.
 
 **Current Version:** 0.5.152 | [Website](https://perryts.com) | [Documentation](https://perryts.github.io/perry/) | [Showcase](https://perryts.com/showcase)
+
+**Community:** [Join the Perry Discord](https://discord.gg/chEmpGdTtZ)
 
 ```bash
 perry compile src/main.ts -o myapp

@@ -105,11 +105,37 @@ extern "C" {
         scanner_id: usize,
         scanner: PerryFfiNamedMutableRootScanner,
     );
-    /// perry-runtime hook: register a probe the runtime's generic method
-    /// dispatcher consults to tell a `register_handle` id apart from a Node
-    /// timer id (both occupy the pointer-tagged small-integer band). Resolved
-    /// at final link (perry-runtime is always linked into the binary).
+}
+
+// perry-runtime hook: register a probe the runtime's generic method dispatcher
+// consults to tell a `register_handle` id apart from a Node timer id (both
+// occupy the pointer-tagged small-integer band). Defined in perry-runtime and
+// resolved at the final link of any real Perry binary.
+//
+// The declaration is gated OUT of perry-ffi's own unit-test binary when
+// `runtime-link` is off, where a no-op stub stands in instead (see below) —
+// otherwise the always-present `extern` item and the stub would clash (E0428).
+#[cfg(not(all(test, not(feature = "runtime-link"))))]
+extern "C" {
     fn js_register_ffi_handle_exists_probe(probe: extern "C" fn(handle: i64) -> bool);
+}
+
+// perry-ffi's own unit-test binary does not link perry-runtime: `runtime-link`
+// is off by default and CI runs `cargo test -p perry-ffi` per-package in
+// isolation (no `--workspace` feature unification, see `.github/workflows/
+// test.yml`). The handle-registry tests below exercise `register_handle`,
+// which calls `js_register_ffi_handle_exists_probe` to wire up the runtime's
+// handle-vs-timer disambiguation probe (#5083). Give that test binary a no-op
+// definition so it links and the registry tests keep running. Gated on
+// `not(feature = "runtime-link")` so it never collides with perry-runtime's
+// real definition — which is present whenever runtime-link is on, or at a
+// wrapper's final link against libperry_runtime.a, neither of which is a
+// perry-ffi `test` build.
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn js_register_ffi_handle_exists_probe(
+    _probe: extern "C" fn(handle: i64) -> bool,
+) {
 }
 
 /// Probe handed to perry-runtime: is `handle` a live entry in this registry?

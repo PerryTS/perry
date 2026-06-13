@@ -138,7 +138,10 @@ pub mod webassembly;
 pub mod arkts_callbacks;
 pub mod geisterhand_registry;
 pub mod i18n;
-#[cfg(all(any(target_os = "ios", target_os = "tvos"), feature = "ios-game-loop"))]
+#[cfg(all(
+    any(target_os = "ios", target_os = "tvos", target_os = "visionos"),
+    feature = "ios-game-loop"
+))]
 pub mod ios_game_loop;
 pub mod json;
 pub mod json_tape;
