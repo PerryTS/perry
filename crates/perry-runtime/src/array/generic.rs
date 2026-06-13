@@ -1071,7 +1071,13 @@ pub extern "C" fn js_arraylike_slice(
     } else {
         clamp_index(start, len)
     };
-    let e = if has_end == 0 {
+    // ECMA-262 §23.1.3.25 step 4: an `end` of `undefined` (whether omitted OR
+    // passed explicitly, e.g. `Array.prototype.slice.call(arr, 1, undefined)`)
+    // means "to the end" (relativeEnd = len). Only a present, non-undefined
+    // `end` is run through ToIntegerOrInfinity. `clamp_index` maps the
+    // TAG_UNDEFINED bit pattern (a NaN) to 0, which would wrongly empty the
+    // slice — so special-case it here.
+    let e = if has_end == 0 || end.to_bits() == crate::value::TAG_UNDEFINED {
         len
     } else {
         clamp_index(end, len)

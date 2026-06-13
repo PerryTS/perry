@@ -475,11 +475,12 @@ pub extern "C" fn js_atomics_load(_closure: *const ClosureHeader, view: f64, ind
 
 #[no_mangle]
 pub extern "C" fn js_atomics_is_lock_free(_closure: *const ClosureHeader, size: f64) -> f64 {
-    // ToIntegerOrInfinity(size) (runs `valueOf`/`toString`, so `'1'`, `true`,
-    // `{valueOf:()=>1}` and `3.14`→3 all behave like Node), then a membership
-    // test over the lock-free element widths.
-    let n = numeric_arg(size);
-    nanbox_bool(matches!(n as i64, 1 | 2 | 4 | 8))
+    // ToNumber(size) (runs `valueOf`/`toString`, so `'4'`→4 behaves like Node),
+    // then an EXACT membership test over the lock-free element widths. Node/V8
+    // compares the raw number, so `4.9` is NOT floored to 4 — it is simply not a
+    // valid element width and returns false.
+    let n = number_arg(size);
+    nanbox_bool(n == 1.0 || n == 2.0 || n == 4.0 || n == 8.0)
 }
 
 #[no_mangle]

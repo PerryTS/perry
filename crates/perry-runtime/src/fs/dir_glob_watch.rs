@@ -1522,7 +1522,10 @@ fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
     if state.active || state.closed {
         return;
     }
-    state.snapshot = snapshot_watch_target(&state.path, state.recursive).unwrap_or_default();
+    // Keep the creation-time baseline (seeded in `js_fs_promises_watch`) rather
+    // than re-snapshotting here — re-snapshotting would discard any events that
+    // occurred between `watch()` and this first `.next()` pull, which Node
+    // delivers (it buffers from FSWatcher creation, not from first iteration).
     let timer_callback = poll_closure_value(promise_watcher_poll_impl as *const u8, id);
     let timer_id = crate::timer::setInterval(timer_callback as i64, FS_WATCH_POLL_INTERVAL_MS);
     if !state.persistent {
@@ -2207,11 +2210,19 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
         Ok(signal) => signal,
         Err(err) => crate::exception::js_throw(err),
     };
-    if let Err(err) = snapshot_watch_target(&path, recursive) {
-        unsafe {
+    // Capture the directory state at creation time. Node registers the
+    // FSWatcher synchronously in `watch()` and buffers events emitted before
+    // the first `.next()` pull, so a file written between `watch()` and the
+    // first iteration is still delivered. Perry's watcher is poll-based and
+    // previously took its baseline snapshot lazily at the first `.next()`,
+    // which silently dropped those pre-iteration events. Seed the baseline
+    // here so the first poll diffs against the creation-time state.
+    let initial_snapshot = match snapshot_watch_target(&path, recursive) {
+        Ok(snapshot) => snapshot,
+        Err(err) => unsafe {
             crate::exception::js_throw(build_fs_error_value(&err, "watch", &path));
-        }
-    }
+        },
+    };
     let id = next_watch_id();
     let object_value = build_promise_watcher_object(id);
     let abort_listener = signal
@@ -2235,7 +2246,7 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
                 timer_id: 0,
                 persistent,
                 active: false,
-                snapshot: WatchSnapshot::new(),
+                snapshot: initial_snapshot,
                 queue: VecDeque::new(),
                 pending: VecDeque::new(),
                 signal: signal_value,
