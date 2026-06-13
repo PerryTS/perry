@@ -184,6 +184,10 @@ fn typed_feedback_trace_dump_runs_before_entry_return() {
 
 #[test]
 fn typed_feedback_instruments_property_and_method_boundaries() {
+    // Typed-feedback site *registration* is opt-in (emitted only when
+    // PERRY_TYPED_FEEDBACK / _TRACE is set); this test exercises the enabled
+    // path. The gate is read fresh per emission, so setting it here suffices.
+    std::env::set_var("PERRY_TYPED_FEEDBACK", "1");
     let ir = ir_for(module(
         "typed_feedback_property.ts",
         vec![param(1, "obj", Type::Any)],

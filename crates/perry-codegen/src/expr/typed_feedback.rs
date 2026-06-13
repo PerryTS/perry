@@ -201,6 +201,28 @@ fn emit_typed_feedback_bytes_global(
     format!("@{}", global)
 }
 
+/// Whether to emit the per-site `js_typed_feedback_register_site` call at all.
+///
+/// Typed feedback (#854) is an opt-in profiling feature, disabled at runtime
+/// unless `PERRY_TYPED_FEEDBACK` / `PERRY_TYPED_FEEDBACK_TRACE` is set — in
+/// which case `js_typed_feedback_register_site` early-returns and does nothing.
+/// But the *call itself* (14 pointer/length arguments) was still emitted on
+/// every property get/set, which on hot OOP code (e.g. a method doing
+/// `this.x = this.x + 1` in a tight loop) costs two no-op cross-crate calls per
+/// field access — the dominant cost of the `method_calls` benchmark (491× Node).
+///
+/// Gate emission on the same env that enables feedback at runtime: a normal
+/// build (env unset) skips registration entirely and pays nothing; a profiling
+/// build (`PERRY_TYPED_FEEDBACK=1 perry app.ts -o app && ./app`, env inherited
+/// by the run) emits and uses it. The site-id is still allocated and returned
+/// so the shape *guard* call is unchanged — guards stay correct either way.
+fn typed_feedback_emission_enabled() -> bool {
+    // Read fresh (not cached) so tests that toggle the env per-case observe the
+    // change. At compile time this is a cheap getenv per property-access site.
+    std::env::var_os("PERRY_TYPED_FEEDBACK").is_some()
+        || std::env::var_os("PERRY_TYPED_FEEDBACK_TRACE").is_some()
+}
+
 pub(crate) fn emit_typed_feedback_register_site(
     ctx: &mut FnCtx<'_>,
     kind: TypedFeedbackKind,
@@ -210,6 +232,11 @@ pub(crate) fn emit_typed_feedback_register_site(
     let local_site_id = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
     let site_id = ctx.typed_feedback_site_id(local_site_id);
+    // Default build: skip the no-op registration call (and its byte globals)
+    // but keep the site-id stable for the guard call.
+    if !typed_feedback_emission_enabled() {
+        return site_id.to_string();
+    }
     let module = if ctx.strings.module_prefix().is_empty() {
         "main".to_string()
     } else {
