@@ -1,3 +1,30 @@
+## v0.5.1170 — fix(codegen): register rest/`arguments` metadata for renamed-export value wrappers (#5134)
+
+`.apply()`/`.call()` on a cross-module **default**-exported (or otherwise
+renamed) *variadic* function forwarded **zero** arguments. ramda's `compose`
+is `export default function compose() { … return pipe.apply(this,
+reverse(arguments)); }`, and `pipe` is `export default function pipe()` with a
+synthesized `arguments` param — so `union.js`'s init (`_curry2(compose(uniq,
+_concat))`) threw `Error: pipe requires at least one argument`.
+
+Root cause: a renamed export gets a forwarding value wrapper
+`__perry_wrap_perry_fn_<src>__<exported>`, but the rest/synthetic-`arguments`
+registration loops (`string_pool.rs`, consumed by `lookup_closure_rest_full` in
+`js_native_call_value`) keyed only on the function's **local** name
+(`__perry_wrap_..._<local>`). When a consumer referenced the renamed export as a
+value and invoked it via `.apply`, the runtime found no rest entry for the
+wrapper's `func_ptr` and dispatched positionally instead of bundling all args
+into the rest/`arguments` slot — so the variadic callee saw
+`arguments.length === 0`. Named exports (local == exported) were unaffected.
+
+Fix (`artifacts.rs`): for each `Export::Named { local, exported }` rename whose
+local function has a rest / synthetic-`arguments` param, also register the
+`__perry_wrap_perry_fn_<src>__<exported>` alias wrapper with the matching
+metadata. Together with #5134's `export default function` hoisting (PR #5149),
+the full ramda repro (`R.pipe(R.filter(...), R.map(...), R.sum)([...])`) now
+returns `120`, matching Node byte-for-byte. Validated no regression on named /
+non-variadic-default `.apply`.
+
 ## v0.5.1168 — Next.js standalone bring-up: walls 36–44 (rebased on main)
 
 Dynamic-parent classes, forward-capture, super.method, cjs export-hint, self-new in capturing closure. (Same content as PR #5125, re-applied cleanly onto current main.)
