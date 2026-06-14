@@ -42,6 +42,12 @@ pub(super) unsafe fn boxed_primitive_base_for_object(
 /// `[String: '…']` base) and never lists them in the `{ … }` body — only extra
 /// own keys appear there. Returns the wrapped string's length for a boxed
 /// String, otherwise `None`.
+///
+/// The count is in UTF-16 code units, NOT Unicode scalar values: the index
+/// properties are installed over `0..js_string_length` (`utf16_len`) by
+/// `install_string_wrapper_indices`, so a non-BMP char (e.g. an emoji, two
+/// UTF-16 units) occupies two indices. Counting `.chars()` would under-count
+/// and leak a trailing index (e.g. `new String("a😀b")` → `{ 3: 'b' }`).
 pub(super) unsafe fn boxed_string_char_index_count(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<usize> {
@@ -49,7 +55,12 @@ pub(super) unsafe fn boxed_string_char_index_count(
     if class_id != CLASS_ID_BOXED_STRING {
         return None;
     }
-    Some(jsvalue_string_content(payload).unwrap_or_default().chars().count())
+    Some(
+        jsvalue_string_content(payload)
+            .unwrap_or_default()
+            .encode_utf16()
+            .count(),
+    )
 }
 
 unsafe fn boxed_primitive_payload_for_object(

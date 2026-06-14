@@ -2725,15 +2725,18 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         );
     }
 
-    // Stamp the instance with the synthetic class id of `newTarget` (not the
-    // invoked `target`). Per `OrdinaryCreateFromConstructor`, the instance's
+    // Stamp the instance with the class id of `newTarget` (not the invoked
+    // `target`). Per `OrdinaryCreateFromConstructor`, the instance's
     // `[[Prototype]]` is `newTarget.prototype`, so `obj instanceof newTarget`
     // must be true and `obj instanceof target` false. Perry models the
-    // prototype chain for plain-function constructors via synthetic class ids,
-    // so allocating with `0` left `Reflect.construct(Target, …, NewTarget)`
-    // instances matching neither. Mirror the same-target path's stamp, keyed on
-    // `nt`. (The real `[[Prototype]]` link is still set below.)
-    let cid = synthetic_class_id_for_function(nt);
+    // prototype chain via class ids, so allocating with `0` left
+    // `Reflect.construct(Target, …, NewTarget)` instances matching neither.
+    // A `newTarget` may be a *declared class* (an `Expr::ClassRef`, e.g.
+    // `Reflect.construct(plainFn, [], class C {})`) — resolve its registered
+    // class id first so `instanceof C` holds — or a *plain function*, for which
+    // the synthetic per-function id applies. (The real `[[Prototype]]` link is
+    // still set below from `newTarget.prototype`.)
+    let cid = new_target_class_id(nt).unwrap_or_else(|| synthetic_class_id_for_function(nt));
     let obj_ptr = js_object_alloc(cid, 0);
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
     if let Some(proto_bits) = constructor_prototype_bits(nt) {
