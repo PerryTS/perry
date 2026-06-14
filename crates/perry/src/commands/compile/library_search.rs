@@ -652,10 +652,17 @@ pub(super) fn find_library_with_candidates(
         let compressed = super::compressed_libs::compressed_sibling(path);
         if compressed.exists() {
             let lib_name = path.file_name().and_then(|s| s.to_str()).unwrap_or(name);
-            if let Ok(decompressed) =
-                super::compressed_libs::decompressed_archive(&compressed, lib_name)
-            {
-                return Ok(decompressed);
+            match super::compressed_libs::decompressed_archive(&compressed, lib_name) {
+                Ok(decompressed) => return Ok(decompressed),
+                // A compressed archive is present but couldn't be expanded
+                // (corrupt download, out of disk, …). Surface the real cause
+                // loudly here — otherwise it's masked by the generic "library
+                // not found" error the caller raises after exhausting candidates.
+                Err(e) => eprintln!(
+                    "  error: failed to decompress {}: {:#}",
+                    compressed.display(),
+                    e
+                ),
             }
         }
     }

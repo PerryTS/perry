@@ -80,7 +80,11 @@ pub(super) fn decompressed_archive(compressed: &Path, lib_name: &str) -> Result<
             fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
         io::copy(&mut decoder, &mut out_file)
             .with_context(|| format!("zstd-decompress {}", compressed.display()))?;
-        out_file.sync_all().ok();
+        // Propagate fsync failures (disk full, I/O error) so a truncated temp
+        // file is cleaned up below rather than renamed into the cache.
+        out_file
+            .sync_all()
+            .with_context(|| format!("flush {}", tmp.display()))?;
         Ok(())
     })();
     if let Err(e) = result {
