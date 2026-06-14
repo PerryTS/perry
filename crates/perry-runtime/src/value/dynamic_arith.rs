@@ -107,10 +107,10 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // inherited `Object.prototype.toString` and yield "[object Object]". Like
     // the Date special-case above, pre-empt with the real string so
     // `"" + url` / `` `${url}` `` match explicit `url.toString()` (#URL coercion).
-    // Skip small-handle values (`< 0x100000` — sockets / timers / widget
-    // handles): they are registry ids, not heap `ObjectHeader`s, so the shape
-    // probe would dereference unmapped memory.
-    if ptr >= 0x100000 {
+    // Skip small-handle values (sockets / timers / widget handles): they are
+    // registry ids, not heap `ObjectHeader`s, so the shape probe would
+    // dereference unmapped memory.
+    if !crate::value::addr_class::is_handle_band(ptr) {
         let boxed =
             f64::from_bits(crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK));
         let href = crate::url::url_class::js_url_href_if_url(boxed);
