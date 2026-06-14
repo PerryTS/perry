@@ -31,7 +31,10 @@ pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: 
         new_target
     };
     if !is_constructor_function(nt) {
-        return throw_type_error(&format!("{} is not a constructor", value_display_string(nt)));
+        return throw_type_error(&format!(
+            "{} is not a constructor",
+            value_display_string(nt)
+        ));
     }
     let args = create_list_from_array_like(args_like);
     if lookup(target).is_some() {
