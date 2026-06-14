@@ -33,6 +33,7 @@ use super::{
 mod create_require_transform;
 mod crypto_ns;
 mod dynamic_glob;
+mod native_addon;
 mod parse_error;
 #[cfg(test)]
 mod tests;
@@ -40,6 +41,7 @@ mod tests;
 use create_require_transform::transform_create_require_literal_requires;
 use crypto_ns::module_uses_global_crypto_namespace;
 use dynamic_glob::expand_dynamic_import_glob;
+use native_addon::refuse_compile_package_native_addon;
 use parse_error::annotate_parse_error;
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
@@ -212,150 +214,6 @@ pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
         "hono/jsx/streaming" => Some("hono_jsx_streaming"),
         _ => None,
     }
-}
-
-fn nearest_package_root(path: &std::path::Path) -> Option<PathBuf> {
-    let mut dir = path.parent();
-    while let Some(candidate) = dir {
-        if candidate.join("package.json").exists() {
-            return Some(candidate.to_path_buf());
-        }
-        dir = candidate.parent();
-    }
-    None
-}
-
-fn package_root_for_compile_package(
-    ctx: &CompilationContext,
-    path: &std::path::Path,
-) -> Option<PathBuf> {
-    ctx.compile_package_dirs
-        .values()
-        .filter(|dir| path.starts_with(dir))
-        .max_by_key(|dir| dir.components().count())
-        .cloned()
-        .or_else(|| nearest_package_root(path))
-}
-
-fn package_name_from_package_json(package_root: &std::path::Path) -> Option<String> {
-    let package_json = fs::read_to_string(package_root.join("package.json")).ok()?;
-    let parsed = serde_json::from_str::<serde_json::Value>(&package_json).ok()?;
-    parsed
-        .get("name")
-        .and_then(|name| name.as_str())
-        .map(str::to_string)
-}
-
-fn find_node_addon_file(dir: &std::path::Path, max_depth: usize) -> Option<PathBuf> {
-    if max_depth == 0 {
-        return None;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return None;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        if file_name == "node_modules" || file_name == ".git" {
-            continue;
-        }
-        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("node") {
-            return Some(path);
-        }
-        if path.is_dir() {
-            if let Some(found) = find_node_addon_file(&path, max_depth - 1) {
-                return Some(found);
-            }
-        }
-    }
-    None
-}
-
-fn node_addon_marker(package_root: &std::path::Path) -> Option<(&'static str, String)> {
-    let binding_gyp = package_root.join("binding.gyp");
-    if binding_gyp.exists() {
-        return Some(("binding.gyp", binding_gyp.display().to_string()));
-    }
-    let prebuilds = package_root.join("prebuilds");
-    if prebuilds.is_dir() {
-        return Some(("prebuilds/", prebuilds.display().to_string()));
-    }
-    let package_json_path = package_root.join("package.json");
-    if let Ok(package_json) = fs::read_to_string(&package_json_path) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&package_json) {
-            if parsed
-                .get("gypfile")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            {
-                return Some((
-                    "package.json gypfile",
-                    package_json_path.display().to_string(),
-                ));
-            }
-            if package_json_dependency_uses_native_addon_loader(&parsed, "node-gyp-build")
-                || package_json_dependency_uses_native_addon_loader(&parsed, "bindings")
-            {
-                return Some((
-                    "native addon loader dependency",
-                    package_json_path.display().to_string(),
-                ));
-            }
-        }
-    }
-    if let Some(node_file) = find_node_addon_file(package_root, 5) {
-        return Some(("*.node", node_file.display().to_string()));
-    }
-    None
-}
-
-fn package_json_dependency_uses_native_addon_loader(
-    package_json: &serde_json::Value,
-    loader_name: &str,
-) -> bool {
-    ["dependencies", "optionalDependencies"]
-        .iter()
-        .any(|section| {
-            package_json
-                .get(section)
-                .and_then(|deps| deps.as_object())
-                .is_some_and(|deps| deps.contains_key(loader_name))
-        })
-}
-
-fn refuse_compile_package_native_addon(
-    ctx: &mut CompilationContext,
-    canonical: &std::path::Path,
-) -> Result<()> {
-    let Some(package_root) = package_root_for_compile_package(ctx, canonical) else {
-        return Ok(());
-    };
-    if !ctx
-        .checked_compile_package_native_addon_roots
-        .insert(package_root.clone())
-    {
-        return Ok(());
-    }
-    if has_perry_native_library(&package_root) {
-        return Ok(());
-    }
-    let Some((marker, marker_path)) = node_addon_marker(&package_root) else {
-        return Ok(());
-    };
-    let package_name = package_name_from_package_json(&package_root)
-        .unwrap_or_else(|| package_root.display().to_string());
-    anyhow::bail!(
-        "package `{}` is in `perry.compilePackages` but uses a Node native addon ({}) at {}.\n\
-         Perry cannot load Node `.node` / N-API addons inside a native Perry binary. \
-         Remove `{}` from `perry.compilePackages`, choose a pure JS/TS package, \
-         or replace the native boundary with a Perry native binding \
-         (`perry.nativeLibrary` / perry-ffi).",
-        package_name,
-        marker,
-        marker_path,
-        package_name
-    );
 }
 
 /// Collect all modules to compile (transitive closure of imports)
@@ -1012,10 +870,20 @@ fn collect_module_one(
                     worker_path_sets.push(set);
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
-                    dyn_errors.push(format!(
-                        "worker_threads Worker in module {}: {}",
-                        module_name, reason
-                    ));
+                    // Real-world packages (e.g. Next.js build-time worker
+                    // pools) construct Workers on paths that are never hit
+                    // when the compiled program runs. Warn and let codegen
+                    // lower this WorkerNew to a runtime throw instead of
+                    // failing the whole compile. Push an empty set to keep
+                    // the fill pass aligned with resolved siblings.
+                    if matches!(format, OutputFormat::Text) {
+                        eprintln!(
+                            "  Warning: worker_threads Worker in module {}: {} — \
+                             this Worker will throw if constructed at runtime",
+                            module_name, reason
+                        );
+                    }
+                    worker_path_sets.push(Vec::new());
                 }
             }
         }
@@ -1081,6 +949,7 @@ fn collect_module_one(
             type_only: false,
             is_dynamic: true,
             is_dynamic_target: false,
+            is_deferred_require: false,
         });
     }
 
@@ -1537,6 +1406,38 @@ fn collect_module_one(
                     }
                     OutputFormat::Json => {}
                 }
+            }
+        }
+    }
+
+    // Next.js lazy-require: the CJS→ESM wrap names a binding `_lazyreq_N` when
+    // every `require('S')` call site is inside a function body (lazy in Node).
+    // Tag the import so `classify_eager_modules` leaves the target Deferred —
+    // matching Node, which only loads such a module when the enclosing function
+    // runs (e.g. jsonwebtoken, required only inside Next.js's request handlers).
+    // The require shim triggers the target's `__init` on first `require()`, so
+    // an over-eager classification is self-correcting at runtime. Limited to
+    // Perry-compiled (`NativeCompiled`) targets — native stdlib / V8 modules
+    // have their own init paths.
+    if was_cjs_wrapped {
+        for import in &mut hir_module.imports {
+            if import.type_only
+                || import.is_dynamic
+                || import.is_native
+                || import.module_kind != perry_hir::ModuleKind::NativeCompiled
+            {
+                continue;
+            }
+            let is_lazy = import.specifiers.iter().any(|s| {
+                let local = match s {
+                    perry_hir::ImportSpecifier::Default { local } => local,
+                    perry_hir::ImportSpecifier::Namespace { local } => local,
+                    perry_hir::ImportSpecifier::Named { local, .. } => local,
+                };
+                local.starts_with("_lazyreq_")
+            });
+            if is_lazy {
+                import.is_deferred_require = true;
             }
         }
     }

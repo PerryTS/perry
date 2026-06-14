@@ -32,6 +32,7 @@ pub fn synthesize_class_captures(
     setters: &mut Vec<(String, Function)>,
     computed_members: &mut Vec<ClassComputedMember>,
     constructor: &mut Option<Function>,
+    static_methods: &mut Vec<Function>,
 ) {
     let module_level_ids = ctx.module_level_ids.clone();
     let outer_scope_ids: std::collections::HashSet<LocalId> =
@@ -59,6 +60,15 @@ pub fn synthesize_class_captures(
     }
     if let Some(ctor) = constructor.as_ref() {
         for id in collect_method_captures(ctor, &outer_scope_ids, &module_level_ids) {
+            union_captures.insert(id);
+        }
+    }
+    // STATIC methods reference enclosing-fn locals too (vendored zod's
+    // `static create(...)` reads the ZodFirstPartyTypeKind enum local).
+    // Their refs join the union so the decl-site snapshot includes them;
+    // the rewrite below reads the snapshot instead of instance fields.
+    for sm in static_methods.iter() {
+        for id in collect_method_captures(sm, &outer_scope_ids, &module_level_ids) {
             union_captures.insert(id);
         }
     }
@@ -209,7 +219,9 @@ pub fn synthesize_class_captures(
     // Helper closure: build a fresh-id map for one function's body,
     // rewrite the body refs (with field-write propagation), and
     // prepend the rebinding lets.
-    let rewrite_method_body = |ctx: &mut LoweringContext, body: &mut Vec<Stmt>| {
+    let rewrite_method_body = |ctx: &mut LoweringContext,
+                               body: &mut Vec<Stmt>|
+     -> std::collections::HashMap<LocalId, LocalId> {
         let mut id_map: std::collections::HashMap<LocalId, LocalId> =
             std::collections::HashMap::new();
         let mut prologue: Vec<Stmt> = Vec::new();
@@ -240,23 +252,99 @@ pub fn synthesize_class_captures(
         );
         prologue.append(body);
         *body = prologue;
+        id_map
     };
 
-    // 2. Methods / getters / setters.
+    // SELF-construction inside this class's own members: `new <Self>(…)`
+    // sites in method bodies were lowered BEFORE this class registered its
+    // captures, so the `Expr::New` Ident arm appended nothing (vendored
+    // zod's `_addCheck(e){ return new ZodString({…this._def…}) }`). After
+    // `rewrite_method_body` runs, the method prologue rebinds every capture
+    // under a fresh id — append those rebind ids here. Nested closure
+    // bodies are walked too; their capture lists already include the
+    // prologue ids when the closure body references them, and a closure
+    // whose ONLY reference is the appended arg gets the id added to its
+    // captures list below.
+    fn append_self_new_args_expr(
+        expr: &mut Expr,
+        class_name: &str,
+        cap_args: &[(LocalId, LocalId)],
+    ) {
+        append_new_args_expr(expr, class_name, cap_args, false)
+    }
+    fn append_self_new_args_stmt(
+        stmt: &mut Stmt,
+        class_name: &str,
+        cap_args: &[(LocalId, LocalId)],
+    ) {
+        append_new_args_stmt(stmt, class_name, cap_args, false)
+    }
+
+    // 2. Methods / getters / setters. After each body's capture rebind,
+    //    append the rebind ids to any SELF-construction `new <Self>(…)`
+    //    sites the body contains (lowered before this class registered).
+    let append_self_sites =
+        |body: &mut Vec<Stmt>, id_map: &std::collections::HashMap<LocalId, LocalId>| {
+            let cap_args: Vec<(LocalId, LocalId)> = captures_vec
+                .iter()
+                .filter_map(|oid| id_map.get(oid).map(|f| (*oid, *f)))
+                .collect();
+            for stmt in body.iter_mut() {
+                append_self_new_args_stmt(stmt, name, &cap_args);
+            }
+        };
     for m in methods.iter_mut() {
-        rewrite_method_body(ctx, &mut m.body);
+        let id_map = rewrite_method_body(ctx, &mut m.body);
+        append_self_sites(&mut m.body, &id_map);
     }
     for (_, g) in getters.iter_mut() {
-        rewrite_method_body(ctx, &mut g.body);
+        let id_map = rewrite_method_body(ctx, &mut g.body);
+        append_self_sites(&mut g.body, &id_map);
     }
     for (_, s) in setters.iter_mut() {
-        rewrite_method_body(ctx, &mut s.body);
+        let id_map = rewrite_method_body(ctx, &mut s.body);
+        append_self_sites(&mut s.body, &id_map);
     }
     for member in computed_members
         .iter_mut()
         .filter(|member| !member.is_static)
     {
-        rewrite_method_body(ctx, &mut member.function.body);
+        let id_map = rewrite_method_body(ctx, &mut member.function.body);
+        append_self_sites(&mut member.function.body, &id_map);
+    }
+
+    // 2b. STATIC methods: no instance carries `__perry_cap_*` fields, so
+    // the prologue rebinds read the decl-site snapshot instead
+    // (`ClassCaptureValue { class_name, index }` →
+    // `js_class_capture_value(class_id, index)` at codegen). The snapshot
+    // is written by the `RegisterClassCaptures` statement emitted at the
+    // class's declaration position, which runs before any user code can
+    // reference the class (TDZ).
+    for sm in static_methods.iter_mut() {
+        let mut id_map: std::collections::HashMap<LocalId, LocalId> =
+            std::collections::HashMap::new();
+        let mut prologue: Vec<Stmt> = Vec::new();
+        for (index, &outer_id) in captures_vec.iter().enumerate() {
+            let new_id = ctx.fresh_local();
+            id_map.insert(outer_id, new_id);
+            prologue.push(Stmt::Let {
+                id: new_id,
+                name: format!("__perry_cap_{}", outer_id),
+                ty: captured_outer_types
+                    .get(&outer_id)
+                    .cloned()
+                    .unwrap_or(Type::Any),
+                mutable: true,
+                init: Some(Expr::ClassCaptureValue {
+                    class_name: name.to_string(),
+                    index: index as u32,
+                }),
+            });
+        }
+        crate::analysis::remap_local_ids_in_stmts(&mut sm.body, &id_map);
+        prologue.append(&mut sm.body);
+        sm.body = prologue;
+        append_self_sites(&mut sm.body, &id_map);
     }
 
     // 3. Constructor.
@@ -273,26 +361,77 @@ pub fn synthesize_class_captures(
     // forced a ctor into existence. The SuperCall also routes known
     // user-class parents through the inline-parent-ctor arm so the
     // parent body runs, matching the no-own-ctor `new` path.
-    let mut ctor = constructor.take().unwrap_or_else(|| Function {
-        id: ctx.fresh_func(),
-        name: format!("{}::constructor", name),
-        type_params: Vec::new(),
-        params: Vec::new(),
-        return_type: Type::Void,
-        body: if has_heritage {
-            vec![Stmt::Expr(Expr::SuperCall(Vec::new()))]
-        } else {
-            Vec::new()
-        },
-        is_async: false,
-        is_generator: false,
-        is_strict: true,
-        was_plain_async: false,
-        was_unrolled: false,
-        is_exported: false,
-        captures: Vec::new(),
-        decorators: Vec::new(),
-    });
+    let mut ctor = match constructor.take() {
+        Some(c) => c,
+        None => {
+            // The spec default ctor FORWARDS its args:
+            // `constructor(...args) { super(...args) }`. A bare
+            // `SuperCall([])` dropped the construction-site user args, so
+            // `new Derived({def})` left the parent ctor's params undefined
+            // (vendored zod: ZodString.create → new ZodString({...}) →
+            // ZodType ctor never saw `def`, `this._def` stayed undefined).
+            // Synthesize explicit forwarding params matching the closest
+            // pending-ancestor ctor's USER arity (its `__perry_cap_*`
+            // params excluded). Ancestors outside `pending_classes`
+            // (module-level / native parents) keep the no-arg baseline.
+            let parent_user_arity = if has_heritage {
+                let mut arity = 0usize;
+                let mut walker: Option<String> = extends_name.map(|s| s.to_string());
+                while let Some(pname) = walker.take() {
+                    let Some(pc) = ctx.pending_classes.iter().find(|c| c.name == pname) else {
+                        break;
+                    };
+                    if let Some(pctor) = pc.constructor.as_ref() {
+                        arity = pctor
+                            .params
+                            .iter()
+                            .filter(|p| !p.name.starts_with("__perry_cap_"))
+                            .count();
+                        break;
+                    }
+                    walker = pc.extends_name.clone();
+                }
+                arity
+            } else {
+                0
+            };
+            let mut params: Vec<Param> = Vec::with_capacity(parent_user_arity);
+            let mut super_args: Vec<Expr> = Vec::with_capacity(parent_user_arity);
+            for i in 0..parent_user_arity {
+                let pid = ctx.fresh_local();
+                params.push(Param {
+                    id: pid,
+                    name: format!("__perry_dflt_arg_{}", i),
+                    ty: Type::Any,
+                    default: None,
+                    decorators: Vec::new(),
+                    is_rest: false,
+                    arguments_object: None,
+                });
+                super_args.push(Expr::LocalGet(pid));
+            }
+            Function {
+                id: ctx.fresh_func(),
+                name: format!("{}::constructor", name),
+                type_params: Vec::new(),
+                params,
+                return_type: Type::Void,
+                body: if has_heritage {
+                    vec![Stmt::Expr(Expr::SuperCall(super_args))]
+                } else {
+                    Vec::new()
+                },
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            }
+        }
+    };
     let mut ctor_id_map: std::collections::HashMap<LocalId, LocalId> =
         std::collections::HashMap::new();
     let mut assignment_stmts: Vec<Stmt> = Vec::with_capacity(captures_vec.len());
@@ -321,10 +460,11 @@ pub fn synthesize_class_captures(
     // Rewrite user-written ctor body BEFORE inserting the assignment
     // stmts (which already reference the fresh ids directly).
     crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
+    append_self_sites(&mut ctor.body, &ctor_id_map);
     let super_pos = ctor
         .body
         .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_))));
+        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
     let insert_at = super_pos.map(|p| p + 1).unwrap_or(0);
     for (i, stmt) in assignment_stmts.into_iter().enumerate() {
         ctor.body.insert(insert_at + i, stmt);
@@ -352,4 +492,162 @@ pub fn synthesize_class_captures(
     //    `LocalGet(outer_id)` per captured outer id at every
     //    construction site.
     ctx.register_class_captures(name.to_string(), captures_vec);
+}
+
+/// Append `cap_args` (the `.1` ids) to every `new <class_name>(…)` site in
+/// `expr`, descending nested closures (patching their capture lists when the
+/// appended id is otherwise unreferenced). With `skip_if_present`, a site
+/// whose args already END with exactly the `.1` id sequence is left alone —
+/// used by the post-body pass, where sites lowered AFTER the class
+/// registered already carry the appends.
+pub(crate) fn append_new_args_expr(
+    expr: &mut Expr,
+    class_name: &str,
+    cap_args: &[(LocalId, LocalId)],
+    skip_if_present: bool,
+) {
+    if let Expr::New {
+        class_name: cn,
+        args,
+        ..
+    } = expr
+    {
+        if cn == class_name {
+            let already = skip_if_present
+                && args.len() >= cap_args.len()
+                && args[args.len() - cap_args.len()..]
+                    .iter()
+                    .zip(cap_args.iter())
+                    .all(|(a, (_, fresh))| matches!(a, Expr::LocalGet(id) if id == fresh));
+            if !already {
+                for (_, fresh) in cap_args {
+                    args.push(Expr::LocalGet(*fresh));
+                }
+            }
+        }
+    }
+    if let Expr::Closure { body, captures, .. } = expr {
+        for stmt in body.iter_mut() {
+            append_new_args_stmt(stmt, class_name, cap_args, skip_if_present);
+        }
+        let mut refs = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        for stmt in body.iter() {
+            crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+        }
+        for (_, fresh) in cap_args {
+            if refs.contains(fresh) && !captures.contains(fresh) {
+                captures.push(*fresh);
+            }
+        }
+        return;
+    }
+    crate::walker::walk_expr_children_mut(expr, &mut |child| {
+        append_new_args_expr(child, class_name, cap_args, skip_if_present)
+    });
+}
+
+/// Statement-level driver for [`append_new_args_expr`].
+pub(crate) fn append_new_args_stmt(
+    stmt: &mut Stmt,
+    class_name: &str,
+    cap_args: &[(LocalId, LocalId)],
+    skip_if_present: bool,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            append_new_args_expr(e, class_name, cap_args, skip_if_present)
+        }
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            append_new_args_expr(condition, class_name, cap_args, skip_if_present);
+            for s in then_branch {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            append_new_args_expr(condition, class_name, cap_args, skip_if_present);
+            for s in body {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(s) = init {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+            if let Some(e) = condition {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+            if let Some(e) = update {
+                append_new_args_expr(e, class_name, cap_args, skip_if_present);
+            }
+            for s in body {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            append_new_args_stmt(body, class_name, cap_args, skip_if_present)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+            }
+            if let Some(c) = catch {
+                for s in &mut c.body {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+            if let Some(fb) = finally {
+                for s in fb {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            append_new_args_expr(discriminant, class_name, cap_args, skip_if_present);
+            for c in cases {
+                if let Some(t) = &mut c.test {
+                    append_new_args_expr(t, class_name, cap_args, skip_if_present);
+                }
+                for s in &mut c.body {
+                    append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
 }

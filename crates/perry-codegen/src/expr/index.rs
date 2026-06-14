@@ -5,7 +5,8 @@ use anyhow::{anyhow, Result};
 
 use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_write_barrier_slot_on_block, nanbox_pointer_inline, raw_f64_layout_fact, FnCtx,
+    emit_jsvalue_slot_store_scalar_aware_on_block, emit_write_barrier_slot_on_block,
+    nanbox_pointer_inline, raw_f64_layout_fact, FnCtx,
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
@@ -218,7 +219,11 @@ pub(crate) fn lower_index_set_fast(
             );
         } else {
             let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
-            let value_bits = emit_jsvalue_slot_store_on_block(
+            // In-place overwrite of a non-raw-layout (e.g. downgraded `any[]`)
+            // array element: the slot holds a valid value, so the scalar-aware
+            // note skips the GC layout hashmap on scalar-over-scalar stores
+            // (#5094 — ~9× on bench_numeric_array_downgrade).
+            let value_bits = emit_jsvalue_slot_store_scalar_aware_on_block(
                 blk,
                 &element_ptr,
                 val_double,

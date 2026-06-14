@@ -19,7 +19,11 @@ pub(super) fn array_from_args(args: &[f64]) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: f64) -> f64 {
     if !is_constructor_function(target) {
-        return throw_type_error("target is not a constructor");
+        // Node reports the offending value: `1 is not a constructor`.
+        return throw_type_error(&format!(
+            "{} is not a constructor",
+            value_display_string(target)
+        ));
     }
     let nt = if new_target.to_bits() == TAG_UNDEFINED {
         target
@@ -27,7 +31,10 @@ pub extern "C" fn js_reflect_construct(target: f64, args_like: f64, new_target: 
         new_target
     };
     if !is_constructor_function(nt) {
-        return throw_type_error("newTarget is not a constructor");
+        return throw_type_error(&format!(
+            "{} is not a constructor",
+            value_display_string(nt)
+        ));
     }
     let args = create_list_from_array_like(args_like);
     if lookup(target).is_some() {

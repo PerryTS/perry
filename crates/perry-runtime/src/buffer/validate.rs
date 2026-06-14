@@ -88,6 +88,23 @@ pub extern "C" fn js_buffer_validate_size(value: f64) -> i32 {
         );
         crate::fs::validate::throw_range_error_with_code(&msg);
     }
+    // #5067 — `size` is in `[0, kMaxLength]` per Node's `assertSize`, but the
+    // backing buffer capacity is an `i32`, so anything above `i32::MAX`
+    // (~2 GiB) cannot actually be allocated. Node passes `assertSize` for
+    // these too and then fails the real allocation, so match its
+    // `RangeError: Array buffer allocation failed` rather than truncating the
+    // cast (which produced a wrong-size buffer or aborted in the allocator).
+    //
+    // Compare the *truncated* size: Node truncates a fractional `size` toward
+    // zero before allocating, so e.g. `Buffer.alloc(2147483647.9)` is the
+    // valid `i32::MAX`, not an over-range request.
+    if n.trunc() > i32::MAX as f64 {
+        // Plain `RangeError` (no `ERR_*` code) to match V8/Node.
+        let msg = b"Array buffer allocation failed";
+        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_rangeerror_new(s);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
     n as i32
 }
 

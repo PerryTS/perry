@@ -118,6 +118,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         }
         true
     };
+    // Next.js lazy-require: specifiers whose every `require('S')` call site is
+    // inside a function body (lazy in Node). Computed up front because it also
+    // suppresses alias ADOPTION below — a function-local `const dep =
+    // require('S')` is a function-scoped const, not a module binding, and
+    // adopting it would hoist `import dep from 'S'` to module scope (eager). We
+    // instead keep the synthetic binding and rename it `_lazyreq_N` so the
+    // target stays `Deferred` and inits only when the shim's
+    // `return _lazyreq_N` runs (i.e. when the function actually calls require).
+    let lazy_specs = function_local_specs(source);
+
     let mut import_local_names: Vec<String> = require_specs
         .iter()
         .enumerate()
@@ -127,6 +137,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         std::collections::HashSet::new();
     for (alias, spec, _) in &raw_aliases {
         if !alias_is_safe(alias) {
+            continue;
+        }
+        if lazy_specs.contains(spec) {
+            // Don't adopt a function-local alias — keep it lazy (see above).
             continue;
         }
         if import_local_names.iter().any(|n| n == alias) {
@@ -140,6 +154,17 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         }
         import_local_names[idx] = alias.clone();
         chosen_alias_per_spec.insert(spec.clone());
+    }
+
+    // Rename the surviving synthetic bindings for function-local specs so
+    // `collect_modules` can tag the import `is_deferred_require` by name and
+    // codegen can fire `<S>__init()` at the shim read site.
+    if !lazy_specs.is_empty() {
+        for (i, spec) in require_specs.iter().enumerate() {
+            if import_local_names[i] == format!("_req_{i}") && lazy_specs.contains(spec) {
+                import_local_names[i] = format!("_lazyreq_{i}");
+            }
+        }
     }
 
     // #1721: ranges of `const <alias> = require(<spec>)` lines whose alias we
@@ -182,12 +207,90 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         .collect::<Vec<_>>()
         .join("\n");
 
+    // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
+    // with only Next's vendored copy on disk) leaves its hoisted import
+    // binding as the boolean TRUE sentinel at runtime. Returning that from
+    // the shim defeats the ubiquitous try/require-fallback pattern — Node
+    // throws MODULE_NOT_FOUND and the catch loads the vendored copy, but
+    // the shim handed back `true` and the catch never ran. Guard such an
+    // entry with a throw — but ONLY when a call site of that specifier
+    // sits inside a `try` block: a BARE top-level require of a pruned
+    // build-only module (`require('next/dist/compiled/browserslist')` in
+    // get-supported-browsers.js) must keep the silent sentinel, because
+    // Perry initializes every collected module eagerly while Node never
+    // loads that file at all — a throw there kills startup. (A real module
+    // default-exporting a boolean would mis-trip the guard; no such
+    // package shape has been observed.)
     let require_cases = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .map(|(spec, local)| format!("        if (specifier === '{}') return {};", spec, local))
+        .map(|(spec, local)| {
+            if require_site_in_try(source, spec) {
+                format!(
+                    "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \
+                     throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', \
+                     \"Cannot find module '{spec}'\"); return {local}; }}"
+                )
+            } else {
+                format!("        if (specifier === '{}') return {};", spec, local)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
+    // Heuristic: is any `require('<spec>')` call site lexically inside a
+    // `try { … }` block? Reverse brace-depth scan from the call offset to
+    // the nearest unmatched `{`, checking whether `try` precedes it.
+    // String/comment contexts are not stripped — a false positive only
+    // turns the silent sentinel into a (more Node-faithful) throw.
+    fn require_site_in_try(source: &str, spec: &str) -> bool {
+        let needle_sq = format!("require('{}')", spec);
+        let needle_dq = format!("require(\"{}\")", spec);
+        let bytes = source.as_bytes();
+        let mut search = 0usize;
+        loop {
+            let hit = source[search..]
+                .find(&needle_sq)
+                .or_else(|| source[search..].find(&needle_dq));
+            let Some(rel) = hit else { return false };
+            let at = search + rel;
+            // Walk backwards to the nearest unmatched `{`, repeatedly: each
+            // enclosing block is checked for a preceding `try`.
+            let mut depth = 0i32;
+            let mut i = at;
+            while i > 0 {
+                i -= 1;
+                match bytes[i] {
+                    b'}' => depth += 1,
+                    b'{' => {
+                        if depth > 0 {
+                            depth -= 1;
+                        } else {
+                            // Enclosing block opener — does `try` precede it?
+                            let mut j = i;
+                            while j > 0
+                                && (bytes[j - 1] == b' '
+                                    || bytes[j - 1] == b'\t'
+                                    || bytes[j - 1] == b'\r'
+                                    || bytes[j - 1] == b'\n')
+                            {
+                                j -= 1;
+                            }
+                            if j >= 3
+                                && &bytes[j - 3..j] == b"try"
+                                && (j == 3 || !bytes[j - 4].is_ascii_alphanumeric())
+                            {
+                                return true;
+                            }
+                            // Keep walking outward (this block wasn't a try).
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            search = at + 1;
+        }
+    }
+
     let require_resolve_cases = require_specs
         .iter()
         .map(|spec| format!("        if (specifier === '{}') return '{}';", spec, spec))

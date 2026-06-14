@@ -59,6 +59,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            // An empty `paths` list means collect_modules could not resolve
+            // the filename statically (it warned at compile time). Many real
+            // packages construct Workers only on cold paths (e.g. Next.js
+            // build-time worker pools) — throw if one is actually reached at
+            // runtime instead of failing the whole compile.
+            if paths.is_empty() {
+                let msg = "worker_threads Worker filename was not statically \
+                           resolvable at compile time; constructing this Worker \
+                           is unsupported in the compiled binary";
+                let msg_idx = ctx.strings.intern(msg);
+                let msg_entry = ctx.strings.entry(msg_idx);
+                let msg_bytes_global = format!("@{}", msg_entry.bytes_global);
+                let msg_len_str = msg_entry.byte_len.to_string();
+                let blk = ctx.block();
+                blk.call_void(
+                    "js_throw_error_with_code",
+                    &[
+                        (PTR, &msg_bytes_global),
+                        (I64, &msg_len_str),
+                        (PTR, &"null".to_string()),
+                        (I64, &"0".to_string()),
+                        (I32, &"0".to_string()),
+                    ],
+                );
+                blk.unreachable();
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             if paths.len() != 1 {
                 bail!(
                     "worker_threads Worker requires exactly one compile-time-resolved filename, got {}",
@@ -364,6 +391,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
+                // Next.js lazy-require: a `_lazyreq_N` binding is the CJS require
+                // shim's handle to a FUNCTION-LOCAL `require('S')`. S is
+                // `Deferred` (never eager-initialized), so before reading its
+                // default-export getter, fire `<S>__init()` — idempotent, so
+                // re-reads cost a guard check. This is the moment Node would run
+                // S's module body: when `require('S')` is actually called.
+                if name.starts_with("_lazyreq_") {
+                    let init_fn = format!("{}__init", source_prefix);
+                    ctx.pending_declares
+                        .push((init_fn.clone(), crate::types::VOID, vec![]));
+                    ctx.block().call_void(&init_fn, &[]);
+                }
                 // Issue #678 followup: a V8-fallback import used as a value
                 // (rather than called directly) has no native singleton
                 // wrapper to point at — the `__perry_wrap_extern_*` for V8
@@ -549,6 +588,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_get_global_this_builtin_value",
                     &[(PTR, &name_bytes_global), (I64, &name_len)],
                 ));
+            }
+            // A default-import alias of a Node builtin module used as a VALUE
+            // (`const nodeTimers = require('node:timers')`, adopted to an
+            // import by the CJS wrap) — materialize the real native-module
+            // namespace object so member reads, monkey-patch writes, and
+            // enumeration behave. Previously fell through to TAG_TRUE:
+            // `typeof nodeTimers === "boolean"` and Next.js's
+            // fast-set-immediate extension threw on
+            // `nodeTimers.setImmediate = patched` at startup.
+            if let Some(source) = ctx.imported_class_sources.get(name) {
+                let bare = source.strip_prefix("node:").unwrap_or(source).to_string();
+                if perry_hir::is_node_builtin_module(&bare) {
+                    let module_label = emit_string_literal_global(ctx, &bare);
+                    let module_len = bare.len();
+                    let blk = ctx.block();
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_create_native_module_namespace",
+                        &[(PTR, &module_label), (I64, &module_len.to_string())],
+                    ));
+                }
             }
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)))
         }

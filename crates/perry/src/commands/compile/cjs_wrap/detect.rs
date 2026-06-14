@@ -21,21 +21,226 @@ use super::*;
 /// `ImportExportInScript`. The guard below short-circuits the wrap when a
 /// top-level `import`/`export` statement is detected.
 pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
+    // An empty (or whitespace-only) file is a valid CJS module exporting
+    // `{}` — marker packages like react's `client-only` ship a 0-byte
+    // index.js whose default import must resolve to the empty exports
+    // object, which only the wrap provides.
+    if source.trim().is_empty() {
+        return true;
+    }
+    // ALL token scans run on comment/string-stripped source. Real packages
+    // defeat raw-text scans in both directions: Next.js's
+    // `setup-node-env.external.js` has the word "import " in a header
+    // comment (which flipped the `require(` arm), and `next/dist/build/
+    // utils.js` GENERATES an ESM server.js inside a template literal whose
+    // column-0 `import path from 'node:path'` line made `has_top_level_esm`
+    // classify the (thoroughly CJS) file as ESM — its bare `exports` then
+    // threw a ReferenceError at module init.
+    let stripped = strip_comments_and_strings(source);
     // ESM-at-the-top wins: a top-level `import`/`export` makes this an
     // ES module regardless of CJS patterns appearing deeper in the file.
-    if has_top_level_esm(source) {
+    if has_top_level_esm(&stripped) {
         return false;
     }
-    source.contains("module.exports")
-        || source.contains("exports.")
+    if stripped.contains("module.exports")
+        || stripped.contains("exports.")
         // Issue #4872: tsc-compiled type-only modules (nestjs dist
         // `*.interface.js`) contain ONLY the interop marker
         // `Object.defineProperty(exports, "__esModule", { value: true });`
         // — no `exports.X =`, no `require(`. Without this arm they fall
         // through to the ESM pipeline, where the bare `exports` identifier
         // throws a ReferenceError at module init.
-        || source.contains("defineProperty(exports,")
-        || (source.contains("require(") && !source.contains("import "))
+        || stripped.contains("defineProperty(exports,")
+    {
+        return true;
+    }
+    stripped.contains("require(") && !stripped.contains("import ")
+}
+
+/// Replace comment bodies and string/template-literal contents with spaces
+/// so token scans (`require(`, `import `) only see real code. Same scanner
+/// shape as `looks_like_es_module` in perry-parser, including the
+/// regex-literal tracking — a regex containing an unescaped quote (e.g.
+/// `/['"]/` in vendored minified bundles like comment-json) would otherwise
+/// desync the string state and mask the rest of the file, hiding a trailing
+/// `module.exports = …`.
+pub(crate) fn strip_comments_and_strings(source: &str) -> String {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Code,
+        Str(u8),
+        LineComment,
+        BlockComment,
+    }
+
+    fn is_ident(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+
+    // A `/` starts a regex literal (not division) when the preceding token
+    // cannot end an expression. Mirrors perry-parser's heuristic.
+    fn regex_can_start_here(bytes: &[u8], slash_at: usize) -> bool {
+        let mut i = slash_at;
+        while i > 0 {
+            i -= 1;
+            match bytes[i] {
+                b' ' | b'\t' | b'\r' | b'\n' => continue,
+                b'=' | b'(' | b',' | b':' | b'[' | b'!' | b'&' | b'|' | b'?' | b'{' | b'}'
+                | b';' | b'+' | b'-' | b'*' | b'%' | b'~' | b'^' | b'<' | b'>' => return true,
+                c if is_ident(c) => {
+                    let end = i + 1;
+                    let mut start = end;
+                    while start > 0 && is_ident(bytes[start - 1]) {
+                        start -= 1;
+                    }
+                    return matches!(
+                        &bytes[start..end],
+                        b"return"
+                            | b"typeof"
+                            | b"instanceof"
+                            | b"in"
+                            | b"of"
+                            | b"case"
+                            | b"do"
+                            | b"else"
+                            | b"void"
+                            | b"delete"
+                            | b"throw"
+                            | b"new"
+                            | b"yield"
+                            | b"await"
+                    );
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    // Returns the index just past the closing `/`, or None if no regex
+    // terminator is found on this line (then it was division after all).
+    fn skip_regex_literal(bytes: &[u8], slash_at: usize) -> Option<usize> {
+        let mut i = slash_at + 1;
+        let mut in_class = false;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 2,
+                b'\n' => return None,
+                b'[' => {
+                    in_class = true;
+                    i += 1;
+                }
+                b']' => {
+                    in_class = false;
+                    i += 1;
+                }
+                b'/' if !in_class => return Some(i + 1),
+                _ => i += 1,
+            }
+        }
+        None
+    }
+
+    let bytes = source.as_bytes();
+    let mut out = vec![b' '; bytes.len()];
+    let mut state = State::Code;
+    let mut i = 0;
+    // Open `${…}` template interpolations: each entry is the `{`-nesting
+    // depth inside that interpolation. The interpolation body is real code
+    // (left unmasked) and may itself contain nested template literals —
+    // next/dist/build/utils.js generates server.js via
+    // `` `${moduleType ? `import …` : `const …`}` `` and a non-nesting
+    // scanner ends the outer template at the first INNER backtick,
+    // unmasking the generated `import` lines.
+    let mut template_interp_depth: Vec<u32> = Vec::new();
+    while i < bytes.len() {
+        match state {
+            State::Code => {
+                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                    state = State::Str(bytes[i]);
+                    i += 1;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                    state = State::LineComment;
+                    i += 2;
+                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    state = State::BlockComment;
+                    i += 2;
+                } else if bytes[i] == b'/' && regex_can_start_here(bytes, i) {
+                    // Regex literal: mask its body (it may contain quotes)
+                    // but keep scanning code after it.
+                    match skip_regex_literal(bytes, i) {
+                        Some(end) => i = end,
+                        None => {
+                            out[i] = bytes[i];
+                            i += 1;
+                        }
+                    }
+                } else if bytes[i] == b'{' {
+                    if let Some(depth) = template_interp_depth.last_mut() {
+                        *depth += 1;
+                    }
+                    out[i] = bytes[i];
+                    i += 1;
+                } else if bytes[i] == b'}' {
+                    match template_interp_depth.last_mut() {
+                        Some(0) => {
+                            // Close of a `${…}` — resume the template literal.
+                            template_interp_depth.pop();
+                            state = State::Str(b'`');
+                            i += 1;
+                        }
+                        Some(depth) => {
+                            *depth -= 1;
+                            out[i] = bytes[i];
+                            i += 1;
+                        }
+                        None => {
+                            out[i] = bytes[i];
+                            i += 1;
+                        }
+                    }
+                } else {
+                    out[i] = bytes[i];
+                    i += 1;
+                }
+            }
+            State::Str(quote) => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                } else if quote == b'`' && bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+                    // `${` — interpolation body is code (and may nest).
+                    template_interp_depth.push(0);
+                    state = State::Code;
+                    i += 2;
+                } else {
+                    if bytes[i] == quote {
+                        state = State::Code;
+                    }
+                    i += 1;
+                }
+            }
+            State::LineComment => {
+                if bytes[i] == b'\n' {
+                    state = State::Code;
+                    out[i] = b'\n';
+                }
+                i += 1;
+            }
+            State::BlockComment => {
+                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    state = State::Code;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    // SAFETY-free: `out` is pure ASCII spaces plus bytes copied verbatim
+    // from `source` at their original positions, so it remains valid UTF-8
+    // except where a multi-byte char was partially masked — use lossy
+    // conversion to stay safe.
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Returns true if `source` contains an unindented `import ` / `import{` /

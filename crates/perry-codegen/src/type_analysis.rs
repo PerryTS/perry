@@ -391,9 +391,18 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             // dispatch in js_object_get_field_by_name_f64. Refining to
             // String lets `const m = e.message; m.length` hit the
             // string fast path instead of returning undefined.
-            if matches!(property.as_str(), "message" | "stack" | "name") {
-                let _ = object;
-                return Some(HirType::String);
+            // NOTE: `.stack` is deliberately excluded — `Error.prepareStackTrace`
+            // can make `.stack` an ARRAY of CallSites (depd / source-map-support),
+            // and a plain object may carry any `.stack` value. Typing it String
+            // unconditionally corrupted those array values on store (the array
+            // pointer got reinterpreted as a string). `.stack` stays `Any`.
+            if matches!(property.as_str(), "message" | "name") {
+                // A user class's DECLARED field type wins over the Error String assumption.
+                let declared = receiver_class_name(ctx, object).and_then(|c| {
+                    let class = ctx.classes.get(&c)?;
+                    class.fields.iter().find(|f| f.name == *property).map(|f| f.ty.clone())
+                });
+                return Some(declared.unwrap_or(HirType::String));
             }
             // obj.field where obj is a known class instance → field's
             // declared type. Reuses the same walk static_type_of uses.
@@ -1332,7 +1341,8 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // back to the Error-string assumption when the receiver's type
         // is genuinely unknown (a real caught `Error`/`unknown`/`any`).
         Expr::PropertyGet { object, property }
-            if matches!(property.as_str(), "message" | "stack" | "name") =>
+            // `.stack` excluded — may be an array via `Error.prepareStackTrace`.
+            if matches!(property.as_str(), "message" | "name") =>
         {
             // If the receiver is a known user class / interface that
             // *declares* a field with this name, that field's declared

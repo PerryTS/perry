@@ -1279,11 +1279,31 @@ unsafe fn format_object_as_json(
     } else {
         class_name.as_deref()
     };
+    // Node prefixes a null-prototype object with `[Object: null prototype]`
+    // (e.g. `Object.create(null)`), since it has no constructor to name.
+    // The flag is set at allocation by `js_object_alloc_null_proto`.
+    let is_null_proto = {
+        let gc =
+            (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+    };
+    // The display prefix before the `{ … }` body: a real class/constructor
+    // name when present, otherwise `[Object: null prototype]` for a
+    // null-proto plain object, otherwise nothing. (Distinct from
+    // `class_name_ref`/`has_class_name`, which drive the private-field skip
+    // and must reflect only a genuine class.)
+    let name_prefix: Option<String> = match class_name_ref {
+        Some(name) => Some(name.to_string()),
+        None if boxed_base.is_none() && is_null_proto => {
+            Some("[Object: null prototype]".to_string())
+        }
+        None => None,
+    };
     let empty_object = || {
         if let Some(base) = boxed_base.as_deref() {
             return base.to_string();
         }
-        match class_name_ref {
+        match name_prefix.as_deref() {
             Some(name) => format!("{name} {{}}"),
             None => "{}".to_string(),
         }
@@ -1398,7 +1418,7 @@ unsafe fn format_object_as_json(
     if parts.is_empty() {
         return empty_object();
     }
-    let single_line = match (boxed_base.as_deref(), class_name_ref) {
+    let single_line = match (boxed_base.as_deref(), name_prefix.as_deref()) {
         (Some(base), _) => format!("{} {{ {} }}", base, parts.join(", ")),
         (None, Some(name)) => format!("{} {{ {} }}", name, parts.join(", ")),
         (None, None) => format!("{{ {} }}", parts.join(", ")),
@@ -1425,7 +1445,7 @@ unsafe fn format_object_as_json(
         .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
-    match (boxed_base.as_deref(), class_name_ref) {
+    match (boxed_base.as_deref(), name_prefix.as_deref()) {
         (Some(base), _) => format!("{} {{\n{}\n}}", base, body),
         (None, Some(name)) => format!("{} {{\n{}\n}}", name, body),
         (None, None) => format!("{{\n{}\n}}", body),

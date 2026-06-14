@@ -50,6 +50,7 @@ impl SH for Expr {
             Expr::Logical { op, left, right } => { tag(h, 17); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             Expr::Call { callee, args, type_args, } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::CallSpread { callee, args, type_args, } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }
             Expr::PodLayoutAlignOf { ty } => { tag(h, 12002); ty.hash(h); }
             Expr::PodLayoutOffsetOf { ty, field_path } => { tag(h, 12003); ty.hash(h); field_path.hash(h); }
@@ -627,6 +628,8 @@ impl SH for Expr {
             Expr::TaggedTemplateStrings { site_id, cooked, raw } => { tag(h, 445); site_id.hash(h); cooked.hash(h); raw.hash(h); }
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
+            Expr::RegisterClassCaptures { class_name, captures } => { tag(h, 12241); class_name.hash(h); for c in captures { c.hash(h); } }
+            Expr::ClassCaptureValue { class_name, index } => { tag(h, 12242); class_name.hash(h); index.hash(h); }
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
             Expr::RegisterClassComputedMethod { class_name, key_expr, method_name, is_static, param_count, has_rest } => { tag(h, 12233); class_name.hash(h); key_expr.as_ref().hash(h); method_name.hash(h); is_static.hash(h); param_count.hash(h); has_rest.hash(h); }
             Expr::RegisterClassComputedAccessor { class_name, key_expr, getter_name, setter_name, is_static } => { tag(h, 12234); class_name.hash(h); key_expr.as_ref().hash(h); getter_name.hash(h); setter_name.hash(h); is_static.hash(h); }

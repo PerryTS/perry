@@ -122,6 +122,13 @@ pub enum Expr {
         type_args: Vec<Type>,
     },
 
+    /// `super(...)` with spread arguments (`super(...arguments)` — the tsc
+    /// pass-through-ctor emit zod's ZodNumber/ZodBigInt use). The parent
+    /// ctor is invoked at runtime through the CLASS_CONSTRUCTORS registry
+    /// with the materialized args array (codegen can't inline a dynamic
+    /// arg count).
+    SuperCallSpread(Vec<CallArg>),
+
     // Named function reference
     FuncRef(FuncId),
 
@@ -362,6 +369,31 @@ pub enum Expr {
     RegisterClassParentDynamic {
         class_name: String,
         parent_expr: Box<Expr>,
+    },
+
+    /// Snapshot the CURRENT values of a function-nested class's captured
+    /// outer-scope locals into the runtime `CLASS_CAPTURE_VALUES` table.
+    /// Emitted at the source-order position of the class declaration
+    /// (parallel to `RegisterClassParentDynamic`), so dynamic construction
+    /// of the class VALUE (`exports.C = C; … new mod.C()` — the webpack /
+    /// zod bundle pattern) can fill the synthesized `__perry_cap_<id>`
+    /// constructor params. Static `new C()` sites keep passing captures as
+    /// trailing args and don't consult the table.
+    RegisterClassCaptures {
+        class_name: String,
+        captures: Vec<Expr>,
+    },
+
+    /// Read slot `index` of a class's decl-site capture snapshot
+    /// (`CLASS_CAPTURE_VALUES`, written by `RegisterClassCaptures`). Used by
+    /// STATIC method bodies of function-nested capturing classes — statics
+    /// have no instance to carry `__perry_cap_*` fields, so their prologue
+    /// rebinds read the snapshot instead (vendored zod's
+    /// `static create(...) { … typeName: k.ZodRecord … }` where `k` is an
+    /// enclosing-function local).
+    ClassCaptureValue {
+        class_name: String,
+        index: u32,
     },
 
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the

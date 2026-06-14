@@ -73,19 +73,50 @@ fn ensure_function_prototype(value: f64) -> f64 {
     if current.to_bits() != crate::value::TAG_UNDEFINED {
         return current;
     }
-    if closure_ptr(value) == 0 {
-        return current;
+    let cptr = closure_ptr(value);
+    if cptr != 0 {
+        let class_id = crate::object::synthetic_class_id_for_function(value);
+        if class_id != 0 {
+            let proto = crate::object::ensure_function_prototype_object(value, class_id);
+            if !proto.is_null() {
+                return crate::value::js_nanbox_pointer(proto as i64);
+            }
+        }
     }
-    let class_id = crate::object::synthetic_class_id_for_function(value);
-    if class_id == 0 {
-        return current;
-    }
-    let proto = crate::object::ensure_function_prototype_object(value, class_id);
+    // A constructor with no `.prototype` used as a `util.inherits` base — most
+    // importantly Perry's native `require('stream')` Stream, which is a callable
+    // native-module object (NOT a CLOSURE_MAGIC closure) with `.Readable` etc.
+    // but no prototype. Node exposes a real `.prototype` on these so
+    // `util.inherits(MyStream, Stream)` can chain `MyStream.prototype.__proto__
+    // = Stream.prototype`. Synthesize a plain object once and cache it on the
+    // value (closure dynamic-prop or object field) so later reads + the
+    // `Object.setPrototypeOf` below see it.
+    let proto = crate::object::js_object_alloc(0, 0);
     if proto.is_null() {
-        current
-    } else {
-        crate::value::js_nanbox_pointer(proto as i64)
+        return current;
     }
+    let proto_val = crate::value::js_nanbox_pointer(proto as i64);
+    if cptr != 0 {
+        crate::closure::closure_set_dynamic_prop(cptr, "prototype", proto_val);
+        return proto_val;
+    }
+    // Restrict the object-backed synthesis to CALLABLE native-module exports
+    // (the `require('stream')` Stream case — a native-module object that acts as
+    // a legacy constructor). A plain non-callable object must NOT gain a
+    // synthesized `.prototype` here: that would let it slip past
+    // `js_util_inherits`'s "superCtor.prototype must be of type object"
+    // validation instead of failing as Node does. (Closures already returned
+    // above via the `cptr != 0` path.)
+    let obj = object_ptr(value);
+    if !obj.is_null()
+        && crate::object::js_object_get_class_id(obj as *const crate::object::ObjectHeader)
+            == crate::object::NATIVE_MODULE_CLASS_ID
+    {
+        let key = named_key(b"prototype");
+        crate::object::js_object_set_field_by_name(obj, key, proto_val);
+        return proto_val;
+    }
+    current
 }
 
 fn set_super_property(ctor: f64, super_ctor: f64) {

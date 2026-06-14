@@ -39,6 +39,24 @@ fn is_non_constructable_builtin_function_value(value: f64) -> bool {
     super::native_module::builtin_closure_is_non_constructable_value(value)
 }
 
+/// True when `value` is a bound native-module method/export closure
+/// (`BOUND_METHOD_FUNC_PTR` trampoline — what a `require('stream').Writable`
+/// property read produces). These represent real Node classes/functions and
+/// must be accepted as `extends` targets.
+fn is_bound_native_method_closure_value(value: f64) -> bool {
+    // Gate on the native-module metadata, not the raw BOUND_METHOD_FUNC_PTR
+    // trampoline: reified `Function.prototype.{bind,call,apply}` values
+    // (`reify_function_method_value`) share that trampoline but are NOT native
+    // constructors, so matching the sentinel alone would let `class X extends
+    // obj.method {}` skip the spec-required TypeError and silently stay
+    // parentless. A real native-module export carries a non-empty module name.
+    unsafe {
+        super::native_module::bound_native_callable_module_and_method(value)
+            .map(|(module, _)| !module.is_empty())
+            .unwrap_or(false)
+    }
+}
+
 fn throw_non_constructable_builtin_function() -> ! {
     super::object_ops::throw_object_type_error(b"Function is not a constructor")
 }
@@ -293,6 +311,28 @@ pub(crate) fn class_parent_closure(class_id: u32) -> Option<usize> {
         .read()
         .ok()
         .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
+}
+
+/// Walk the class parent chain looking for a registered parent-closure edge.
+/// `super()` dispatch needs this because the instance's class_id is the
+/// MOST-DERIVED class, while the closure-parent edge is keyed by the class
+/// that directly `extends <function value>` — possibly an ancestor.
+pub(crate) fn parent_closure_in_chain(class_id: u32) -> Option<usize> {
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while depth < 32 && cid != 0 {
+        if let Some(addr) = class_parent_closure(cid) {
+            return Some(addr);
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
 }
 
 /// Reverse lookup: which declared class's `.prototype` is this heap object?
@@ -1598,7 +1638,11 @@ pub unsafe extern "C" fn js_new_function_construct(
             || jv.is_any_string()
             || jv.is_bigint()
         {
-            super::object_ops::throw_object_type_error(b"is not a constructor");
+            let desc = unsafe { super::object_ops::describe_value_for_type_error(func_value) };
+            super::object_ops::throw_object_type_error_with_suffix(
+                &format!("{desc} "),
+                "is not a constructor",
+            );
         }
     }
     // `new (new String(""))` / `new (new Number(1))` — a boxed primitive WRAPPER
@@ -4301,6 +4345,38 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// recursive helper that returns its receiver can't create a cycle.
 #[no_mangle]
 pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: f64) {
+    // A globalThis builtin constructor closure is a valid superclass
+    // (`class CloseEvent extends Event` — the `ws` package's WebSocket
+    // events). Resolve it through the same name table the dynamic
+    // `instanceof` path uses and register the edge when the builtin has a
+    // runtime class id, so subclass instances satisfy `instanceof Event`
+    // and Event-shaped dispatch gates. Builtins without a class id keep the
+    // parentless baseline (no throw — they ARE constructors).
+    if let Some(name) = identify_global_builtin_constructor(parent_value) {
+        let parent_cid = super::instanceof::global_builtin_constructor_class_id(name);
+        if parent_cid != 0 && parent_cid != class_id {
+            register_class(class_id, parent_cid);
+        }
+        // A dynamic subclass that resolves its parent through this builtin
+        // branch must still record the fetch-parent kind so `new X()` attaches
+        // the native Request/Response handle — the bookkeeping below this
+        // early return would otherwise be skipped.
+        match name {
+            "Request" => super::register_fetch_parent_kind(class_id, 1),
+            "Response" => super::register_fetch_parent_kind(class_id, 2),
+            _ => {}
+        }
+        return;
+    }
+    // A bound native-module export (`const { Writable } = require('stream');
+    // class Receiver extends Writable` — the `ws` package's shape) is a real
+    // Node constructor even though Perry models it as a BOUND_METHOD closure.
+    // Keep the parentless baseline rather than mis-throwing; native-parent
+    // method inheritance is handled by codegen's extends_name machinery, not
+    // by this registry edge.
+    if is_bound_native_method_closure_value(parent_value) {
+        return;
+    }
     // Spec: a non-`null` superclass that is not a constructor throws a TypeError
     // at class-definition time (before any `.prototype` access). (Test262
     // subclass/superclass-* and definition/invalid-extends.)

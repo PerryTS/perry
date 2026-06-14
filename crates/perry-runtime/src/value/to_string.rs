@@ -691,6 +691,36 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     return js_jsvalue_to_string(f64::from_bits(html.bits()));
                 }
             }
+            // WHATWG `URL` / `URLSearchParams` have native `toString`s
+            // (`href` / the query string) that aren't discoverable as object
+            // fields. They must be checked BEFORE OrdinaryToPrimitive, which
+            // would otherwise find the inherited `Object.prototype.toString`
+            // and return "[object Object]" — so `String(url)`, `` `${url}` ``
+            // and `"" + url` diverged from explicit `url.toString()`. Detected
+            // before the GC-header object dispatch like the other native types.
+            //
+            // Normalize the raw heap pointer to a `POINTER_TAG` value first:
+            // the `+`/template concat path delivers the operand as a raw
+            // pointer (upper-16 == 0), and `js_url_href_if_url`'s
+            // `object_from_f64` only recognizes `POINTER_TAG`. `String(url)`
+            // already arrives tagged. Skip the probe for small-handle values
+            // (sockets / timers / widget handles): those are registry ids, not
+            // heap `ObjectHeader`s, so the shape check would dereference
+            // unmapped memory.
+            if !crate::value::addr_class::is_handle_band(ptr as usize) {
+                let boxed = f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK));
+                let url_href = crate::url::url_class::js_url_href_if_url(boxed);
+                if url_href.to_bits() != crate::value::TAG_UNDEFINED {
+                    return js_jsvalue_to_string(url_href);
+                }
+                if crate::url::try_read_as_search_params(ptr as *mut crate::object::ObjectHeader)
+                    .is_some()
+                {
+                    return crate::url::search_params::js_url_search_params_to_string(
+                        ptr as *mut crate::object::ObjectHeader,
+                    );
+                }
+            }
             // OrdinaryToPrimitive(obj, "string"): the object has no
             // `[Symbol.toPrimitive]` (checked above) and is not an
             // array/buffer/JSX/symbol with its own coercion. Per spec, call

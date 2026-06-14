@@ -467,8 +467,15 @@ fn readable_unshift_prepends_chunk_and_returns_hwm_signal() {
     );
     assert_eq!(js_node_stream_method_readable_length(handle), 11.0);
 
-    let joined = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
-    assert_eq!(stream_test_buffer_bytes(joined), b"hello world");
+    // Node v26 `read()` with no size and no decoder returns the head chunk only
+    // — one buffer at a time — not the whole concatenated buffer. The unshifted
+    // chunk becomes the new head, so the first read yields "hello " and "world"
+    // remains for the next read. (internal/streams/readable, howMuchToRead(NaN))
+    let head = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(head), b"hello ");
+    assert_eq!(js_node_stream_method_readable_length(handle), 5.0);
+    let tail = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(tail), b"world");
     assert_eq!(js_node_stream_method_readable_length(handle), 0.0);
 
     let opts = crate::object::js_object_alloc(0, 1);
@@ -493,8 +500,13 @@ fn readable_unshift_after_eof_before_end_prepends_chunk() {
         TAG_TRUE
     );
 
-    let joined = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
-    assert_eq!(stream_test_buffer_bytes(joined), b"hello world");
+    // Chunk-at-a-time (no decoder): `read()` returns the unshifted head
+    // ("hello ") and leaves "world" for the next read, even though EOF was
+    // already signalled via push(null). Matches node v26.
+    let head = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(head), b"hello ");
+    let tail = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(tail), b"world");
 }
 
 fn stream_test_buffer_bytes(value: f64) -> Vec<u8> {

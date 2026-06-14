@@ -137,6 +137,7 @@ impl LoweringContext {
             current_class_super_ident: None,
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
+            forward_class_names: std::collections::HashSet::new(),
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),

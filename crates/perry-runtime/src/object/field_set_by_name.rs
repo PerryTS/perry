@@ -617,6 +617,18 @@ pub extern "C" fn js_object_set_field_by_name(
                 super::set_buffer_pool_size(value);
                 return;
             }
+            // CommonJS module exports are MUTABLE in Node: monkey-patching
+            // like Next.js's `require('node:timers').setImmediate = patched`
+            // must store the override (read back via `vt_get_own_field`)
+            // instead of falling through to the frozen-object throw.
+            if !module_name.is_empty() && property_name != "__module__" {
+                super::native_module::native_namespace_prop_override_store(
+                    &module_name,
+                    property_name,
+                    value,
+                );
+                return;
+            }
         }
 
         // Refs #486 (hono): class setter dispatch. JS spec: a `set X(...)`

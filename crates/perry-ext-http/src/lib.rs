@@ -87,6 +87,9 @@ use validation::{validate_client_options, validate_client_url_string};
 // failure, …) into the Node `Error` shape (`.code`/`.syscall`/`.errno`).
 mod transport_error;
 
+mod response_headers;
+use response_headers::build_response_headers_object;
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -327,7 +330,12 @@ unsafe impl Sync for ClientRequestHandle {}
 pub struct IncomingMessageHandle {
     pub status_code: u16,
     pub status_message: String,
-    pub headers: HashMap<String, String>,
+    /// Raw `(name, value)` header pairs in arrival order, multiplicity
+    /// preserved. The combined `res.headers` view (Node's
+    /// `matchKnownFields` rules: `set-cookie` → array, single-value
+    /// fields keep-first, everything else joined with `, `) is built
+    /// lazily in [`build_response_headers_object`] (#5079).
+    pub headers: Vec<(String, String)>,
     pub trailers: HashMap<String, String>,
     pub body: Vec<u8>,
     pub listeners: HashMap<String, Vec<i64>>,
@@ -1449,7 +1457,7 @@ pub extern "C" fn js_http_status_message(handle: Handle) -> *mut StringHeader {
 pub extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
     let mut out = f64::from_bits(TAG_UNDEFINED);
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        out = map_to_js_object(&res.headers);
+        out = build_response_headers_object(&res.headers);
     });
     if out.to_bits() == TAG_UNDEFINED {
         if let Some(server_out) = server_incoming_property(handle, "headers") {

@@ -50,7 +50,7 @@ pub(self) use extract_exports::{
 };
 pub(self) use extract_requires::{
     extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
-    identifier_is_reassigned,
+    function_local_specs, identifier_is_reassigned,
 };
 pub(self) use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,
@@ -94,6 +94,76 @@ mod tests {
     #[test]
     fn does_not_detect_pure_esm() {
         assert!(!is_commonjs("import x from 'foo'; export const y = 1;"));
+    }
+
+    #[test]
+    fn require_only_file_with_import_word_in_comment_is_cjs() {
+        // Next.js `setup-node-env.external.js`: pure side-effect requires,
+        // but the header comment contains the word "import". The comment
+        // must not flip classification to ESM.
+        let src = r#"// This is a minimal import that initializes the node environment
+"use strict";
+if (process.env.NEXT_RUNTIME !== 'edge') {
+    require('next/dist/server/node-environment');
+}
+"#;
+        assert!(
+            is_commonjs(src),
+            "comment text must not defeat require( arm"
+        );
+    }
+
+    #[test]
+    fn template_literal_esm_codegen_is_still_cjs() {
+        // next/dist/build/utils.js writes an ESM server.js via a template
+        // literal whose column-0 `import path from 'node:path'` line must
+        // not flip this CJS file to the ESM pipeline.
+        let src = "\"use strict\";\nObject.defineProperty(exports, \"__esModule\", { value: true });\nexports.write = function() {\n  return `performance.mark('next-start');\nimport path from 'node:path'\nimport module from 'node:module'\n`;\n};\n";
+        assert!(
+            is_commonjs(src),
+            "template-literal import must not defeat CJS detection"
+        );
+    }
+
+    #[test]
+    fn nested_template_interpolation_stays_masked() {
+        // next/dist/build/utils.js shape: an outer template whose `${…}`
+        // interpolation contains NESTED templates with column-0 `import`
+        // lines. The whole construct must stay masked as string content.
+        let src = "\"use strict\";\nexports.write = (m) => {\n  return `${m ? `x\nimport path from 'node:path'\n` : `const path = require('path')`}\nrest`;\n};\n";
+        assert!(
+            is_commonjs(src),
+            "nested template import lines must not defeat CJS detection"
+        );
+    }
+
+    #[test]
+    fn regex_with_quote_does_not_mask_trailing_module_exports() {
+        // comment-json's bundle shape: regex literals containing quotes
+        // followed by the real `module.exports=` tail. The stripper must
+        // track regex literals or the tail is masked as string content.
+        let src = "const e = s.split(/['\"]/);\nvar i = make();\nmodule.exports = i;\n";
+        assert!(
+            is_commonjs(src),
+            "regex with quote must not hide module.exports"
+        );
+    }
+
+    #[test]
+    fn require_in_string_only_is_not_cjs() {
+        // `require(` appearing only inside a string literal is not evidence
+        // of CommonJS.
+        let src = "const msg = \"call require('x') yourself\";\nconsole.log(msg);\n";
+        assert!(!is_commonjs(src));
+    }
+
+    #[test]
+    fn empty_file_is_cjs() {
+        // Marker packages (react's `client-only`) ship a 0-byte index.js;
+        // its default import must resolve to the wrap's empty exports
+        // object, so empty/whitespace-only sources count as CommonJS.
+        assert!(is_commonjs(""));
+        assert!(is_commonjs("  \n\t\n"));
     }
 
     #[test]
@@ -1193,6 +1263,34 @@ module.exports = SafeBuffer;"#;
         );
         assert!(names.contains(&"transport".to_string()));
         assert!(names.contains(&"version".to_string()));
+    }
+
+    #[test]
+    fn extract_exports_skips_inner_module_exports_param() {
+        // next/dist/compiled/p-queue: webpack/ncc inner modules write to their
+        // OWN exports object (`e.exports.X = …`), which is not a named export
+        // of the outer bundle. Pre-fix the dot-boundary regex matched it, the
+        // wrap emitted `export const TimeoutError = _cjs.TimeoutError;` at
+        // module scope, and that const shadowed the inner class binding —
+        // every inner reference to `TimeoutError` became undefined.
+        let src = "var mods = { 816: (e, t, n) => {\n\
+                       class TimeoutError extends Error {}\n\
+                       const pTimeout = (p) => p;\n\
+                       e.exports = pTimeout;\n\
+                       e.exports.str = 'hello';\n\
+                       e.exports.TimeoutError = TimeoutError;\n\
+                   }};\n\
+                   exports.real = 1;\n\
+                   module.exports.alsoReal = 2;\n";
+        let names = extract_exports_from_source(src);
+        assert!(
+            !names.contains(&"TimeoutError".to_string()),
+            "`e.exports.X` is an inner module's exports, not ours: {:?}",
+            names
+        );
+        assert!(!names.contains(&"str".to_string()), "got: {:?}", names);
+        assert!(names.contains(&"real".to_string()));
+        assert!(names.contains(&"alsoReal".to_string()));
     }
 
     #[test]

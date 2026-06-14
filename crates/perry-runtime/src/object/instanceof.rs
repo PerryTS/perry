@@ -269,59 +269,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             }
             _ => {}
         }
-        let class_id = match name {
-            // Reference-type global constructors used as runtime *values*
-            // (e.g. `Function.prototype[Symbol.hasInstance].call(Map, m)`, or a
-            // dynamic `x instanceof ctorVar`). These mirror the synthetic ids
-            // the compile-time `instanceof` operator emits — see
-            // perry-codegen/src/expr/instance_misc1.rs — which `js_instanceof`
-            // resolves via the per-type registries (#3662). `Array`/`Object`/
-            // `Date` carry their own coercion thunks rather than the shared
-            // noop thunk; #4102 added those thunks to the
-            // `identify_global_builtin_constructor` allow-list so the dynamic /
-            // reflective path now resolves them here just like the literal-RHS
-            // operator does at compile time.
-            "Map" => 0xFFFF0022,
-            "Set" => 0xFFFF0023,
-            "RegExp" => 0xFFFF0021,
-            "ArrayBuffer" => 0xFFFF0025,
-            "Array" => 0xFFFF0024,
-            "Object" => 0xFFFF0050,
-            "Function" => CLASS_ID_FUNCTION,
-            "Number" => 0xFFFF00D0,
-            "String" => 0xFFFF00D1,
-            "Boolean" => 0xFFFF00D2,
-            "BigInt" => 0xFFFF00D3,
-            "Symbol" => 0xFFFF00D4,
-            "Date" => 0xFFFF0020,
-            "Error" => crate::error::CLASS_ID_ERROR,
-            "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
-            "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,
-            "ReferenceError" => crate::error::CLASS_ID_REFERENCE_ERROR,
-            "SyntaxError" => crate::error::CLASS_ID_SYNTAX_ERROR,
-            "EvalError" => crate::error::CLASS_ID_EVAL_ERROR,
-            "URIError" => crate::error::CLASS_ID_URI_ERROR,
-            "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
-            "Promise" => CLASS_ID_PROMISE,
-            "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
-            "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
-            "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
-            "CompressionStream" => crate::object::CLASS_ID_COMPRESSION_STREAM,
-            "DecompressionStream" => crate::object::CLASS_ID_DECOMPRESSION_STREAM,
-            "Event" => crate::event_target::CLASS_ID_EVENT,
-            "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
-            "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
-            // TypedArray constructors used as runtime *values* (a dynamic
-            // `x instanceof TA` where `TA` is a variable — e.g. test262's
-            // `testWithTypedArrayConstructors`). Mirrors the per-kind synthetic
-            // ids the compile-time `instanceof Float64Array` operator resolves.
-            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-            | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
-            | "BigInt64Array" | "BigUint64Array" => crate::typedarray::kind_for_name(name)
-                .map(crate::typedarray::class_id_for_kind)
-                .unwrap_or(0),
-            _ => 0,
-        };
+        let class_id = global_builtin_constructor_class_id(name);
         if class_id != 0 {
             return js_instanceof(value, class_id);
         }
@@ -333,6 +281,71 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    return js_instanceof_dynamic_tail(value, type_ref);
+}
+
+/// Runtime class id for a globalThis built-in constructor *name*.
+///
+/// Reference-type global constructors used as runtime values (e.g.
+/// `Function.prototype[Symbol.hasInstance].call(Map, m)`, or a dynamic
+/// `x instanceof ctorVar`). These mirror the synthetic ids the compile-time
+/// `instanceof` operator emits — see perry-codegen/src/expr/instance_misc1.rs
+/// — which `js_instanceof` resolves via the per-type registries (#3662).
+/// `Array`/`Object`/`Date` carry their own coercion thunks rather than the
+/// shared noop thunk; #4102 added those thunks to the
+/// `identify_global_builtin_constructor` allow-list so the dynamic /
+/// reflective path resolves them just like the literal-RHS operator does at
+/// compile time. Also consulted by `js_register_class_parent_dynamic` so a
+/// user `class X extends Event` registers the `X → Event` chain edge.
+/// Returns 0 for names without a runtime class id.
+pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
+    match name {
+        "Map" => 0xFFFF0022,
+        "Set" => 0xFFFF0023,
+        "RegExp" => 0xFFFF0021,
+        "ArrayBuffer" => 0xFFFF0025,
+        "Array" => 0xFFFF0024,
+        "Object" => 0xFFFF0050,
+        "Function" => CLASS_ID_FUNCTION,
+        "Number" => 0xFFFF00D0,
+        "String" => 0xFFFF00D1,
+        "Boolean" => 0xFFFF00D2,
+        "BigInt" => 0xFFFF00D3,
+        "Symbol" => 0xFFFF00D4,
+        "Date" => 0xFFFF0020,
+        "Error" => crate::error::CLASS_ID_ERROR,
+        "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
+        "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,
+        "ReferenceError" => crate::error::CLASS_ID_REFERENCE_ERROR,
+        "SyntaxError" => crate::error::CLASS_ID_SYNTAX_ERROR,
+        "EvalError" => crate::error::CLASS_ID_EVAL_ERROR,
+        "URIError" => crate::error::CLASS_ID_URI_ERROR,
+        "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
+        "Promise" => CLASS_ID_PROMISE,
+        "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
+        "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
+        "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
+        "CompressionStream" => crate::object::CLASS_ID_COMPRESSION_STREAM,
+        "DecompressionStream" => crate::object::CLASS_ID_DECOMPRESSION_STREAM,
+        "Event" => crate::event_target::CLASS_ID_EVENT,
+        "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
+        "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
+        // TypedArray constructors used as runtime *values* (a dynamic
+        // `x instanceof TA` where `TA` is a variable — e.g. test262's
+        // `testWithTypedArrayConstructors`). Mirrors the per-kind synthetic
+        // ids the compile-time `instanceof Float64Array` operator resolves.
+        "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+        | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" => crate::typedarray::kind_for_name(name)
+            .map(crate::typedarray::class_id_for_kind)
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+#[inline]
+fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
+    use crate::value::TAG_FALSE;
     if crate::node_submodules::is_diagnostics_bounded_channel_constructor_value(type_ref) {
         return if crate::node_submodules::diagnostics_bounded_channel_is_instance_value(value) {
             f64::from_bits(crate::value::TAG_TRUE)

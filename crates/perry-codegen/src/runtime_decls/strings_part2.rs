@@ -1191,6 +1191,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_abort_signal_throw_if_aborted", DOUBLE, &[I64]);
     module.declare_function("js_event_target_new", I64, &[]);
     module.declare_function("js_event_new", I64, &[DOUBLE, DOUBLE, I32]);
+    // `super(type, options)` from `class X extends Event/CustomEvent` —
+    // initializes Event fields onto the existing subclass `this`.
+    module.declare_function(
+        "js_event_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32, I32],
+    );
     module.declare_function("js_custom_event_new", I64, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_dom_exception_new", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_event_target_add_event_listener", VOID, &[I64, I64, I64]);

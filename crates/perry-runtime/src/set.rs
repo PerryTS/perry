@@ -541,7 +541,9 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
     let new_elements =
         realloc((*set).elements as *mut u8, old_layout, new_layout.size()) as *mut f64;
     if new_elements.is_null() {
-        panic!("Failed to grow set elements");
+        // #5067 — a constructor-driven `new Set(hugeIterable)` can hit this
+        // growth path; surface a catchable RangeError instead of aborting.
+        crate::error::throw_allocation_failed();
     }
 
     // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
@@ -563,7 +565,8 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         ) as *mut SetHeader;
         let elements = alloc(elem_layout) as *mut f64;
         if elements.is_null() {
-            panic!("Failed to allocate set elements");
+            // #5067 — catchable RangeError instead of aborting on OOM.
+            crate::error::throw_allocation_failed();
         }
 
         // Initialize header

@@ -36,6 +36,32 @@ thread_local! {
     static MODULE_CJS_GLOBAL_PATHS_VALUE: Cell<u64> = const { Cell::new(0) };
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+    /// User overrides of native-module namespace properties, keyed
+    /// `"{module}\0{prop}"`. CommonJS module exports are MUTABLE in Node —
+    /// monkey-patching like Next.js's
+    /// `require('node:timers').setImmediate = patched` must store and win
+    /// subsequent property reads instead of throwing read-only.
+    static NATIVE_NAMESPACE_PROP_OVERRIDES: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Store a user override for a native-module namespace property
+/// (`require('node:timers').setImmediate = fn`). Wins subsequent reads via
+/// `vt_get_own_field`.
+pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, value: f64) {
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow_mut()
+            .insert(format!("{module}\0{prop}"), value.to_bits());
+    });
+}
+
+/// Read back a stored native-namespace property override, if any.
+pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Option<f64> {
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow()
+            .get(&format!("{module}\0{prop}"))
+            .map(|bits| f64::from_bits(*bits))
+    })
 }
 
 fn bound_native_method_length(name: &str) -> Option<u32> {
@@ -54,6 +80,12 @@ pub extern "C" fn js_vm_create_context(sandbox: f64) -> f64 {
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     NATIVE_CALLABLE_EXPORTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
             visitor.visit_nanbox_u64_slot(value_bits);
@@ -2936,6 +2968,18 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             VM_NAMESPACE_KEYS
         }),
         "vm.constants" => Some(VM_CONSTANTS_KEYS),
+        // Plain `timers` was missing — `require('node:timers').setImmediate`
+        // read undefined (Next.js's fast-set-immediate extension reads and
+        // patches it at module init).
+        "timers" => Some(&[
+            b"setTimeout",
+            b"clearTimeout",
+            b"setInterval",
+            b"clearInterval",
+            b"setImmediate",
+            b"clearImmediate",
+            b"promises",
+        ]),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
@@ -4545,6 +4589,23 @@ fn attach_module_cjs_constructor_statics(closure_addr: usize) {
             bound_native_callable_export_value("module", name),
         );
     }
+    // `Module.prototype` — Node's require-hook pattern (Next.js):
+    // `const mod = require('module'); const orig = mod.prototype.require;
+    // mod.prototype.require = function(request) {…}`. Expose a plain object
+    // carrying a `require` method so the read+patch round-trips; the patch
+    // is inert under AOT compilation (Perry resolves modules at compile
+    // time), but startup must not throw on the access.
+    let proto = js_object_alloc(0, 1);
+    native_set_field(
+        proto,
+        "require",
+        bound_native_callable_export_value("module", "_load"),
+    );
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "prototype",
+        crate::value::js_nanbox_pointer(proto as i64),
+    );
 }
 
 fn native_color_tuple(open: i32, close: i32) -> f64 {
@@ -4753,6 +4814,21 @@ pub(crate) fn set_bound_native_closure_name(
     let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_value = f64::from_bits(JSValue::string_ptr(ptr).bits());
     crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    // Spec: a function's `name` property is { writable:false, enumerable:false,
+    // configurable:true }. Storing it as a plain dynamic prop left it ENUMERABLE
+    // by default, so `for (k in Buffer)` yielded "name" — even though
+    // `getOwnPropertyDescriptor(Buffer,'name').enumerable` correctly reported
+    // false via the function-name special case. The inconsistency broke
+    // safe-buffer's `copyProps(Buffer, SafeBuffer)` (`for (k in Buffer)
+    // SafeBuffer[k] = Buffer[k]`): it copied "name" onto SafeBuffer, whose own
+    // `name` is read-only, throwing `Cannot assign to read only property 'name'`
+    // in strict mode (jsonwebtoken → Next.js). Pin the proper descriptor so
+    // enumeration matches reflection.
+    crate::object::set_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
 }
 
 thread_local! {
@@ -8440,6 +8516,11 @@ unsafe fn vt_get_own_field(
     }
     let property_name =
         std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+    // A user override (`require('node:timers').setImmediate = patched`)
+    // wins all built-in resolution below — CJS exports are mutable in Node.
+    if let Some(value) = native_namespace_prop_override_get(&module_name, property_name) {
+        return Some(JSValue::from_bits(value.to_bits()));
+    }
     if matches!(
         module_name,
         "process" | "process.namespace" | "process.default"

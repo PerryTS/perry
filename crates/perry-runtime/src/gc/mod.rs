@@ -111,24 +111,7 @@ fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
     let current_rss_bytes = crate::process::get_rss_bytes();
     let evacuation_policy_allowed = gen_gc_evacuate_enabled();
     let force_evacuation = gc_force_evacuate_enabled();
-    // #5029: old-page defrag (C4b old-gen compaction) is skipped on cycles
-    // that run the conservative native-stack scan. Conservative stack words
-    // cannot be rewritten after a move, and per-object CONS_PINNED only
-    // protects DIRECT discoveries — the stress suite demonstrated a moved
-    // old object whose remaining referrer was not rewritten (clone shape
-    // lookups through it returned recycled memory). Until every such
-    // referrer surface is registered for rewrite, moving old objects is only
-    // sound when all roots are precise. Copying minors (the steady-state
-    // path) never run the conservative scan, so defrag keeps operating
-    // there via its own policy.
-    let conservative_scan_this_cycle = matches!(
-        roots::conservative_stack_scan_decision(),
-        roots::ConservativeStackScanDecision::Scan
-    );
-    let old_page_selection = if evacuation_policy_allowed
-        && old_to_young_tracking_complete()
-        && !conservative_scan_this_cycle
-    {
+    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {
         OldPageDefragSelection::default()
@@ -412,6 +395,7 @@ pub fn gc_init() {
     // singletons store heap pointers in TLS caches; keep them live and rewrite
     // them if a copying collection moves their backing allocations.
     gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_class_capture_value_roots_mut);
     gc_register_mutable_root_scanner(crate::node_vm::scan_vm_roots_mut);
     gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);

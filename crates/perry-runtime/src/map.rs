@@ -604,7 +604,8 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         // on a fresh Map that never saw entity 5121.
         let entries = alloc(ent_layout) as *mut f64;
         if entries.is_null() {
-            panic!("Failed to allocate map entries");
+            // #5067 — catchable RangeError instead of aborting on OOM.
+            crate::error::throw_allocation_failed();
         }
         ptr::write_bytes(entries as *mut u8, 0u8, ent_layout.size());
 
@@ -754,7 +755,9 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
 
     let new_entries = realloc((*map).entries as *mut u8, old_layout, new_layout.size()) as *mut f64;
     if new_entries.is_null() {
-        panic!("Failed to grow map entries");
+        // #5067 — a constructor-driven `new Map(hugeIterable)` can hit this
+        // growth path; surface a catchable RangeError instead of aborting.
+        crate::error::throw_allocation_failed();
     }
 
     // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.

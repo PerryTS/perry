@@ -1327,6 +1327,40 @@ mod manifest_parse_tests {
         assert!(msg.contains("backends.vulkan.available"), "got: {msg}");
         assert!(msg.contains("expected boolean"), "got: {msg}");
     }
+
+    #[test]
+    fn dotted_specifier_appends_not_replaces_extension() {
+        // Next.js app-render dir: `stream-ops.js` and `stream-ops.web.js`
+        // coexist, and `stream-ops.js` does `require("./stream-ops.web")`.
+        // `Path::with_extension("js")` REPLACES `.web` → `stream-ops.js` (the
+        // requiring file itself); resolving to it makes the module self-require
+        // and its re-export getters recurse forever. The resolver must APPEND:
+        // `./stream-ops.web` → `./stream-ops.web.js`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("stream-ops.js"), "// requiring module\n").expect("write");
+        std::fs::write(root.join("stream-ops.web.js"), "// the real target\n").expect("write");
+
+        let resolved = resolve_with_extensions(&root.join("stream-ops.web")).expect("must resolve");
+        assert_eq!(
+            resolved,
+            root.join("stream-ops.web.js"),
+            "must append `.js` to the full specifier, not strip `.web`"
+        );
+    }
+
+    #[test]
+    fn pruned_js_specifier_still_falls_back_to_ts_via_replace() {
+        // The REPLACE path is retained for Perry's TS-over-JS preference: a
+        // `require("./foo.js")` whose `.js` was pruned but whose `./foo.ts`
+        // source is present must still resolve to the TS file.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("foo.ts"), "export const x = 1;\n").expect("write");
+
+        let resolved = resolve_with_extensions(&root.join("foo.js")).expect("must resolve");
+        assert_eq!(resolved, root.join("foo.ts"));
+    }
 }
 
 #[cfg(test)]
@@ -1692,6 +1726,45 @@ mod subpath_imports_tests {
         assert!(
             resolve_import("#nope", &importer, root, &HashSet::new(), &HashMap::new(),).is_none(),
             "a `#` specifier missing from the imports map must not resolve"
+        );
+    }
+}
+
+#[cfg(test)]
+mod exports_candidates_tests {
+    use crate::commands::compile::resolve::resolve_exports_candidates;
+
+    #[test]
+    fn pruned_import_target_falls_back_to_default() {
+        // @swc/helpers shape under Next.js standalone output: file tracing
+        // prunes esm/, so the `import` condition target is absent on disk and
+        // the resolver must surface `default` (cjs) as a later candidate.
+        let exports: serde_json::Value = serde_json::json!({
+            ".": { "import": "./esm/index.js", "default": "./cjs/index.cjs" },
+            "./_/_interop_require_default": {
+                "import": "./esm/_interop_require_default.js",
+                "default": "./cjs/_interop_require_default.cjs"
+            }
+        });
+        let candidates = resolve_exports_candidates(&exports, "./_/_interop_require_default");
+        assert_eq!(
+            candidates,
+            vec![
+                "./esm/_interop_require_default.js".to_string(),
+                "./cjs/_interop_require_default.cjs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wildcard_candidates_expand_star() {
+        let exports: serde_json::Value = serde_json::json!({
+            "./cjs/*": { "import": "./esm/*.js", "default": "./cjs/*.cjs" }
+        });
+        let candidates = resolve_exports_candidates(&exports, "./cjs/foo");
+        assert_eq!(
+            candidates,
+            vec!["./esm/foo.js".to_string(), "./cjs/foo.cjs".to_string()]
         );
     }
 }

@@ -2445,6 +2445,29 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     });
                 }
             }
+            // `console[dynamicKey]` — the receiver is a bare `console` ident
+            // (not shadowed: a local would have lowered `object` to a
+            // LocalGet, not the `GlobalGet(0)` builtin sentinel). The static
+            // `console.log` value read already resolves to a real bound
+            // closure via `js_native_module_property_by_name`, but the
+            // computed form fell through to `IndexGet { GlobalGet(0), key }`,
+            // i.e. reading the method off numeric 0 — so `console[m](...)`
+            // threw `(number).<m> is not a function` (the Next.js
+            // `prefixedLog` wall). Route the runtime key through the same
+            // native-module resolver so both forms agree.
+            if matches!(&*object, Expr::GlobalGet(0))
+                && matches!(member.obj.as_ref(), ast::Expr::Ident(id) if id.sym.as_ref() == "console")
+            {
+                return Ok(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_console_method_by_value".to_string(),
+                        param_types: vec![Type::Any],
+                        return_type: Type::Any,
+                    }),
+                    args: vec![*index],
+                    type_args: Vec::new(),
+                });
+            }
             Ok(Expr::IndexGet { object, index })
         }
         ast::MemberProp::PrivateName(private) => {

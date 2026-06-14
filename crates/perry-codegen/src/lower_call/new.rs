@@ -108,7 +108,7 @@ fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
 }
 
 fn expr_calls_super(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_)) {
+    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
         return true;
     }
     let mut found = false;
@@ -131,7 +131,7 @@ fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
 }
 
 fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_)) {
+    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
         return true;
     }
     if let Expr::Closure { body, .. } = expr {
@@ -269,21 +269,45 @@ fn inline_constructor_param_values(
     lowered_args: &[String],
 ) -> Vec<String> {
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    // Synthesized `__perry_cap_<id>` capture params are always TRAILING
+    // params, and `Expr::New` sites always append the capture values after
+    // the user args — but the two sides need not agree on the USER arity.
+    // A no-user-ctor capturing class has zero user params while the `new`
+    // site may pass user args (`new ZodString({})` — the vendored-zod
+    // bundle), so positional binding put the user arg into the capture
+    // slot. Bind capture params from the args TAIL and user params from
+    // the head.
+    let n_caps = params
+        .iter()
+        .filter(|p| {
+            p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+        })
+        .count()
+        .min(lowered_args.len());
+    let user_len = lowered_args.len() - n_caps;
+    let (user_args, cap_args) = lowered_args.split_at(user_len);
+    let mut cap_iter = cap_args.iter();
+
     let mut out = Vec::with_capacity(params.len());
     let mut visible_index = 0usize;
     for param in params {
-        if param.arguments_object.is_some() {
-            out.push(pack_lowered_args_array(ctx, lowered_args));
+        if param.name.starts_with("__perry_cap_")
+            && !param.is_rest
+            && param.arguments_object.is_none()
+        {
+            out.push(cap_iter.next().cloned().unwrap_or_else(|| undef.clone()));
+        } else if param.arguments_object.is_some() {
+            out.push(pack_lowered_args_array(ctx, user_args));
         } else if param.is_rest {
-            let tail = if visible_index < lowered_args.len() {
-                &lowered_args[visible_index..]
+            let tail = if visible_index < user_args.len() {
+                &user_args[visible_index..]
             } else {
                 &[]
             };
             out.push(pack_lowered_args_array(ctx, tail));
         } else {
             out.push(
-                lowered_args
+                user_args
                     .get(visible_index)
                     .cloned()
                     .unwrap_or_else(|| undef.clone()),
@@ -361,7 +385,39 @@ fn call_local_constructor_symbol(
     // from `_addCheck`, where ZodNumber has no own ctor and ZodType does).
     let param_count = effective_constructor_param_count(ctx, class);
     let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let mut ctor_values = lowered_args.to_vec();
+    // When the ctor's signature is statically known, build per-param values
+    // with the SAME packing rules the inline path uses — a rest param or the
+    // synthesized `arguments` param receives a PACKED ARRAY, not a raw
+    // positional value. Pre-fix, `new Kid({...})` from a method of Kid (the
+    // recursion-guarded symbol-call path) shoved the user arg RAW into the
+    // ctor's synthetic `arguments` slot; `super(...arguments)` then spread
+    // an object with no `length` and the parent ctor saw zero args
+    // (vendored zod's `z.number().int()` chain — `_addCheck` →
+    // `new ZodNumber({…})` → `constructor(){ super(...arguments) }`).
+    let effective_params: Option<Vec<perry_hir::Param>> = {
+        let mut found = class.constructor.as_ref().map(|c| c.params.clone());
+        if found.is_none() {
+            let mut parent = class.extends_name.as_deref().map(|s| s.to_string());
+            while let Some(pname) = parent {
+                match ctx.classes.get(&pname).copied() {
+                    Some(pc) => {
+                        if let Some(pctor) = pc.constructor.as_ref() {
+                            found = Some(pctor.params.clone());
+                            break;
+                        }
+                        parent = pc.extends_name.as_deref().map(|s| s.to_string());
+                    }
+                    None => break,
+                }
+            }
+        }
+        found
+    };
+    let mut ctor_values = if let Some(params) = effective_params {
+        inline_constructor_param_values(ctx, &params, lowered_args)
+    } else {
+        lowered_args.to_vec()
+    };
     ctor_values.truncate(param_count);
     while ctor_values.len() < param_count {
         ctor_values.push(undef_lit.clone());
@@ -514,6 +570,27 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     DOUBLE,
                     "js_new_function_construct",
                     &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                ));
+            }
+            // `new Function(p1, …, body)` with a RUNTIME-constructed body (the
+            // const-foldable / static-literal case was handled in HIR lowering;
+            // only dynamic bodies reach here). Perry is AOT-compiled and can't
+            // compile an arbitrary runtime string, so historically this produced
+            // a non-callable placeholder object. Route it through a runtime
+            // helper that recognizes the small set of well-known codegen-library
+            // templates (currently `depd`'s deprecation-wrapper, used eagerly by
+            // `send` → Next.js) and returns a working native function; anything
+            // else still gets the placeholder. NO general JS interpreter.
+            if class_name == "Function" {
+                let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered_args.push(lower_expr(ctx, a)?);
+                }
+                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_function_ctor_from_strings",
+                    &[(PTR, &args_ptr), (I64, &args_len)],
                 ));
             }
             // Built-in / native class (Promise, Error, Date, etc.) with

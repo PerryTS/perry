@@ -48915,11 +48915,11 @@ msgstr "`afn`（近似函数）— 会让 LLVM 替换为低精度的数学内建
 #: src/cli/fast-math.md:99
 msgid ""
 "For reference, Rust nightly's `#![feature(float_algebraic)]` enables "
-"`reassoc + contract + nsz + arcp + afn`. Perry's `--fast-math` is strictly "
+"`reassoc + contract + nsz + arcp`. Perry's `--fast-math` is strictly "
 "more conservative than that."
 msgstr ""
 "作为参考，Rust nightly 的 `#![feature(float_algebraic)]` 启用了 `reassoc + contract +"
-" nsz + arcp + afn`。Perry 的 `--fast-math` 比这严格保守得多。"
+" nsz + arcp`。Perry 的 `--fast-math` 比这严格保守得多。"
 
 #: src/cli/fast-math.md:103
 msgid "Performance numbers"

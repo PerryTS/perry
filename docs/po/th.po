@@ -51030,11 +51030,11 @@ msgstr ""
 #: src/cli/fast-math.md:99
 msgid ""
 "For reference, Rust nightly's `#![feature(float_algebraic)]` enables "
-"`reassoc + contract + nsz + arcp + afn`. Perry's `--fast-math` is strictly "
+"`reassoc + contract + nsz + arcp`. Perry's `--fast-math` is strictly "
 "more conservative than that."
 msgstr ""
 "เพื่อการอ้างอิง `#![feature(float_algebraic)]` ของ Rust nightly เปิดใช้งาน "
-"`reassoc + contract + nsz + arcp + afn` `--fast-math` ของ Perry "
+"`reassoc + contract + nsz + arcp` `--fast-math` ของ Perry "
 "นั้นอนุรักษ์นิยมมากกว่านั้นอย่างเข้มงวด"
 
 #: src/cli/fast-math.md:103

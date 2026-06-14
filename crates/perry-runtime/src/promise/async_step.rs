@@ -48,22 +48,17 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // Issue #586: ECMAScript thenable assimilation. The async-to-generator
     // transform rewrites every `await x` into `Promise.resolve(x).then(...)`
     // — which means thenable assimilation has to happen here, not in the
-    // codegen-side `Expr::Await` lowering. `js_assimilate_thenable` returns
-    // a fresh Promise wrapper that follows the thenable's `.then(resolve,
-    // reject)` callbacks; chain its eventual state into our outer promise
-    // via the same `js_promise_resolve_with_promise` pattern as the real-
-    // Promise arm above. Drizzle's `QueryPromise` (`then` triggers the SQL
-    // round-trip) is the load-bearing motivating case (#488).
-    let assim = js_assimilate_thenable(value);
-    if assim.to_bits() != value.to_bits() && js_value_is_promise(assim) != 0 {
-        let inner = crate::value::js_nanbox_get_pointer(assim) as *mut Promise;
-        if !inner.is_null() && inner != promise {
-            js_promise_resolve_with_promise(promise, inner);
-            return promise;
-        }
-    }
-
-    js_promise_resolve(promise, value);
+    // codegen-side `Expr::Await` lowering. `promise_resolve_assimilating`
+    // implements the spec PromiseResolveThenableJob: a thenable's `.then` is
+    // invoked from a SCHEDULED microtask, never synchronously during resolve.
+    // This matters for `Promise.race`/`Promise.any` over a thenable, where Node
+    // does not call the thenable's `then` until the job runs (so the count of
+    // synchronous `then` invocations stays 0). Primitives (fast path above) and
+    // native Promises (short-circuit above) never reach here, so the per-await
+    // steady state is untouched; only real thenables (drizzle's `QueryPromise`,
+    // object literals with `then`) defer by one microtask — which the await
+    // loop drains, leaving the resolved value identical.
+    super::combinators::promise_resolve_assimilating(promise, value);
     promise
 }
 

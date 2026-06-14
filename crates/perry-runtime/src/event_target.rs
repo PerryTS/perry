@@ -217,6 +217,21 @@ fn construct_event(
     if event.is_null() {
         return std::ptr::null_mut();
     }
+    init_event_fields(event, type_value, options, constructor_name, detail);
+    event
+}
+
+/// Shared Event field/method initialization, applied either to a freshly
+/// allocated Event (`construct_event`) or to an existing subclass instance
+/// (`js_event_subclass_init` — `super(type, options)` from
+/// `class X extends Event`).
+fn init_event_fields(
+    event: *mut ObjectHeader,
+    type_value: f64,
+    options: f64,
+    constructor_name: &[u8],
+    detail: Option<f64>,
+) {
     let type_ptr = string_from_value(type_value);
     set_event_field(
         event,
@@ -263,15 +278,71 @@ fn construct_event(
         "stopImmediatePropagation",
         event_stop_immediate_propagation_thunk,
     );
-    event
 }
+
+/// `super(type, options)` from a user `class X extends Event` /
+/// `extends CustomEvent`: initialize the standard Event fields and methods
+/// onto the EXISTING subclass instance (`this`) instead of allocating a new
+/// Event. The subclass's own class id stays on the header — the
+/// `Subclass → Event` registry edge registered at class-definition time
+/// keeps `instanceof Event` and dispatch acceptance working.
+#[no_mangle]
+pub extern "C" fn js_event_subclass_init(
+    this_value: f64,
+    type_value: f64,
+    options: f64,
+    argc: u32,
+    is_custom: u32,
+) -> f64 {
+    let Some(event) = value_as_ptr::<ObjectHeader>(this_value) else {
+        return undefined_value();
+    };
+    if argc == 0 {
+        throw_missing_arg("type");
+    }
+    // `class X extends CustomEvent` must initialize as a CustomEvent: the
+    // `constructor` field resolves to the CustomEvent global and `detail` is
+    // read off the options bag (mirroring the direct `new CustomEvent(...)`
+    // path). Plain `extends Event` keeps `b"Event"` and no `detail`.
+    if is_custom != 0 {
+        let detail = unsafe { option_detail(options) };
+        init_event_fields(event, type_value, options, b"CustomEvent", Some(detail));
+    } else {
+        init_event_fields(event, type_value, options, b"Event", None);
+    }
+    undefined_value()
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build —
+/// `js_event_subclass_init` is a generated-code-only callee.
+#[used]
+static KEEP_JS_EVENT_SUBCLASS_INIT: extern "C" fn(f64, f64, f64, u32, u32) -> f64 =
+    js_event_subclass_init;
 
 fn is_event_instance(event: *const ObjectHeader) -> bool {
     if event.is_null() {
         return false;
     }
     let class_id = unsafe { (*event).class_id };
-    class_id == CLASS_ID_EVENT || class_id == CLASS_ID_CUSTOM_EVENT
+    if class_id == CLASS_ID_EVENT || class_id == CLASS_ID_CUSTOM_EVENT {
+        return true;
+    }
+    // A user subclass (`class CloseEvent extends Event`, e.g. the `ws`
+    // package's WebSocket events) carries its own class id; walk the
+    // registered parent chain looking for the Event base.
+    let mut cur = class_id;
+    for _ in 0..64 {
+        match crate::object::get_parent_class_id(cur) {
+            Some(parent) if parent != 0 && parent != cur => {
+                if parent == CLASS_ID_EVENT || parent == CLASS_ID_CUSTOM_EVENT {
+                    return true;
+                }
+                cur = parent;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// `new Event(type, options?)`.

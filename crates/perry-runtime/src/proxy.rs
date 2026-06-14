@@ -408,6 +408,26 @@ fn throw_type_error(msg: &str) -> f64 {
     crate::exception::js_throw(boxed)
 }
 
+/// `String(value)` rendering of a JS value, for diagnostic messages that
+/// embed the offending value (e.g. Node's `"1 is not a constructor"` and
+/// the proxy construct-trap `"… non-object ('1')"`). Returns an empty
+/// string on a null/unrenderable value. (#2768)
+pub(crate) fn value_display_string(value: f64) -> String {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let str_ptr = crate::value::js_jsvalue_to_string(value);
+    if str_ptr.is_null() {
+        return String::new();
+    }
+    let nb = f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(nb, &mut scratch) {
+        if !ptr.is_null() && len > 0 {
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+    }
+    String::new()
+}
+
 fn reflect_value_is_symbol(value: f64) -> bool {
     let bits = value.to_bits();
     (bits >> 48) == (POINTER_TAG >> 48)
@@ -1110,14 +1130,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
     // #5054 fast path: the spec walk below probes own_set_descriptor on the
     // target, which ends in a LINEAR keys_array scan — so every dynamic
     // `obj[key] = v` was O(own-key-count) and building a wide dynamic object
-    // quadratic (10k props ~ 12s). When nothing the walk models can apply —
-    // plain GC_TYPE_OBJECT receiver written as itself, no property/accessor
-    // descriptor ever installed in the process (monotonic global), no class
-    // machinery (class_id 0), no recorded setPrototypeOf target, extensible,
-    // string key — the write reduces to the ordinary data-property store.
-    // #5054 fast path: the spec walk below probes own_set_descriptor on the
-    // target, which ends in a LINEAR keys_array scan — so every dynamic
-    // `obj[key] = v` was O(own-key-count) and building a wide dynamic object
     // quadratic (10k props ~ 12s). When nothing the walk models can apply,
     // the write reduces to the ordinary data-property store:
     //   - target written as itself (receiver bits identical),
@@ -1154,6 +1166,38 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         && crate::object::prototype_chain::object_static_prototype(addr).is_none()
                     {
                         target_set(target, key, value);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // CommonJS native-module namespaces are MUTABLE in Node — monkey-patching
+    // like Next.js's `require('node:timers').setImmediate = patched` must
+    // store the override (read back through the namespace vtable's
+    // `get_own_field`) rather than reporting the built-in member
+    // non-writable and throwing under strict mode.
+    {
+        let jv = crate::value::JSValue::from_bits(target.to_bits());
+        if jv.is_pointer() {
+            let obj = extract_pointer(target.to_bits()) as *const crate::object::ObjectHeader;
+            if !obj.is_null() && unsafe { (*obj).class_id } == crate::object::NATIVE_MODULE_CLASS_ID
+            {
+                let module_name = unsafe { crate::object::get_module_name_from_namespace(target) };
+                if let (false, Some(prop)) =
+                    (module_name.is_empty(), property_key_to_rust_string(key))
+                {
+                    if prop != "__module__" {
+                        if module_name == "buffer.Buffer" && prop == "poolSize" {
+                            crate::object::set_buffer_pool_size(value);
+                        } else {
+                            crate::object::native_namespace_prop_override_store(
+                                module_name,
+                                &prop,
+                                value,
+                            );
+                        }
                         return true;
                     }
                 }
@@ -1697,7 +1741,11 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
     crate::object::js_implicit_this_set(prev);
     // [[Construct]] must return an Object (spec step 9 of the construct trap).
     if !reflect_value_is_object(result) {
-        return throw_type_error("proxy [[Construct]] trap returned a non-object value");
+        // Node/V8 wording: `'construct' on proxy: trap returned non-object ('1')`.
+        return throw_type_error(&format!(
+            "'construct' on proxy: trap returned non-object ('{}')",
+            value_display_string(result)
+        ));
     }
     result
 }

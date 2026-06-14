@@ -121,6 +121,65 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // observable to user code.
             Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
         }
+        // Snapshot a function-nested class's captured outer locals into the
+        // runtime CLASS_CAPTURE_VALUES table at the decl site, so DYNAMIC
+        // construction of the class value (`exports.C = C; new mod.C()` —
+        // the webpack/zod bundle pattern) can fill the synthesized
+        // `__perry_cap_<id>` ctor params. Mirrors RegisterClassParentDynamic
+        // placement; static `new C()` sites pass captures inline and never
+        // consult the table.
+        Expr::RegisterClassCaptures {
+            class_name,
+            captures,
+        } => {
+            let mut lowered: Vec<String> = Vec::with_capacity(captures.len());
+            for c in captures {
+                lowered.push(lower_expr(ctx, c)?);
+            }
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 && !lowered.is_empty() {
+                    let n = lowered.len();
+                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                    for (i, v) in lowered.iter().enumerate() {
+                        let slot =
+                            ctx.block()
+                                .gep(DOUBLE, &buf, &[(crate::types::I64, &i.to_string())]);
+                        ctx.block().store(DOUBLE, v, &slot);
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg, n, buf
+                    ));
+                    let cid_str = class_id.to_string();
+                    let len_str = n.to_string();
+                    ctx.block().call_void(
+                        "js_class_register_capture_values",
+                        &[
+                            (crate::types::I32, &cid_str),
+                            (crate::types::PTR, &ptr_reg),
+                            (crate::types::I64, &len_str),
+                        ],
+                    );
+                }
+            }
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
+        // Read slot `index` of the class's decl-site capture snapshot —
+        // STATIC method prologue rebinds (no instance to carry the
+        // `__perry_cap_*` fields).
+        Expr::ClassCaptureValue { class_name, index } => {
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                let cid_str = class_id.to_string();
+                let idx_str = index.to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_class_capture_value",
+                    &[(crate::types::I32, &cid_str), (crate::types::I32, &idx_str)],
+                ));
+            }
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
         // Issue #894: `static [Symbol.for("k")] = init` inside a
         // class expression returned from a factory function. Emitted
         // by HIR lowering as a `Sequence([…, RegisterClassStaticSymbol,

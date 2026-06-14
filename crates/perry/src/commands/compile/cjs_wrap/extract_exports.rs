@@ -355,8 +355,15 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     };
 
     // Shape 1: `exports.X = ...` / `module.exports.X = ...`
+    // The boundary class excludes `.` so `e.exports.X = …` (a property write on
+    // some OTHER object — e.g. a webpack/ncc inner module's own exports param,
+    // as in next/dist/compiled/p-queue's `e.exports.TimeoutError = TimeoutError`)
+    // is NOT mistaken for a named export of the outer bundle. A false positive
+    // here makes the wrap emit `export const X = _cjs.X;` at module scope,
+    // which shadows the inner binding of the same name during lowering and
+    // turns every inner reference to it into `undefined`.
     let dot_re = regex::Regex::new(
-        r"(?:^|[^A-Za-z0-9_$])(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
+        r"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
     )
     .unwrap();
     for cap in dot_re.captures_iter(source) {

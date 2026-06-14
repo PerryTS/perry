@@ -461,6 +461,13 @@ pub(super) fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool)
     if !end_dest {
         add_pipe_no_end_destination(stream, dest);
     }
+    // A flowing destination (e.g. a piped-into PassThrough/Duplex) must consume
+    // each chunk from its own readable buffer when it emits 'data' live —
+    // otherwise the chunk lingers in the buffer and the destination's drain
+    // microtask re-emits it, duplicating every piped chunk. `pipeline()` already
+    // marks both ends; `pipe()` needs the same on the destination. (matches
+    // mark_live_pipe_consume_on_emit usage in node_stream_pipeline.rs)
+    mark_live_pipe_consume_on_emit(dest);
     install_pipe_destination_listeners(stream, dest);
     let _ = emit_stream_event(dest, string_value(b"pipe"), &[stream]);
     set_readable_flowing(stream, f64::from_bits(TAG_TRUE));

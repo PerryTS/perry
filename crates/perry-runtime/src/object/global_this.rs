@@ -460,8 +460,49 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             undef
         }
         _ => {
+            // `class PQ extends t {}` nested inside another function (webpack/
+            // ncc inner modules — next/dist/compiled/p-queue extending
+            // eventemitter3): HIR lowers the heritage Ident at class-DECL
+            // scope, but codegen re-emits that expression inside the
+            // constructor, where the captured slot index is unrelated, so
+            // `parent_val` arrives stale (undefined). The decl-site
+            // `js_register_class_parent_dynamic` call DID see the live value
+            // and recorded it in CLASS_PARENT_CLOSURES — prefer that
+            // registration whenever `parent_val` isn't actually callable, so
+            // the parent function body still runs with `this` bound (sets
+            // `this._events` etc.). A valid closure / class-object parent
+            // value keeps the existing direct-dispatch path untouched.
+            let mut callee = parent_val;
+            let bits = parent_val.to_bits();
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+            const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+            let usable = if bits & TAG_MASK == POINTER_TAG {
+                let p = (bits & PTR_MASK) as usize;
+                // A real callability test: a closure, or a per-evaluation class
+                // OBJECT (constructor). The prior `class_id != 0` accepted any
+                // pointer-tagged object with a class id — including non-callable
+                // instances — so a stale captured slot holding one of those
+                // skipped the `parent_closure_in_chain` recovery below and
+                // dispatched `js_native_call_value` on a non-function.
+                crate::closure::is_closure_ptr(p)
+                    || super::class_registry::is_class_object_ptr(p as *const u8)
+            } else {
+                // INT32-tagged ClassRefs route through the static super paths
+                // before reaching here; anything else (undefined / a stale
+                // numeric slot) is not a constructor.
+                bits & TAG_MASK == 0x7FFE_0000_0000_0000
+            };
+            if !usable {
+                if let Some(obj) = subclass_this_object_ptr(this_box) {
+                    let cid = crate::object::js_object_get_class_id(obj);
+                    if let Some(addr) = super::class_registry::parent_closure_in_chain(cid) {
+                        callee = f64::from_bits(POINTER_TAG | addr as u64);
+                    }
+                }
+            }
             let prev = crate::object::js_implicit_this_set(this_box);
-            let r = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+            let r = crate::closure::js_native_call_value(callee, args_ptr, args_len);
             crate::object::js_implicit_this_set(prev);
             r
         }
@@ -1204,6 +1245,81 @@ extern "C" fn global_this_error_is_error_thunk(
 ) -> f64 {
     crate::error::js_error_is_error(value)
 }
+
+/// `new Function(...)` with a RUNTIME-constructed body. Static/const bodies are
+/// AOT-compiled in HIR; only dynamic ones reach here. Perry has no JS
+/// interpreter, but it CAN recognize the fixed templates a few popular codegen
+/// libraries emit and return a real native function. Currently: `depd`'s
+/// deprecation wrapper (used eagerly by `send` → Next.js). depd's wrapper just
+/// logs a deprecation then forwards to the wrapped fn, so the "wrapper" can
+/// simply BE that fn — `new Function(...)(fn,log,deprecate,msg,site)` returns
+/// `fn`. Unrecognized templates fall back to a non-callable placeholder object
+/// (prior behavior); there is no general eval.
+#[no_mangle]
+pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: usize) -> f64 {
+    let arg_str = |i: usize| -> String {
+        if i >= args_len || args_ptr.is_null() {
+            return String::new();
+        }
+        let v = unsafe { *args_ptr.add(i) };
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        match crate::string::str_bytes_from_jsvalue(v, &mut scratch) {
+            Some((p, n)) if !p.is_null() => {
+                let bytes = unsafe { std::slice::from_raw_parts(p, n as usize) };
+                std::str::from_utf8(bytes).unwrap_or("").to_string()
+            }
+            _ => String::new(),
+        }
+    };
+    // depd `wrapfunction`: `new Function("fn","log","deprecate","message",
+    // "site", '…return function (…) { log.call(deprecate, message, site)\n
+    // return fn.apply(this, arguments)\n}')`. The outer, called with
+    // (fn,log,deprecate,message,site), returns that wrapper. Match the FULL
+    // shape — exactly six args, the five parameter names verbatim, AND the
+    // body substrings — so an unrelated dynamic Function body that happens to
+    // contain the substrings isn't misclassified as depd's wrapper.
+    if args_len == 6
+        && arg_str(0) == "fn"
+        && arg_str(1) == "log"
+        && arg_str(2) == "deprecate"
+        && arg_str(3) == "message"
+        && arg_str(4) == "site"
+    {
+        let body = arg_str(5);
+        if body.contains("return function (")
+            && body.contains("log.call(deprecate, message, site)")
+            && body.contains("return fn.apply(this, arguments)")
+        {
+            let fp = depd_wrapfunction_outer_thunk as *const u8;
+            crate::closure::js_register_closure_arity(fp, 5);
+            let closure = crate::closure::js_closure_alloc_singleton(fp);
+            if !closure.is_null() {
+                return crate::value::js_nanbox_pointer(closure as i64);
+            }
+        }
+    }
+    let obj = crate::object::js_object_alloc(0, 0);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+/// depd `wrapfunction` outer `(fn, log, deprecate, message, site) => wrapper`.
+/// The wrapper forwards to `fn` (deprecation logging dropped — a non-essential
+/// warning), so return `fn` itself: calling the "deprecated" function calls the
+/// real one with identical `this`/arguments.
+extern "C" fn depd_wrapfunction_outer_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    fn_v: f64,
+    _log: f64,
+    _deprecate: f64,
+    _message: f64,
+    _site: f64,
+) -> f64 {
+    fn_v
+}
+
+#[used]
+static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C" fn(*const f64, usize) -> f64 =
+    js_function_ctor_from_strings;
 
 /// #2904: `Error.prepareStackTrace` default — Node leaves a hook here that
 /// formats the stack from structured frames. Perry's stack strings are
@@ -4904,10 +5020,29 @@ fn alias_number_static_to_global_function(singleton: *mut ObjectHeader, name: &s
     );
 }
 
+thread_local! {
+    /// Raw address of THIS thread's `Error` constructor closure, captured at
+    /// install. Read by `error::error_prepare_stack_trace_override` so
+    /// `captureStackTrace` / `error.stack` can honor a user-set
+    /// `Error.prepareStackTrace`. Thread-local, not a process-global: each
+    /// `perry/thread` agent has its own arena + realm, and an `Error`
+    /// constructor / `prepareStackTrace` from another thread's arena can be a
+    /// foreign or freed pointer — the same reason `globalThis` is per-thread.
+    pub(crate) static ERROR_CONSTRUCTOR_PTR: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// The default `Error.prepareStackTrace` thunk's address — used to tell a
+/// user override apart from Perry's built-in default.
+pub(crate) fn default_prepare_stack_trace_func_ptr() -> usize {
+    global_this_error_prepare_stack_trace_thunk as *const u8 as usize
+}
+
 fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
     if ctor.is_null() {
         return;
     }
+    ERROR_CONSTRUCTOR_PTR.with(|c| c.set(ctor as usize));
     let func_ptr = global_this_error_capture_stack_trace_thunk as *const u8;
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {

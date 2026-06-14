@@ -509,6 +509,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             } else if ctx.lookup_class(&name).is_some() {
                 // Class used as a first-class value (e.g., { Point: Point })
                 Ok(Expr::ClassRef(name))
+            } else if ctx.forward_class_names.contains(&name) {
+                // Forward reference to a sibling class declared LATER in the
+                // same function body (vendored zod: ZodType.optional() →
+                // ZodOptional.create(...)). JS resolves this at call time;
+                // emit a ClassRef by name — codegen resolves it from the
+                // class registry, which has every pending class by then.
+                Ok(Expr::ClassRef(name))
             } else if name == "undefined" {
                 // Global undefined identifier
                 Ok(Expr::Undefined)

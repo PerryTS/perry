@@ -174,7 +174,7 @@ pub fn lower_constructor(
         // touch only params (not `this`), so they stay at the very top.
         if let Some(super_pos) = body
             .iter()
-            .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_))))
+            .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))))
         {
             let tail = body.split_off(super_pos + 1);
             body.extend(assignments);

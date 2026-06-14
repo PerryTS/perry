@@ -2207,7 +2207,10 @@ pub fn run_with_parse_cache(
                     }
                 };
                 for import in &hir_module.imports {
-                    if import.is_dynamic || import.type_only {
+                    // `is_deferred_require`: a function-local `require('S')`
+                    // (lazy in Node). S must NOT chain into this module's init
+                    // — it inits only when the require shim is actually called.
+                    if import.is_dynamic || import.type_only || import.is_deferred_require {
                         continue;
                     }
                     if let Some(resolved) = &import.resolved_path {

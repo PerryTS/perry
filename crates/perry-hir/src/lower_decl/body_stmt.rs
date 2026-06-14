@@ -285,6 +285,64 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         member,
                     )));
                 }
+                // A function-nested class that captures enclosing locals
+                // (`const n = require('x'); class C { m() { n.f() } }` — the
+                // webpack/zod bundle pattern) snapshots the CURRENT capture
+                // values at the decl site so dynamic construction of the
+                // class VALUE (`exports.C = C; new mod.C()`) can fill the
+                // synthesized `__perry_cap_<id>` ctor params. Static `new C()`
+                // sites still pass captures as trailing args directly.
+                if let Some(captured) = ctx.lookup_class_captures(&class.name) {
+                    if !captured.is_empty() {
+                        let captures: Vec<Expr> =
+                            captured.iter().map(|id| Expr::LocalGet(*id)).collect();
+                        result.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                            class_name: class.name.clone(),
+                            captures,
+                        }));
+                    }
+                }
+                // Static field initializers + static blocks for a
+                // function-nested class. The module-level path
+                // (`lower/stmt.rs`) emits these into `module.init`; here they
+                // belong in the function body so they run when the class
+                // declaration is evaluated. Without this, an in-function
+                // class's `static x = …` fields and `static { … }` blocks
+                // silently stayed at their zero default — only top-level
+                // classes initialized. Mirrors the top-level emission order
+                // (fields then blocks, per ClassDefinitionEvaluation), with
+                // lexical `this` in field initializers bound to the class ref.
+                for sf in &class.static_fields {
+                    if let Some(init) = &sf.init {
+                        let mut init_value = init.clone();
+                        crate::analysis::substitute_lexical_this_in_expr(
+                            &mut init_value,
+                            &Expr::ClassRef(class.name.clone()),
+                        );
+                        if let Some(key) = sf.key_expr.as_ref() {
+                            result.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
+                                class_name: class.name.clone(),
+                                key: Box::new(key.clone()),
+                                value: Box::new(init_value),
+                            }));
+                        } else {
+                            result.push(Stmt::Expr(Expr::StaticFieldSet {
+                                class_name: class.name.clone(),
+                                field_name: sf.name.clone(),
+                                value: Box::new(init_value),
+                            }));
+                        }
+                    }
+                }
+                for sm in &class.static_methods {
+                    if sm.name.starts_with("__perry_static_init_") {
+                        result.push(Stmt::Expr(Expr::StaticMethodCall {
+                            class_name: class.name.clone(),
+                            method_name: sm.name.clone(),
+                            args: Vec::new(),
+                        }));
+                    }
+                }
                 ctx.pending_classes.push(class);
             } else {
                 // Duplicate same-named class: still evaluate its computed

@@ -77,6 +77,9 @@ pub fn declare_phase1(module: &mut LlModule) {
     module.declare_function("js_console_warn_number", VOID, &[DOUBLE]);
     // console.dir(value, options) — honors options.depth (#1199).
     module.declare_function("js_console_dir_with_options", VOID, &[DOUBLE, DOUBLE]);
+    // console[dynamicKey] — resolve a console method by runtime key string to
+    // the bound native closure (the `console[m](...)` computed-member form).
+    module.declare_function("js_console_method_by_value", DOUBLE, &[DOUBLE]);
 
     // NaN-boxing wrappers (bridge between raw handles and NaN-boxed doubles).
     module.declare_function("js_nanbox_string", DOUBLE, &[I64]);

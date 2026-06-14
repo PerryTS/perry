@@ -184,13 +184,20 @@ pub fn lower_fn_body_block_stmt(
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
     // any earlier statement resolve via `lookup_local`. Generator and
-    // async-generator FnDecls are excluded — those go through the
-    // hoist-to-top-level + FuncRef path in `lower_body_stmt` and aren't
-    // closure-bound at the source position.
+    // async-generator FnDecls ARE included: `lower_body_stmt` lowers them to
+    // a top-level function plus a source-position `Stmt::Let { init: FuncRef }`
+    // binding the name. Spec function-declaration hoisting still applies to
+    // generators, so a forward reference (`A.gen = gen` ABOVE the
+    // `function* gen(){}` in a webpack/ncc inner module — next/dist/compiled/
+    // edge-runtime's `consumeUint8ArrayReadableStream`) must resolve. We
+    // pre-define the local here (so `lookup_local` succeeds at the forward
+    // reference) and Phase 3 moves the FuncRef `Let` to the front (so it is
+    // initialized before that reference runs). The FuncRef value is pure, so
+    // reordering it ahead of other statements is safe.
     let mut hoisted_id_set: HashSet<LocalId> = HashSet::new();
     for stmt in &block.stmts {
         if let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt {
-            if fn_decl.function.body.is_none() || fn_decl.function.is_generator {
+            if fn_decl.function.body.is_none() {
                 continue;
             }
             let name = fn_decl.ident.sym.to_string();
@@ -203,15 +210,88 @@ pub fn lower_fn_body_block_stmt(
         }
     }
 
+    // Phase 1.5: pre-register sibling class DECLARATION names so forward
+    // references inside earlier statements/method bodies resolve to
+    // `ClassRef` instead of the unknown-global sentinel. JS resolves
+    // these at call time (vendored zod: `ZodType.optional()` calls
+    // `ZodOptional.create(...)` declared far below in the same webpack
+    // module function). Scoped: the previous set is restored on exit so
+    // names don't leak across function bodies.
+    let saved_forward_class_names = ctx.forward_class_names.clone();
+    for stmt in &block.stmts {
+        if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            ctx.forward_class_names
+                .insert(class_decl.ident.sym.to_string());
+        }
+    }
+
     // Phase 2: lower the body. The inner FnDecl arm in `lower_body_stmt`
     // calls `lookup_local(name)` and reuses our pre-defined id.
-    let body = match lower_block_stmt(ctx, block) {
+    let mut body = match lower_block_stmt(ctx, block) {
         Ok(body) => body,
         Err(err) => {
             ctx.current_strict = parent_strict;
+            ctx.forward_class_names = saved_forward_class_names;
             return Err(err);
         }
     };
+    ctx.forward_class_names = saved_forward_class_names;
+
+    // Re-register capture snapshots for classes declared in this body at
+    // its END. The decl-site `RegisterClassCaptures` runs before later
+    // statements assign captured vars (tsc emits TS-enum namespaces AFTER
+    // the classes that reference them — vendored zod's
+    // ZodFirstPartyTypeKind), so static-method snapshot reads and post-
+    // return dynamic constructions need the FINAL values. Inserted before
+    // a trailing `return` when present; bodies with early returns keep the
+    // decl-site snapshot for those paths.
+    {
+        let mut re_regs: Vec<Stmt> = Vec::new();
+        for stmt in &block.stmts {
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                let cname = class_decl.ident.sym.to_string();
+                if let Some(captured) = ctx.lookup_class_captures(&cname) {
+                    if !captured.is_empty() {
+                        let captures: Vec<Expr> =
+                            captured.iter().map(|id| Expr::LocalGet(*id)).collect();
+                        // Sibling code lowered BEFORE this class registered
+                        // its captures (forward refs — zod's
+                        // `function createZodEnum(...) { return new
+                        // ZodEnum({...}) }` declared above the class) has
+                        // `new <class>(…)` sites with NO cap args appended;
+                        // the inline binder then misfills the ctor params.
+                        // Append the raw outer ids now; sites lowered after
+                        // registration already end with exactly these ids
+                        // and are skipped (tail-match guard). Class members
+                        // were handled by `append_self_sites` with remapped
+                        // ids — their tails don't match the raw ids, but
+                        // they ALREADY carry appends; restrict this pass to
+                        // non-member code by walking the lowered body only
+                        // (member bodies live in pending_classes, not here).
+                        let cap_args: Vec<(perry_types::LocalId, perry_types::LocalId)> =
+                            captured.iter().map(|id| (*id, *id)).collect();
+                        for s in body.iter_mut() {
+                            super::class_captures::append_new_args_stmt(s, &cname, &cap_args, true);
+                        }
+                        re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                            class_name: cname,
+                            captures,
+                        }));
+                    }
+                }
+            }
+        }
+        if !re_regs.is_empty() {
+            let insert_at = if matches!(body.last(), Some(Stmt::Return(_))) {
+                body.len() - 1
+            } else {
+                body.len()
+            };
+            for (i, s) in re_regs.into_iter().enumerate() {
+                body.insert(insert_at + i, s);
+            }
+        }
+    }
 
     // Undefined-initialised entry slots for hoisted `var`s declared in
     // nested blocks (see predefine_var_bindings_in_function_body docs).
@@ -238,9 +318,17 @@ pub fn lower_fn_body_block_stmt(
     let mut hoisted_lets: Vec<Stmt> = Vec::new();
     let mut other: Vec<Stmt> = Vec::new();
     for s in body {
+        // A regular/async FnDecl lowers to a `Let { init: Closure }`; a
+        // generator/async-generator FnDecl lowers to a `Let { init: FuncRef }`
+        // (the body lives in a hoisted top-level function). Both forms are
+        // hoisted to the front per spec function-declaration semantics.
         let is_hoisted = matches!(
             &s,
             Stmt::Let { id, init: Some(Expr::Closure { .. }), .. }
+                if hoisted_id_set.contains(id)
+        ) || matches!(
+            &s,
+            Stmt::Let { id, init: Some(Expr::FuncRef(_)), .. }
                 if hoisted_id_set.contains(id)
         );
         if is_hoisted {

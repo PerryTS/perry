@@ -130,6 +130,16 @@ unsafe fn dispatch_pointer_with_replacer(
         }
         return;
     }
+    // Issue #5111: TypedArray (no GcHeader on small ones) detection before
+    // gc_obj_type, same rationale as the buffer check above.
+    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if indent.is_empty() {
+            stringify_typed_array(ptr, buf);
+        } else {
+            stringify_typed_array_pretty(ptr, buf, indent, depth);
+        }
+        return;
+    }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => {
             stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
@@ -523,6 +533,11 @@ pub(crate) unsafe fn stringify_value_pretty(
         // Set/Error serialize as "{}" in Node (no enumerable own props).
         if crate::buffer::is_registered_buffer(ptr as usize) {
             stringify_buffer_pretty(ptr, buf, indent, depth);
+            return;
+        }
+        // Issue #5111: TypedArray detection before gc_obj_type (see above).
+        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+            stringify_typed_array_pretty(ptr, buf, indent, depth);
             return;
         }
         // #2900: raw-JSON wrapper — emit stored text verbatim (pretty-print

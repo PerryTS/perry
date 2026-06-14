@@ -28,33 +28,35 @@ pub(super) fn lower_builtin_new(
     args: &[Expr],
 ) -> Result<Option<String>> {
     // Issue #602: ambiguously-named built-in constructors (Client / Pool /
-    // Database / Redis / MongoClient / Decimal) collide with default-import
-    // aliases from unrelated packages — `import Client from "better-sqlite3"`
-    // would otherwise dispatch through pg's Client arm and emit an undefined
-    // `js_pg_client_new` reference at link time. When `class_name` matches an
-    // ambiguous arm AND we know the import source is NOT the package the arm
-    // is for, return `None` so `lower_new` falls through to the generic path.
-    // Names without a recorded import source (top-level globals, locally-
-    // defined classes already filtered upstream, etc.) keep their pre-#602
-    // behavior — the arm still fires.
+    // Database / Redis / MongoClient / Decimal) collide with bindings from
+    // unrelated packages — `import Client from "better-sqlite3"` would
+    // otherwise dispatch through pg's Client arm and emit an undefined
+    // `js_pg_client_new` reference at link time. None of these names is a
+    // Node global, so the arm fires ONLY on positive evidence: a recorded
+    // import binding whose source is the arm's package (the CJS wrap's
+    // require-adoption records these too). Names without a matching import
+    // source fall through to the generic path — this covers function-scoped
+    // class expressions like undici's `var Client = class _Client …` inside
+    // bundled vendor code (Next.js `@edge-runtime/primitives`), which are
+    // invisible to `ctx.classes` and previously hit pg's arm, breaking the
+    // link of any program that bundles undici without importing pg.
     let import_src = ctx
         .imported_class_sources
         .get(class_name)
         .map(|s| s.as_str());
-    let arm_mismatches_source = match (class_name, import_src) {
-        ("Client", Some(src)) => src != "pg",
-        ("Pool", Some(src)) => src != "pg",
-        ("Database", Some(src)) => src != "better-sqlite3",
-        ("DatabaseSync", Some(src)) => src != "sqlite",
-        ("Session", Some(src)) => src != "sqlite",
-        ("StatementSync", Some(src)) => src != "sqlite",
-        ("Redis", Some(src)) => src != "ioredis" && src != "redis",
-        ("MongoClient", Some(src)) => src != "mongodb",
-        ("Decimal", Some(src)) => src != "decimal.js",
-        _ => false,
+    let required_sources: Option<&[&str]> = match class_name {
+        "Client" | "Pool" => Some(&["pg"]),
+        "Database" => Some(&["better-sqlite3"]),
+        "DatabaseSync" | "Session" | "StatementSync" => Some(&["sqlite", "node:sqlite"]),
+        "Redis" => Some(&["ioredis", "redis"]),
+        "MongoClient" => Some(&["mongodb"]),
+        "Decimal" => Some(&["decimal.js"]),
+        _ => None,
     };
-    if arm_mismatches_source {
-        return Ok(None);
+    if let Some(sources) = required_sources {
+        if !import_src.is_some_and(|src| sources.contains(&src)) {
+            return Ok(None);
+        }
     }
     match class_name {
         "Utf8Stream"

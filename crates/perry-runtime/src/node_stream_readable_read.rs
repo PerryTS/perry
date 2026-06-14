@@ -49,7 +49,13 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         return f64::from_bits(TAG_NULL);
     }
 
-    if !readable_is_flowing(stream) {
+    // Node's `howMuchToRead(NaN)` (internal/streams/readable, v26): WITHOUT a
+    // string decoder, `read()` always returns just the head chunk — one buffer
+    // at a time — even when the stream is paused. Only a *decoded* (setEncoding)
+    // paused stream concatenates the entire buffer into a single string. So we
+    // drain the whole buffer here only when paused AND a decoder is active;
+    // otherwise fall through to the head-only path below.
+    if !readable_is_flowing(stream) && readable_encoding_tag(stream).is_some() {
         return drain_whole_buffer(stream, values);
     }
 
@@ -270,7 +276,11 @@ pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
     sync_pending_readable_chunks_to_buffer(stream);
     if stream_hidden_ended(stream) && remaining == 0.0 {
         clear_pending_readable_chunks(stream);
-        queue_readable_event(stream);
+        // Node never emits a final `readable` just to hand the consumer a
+        // null at EOF: once `read()` returns the last buffered item from an
+        // ended stream it transitions straight to `end` (endReadable). A
+        // re-queued `readable` here makes a fixed-count consumer observe an
+        // extra `read() === null` pair. (internal/streams/readable, v26)
         schedule_readable_end(stream);
     }
     chunk

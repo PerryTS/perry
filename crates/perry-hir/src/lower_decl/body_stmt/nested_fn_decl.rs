@@ -143,6 +143,24 @@ pub(super) fn lower_nested_fn_decl(
         body = new_body;
     }
 
+    // Prepend defaulted-parameter application (`if (p === undefined) p =
+    // <default>`). Mirrors `lower_fn_decl` (fn_decl.rs) — without it, a
+    // `function f(a, opts = {})` nested in a block (which is what EVERY
+    // top-level function becomes once cjs_wrap wraps the module body in an
+    // IIFE) records `param.default` but never materializes the guard, so a
+    // caller that omits the arg (or pads it with TAG_UNDEFINED) reads the
+    // param as `undefined` instead of its default. This broke Next.js
+    // `recursiveReadDir(dir)` → `setupFsCheck` → the whole server boot
+    // (`Cannot convert undefined or null to object` destructuring the
+    // dropped `options = {}`). Defaults run before any destructuring, so
+    // prepend after the destructuring block (ending up first in the body).
+    let default_stmts = build_default_param_stmts(&params);
+    if !default_stmts.is_empty() {
+        let mut new_body = default_stmts;
+        new_body.append(&mut body);
+        body = new_body;
+    }
+
     ctx.exit_scope(scope_mark);
 
     // Detect captured variables

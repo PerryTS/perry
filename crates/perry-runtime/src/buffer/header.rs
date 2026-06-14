@@ -3,6 +3,17 @@ use super::*;
 /// Type ID constant for Buffer/Uint8Array - matches class_id 0xFFFF0004
 pub const BUFFER_TYPE_ID: u32 = 0xFFFF0004;
 
+/// #5067 — throw a catchable `RangeError: Array buffer allocation failed`
+/// (Node/V8's message) when a buffer backing block cannot be allocated,
+/// rather than aborting the process.
+#[cold]
+fn throw_buffer_alloc_failed() -> ! {
+    let msg = b"Array buffer allocation failed";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_rangeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Buffer header - similar to StringHeader but specifically for binary data
 /// NOTE: Layout must match ArrayHeader (length at offset 0, capacity at offset 4)
 /// because the codegen treats Uint8Array like arrays with hardcoded offsets.
@@ -531,7 +542,8 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
     unsafe {
         let ptr = alloc(layout) as *mut BufferHeader;
         if ptr.is_null() {
-            panic!("Failed to allocate buffer");
+            // #5067 — surface a catchable `RangeError` instead of aborting.
+            throw_buffer_alloc_failed();
         }
         (*ptr).length = 0;
         (*ptr).capacity = capacity;

@@ -477,6 +477,15 @@ pub struct LoweringContext {
     /// field layout. Dedup is per-module only; cross-module dedup would need
     /// a stable hash and is deferred.
     pub(crate) anon_shape_classes: HashMap<String, String>,
+    /// Class DECLARATION names at the top level of the function body
+    /// currently being lowered. JS resolves a method-body reference to a
+    /// sibling class declared LATER in the same function at call time
+    /// (vendored zod: `ZodType.optional()` calls `ZodOptional.create(...)`
+    /// with ZodOptional declared hundreds of lines below) — without this
+    /// set the Ident lowered to the unknown-global sentinel and the member
+    /// call dispatched into `Object.create`. Scoped save/restore in
+    /// `lower_fn_body_block_stmt`.
+    pub(crate) forward_class_names: std::collections::HashSet<String>,
     /// Counter for generating anon-class names (`__AnonShape_N`).
     // #854: initialized in `new` but unread — anon-shape classes are now named
     // by content-addressed FNV hash (see `synthesize_anon_shape_class`), not by

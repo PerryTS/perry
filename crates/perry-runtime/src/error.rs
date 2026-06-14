@@ -235,6 +235,18 @@ pub extern "C" fn js_rangeerror_new(message: *mut StringHeader) -> *mut ErrorHea
     unsafe { alloc_error(ERROR_KIND_RANGE_ERROR, b"RangeError", message, true) }
 }
 
+/// #5067 — throw a catchable `RangeError: Array buffer allocation failed`
+/// (V8/Node's allocation-failure message) instead of aborting the process
+/// when a user-controlled-size backing buffer cannot be allocated. Shared
+/// by the Set/Map/RegExp backing-store allocators.
+#[cold]
+pub(crate) fn throw_allocation_failed() -> ! {
+    let msg = b"Array buffer allocation failed";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = js_rangeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Create a new ReferenceError with a message
 #[no_mangle]
 pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
@@ -318,21 +330,22 @@ pub unsafe extern "C" fn js_throw_error_with_code(
     ))
 }
 
-/// Build a Node-style system `Error`: `.message` + `.code` (the message→code
-/// side table the `.code` getter reads) plus `.syscall` (string) and `.errno`
-/// (number) own properties. `perry-ext-http` calls this to surface client
-/// transport failures (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, …) as the
-/// real coded `Error` objects Node hands to `request.on('error')`, instead of
-/// the bare message string the legacy path passed.
+/// Build a Node-style *system* `Error` value carrying `.message`, `.code`
+/// (a Node `E*` string like `"ECONNREFUSED"`), `.syscall` (the failing call,
+/// e.g. `"connect"`) and `.errno` (the libuv-negative number). This is the
+/// shape Node hands to `socket`/`request` `'error'` listeners for transport
+/// failures, so consumers branching on `err.code === 'ECONNREFUSED'` work.
 ///
-/// The `.syscall`/`.errno` properties land in the `Error` expando side table
-/// (`ERROR_USER_PROPS`) via [`crate::object::js_object_set_field_by_name`],
-/// which recognizes `Error` cells by their NaN-box tag — `ErrorHeader` is not
-/// an `ObjectHeader`, so a raw field write would corrupt it.
+/// Like [`js_error_value_with_code`], building + registering through this
+/// single extern symbol guarantees the message→{code,syscall,errno} side-table
+/// registrations and the later `.code`/`.syscall`/`.errno` getter reads resolve
+/// through the same runtime copy (the getters live in
+/// `object::field_get_set`). The `code`/`syscall` strings are interned to
+/// `&'static str` so they outlive the call.
 ///
 /// # Safety
-/// `msg_ptr`/`code_ptr`/`syscall_ptr` must each point to their stated number of
-/// valid bytes, or be null with the matching length `0`.
+/// `msg_ptr`/`code_ptr`/`syscall_ptr` must each point to the corresponding
+/// `*_len` valid bytes, or be null with their length `0`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_system_error_value(
     msg_ptr: *const u8,
@@ -343,25 +356,37 @@ pub unsafe extern "C" fn js_node_system_error_value(
     syscall_len: usize,
     errno: f64,
 ) -> f64 {
-    let err_val = js_error_value_with_code(msg_ptr, msg_len, code_ptr, code_len, 0);
-    let obj = err_val.to_bits() as *mut crate::object::ObjectHeader;
+    let msg = js_string_from_bytes(msg_ptr, msg_len as u32);
+    if !code_ptr.is_null() && code_len > 0 {
+        let bytes = std::slice::from_raw_parts(code_ptr, code_len);
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            crate::node_submodules::register_error_code_pub(msg, intern_error_code(s));
+        }
+    }
     if !syscall_ptr.is_null() && syscall_len > 0 {
-        let key = js_string_from_bytes(b"syscall".as_ptr(), 7) as *const StringHeader;
-        let sval_str = js_string_from_bytes(syscall_ptr, syscall_len as u32);
-        let sval = crate::value::js_nanbox_string(sval_str as i64);
-        crate::object::js_object_set_field_by_name(obj, key, sval);
+        let bytes = std::slice::from_raw_parts(syscall_ptr, syscall_len);
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            crate::node_submodules::register_error_syscall(msg, intern_error_code(s));
+        }
     }
-    {
-        let key = js_string_from_bytes(b"errno".as_ptr(), 5) as *const StringHeader;
-        crate::object::js_object_set_field_by_name(obj, key, errno);
-    }
-    err_val
+    crate::node_submodules::register_error_errno(msg, errno as i32);
+    let err = js_error_new_with_message(msg);
+    crate::value::js_nanbox_pointer(err as i64)
 }
 
 // These FFI entries are referenced only from extension archives (linked after
 // the runtime's bitcode is optimized), so the auto-optimize LTO pass would
 // otherwise dead-strip them (see project_auto_optimize_keepalive_3320). The
 // `#[used]` anchors pin them.
+#[used]
+static KEEP_JS_ERROR_VALUE_WITH_CODE: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    i32,
+) -> f64 = js_error_value_with_code;
+
 #[used]
 static KEEP_JS_NODE_SYSTEM_ERROR_VALUE: unsafe extern "C" fn(
     *const u8,
@@ -372,15 +397,6 @@ static KEEP_JS_NODE_SYSTEM_ERROR_VALUE: unsafe extern "C" fn(
     usize,
     f64,
 ) -> f64 = js_node_system_error_value;
-
-#[used]
-static KEEP_JS_ERROR_VALUE_WITH_CODE: unsafe extern "C" fn(
-    *const u8,
-    usize,
-    *const u8,
-    usize,
-    i32,
-) -> f64 = js_error_value_with_code;
 
 #[used]
 static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
@@ -979,6 +995,171 @@ fn throw_capture_stack_trace_target_type_error() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+// ───────────────────────── V8 CallSite shim ─────────────────────────
+// Packages like `depd` and `source-map-support` set `Error.prepareStackTrace`
+// and then call CallSite METHODS (`getFileName`, `getLineNumber`, …) on the
+// "structured stack trace" array V8 passes as the 2nd argument. Perry doesn't
+// capture real JS frames yet, so these return spec-compatible placeholders
+// (`getFileName()` may legitimately be `null`; line/column 0). The point is the
+// API SHAPE — without callable CallSite methods, `obj.stack.slice(1)[i]
+// .getFileName()` throws `(string).getFileName is not a function` and modules
+// like `next/dist/compiled/send` (bundled depd) crash at eager init.
+
+extern "C" fn callsite_undefined(_c: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+extern "C" fn callsite_null(_c: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_NULL)
+}
+extern "C" fn callsite_zero(_c: *const crate::closure::ClosureHeader) -> f64 {
+    0.0
+}
+extern "C" fn callsite_false(_c: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_FALSE)
+}
+extern "C" fn callsite_true(_c: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_TRUE)
+}
+extern "C" fn callsite_to_string(_c: *const crate::closure::ClosureHeader) -> f64 {
+    let s = js_string_from_bytes(b"<anonymous>".as_ptr(), 11);
+    crate::value::js_nanbox_string(s as i64)
+}
+
+fn attach_call_site_method(obj: *mut crate::object::ObjectHeader, name: &str, fp: *const u8) {
+    crate::closure::js_register_closure_arity(fp, 0);
+    // Singleton (func_ptr-keyed, permanent) closure — never collected/moved, so
+    // the CallSite's method field stays valid across GC cycles.
+    let closure = crate::closure::js_closure_alloc_singleton(fp);
+    if closure.is_null() {
+        return;
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::value::js_nanbox_pointer(closure as i64);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+fn make_call_site() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 20);
+    let undef = callsite_undefined as *const u8;
+    let null = callsite_null as *const u8;
+    let zero = callsite_zero as *const u8;
+    let f = callsite_false as *const u8;
+    let t = callsite_true as *const u8;
+    attach_call_site_method(obj, "getFileName", undef);
+    attach_call_site_method(obj, "getScriptNameOrSourceURL", undef);
+    attach_call_site_method(obj, "getLineNumber", zero);
+    attach_call_site_method(obj, "getColumnNumber", zero);
+    attach_call_site_method(obj, "getEnclosingLineNumber", zero);
+    attach_call_site_method(obj, "getEnclosingColumnNumber", zero);
+    attach_call_site_method(obj, "getFunctionName", null);
+    attach_call_site_method(obj, "getMethodName", null);
+    attach_call_site_method(obj, "getTypeName", null);
+    attach_call_site_method(obj, "getFunction", undef);
+    attach_call_site_method(obj, "getThis", undef);
+    attach_call_site_method(obj, "getEvalOrigin", undef);
+    attach_call_site_method(obj, "getPosition", zero);
+    attach_call_site_method(obj, "isNative", f);
+    attach_call_site_method(obj, "isEval", f);
+    attach_call_site_method(obj, "isToplevel", t);
+    attach_call_site_method(obj, "isConstructor", f);
+    attach_call_site_method(obj, "isAsync", f);
+    attach_call_site_method(obj, "isPromiseAll", f);
+    attach_call_site_method(obj, "toString", callsite_to_string as *const u8);
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+/// Build a structured-stack array of `n` (clamped) CallSite objects.
+fn build_structured_stack(n: usize) -> f64 {
+    let n = n.clamp(1, 64);
+    // All CallSites carry identical placeholder data, so share ONE object across
+    // every slot. Returned to the caller (GC-rooted like any native-call result).
+    let cs = make_call_site();
+    let cs_jsv = crate::value::JSValue::from_bits(cs.to_bits());
+    let mut arr = crate::array::js_array_alloc(n as u32);
+    for _ in 0..n {
+        arr = crate::array::js_array_push(arr, cs_jsv);
+    }
+    f64::from_bits(crate::value::JSValue::array_ptr(arr).bits())
+}
+
+/// If the global `Error.prepareStackTrace` has been overridden with a user
+/// function (i.e. it is no longer Perry's default thunk), return its NaN-boxed
+/// closure value; otherwise `None`.
+fn error_prepare_stack_trace_override() -> Option<f64> {
+    let ctor = crate::object::ERROR_CONSTRUCTOR_PTR.with(|c| c.get());
+    if ctor == 0 {
+        return None;
+    }
+    let key = js_string_from_bytes(b"prepareStackTrace".as_ptr(), 17);
+    let val =
+        crate::object::js_object_get_field_by_name(ctor as *const crate::object::ObjectHeader, key);
+    if !val.is_pointer() {
+        return None;
+    }
+    let val_f64 = f64::from_bits(val.bits());
+    let ptr = crate::value::js_nanbox_get_pointer(val_f64) as usize;
+    if !crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    let fp = unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr } as usize;
+    if fp == crate::object::default_prepare_stack_trace_func_ptr() {
+        return None;
+    }
+    Some(val_f64)
+}
+
+/// Compute a `.stack` value honoring the current `Error.prepareStackTrace`.
+/// With a user override, returns `prepareStackTrace(receiver, [CallSite, …])`;
+/// otherwise the coarse string. Returning it (vs storing it) keeps the result
+/// GC-rooted by the reading caller — a Rust-side store of the nursery CallSite
+/// array gets reclaimed the moment this returns (V8 itself evaluates `.stack`
+/// lazily for exactly this reason).
+unsafe fn compute_stack_value(receiver: f64) -> f64 {
+    if let Some(prep) = error_prepare_stack_trace_override() {
+        let structured = build_structured_stack(10);
+        let prep_ptr =
+            crate::value::js_nanbox_get_pointer(prep) as *const crate::closure::ClosureHeader;
+        return crate::closure::js_closure_call2(prep_ptr, receiver, structured);
+    }
+    let s = make_stack("Error", "");
+    crate::value::js_nanbox_string(s as i64)
+}
+
+/// Lazy `stack` accessor installed by `Error.captureStackTrace`. Fires on read
+/// with `this` bound to the target object (V8 semantics: `prepareStackTrace` is
+/// consulted at access time, not capture time).
+extern "C" fn error_stack_lazy_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    unsafe { compute_stack_value(receiver) }
+}
+
+/// Install the lazy `stack` getter accessor on `target`.
+unsafe fn install_lazy_stack_accessor(target_ptr: *mut crate::object::ObjectHeader) {
+    let fp = error_stack_lazy_getter as *const u8;
+    crate::closure::js_register_closure_arity(fp, 0);
+    let closure = crate::closure::js_closure_alloc(fp, 0);
+    if closure.is_null() {
+        return;
+    }
+    let getter_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
+    let key = js_string_from_bytes(b"stack".as_ptr(), 5);
+    crate::object::ensure_key_in_keys_array(target_ptr, key);
+    crate::object::install_builtin_getter(target_ptr, "stack", getter_bits);
+    crate::object::set_accessor_descriptor(
+        target_ptr as usize,
+        "stack".to_string(),
+        crate::object::AccessorDescriptor {
+            get: getter_bits,
+            set: 0,
+        },
+    );
+    crate::object::set_property_attrs(
+        target_ptr as usize,
+        "stack".to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
 /// `Error.captureStackTrace(target[, constructorOpt])`.
 ///
 /// Perry's stack strings are intentionally coarse today; this helper installs
@@ -998,15 +1179,13 @@ pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f6
             throw_capture_stack_trace_target_type_error();
         }
 
-        let stack = make_stack("Error", "");
-        let key = js_string_from_bytes(b"stack".as_ptr(), 5);
-        let value = crate::value::js_nanbox_string(stack as i64);
-        crate::object::js_object_set_field_by_name(target_ptr, key, value);
-        crate::object::set_property_attrs(
-            target_ptr as usize,
-            "stack".to_string(),
-            crate::object::PropertyAttrs::new(true, false, true),
-        );
+        // Install a lazy `stack` getter (V8 semantics): on read it consults the
+        // current `Error.prepareStackTrace` and returns `prepareStackTrace(this,
+        // [CallSite, …])` — the contract `depd` / `source-map-support` rely on —
+        // or the coarse string when there is no override. A getter RETURNS the
+        // value to its caller (GC-rooted), unlike a stored nursery array which a
+        // minor GC would reclaim the instant `captureStackTrace` returns.
+        install_lazy_stack_accessor(target_ptr);
     }
 
     f64::from_bits(crate::value::TAG_UNDEFINED)

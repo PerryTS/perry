@@ -1199,8 +1199,24 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else {
             (version.clone(), None)
         };
+    // Home Screen display name (CFBundleDisplayName): prefer the target's own
+    // [platform].display_name, else [project].display_name. None → the build
+    // service omits the key and the icon label falls back to the app name.
+    let platform_display_name = if is_ios {
+        config.ios.as_ref().and_then(|c| c.display_name.clone())
+    } else if is_macos {
+        config.macos.as_ref().and_then(|c| c.display_name.clone())
+    } else if is_tvos {
+        config.tvos.as_ref().and_then(|c| c.display_name.clone())
+    } else {
+        None
+    };
+    let display_name = platform_display_name
+        .or_else(|| config.project.as_ref().and_then(|p| p.display_name.clone()));
+
     let manifest = BuildManifest {
         app_name: app_name.clone(),
+        display_name,
         bundle_id,
         version: manifest_version,
         short_version: manifest_short_version,

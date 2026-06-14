@@ -157,6 +157,36 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
 }
 
+/// `console[dynamicKey]` — resolve a console method by a RUNTIME key string,
+/// returning the same bound native closure a static `console.<key>` value read
+/// produces. Codegen routes the computed-member form here (`console[m](...)`,
+/// `const f = console[m]`, `loadEnvConfig(dir, true, console, false)` reaching
+/// into a forwarded console). Without it the receiver collapsed to the
+/// `GlobalGet(0)` sentinel and the method was read off numeric `0`, so the call
+/// threw `(number).log is not a function` (the Next.js `_log.event` wall:
+/// `prefixedLog` does `console[consoleMethod](...)`). A non-string key or an
+/// unknown method name yields `undefined`, matching a real object miss.
+#[no_mangle]
+pub extern "C" fn js_console_method_by_value(key: f64) -> f64 {
+    // Apply JS property-key coercion before the lookup: `console[0]` → "0",
+    // `console[{toString:()=>'log'}]` → "log". A Symbol key coerces to a
+    // symbol (not a string method name), so it falls through to `undefined`,
+    // matching a real object miss.
+    let coerced = unsafe { crate::object::js_to_property_key(key) };
+    let name = match jsvalue_string_content(coerced) {
+        Some(s) => s,
+        None => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"console".as_ptr(),
+            "console".len(),
+            name.as_ptr(),
+            name.len(),
+        )
+    }
+}
+
 /// GC root scanner: pin the lazily-allocated `console.log`-as-closure
 /// singleton against the next sweep.
 pub fn scan_console_log_singleton_roots(mark: &mut dyn FnMut(f64)) {

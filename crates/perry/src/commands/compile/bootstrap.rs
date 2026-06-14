@@ -505,6 +505,7 @@ mod js_runtime_gate_tests {
             type_only: false,
             is_dynamic: false,
             is_dynamic_target: false,
+            is_deferred_require: false,
         });
 
         let mut package = empty_module("pkg");

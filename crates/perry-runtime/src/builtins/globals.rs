@@ -281,9 +281,26 @@ pub extern "C" fn js_decode_uri_component(value: f64) -> i64 {
 const ESCAPE_UNESCAPED: &[u8] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@*_+-./";
 
+/// `ToString(value)` throws a TypeError for a Symbol argument. `escape` /
+/// `unescape` (and the URI family) apply ToString to their input, so a Symbol
+/// must reject rather than coerce to a `"Symbol(x)"` description string.
+fn throw_if_symbol(value: f64) {
+    if (value.to_bits() & 0xFFFF_0000_0000_0000) == crate::value::POINTER_TAG
+        && crate::symbol::is_registered_symbol(
+            (value.to_bits() & crate::value::POINTER_MASK) as usize,
+        )
+    {
+        let msg = b"Cannot convert a Symbol value to a string";
+        let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(msg_str);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+}
+
 /// escape(string) -> string (legacy, ES Annex B B.2.1.1)
 #[no_mangle]
 pub extern "C" fn js_escape(value: f64) -> i64 {
+    throw_if_symbol(value);
     let input = extract_str_from_nanbox(value);
     let mut result = String::with_capacity(input.len() * 3);
     let mut buf = [0u16; 2];
@@ -310,6 +327,7 @@ pub extern "C" fn js_escape(value: f64) -> i64 {
 /// unescape(string) -> string (legacy, ES Annex B B.2.1.2)
 #[no_mangle]
 pub extern "C" fn js_unescape(value: f64) -> i64 {
+    throw_if_symbol(value);
     let input = extract_str_from_nanbox(value);
     let chars: Vec<char> = input.chars().collect();
     // Reassemble into UTF-16 code units, then decode, so `%uD835%uDFD8`-style

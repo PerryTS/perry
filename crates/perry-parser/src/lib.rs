@@ -353,6 +353,73 @@ fn looks_like_es_module(source: &str) -> bool {
         Some(end)
     }
 
+    // A `/` starts a regex literal (not division) when the preceding token
+    // cannot end an expression: an operator/punctuator, start of input, or a
+    // keyword like `return`. Regex literals may contain unescaped quote chars
+    // (e.g. picomatch's `/(^[*!]|[/()[\]{}"])/`), which would desync the
+    // string-state scan below if skipped as ordinary code.
+    fn regex_can_start_here(bytes: &[u8], slash_at: usize) -> bool {
+        let mut i = slash_at;
+        while i > 0 {
+            i -= 1;
+            match bytes[i] {
+                b' ' | b'\t' | b'\r' | b'\n' => continue,
+                b'=' | b'(' | b',' | b':' | b'[' | b'!' | b'&' | b'|' | b'?' | b'{' | b'}'
+                | b';' | b'+' | b'-' | b'*' | b'%' | b'~' | b'^' | b'<' | b'>' => return true,
+                c if is_ident(c) => {
+                    let end = i + 1;
+                    let mut start = end;
+                    while start > 0 && is_ident(bytes[start - 1]) {
+                        start -= 1;
+                    }
+                    return matches!(
+                        &bytes[start..end],
+                        b"return"
+                            | b"typeof"
+                            | b"instanceof"
+                            | b"in"
+                            | b"of"
+                            | b"case"
+                            | b"do"
+                            | b"else"
+                            | b"void"
+                            | b"delete"
+                            | b"throw"
+                            | b"new"
+                            | b"yield"
+                            | b"await"
+                    );
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    // Returns the index just past the closing `/`, or None if no regex
+    // terminator is found on this line (then it was division after all).
+    fn skip_regex_literal(bytes: &[u8], slash_at: usize) -> Option<usize> {
+        let mut i = slash_at + 1;
+        let mut in_class = false;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 2,
+                b'\n' => return None,
+                b'[' => {
+                    in_class = true;
+                    i += 1;
+                }
+                b']' => {
+                    in_class = false;
+                    i += 1;
+                }
+                b'/' if !in_class => return Some(i + 1),
+                _ => i += 1,
+            }
+        }
+        None
+    }
+
     let bytes = source.as_bytes();
     let mut i = 0;
     let mut state = State::Code;
@@ -368,6 +435,11 @@ fn looks_like_es_module(source: &str) -> bool {
                 } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
                     state = State::BlockComment;
                     i += 2;
+                } else if bytes[i] == b'/' && regex_can_start_here(bytes, i) {
+                    match skip_regex_literal(bytes, i) {
+                        Some(end) => i = end,
+                        None => i += 1,
+                    }
                 } else {
                     if prev_allows_module_item(bytes, i) {
                         if let Some(end) = next_after_keyword(bytes, i, b"export") {
@@ -706,6 +778,26 @@ pub fn swc_span_to_span(swc_span: swc_common::Span, file_id: FileId) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_looks_like_es_module_survives_regex_with_quote() {
+        // Regression: picomatch's bundled source contains a regex literal with
+        // an unescaped `"` inside a character class. The module-detection scan
+        // must not enter string state there, or a trailing `export` (appended
+        // by the CJS wrap) is missed and the file parses as a Script.
+        let source = "const re = /(^[*!]|[/()[\\]{}\"])/;\nconst x = \"ok\";\nexport default x;\n";
+        let module = parse_typescript(source, "vendored.js").unwrap();
+        assert_eq!(module.body.len(), 3);
+    }
+
+    #[test]
+    fn test_division_not_treated_as_regex() {
+        // `a / b` must not be consumed as a regex literal that would swallow
+        // the following string quote.
+        let source = "const a = 1, b = 2;\nconst c = a / b; const s = \"x\";\nexport default c;\n";
+        let module = parse_typescript(source, "math.js").unwrap();
+        assert_eq!(module.body.len(), 4);
+    }
 
     #[test]
     fn test_parse_simple_function() {
