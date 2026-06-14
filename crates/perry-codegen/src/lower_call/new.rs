@@ -781,8 +781,45 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // Layout constants are duplicated here from the runtime; if
     // `GcHeader` or `ObjectHeader` ever change in
     // `crates/perry-runtime/src/{gc,object}.rs`, update both sides.
-    let obj_handle = if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned()
-    {
+    let obj_handle = if class.extends_expr.is_some() {
+        // Wall 45: dynamic-parent subclass (`class X extends _mod.default`).
+        // The parent's field layout is unknown at this compile time (the
+        // `extends` target is an unresolvable cross-module value, so the
+        // parent-chain walk above contributed 0 fields and `field_count` /
+        // `packed_keys` cover only X's OWN fields). Allocating with that
+        // own-only layout under-sizes and mis-lays-out the instance: the
+        // parent's constructor and inherited methods address the inherited
+        // fields at the PARENT's slot indices (parent fields first), which fall
+        // past X's own slots → OOB heap reads (captures read as garbage).
+        // Route to `js_object_alloc_class_dynamic_parent`, which resolves the
+        // runtime-registered parent edge + keys-array (both established at
+        // module init by `js_register_class_parent_dynamic` /
+        // `js_build_class_keys_array`, before any `new X()`) and allocates with
+        // the merged `[parent keys..] ++ [own keys..]` layout. Bypasses the
+        // inline bump-alloc fast path (which would bake the wrong layout).
+        let mut packed_keys = String::new();
+        for f in &class.fields {
+            if f.key_expr.is_some() {
+                continue;
+            }
+            packed_keys.push_str(&f.name);
+            packed_keys.push('\0');
+        }
+        let keys_idx = ctx.strings.intern(&packed_keys);
+        let keys_entry = ctx.strings.entry(keys_idx);
+        let keys_global = format!("@{}", keys_entry.bytes_global);
+        let keys_len_str = keys_entry.byte_len.to_string();
+        ctx.block().call(
+            I64,
+            "js_object_alloc_class_dynamic_parent",
+            &[
+                (I32, &cid_str),
+                (I32, &n_str),
+                (PTR, &keys_global),
+                (I32, &keys_len_str),
+            ],
+        )
+    } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
         // Compile-time layout constants.
         const GC_HEADER_SIZE: u64 = 8;
         const OBJECT_HEADER_SIZE: u64 = 24;

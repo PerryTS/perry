@@ -870,6 +870,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I32, I32, I32, PTR, I32],
     );
+    // Wall 45: merged-layout allocator for dynamic-parent subclasses
+    // (`class X extends _mod.default`). Args: (class_id, own_field_count,
+    // own_packed_keys, own_packed_keys_len). Resolves the runtime-registered
+    // parent layout and allocates `[parent keys..] ++ [own keys..]` so
+    // inherited fields land at the parent's slot indices.
+    module.declare_function(
+        "js_object_alloc_class_dynamic_parent",
+        I64,
+        &[I32, I32, PTR, I32],
+    );
     // Fast class allocator that takes a pre-built keys_array pointer
     // directly, bypassing the per-call SHAPE_CACHE lookup. The codegen
     // emits one `js_build_class_keys_array` call at module init per
