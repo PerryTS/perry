@@ -352,7 +352,8 @@ fn build_response_headers_object(raw: &[(String, String)]) -> f64 {
                 for cookie in &set_cookie {
                     let ptr =
                         perry_runtime::js_string_from_bytes(cookie.as_ptr(), cookie.len() as u32);
-                    arr = perry_runtime::js_array_push(arr, perry_runtime::JSValue::string_ptr(ptr));
+                    arr =
+                        perry_runtime::js_array_push(arr, perry_runtime::JSValue::string_ptr(ptr));
                 }
                 JsValue::from_bits(perry_runtime::JSValue::array_ptr(arr).bits())
             } else if let Some(val) = combined.get(key) {
