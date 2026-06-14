@@ -1,3 +1,40 @@
+## v0.5.1167 — perry/ui: implement `toggleSetState` (#5076)
+
+`toggleSetState(widget, on)` was declared-but-unimplemented: it passed
+`perry check` (it was in the type surface conceptually) yet failed
+`perry compile` with `perry/ui: 'toggleSetState' is not a known function`,
+because the codegen known-function registry (`PERRY_UI_TABLE`) had no row
+for it. Since `Toggle(label, onChange)` has no initial-state parameter,
+this left **no working way to show a Toggle in a non-default (ON) state**
+in a rebuild/re-create render model.
+
+Implemented end-to-end rather than removed from the surface:
+
+- **Type stub** (`types/perry/ui/index.d.ts`): added
+  `export function toggleSetState(widget: Widget, on: number): void;`
+  next to `Toggle`.
+- **Dispatch table** (`crates/perry-dispatch/src/ui_table.rs`): new
+  `PERRY_UI_TABLE` row `toggleSetState` → `perry_ui_toggle_set_state`,
+  `args: [Widget, I64Raw]`, `ret: Void` — mirroring the proven
+  `tableSetAllowsMultipleSelection` shape. This makes it resolvable via
+  `ui_method_to_runtime`, so the LLVM, JS, and WASM backends all pick it
+  up (the `dispatch_drift` acceptance test stays green).
+- **Native backends** (`#[no_mangle] perry_ui_toggle_set_state(handle, on)`):
+  macOS, iOS, tvOS, visionOS, Windows, Android, and GTK4 delegate to the
+  already-present `widgets::toggle::set_state` (the same helper the
+  two-way `stateBindToggle` binding drives). Windows casts `on` to `i32`
+  for its `set_state`. watchOS (tree-render model) sets the node's
+  `toggle_on` flag directly so the next host render reflects it.
+- **Web/WASM runtimes** (`web_runtime.js`, `wasm_runtime.js`): added
+  `perry_ui_toggle_set_state` setting the underlying checkbox's
+  `checked`, and registered it in each runtime's export/dispatch map.
+
+Verified: the issue repro now lowers past the previous
+`'toggleSetState' is not a known function` codegen error (it reaches the
+link step). The broader "declared-but-unimplemented passes check, fails
+compile" sharp edge raised in #5076 is a larger one-source-of-truth
+refactor and is left as follow-up.
+
 ## v0.5.1166 — Node-parity & robustness sweep (10 fixes)
 
 Rolls up the issue-fix batch merged on top of 0.5.1165. Per-PR detail lives on
