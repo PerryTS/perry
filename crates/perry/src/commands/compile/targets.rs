@@ -291,7 +291,7 @@ pub(super) fn compile_for_ios_widget(
     }
 
     // Emit the shared per-bundle runtime FFI block exactly once (#5069).
-    write_shared_widget_runtime(&output_dir, &widgets, &mut all_swift_files, format)?;
+    write_shared_widget_runtime(&output_dir, &widgets, &mut all_swift_files)?;
 
     // Report results
     let total_size: usize = all_swift_files.iter().map(|(_, s)| s.len()).sum();
@@ -404,7 +404,6 @@ fn write_shared_widget_runtime(
     output_dir: &Path,
     widgets: &[&perry_hir::ir::WidgetDecl],
     all_swift_files: &mut Vec<(String, String)>,
-    format: OutputFormat,
 ) -> Result<()> {
     if !widgets
         .iter()
@@ -415,23 +414,24 @@ fn write_shared_widget_runtime(
 
     let app_group = widgets.iter().find_map(|w| w.app_group.as_deref());
 
-    if matches!(format, OutputFormat::Text) {
-        if let Some(group) = app_group {
-            let mut conflicting: Vec<&str> = widgets
-                .iter()
-                .filter_map(|w| w.app_group.as_deref())
-                .filter(|g| *g != group)
-                .collect();
-            if !conflicting.is_empty() {
-                conflicting.sort_unstable();
-                conflicting.dedup();
-                eprintln!(
-                    "Warning: widgets in this bundle declare differing app groups; \
-                     the shared-storage bridge will use \"{}\" (ignoring: {}).",
-                    group,
-                    conflicting.join(", ")
-                );
-            }
+    // Warn regardless of output format: this goes to stderr (eprintln!), so it
+    // never corrupts the JSON written to stdout, and the misconfiguration is
+    // worth surfacing even when scripting against `--format json`.
+    if let Some(group) = app_group {
+        let mut conflicting: Vec<&str> = widgets
+            .iter()
+            .filter_map(|w| w.app_group.as_deref())
+            .filter(|g| *g != group)
+            .collect();
+        if !conflicting.is_empty() {
+            conflicting.sort_unstable();
+            conflicting.dedup();
+            eprintln!(
+                "Warning: widgets in this bundle declare differing app groups; \
+                 the shared-storage bridge will use \"{}\" (ignoring: {}).",
+                group,
+                conflicting.join(", ")
+            );
         }
     }
 
@@ -600,7 +600,7 @@ pub(super) fn compile_for_watchos_widget(
     }
 
     // Emit the shared per-bundle runtime FFI block exactly once (#5069).
-    write_shared_widget_runtime(&output_dir, &widgets, &mut all_swift_files, format)?;
+    write_shared_widget_runtime(&output_dir, &widgets, &mut all_swift_files)?;
 
     let total_size: usize = all_swift_files.iter().map(|(_, s)| s.len()).sum();
     let is_simulator = args.target.as_deref() == Some("watchos-widget-simulator");
