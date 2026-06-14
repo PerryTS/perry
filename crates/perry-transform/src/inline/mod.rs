@@ -61,7 +61,9 @@ pub(crate) use substitute::{
     collect_body_local_ids, substitute_locals, substitute_locals_in_stmts, substitute_this,
     substitute_this_in_stmts,
 };
-pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexical_super_set};
+pub(crate) use super_detect::{
+    enter_inline_expr_recursion, method_contains_lexical_super, MAX_INLINE_EXPR_RECURSION_DEPTH,
+};
 
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};

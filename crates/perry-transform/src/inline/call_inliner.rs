@@ -1503,7 +1503,7 @@ pub fn try_inline_simple_call(
                     if !method_candidate.method_lookup_safe {
                         return None;
                     }
-                    if method_contains_lexical_super_set(&method_candidate.func) {
+                    if method_contains_lexical_super(&method_candidate.func) {
                         return None;
                     }
 
@@ -1769,7 +1769,7 @@ pub fn try_inline_call(
                     // extra actual args plus their side effects.
                     if !method_candidate.method_lookup_safe
                         || args.len() > method_candidate.func.params.len()
-                        || method_contains_lexical_super_set(&method_candidate.func)
+                        || method_contains_lexical_super(&method_candidate.func)
                     {
                         return None;
                     }
