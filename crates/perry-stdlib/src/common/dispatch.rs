@@ -2282,6 +2282,75 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         };
     }
 
+    // #5037 — external-fastify variant of the request/reply property
+    // dispatch above. When the well-known flip routes `fastify` to
+    // perry-ext-fastify (auto-optimize / `--no-default-features`),
+    // `bundled-fastify`/`http-server` are stripped and the bundled
+    // arm above is compiled out. A `request`/`reply` handle that
+    // escaped into a user helper — its static type erased, so codegen
+    // emitted a generic dynamic property read here rather than a
+    // `NativeMethodCall` — then had no dispatch path and read
+    // `undefined` (inline reads in the handler still worked because
+    // codegen recognised the receiver and called `js_fastify_req_*`
+    // directly). The handle lives in perry-ext-fastify's perry-ffi
+    // registry, not perry-stdlib's, so probe membership via the
+    // external `js_ext_fastify_is_context_handle` symbol (resolved at
+    // link time) and forward to the same `js_fastify_req_*` exports
+    // the bundled arm uses. Mirrors the `external-fastify-pump` pump
+    // wiring in `async_bridge.rs`.
+    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    {
+        extern "C" {
+            fn js_ext_fastify_is_context_handle(handle: i64) -> i32;
+            fn js_fastify_req_query_object(handle: i64) -> f64;
+            fn js_fastify_req_params_object(handle: i64) -> f64;
+            fn js_fastify_req_json(handle: i64) -> f64;
+            fn js_fastify_req_body(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_headers(handle: i64) -> i64;
+            fn js_fastify_req_method(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_url(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_get_user_data(handle: i64) -> f64;
+        }
+        if js_ext_fastify_is_context_handle(handle) != 0 {
+            return match property_name {
+                "query" => js_fastify_req_query_object(handle),
+                "params" => js_fastify_req_params_object(handle),
+                "body" => js_fastify_req_json(handle),
+                "rawBody" | "text" => {
+                    let ptr = js_fastify_req_body(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "headers" => {
+                    // Returns NaN-boxed JS object bits — use directly.
+                    let bits = js_fastify_req_headers(handle);
+                    f64::from_bits(bits as u64)
+                }
+                "method" => {
+                    let ptr = js_fastify_req_method(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "url" => {
+                    let ptr = js_fastify_req_url(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "user" => js_fastify_req_get_user_data(handle),
+                _ => f64::from_bits(0x7FFC_0000_0000_0001), // undefined
+            };
+        }
+    }
+
     // Issue #340: axios response — dispatch `r.status` / `r.data` /
     // `r.statusText` / `r.headers` to the AxiosResponseHandle accessor
     // shims. The handle id is registered in the common HANDLES
