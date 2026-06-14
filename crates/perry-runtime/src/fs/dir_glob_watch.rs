@@ -1522,10 +1522,23 @@ fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
     if state.active || state.closed {
         return;
     }
-    // Keep the creation-time baseline (seeded in `js_fs_promises_watch`) rather
-    // than re-snapshotting here — re-snapshotting would discard any events that
-    // occurred between `watch()` and this first `.next()` pull, which Node
-    // delivers (it buffers from FSWatcher creation, not from first iteration).
+    // Re-baseline the snapshot at the moment iteration actually begins (the
+    // first `.next()` pull), then let `promise_watcher_poll_impl` advance the
+    // baseline after every poll. This makes the watcher's two behaviors match
+    // Node:
+    //   * Events emitted between `watch()` and the first `.next()` are NOT
+    //     delivered — Node's async iterator only starts collecting once you
+    //     iterate, so a write before the first pull is ignored. Folding the
+    //     current directory state into the baseline here drops those.
+    //   * A write that happens AFTER a pull is begun is delivered, because each
+    //     subsequent poll diffs against the post-pull baseline (which advanced
+    //     past the now-consumed state) and so detects the fresh change.
+    // Seeding the baseline at creation time (in `js_fs_promises_watch`) without
+    // this refresh broke the post-pull case: the first poll would report the
+    // pre-pull write to the pending pull, and—more importantly—left the
+    // bookkeeping seeded against stale creation-time state. Refreshing here
+    // restores both halves.
+    state.snapshot = snapshot_watch_target(&state.path, state.recursive).unwrap_or_default();
     let timer_callback = poll_closure_value(promise_watcher_poll_impl as *const u8, id);
     let timer_id = crate::timer::setInterval(timer_callback as i64, FS_WATCH_POLL_INTERVAL_MS);
     if !state.persistent {
@@ -2210,13 +2223,14 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
         Ok(signal) => signal,
         Err(err) => crate::exception::js_throw(err),
     };
-    // Capture the directory state at creation time. Node registers the
-    // FSWatcher synchronously in `watch()` and buffers events emitted before
-    // the first `.next()` pull, so a file written between `watch()` and the
-    // first iteration is still delivered. Perry's watcher is poll-based and
-    // previously took its baseline snapshot lazily at the first `.next()`,
-    // which silently dropped those pre-iteration events. Seed the baseline
-    // here so the first poll diffs against the creation-time state.
+    // Snapshot the watch target at creation time. This serves two purposes:
+    //   1. It validates the path synchronously, matching Node's `watch()` which
+    //      throws (ENOENT etc.) at call time rather than at first iteration.
+    //   2. It seeds an initial baseline for the state.
+    // The baseline is intentionally re-taken in `start_promise_watcher` at the
+    // first `.next()` pull (so pre-iteration writes are ignored, per Node) and
+    // then advanced by every poll (so post-pull writes are delivered). The
+    // value seeded here is therefore a placeholder that the first pull refreshes.
     let initial_snapshot = match snapshot_watch_target(&path, recursive) {
         Ok(snapshot) => snapshot,
         Err(err) => unsafe {
