@@ -690,7 +690,15 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             if fn_ptr.is_null() {
                 throw_iterator_method_not_callable();
             }
+            // Spec `GetIterator(obj)` → `Call(method, obj)`: the
+            // `[Symbol.iterator]()` factory runs with `this === obj`. A canonical
+            // bound class method (#5128's `@@iterator` wrapper) reads its receiver
+            // from IMPLICIT_THIS, so set it here too — mirroring `js_get_iterator`.
+            // Without this the wrapper saw a stale `this` and the generator
+            // yielded nothing (empty spread).
+            let prev_this = crate::object::js_implicit_this_set(value);
             let iter = crate::closure::js_closure_call0(fn_ptr);
+            crate::object::js_implicit_this_set(prev_this);
             if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
                 return js_iterator_to_array(crate::array::array_values_iter(iter));
             }

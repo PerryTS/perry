@@ -751,6 +751,42 @@ pub fn lower_class_decl(
                             };
                             ctx.pending_functions.push(top_fn);
                             ctx.iterator_func_for_class.insert(name.clone(), top_fn_id);
+
+                            // #5128: also register a synthetic NON-generator
+                            // `@@iterator` class method that forwards to the
+                            // lifted generator (`return __perry_iter_X(this)`).
+                            // The syntactic `for…of` fast path dispatches to the
+                            // lifted function directly via `iterator_func_for_class`,
+                            // but every *runtime*-dispatched iterator consumer
+                            // (spread `[...x]`, `Math.max(...x)`, destructuring,
+                            // `x[Symbol.iterator]()`) resolves `@@iterator` through
+                            // the class registry. Without this method the class has
+                            // no `@@iterator` for them to find, so they threw
+                            // "value is not iterable". (The runtime maps the
+                            // well-known `Symbol.iterator` to this `@@iterator`
+                            // method name in `js_object_get_symbol_property`.)
+                            let wrapper_fn_id = ctx.fresh_func();
+                            let wrapper = Function {
+                                id: wrapper_fn_id,
+                                name: "@@iterator".to_string(),
+                                type_params: Vec::new(),
+                                params: Vec::new(),
+                                return_type: Type::Any,
+                                body: vec![Stmt::Return(Some(Expr::Call {
+                                    callee: Box::new(Expr::FuncRef(top_fn_id)),
+                                    args: vec![Expr::This],
+                                    type_args: Vec::new(),
+                                }))],
+                                is_async: false,
+                                is_generator: false,
+                                is_strict: true,
+                                was_plain_async: false,
+                                was_unrolled: false,
+                                is_exported: false,
+                                captures: Vec::new(),
+                                decorators: Vec::new(),
+                            };
+                            methods.push(wrapper);
                             continue;
                         }
                         if seen_generic_computed_member && can_source_order_register {

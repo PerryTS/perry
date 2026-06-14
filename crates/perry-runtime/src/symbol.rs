@@ -634,6 +634,24 @@ pub(crate) unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
     ptr as usize
 }
 
+/// #5128: map a well-known-symbol key to the synthetic class-method name used
+/// for a symbol-keyed instance *method* (`*[Symbol.iterator]()` →
+/// `@@iterator`, `[Symbol.asyncIterator]()` → `@@asyncIterator`). Returns
+/// `None` for any other symbol. Used by `js_object_get_symbol_property` to
+/// resolve a user class's iterator method off its prototype.
+fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
+    for (wk, method) in [("iterator", "@@iterator"), ("asyncIterator", "@@asyncIterator")] {
+        let s = well_known_symbol(wk);
+        if !s.is_null() {
+            let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
+            if sym_key == unsafe { sym_key_from_f64(f) } {
+                return Some(method);
+            }
+        }
+    }
+    None
+}
+
 /// Define (or merge) a symbol-keyed accessor on an object literal, delegating
 /// to the shared symbol-accessor side table. Separate `get`/`set` definitions
 /// for the same key accumulate, matching `Object.defineProperty` semantics.
@@ -1771,6 +1789,23 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                         crate::object::class_symbol_getter_value(class_id, sym_key, obj_f64, false)
                     {
                         return v;
+                    }
+                    // #5128: a symbol-keyed instance METHOD — `*[Symbol.iterator]()`
+                    // (and `[Symbol.asyncIterator]()`) are registered on the class
+                    // under the synthetic names `@@iterator` / `@@asyncIterator`.
+                    // Read the method off the class and return a bound method so
+                    // iteration-protocol consumers (`[...x]`, `for…of`,
+                    // `Math.max(...x)`, destructuring) can drive `.next()`. Guard
+                    // on `method_owner_class_id` first: `js_class_method_bind`
+                    // otherwise mints a bound closure for a non-existent method.
+                    if let Some(method_name) = well_known_symbol_method_name(sym_key) {
+                        if crate::object::method_owner_class_id(class_id, method_name).is_some() {
+                            return crate::object::js_class_method_bind(
+                                obj_f64,
+                                method_name.as_ptr(),
+                                method_name.len(),
+                            );
+                        }
                     }
                 }
             }
