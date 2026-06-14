@@ -352,6 +352,51 @@ static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
     i32,
 ) -> ! = js_throw_error_with_code;
 
+/// Build a Node-style system `Error`: `.message` + `.code` (the message→code
+/// side table the `.code` getter reads) plus `.syscall` (string) and `.errno`
+/// (number) own properties. `perry-ext-http` calls this to surface client
+/// transport failures (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, …) as the
+/// real coded `Error` objects Node hands to `request.on('error')`.
+///
+/// # Safety
+/// `msg_ptr`/`code_ptr`/`syscall_ptr` must each point to their stated number of
+/// valid bytes, or be null with the matching length `0`.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_system_error_value(
+    msg_ptr: *const u8,
+    msg_len: usize,
+    code_ptr: *const u8,
+    code_len: usize,
+    syscall_ptr: *const u8,
+    syscall_len: usize,
+    errno: f64,
+) -> f64 {
+    let err_val = js_error_value_with_code(msg_ptr, msg_len, code_ptr, code_len, 0);
+    let obj = err_val.to_bits() as *mut crate::object::ObjectHeader;
+    if !syscall_ptr.is_null() && syscall_len > 0 {
+        let key = js_string_from_bytes(b"syscall".as_ptr(), 7) as *const StringHeader;
+        let sval_str = js_string_from_bytes(syscall_ptr, syscall_len as u32);
+        let sval = crate::value::js_nanbox_string(sval_str as i64);
+        crate::object::js_object_set_field_by_name(obj, key, sval);
+    }
+    {
+        let key = js_string_from_bytes(b"errno".as_ptr(), 5) as *const StringHeader;
+        crate::object::js_object_set_field_by_name(obj, key, errno);
+    }
+    err_val
+}
+
+#[used]
+static KEEP_JS_NODE_SYSTEM_ERROR_VALUE: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    f64,
+) -> f64 = js_node_system_error_value;
+
 /// Throw `ERR_PERRY_UNIMPLEMENTED` for a registered-but-stub API. Used
 /// by the stub-elimination epic's strict mode (#4918/#4919): a runtime
 /// stub calls [`crate::stub_diag::perry_runtime_stub`] to warn, then —
