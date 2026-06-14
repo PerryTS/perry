@@ -1,4 +1,29 @@
-## v0.5.1164 — perf(codegen): integer-specialize `i < n` loop guards when the bound is `any`/untyped
+## v0.5.1165 — fix(json): `JSON.stringify` of a TypedArray no longer SIGSEGVs (#5111)
+
+`JSON.stringify(new Int32Array([1,2,3]).map(x => x*2))` segfaulted, as did
+`subarray`/`slice`/`filter` results and even a plain
+`JSON.stringify(new Int32Array([1,2,3]))`. The stringify value dispatchers had
+no TypedArray arm: a `TypedArrayHeader`-backed view reached the `gc_obj_type`
+tag read, but small typed arrays are plain-`alloc`'d with **no** `GcHeader`, so
+the read 8 bytes before the header pulled in unrelated allocator metadata and
+dispatched to a random arm (the observed crash). `Array.from`/spread happened to
+read garbage element kinds/offsets via the same mis-dispatch.
+
+Fix: detect a registered typed array via `lookup_typed_array_kind` **before**
+`gc_obj_type` — exactly the pre-check already used for `Buffer`/`Uint8Array`
+(no GcHeader either) — and serialize it in Node's index shape `{"0":v,…}`. Two
+new helpers in `json/stringify.rs`, `stringify_typed_array` (compact) and
+`stringify_typed_array_pretty` (the `space`-indented form), are wired into every
+buffer-dispatch site: `stringify_value`, `stringify_value_depth`, the nested
+array-element path, and the replacer/pretty walks in `json/replacer.rs`. Each
+element funnels through `write_number`, so `NaN`/`±Infinity` render as `null`
+and a `BigInt64`/`BigUint64` element throws Node's "Do not know how to serialize
+a BigInt" `TypeError`. Output is byte-for-byte identical to
+`node --experimental-strip-types` for the typed array as a root value, an object
+field, and an array element, in both compact and 3-arg pretty forms. Covered by
+the new `stringify_typed_array_emits_node_index_shape` unit test.
+
+
 
 Tight integer loops whose bound is **not statically typed `number`** — most
 commonly an `any`-typed or un-annotated value (e.g. a count out of

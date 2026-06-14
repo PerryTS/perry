@@ -60,6 +60,70 @@ pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
     }
 }
 
+/// Issue #5111: serialize a `TypedArrayHeader`-backed typed array (`Int8Array`
+/// … `Float64Array`, `BigInt64Array`/`BigUint64Array`, `Float16Array`, plus the
+/// `map`/`subarray`/`slice`/`filter` results) in Node's shape `{"0":v,…}`.
+///
+/// Like `stringify_buffer`, this MUST run BEFORE `gc_obj_type`: a small typed
+/// array is plain-`alloc`'d with NO `GcHeader`, so the gc-tag read 8 bytes
+/// before the header reads unrelated allocator memory and dispatches to a
+/// random arm — the SIGSEGV reported for `JSON.stringify(ta.map(...))`. Each
+/// element is funneled through `write_number`, which renders `NaN`/`±Infinity`
+/// as `null` and routes a `BigInt64`/`BigUint64` element to the throwing
+/// serializer (Node's "Do not know how to serialize a BigInt" `TypeError`).
+pub(crate) unsafe fn stringify_typed_array(ptr: *const u8, buf: &mut String) {
+    let ta = ptr as *const crate::typedarray::TypedArrayHeader;
+    let len = crate::typedarray::js_typed_array_length(ta);
+    buf.push('{');
+    for i in 0..len {
+        if i > 0 {
+            buf.push(',');
+        }
+        let mut idx_buf = itoa::Buffer::new();
+        buf.push('"');
+        buf.push_str(idx_buf.format(i));
+        buf.push_str("\":");
+        write_number(buf, crate::typedarray::js_typed_array_get(ta, i));
+    }
+    buf.push('}');
+}
+
+/// Pretty-printed (`space`-indented) form of `stringify_typed_array`, matching
+/// the layout of `stringify_buffer_pretty`'s plain-Uint8Array branch.
+pub(crate) unsafe fn stringify_typed_array_pretty(
+    ptr: *const u8,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
+    let ta = ptr as *const crate::typedarray::TypedArrayHeader;
+    let len = crate::typedarray::js_typed_array_length(ta);
+    if len <= 0 {
+        buf.push_str("{}");
+        return;
+    }
+    let push_indent = |buf: &mut String, levels: usize| {
+        for _ in 0..levels {
+            buf.push_str(indent);
+        }
+    };
+    buf.push_str("{\n");
+    for i in 0..len {
+        push_indent(buf, depth + 1);
+        let mut idx_buf = itoa::Buffer::new();
+        buf.push('"');
+        buf.push_str(idx_buf.format(i));
+        buf.push_str("\": ");
+        write_number(buf, crate::typedarray::js_typed_array_get(ta, i));
+        if i + 1 < len {
+            buf.push(',');
+        }
+        buf.push('\n');
+    }
+    push_indent(buf, depth);
+    buf.push('}');
+}
+
 /// Pretty-printed (`space`-indented) form of `stringify_buffer`. Emits the
 /// same `{type,data}` (Buffer) / `{index:byte}` (plain Uint8Array) shape as
 /// the compact version but with newlines + indentation, matching Node's
@@ -667,6 +731,12 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             stringify_buffer(ptr, buf);
             return;
         }
+        // Issue #5111: TypedArray (no GcHeader on small ones) detection BEFORE
+        // gc_obj_type, same rationale as the buffer check above.
+        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+            stringify_typed_array(ptr, buf);
+            return;
+        }
 
         // Prefer the GC header's obj_type tag for dispatch — the old
         // capacity heuristic (`cap < 10000`) misidentified legitimate
@@ -882,6 +952,11 @@ pub(crate) unsafe fn stringify_value_depth(
         // the matching branch in `stringify_value`.
         if crate::buffer::is_registered_buffer(ptr as usize) {
             stringify_buffer(ptr, buf);
+            return;
+        }
+        // Issue #5111: TypedArray detection BEFORE gc_obj_type (see above).
+        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+            stringify_typed_array(ptr, buf);
             return;
         }
         match gc_obj_type(ptr) {
@@ -1739,6 +1814,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // the matching branch in `stringify_value`.
             if crate::buffer::is_registered_buffer(elem_ptr as usize) {
                 stringify_buffer(elem_ptr, buf);
+                continue;
+            }
+            // Issue #5111: TypedArray element detection BEFORE gc_obj_type.
+            if crate::typedarray::lookup_typed_array_kind(elem_ptr as usize).is_some() {
+                stringify_typed_array(elem_ptr, buf);
                 continue;
             }
             match gc_obj_type(elem_ptr) {
