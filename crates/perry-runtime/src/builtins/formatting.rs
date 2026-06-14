@@ -1265,6 +1265,10 @@ unsafe fn format_object_as_json(
     }
 
     let boxed_base = boxed_primitives::boxed_primitive_base_for_object(obj_ptr);
+    // A boxed `String` exposes its characters as integer-index own properties
+    // (`"0".."len-1"`). Node folds those into the `[String: '…']` base and never
+    // lists them in the `{ … }` body — only extra own keys appear. Skip them.
+    let boxed_string_char_count = boxed_primitives::boxed_string_char_index_count(obj_ptr);
     let class_name = {
         let class_id = (*obj_ptr).class_id;
         if class_id == 0 {
@@ -1350,6 +1354,16 @@ unsafe fn format_object_as_json(
         // Node's util.inspect never exposes them, even with showHidden.
         if has_class_name && key_str.starts_with('#') {
             continue;
+        }
+
+        // Hide a boxed String's character index properties (`"0".."len-1"`):
+        // they are rendered by the `[String: '…']` base, not the body.
+        if let Some(char_count) = boxed_string_char_count {
+            if let Ok(idx) = key_str.parse::<usize>() {
+                if idx < char_count {
+                    continue;
+                }
+            }
         }
 
         let is_enumerable = if descriptors_in_use {

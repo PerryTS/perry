@@ -36,6 +36,22 @@ pub(super) unsafe fn boxed_primitive_base_for_object(
     }
 }
 
+/// For a boxed `String` wrapper (`new String("abc")`), the integer-index own
+/// properties `"0".."len-1"` mirror the underlying characters. Node's
+/// `util.inspect` treats those as the wrapped primitive (shown via the
+/// `[String: '…']` base) and never lists them in the `{ … }` body — only extra
+/// own keys appear there. Returns the wrapped string's length for a boxed
+/// String, otherwise `None`.
+pub(super) unsafe fn boxed_string_char_index_count(
+    obj_ptr: *const crate::object::ObjectHeader,
+) -> Option<usize> {
+    let (class_id, payload) = boxed_primitive_payload_for_object(obj_ptr)?;
+    if class_id != CLASS_ID_BOXED_STRING {
+        return None;
+    }
+    Some(jsvalue_string_content(payload).unwrap_or_default().chars().count())
+}
+
 unsafe fn boxed_primitive_payload_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<(u32, f64)> {
