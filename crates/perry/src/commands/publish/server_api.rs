@@ -82,6 +82,9 @@ pub(super) enum ServerMessage {
 #[derive(Debug, Serialize)]
 pub(super) struct BuildManifest {
     pub(super) app_name: String,
+    /// Home Screen display name (CFBundleDisplayName). `None` → the build
+    /// service omits the key and the icon label falls back to CFBundleName.
+    pub(super) display_name: Option<String>,
     pub(super) bundle_id: String,
     pub(super) version: String,
     pub(super) short_version: Option<String>,
