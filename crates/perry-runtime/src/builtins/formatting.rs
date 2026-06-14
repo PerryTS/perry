@@ -1283,7 +1283,8 @@ unsafe fn format_object_as_json(
     // (e.g. `Object.create(null)`), since it has no constructor to name.
     // The flag is set at allocation by `js_object_alloc_null_proto`.
     let is_null_proto = {
-        let gc = (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let gc =
+            (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
     };
     // The display prefix before the `{ … }` body: a real class/constructor
