@@ -1257,8 +1257,11 @@ extern "C" fn global_this_error_is_error_thunk(
 /// (prior behavior); there is no general eval.
 #[no_mangle]
 pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: usize) -> f64 {
-    let body = if args_len >= 1 && !args_ptr.is_null() {
-        let v = unsafe { *args_ptr.add(args_len - 1) };
+    let arg_str = |i: usize| -> String {
+        if i >= args_len || args_ptr.is_null() {
+            return String::new();
+        }
+        let v = unsafe { *args_ptr.add(i) };
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         match crate::string::str_bytes_from_jsvalue(v, &mut scratch) {
             Some((p, n)) if !p.is_null() => {
@@ -1267,22 +1270,32 @@ pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: 
             }
             _ => String::new(),
         }
-    } else {
-        String::new()
     };
     // depd `wrapfunction`: `new Function("fn","log","deprecate","message",
     // "site", '…return function (…) { log.call(deprecate, message, site)\n
     // return fn.apply(this, arguments)\n}')`. The outer, called with
-    // (fn,log,deprecate,message,site), returns that wrapper.
-    if body.contains("return function (")
-        && body.contains("log.call(deprecate, message, site)")
-        && body.contains("return fn.apply(this, arguments)")
+    // (fn,log,deprecate,message,site), returns that wrapper. Match the FULL
+    // shape — exactly six args, the five parameter names verbatim, AND the
+    // body substrings — so an unrelated dynamic Function body that happens to
+    // contain the substrings isn't misclassified as depd's wrapper.
+    if args_len == 6
+        && arg_str(0) == "fn"
+        && arg_str(1) == "log"
+        && arg_str(2) == "deprecate"
+        && arg_str(3) == "message"
+        && arg_str(4) == "site"
     {
-        let fp = depd_wrapfunction_outer_thunk as *const u8;
-        crate::closure::js_register_closure_arity(fp, 5);
-        let closure = crate::closure::js_closure_alloc_singleton(fp);
-        if !closure.is_null() {
-            return crate::value::js_nanbox_pointer(closure as i64);
+        let body = arg_str(5);
+        if body.contains("return function (")
+            && body.contains("log.call(deprecate, message, site)")
+            && body.contains("return fn.apply(this, arguments)")
+        {
+            let fp = depd_wrapfunction_outer_thunk as *const u8;
+            crate::closure::js_register_closure_arity(fp, 5);
+            let closure = crate::closure::js_closure_alloc_singleton(fp);
+            if !closure.is_null() {
+                return crate::value::js_nanbox_pointer(closure as i64);
+            }
         }
     }
     let obj = crate::object::js_object_alloc(0, 0);
@@ -5007,11 +5020,17 @@ fn alias_number_static_to_global_function(singleton: *mut ObjectHeader, name: &s
     );
 }
 
-/// Raw address of the global `Error` constructor closure, captured at install.
-/// Read by `error::error_prepare_stack_trace_override` so `captureStackTrace` /
-/// `error.stack` can honor a user-set `Error.prepareStackTrace`.
-pub(crate) static ERROR_CONSTRUCTOR_PTR: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    /// Raw address of THIS thread's `Error` constructor closure, captured at
+    /// install. Read by `error::error_prepare_stack_trace_override` so
+    /// `captureStackTrace` / `error.stack` can honor a user-set
+    /// `Error.prepareStackTrace`. Thread-local, not a process-global: each
+    /// `perry/thread` agent has its own arena + realm, and an `Error`
+    /// constructor / `prepareStackTrace` from another thread's arena can be a
+    /// foreign or freed pointer — the same reason `globalThis` is per-thread.
+    pub(crate) static ERROR_CONSTRUCTOR_PTR: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 
 /// The default `Error.prepareStackTrace` thunk's address — used to tell a
 /// user override apart from Perry's built-in default.
@@ -5023,7 +5042,7 @@ fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
     if ctor.is_null() {
         return;
     }
-    ERROR_CONSTRUCTOR_PTR.store(ctor as usize, std::sync::atomic::Ordering::Relaxed);
+    ERROR_CONSTRUCTOR_PTR.with(|c| c.set(ctor as usize));
     let func_ptr = global_this_error_capture_stack_trace_thunk as *const u8;
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {

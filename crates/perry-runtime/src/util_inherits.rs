@@ -100,8 +100,18 @@ fn ensure_function_prototype(value: f64) -> f64 {
         crate::closure::closure_set_dynamic_prop(cptr, "prototype", proto_val);
         return proto_val;
     }
+    // Restrict the object-backed synthesis to CALLABLE native-module exports
+    // (the `require('stream')` Stream case — a native-module object that acts as
+    // a legacy constructor). A plain non-callable object must NOT gain a
+    // synthesized `.prototype` here: that would let it slip past
+    // `js_util_inherits`'s "superCtor.prototype must be of type object"
+    // validation instead of failing as Node does. (Closures already returned
+    // above via the `cptr != 0` path.)
     let obj = object_ptr(value);
-    if !obj.is_null() {
+    if !obj.is_null()
+        && crate::object::js_object_get_class_id(obj as *const crate::object::ObjectHeader)
+            == crate::object::NATIVE_MODULE_CLASS_ID
+    {
         let key = named_key(b"prototype");
         crate::object::js_object_set_field_by_name(obj, key, proto_val);
         return proto_val;

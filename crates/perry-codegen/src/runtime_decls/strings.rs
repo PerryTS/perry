@@ -314,11 +314,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Args: (msg_ptr, msg_len, code_ptr, code_len, kind). Used by the
     // WorkerNew unresolved-path fallback. Helper diverges (`-> !`); declared
     // as void-return for LLVM purposes.
-    module.declare_function(
-        "js_throw_error_with_code",
-        VOID,
-        &[PTR, I64, PTR, I64, I32],
-    );
+    module.declare_function("js_throw_error_with_code", VOID, &[PTR, I64, PTR, I64, I32]);
     module.declare_function("js_map_set", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_map_get", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_map_has", I32, &[I64, DOUBLE]);

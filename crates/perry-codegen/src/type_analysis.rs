@@ -397,8 +397,12 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             // unconditionally corrupted those array values on store (the array
             // pointer got reinterpreted as a string). `.stack` stays `Any`.
             if matches!(property.as_str(), "message" | "name") {
-                let _ = object;
-                return Some(HirType::String);
+                // A user class's DECLARED field type wins over the Error String assumption.
+                let declared = receiver_class_name(ctx, object).and_then(|c| {
+                    let class = ctx.classes.get(&c)?;
+                    class.fields.iter().find(|f| f.name == *property).map(|f| f.ty.clone())
+                });
+                return Some(declared.unwrap_or(HirType::String));
             }
             // obj.field where obj is a known class instance → field's
             // declared type. Reuses the same walk static_type_of uses.

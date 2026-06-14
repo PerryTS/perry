@@ -168,7 +168,12 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
 /// unknown method name yields `undefined`, matching a real object miss.
 #[no_mangle]
 pub extern "C" fn js_console_method_by_value(key: f64) -> f64 {
-    let name = match jsvalue_string_content(key) {
+    // Apply JS property-key coercion before the lookup: `console[0]` → "0",
+    // `console[{toString:()=>'log'}]` → "log". A Symbol key coerces to a
+    // symbol (not a string method name), so it falls through to `undefined`,
+    // matching a real object miss.
+    let coerced = unsafe { crate::object::js_to_property_key(key) };
+    let name = match jsvalue_string_content(coerced) {
         Some(s) => s,
         None => return f64::from_bits(crate::value::TAG_UNDEFINED),
     };

@@ -1019,13 +1019,13 @@ fn build_structured_stack(n: usize) -> f64 {
 /// function (i.e. it is no longer Perry's default thunk), return its NaN-boxed
 /// closure value; otherwise `None`.
 fn error_prepare_stack_trace_override() -> Option<f64> {
-    let ctor = crate::object::ERROR_CONSTRUCTOR_PTR
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let ctor = crate::object::ERROR_CONSTRUCTOR_PTR.with(|c| c.get());
     if ctor == 0 {
         return None;
     }
     let key = js_string_from_bytes(b"prepareStackTrace".as_ptr(), 17);
-    let val = crate::object::js_object_get_field_by_name(ctor as *const crate::object::ObjectHeader, key);
+    let val =
+        crate::object::js_object_get_field_by_name(ctor as *const crate::object::ObjectHeader, key);
     if !val.is_pointer() {
         return None;
     }
