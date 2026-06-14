@@ -22,9 +22,44 @@ Two correctness measures learned the hard way (see CHANGELOG / project memory):
 
 Usage: node_suite_run.py <perry-bin> <repo-root> [comma-separated-modules]
 """
-import os, subprocess, sys, tempfile
+import os, re, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
+
+# Environment-variant tokens that defeat byte-for-byte stdout comparison without
+# indicating any Perry defect. Scrubbed SYMMETRICALLY from both node and perry
+# output before the equality check (see normalize()).
+#
+#   1. console.time/timeEnd/timeLog durations. Node's formatTime renders a live
+#      hrtime delta as the raw float `${ms}ms` (or `${s}s`, or `m:ss.mmm`), so the
+#      number is non-deterministic run-to-run AND has a variable decimal count —
+#      node itself prints e.g. 0.004ms / 0.004ms / 0.003ms, and 2.59ms / 2.68ms,
+#      across runs of the same program. The duration always follows the timer
+#      label as `<label>: <dur>`, so we anchor on `: ` (a lookbehind) and mask the
+#      numeric value while KEEPING the unit — a dropped `ms`, a wrong label, or a
+#      missing trailing arg still surfaces as a diff, and the `: ` anchor keeps
+#      ordinary numbers elsewhere in the output untouched.
+#   2. Stack-trace frames. console.trace, thrown-error inspection, and `[cause]`
+#      blocks print `    at <path>:<line>:<col>` plus node-internal ESM-loader
+#      frames Perry cannot reproduce (and Perry's own native-symbol /
+#      `(… N more identical frames)` placeholders). Paths and line numbers vary by
+#      machine, so whole frame lines are dropped. Frames are always indented >=4
+#      spaces, which keeps ordinary 2-space-per-level inspect output untouched.
+_DUR_MS = re.compile(r"(?<=: )\d+(?:\.\d+)?(ms|s)\b")
+_DUR_CLOCK = re.compile(r"\b\d+:\d{2}\.\d{3} \((h:mm|m):ss\.mmm\)")
+_FRAME = re.compile(r"^\s{4,}(at\s|\d+:\s)|… \d+ more identical frames")
+
+
+def normalize(text: str) -> str:
+    out = []
+    for line in text.split("\n"):
+        if _FRAME.search(line):
+            continue
+        line = _DUR_MS.sub(lambda m: "<dur>" + m.group(1), line)
+        line = _DUR_CLOCK.sub(lambda m: "<dur:" + m.group(1) + ">", line)
+        out.append(line)
+    return "\n".join(out)
+
 
 PERRY = sys.argv[1]
 ROOT = sys.argv[2]
@@ -72,7 +107,7 @@ def run_one(args):
     # Match stdout byte-for-byte (ignore only trailing-newline noise, not leading
     # whitespace) AND exit code — so a Perry crash that happened to print matching
     # output before dying is a diff, not a false pass.
-    ok = (n.stdout.rstrip("\n") == p.stdout.rstrip("\n")) and (n.returncode == p.returncode)
+    ok = (normalize(n.stdout.rstrip("\n")) == normalize(p.stdout.rstrip("\n"))) and (n.returncode == p.returncode)
     return (mod, "pass" if ok else "diff")
 
 
