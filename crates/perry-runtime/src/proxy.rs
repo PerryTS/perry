@@ -1097,9 +1097,46 @@ fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> boo
     true
 }
 
+/// #5129: build a fresh data property descriptor
+/// `{ value, writable: true, enumerable: true, configurable: true }`
+/// (the CreateDataProperty shape) for defining a property on a Proxy receiver
+/// via its `[[DefineOwnProperty]]`.
+unsafe fn build_create_data_descriptor(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_root = scope.root_nanbox_f64(value);
+    let desc = crate::object::js_object_alloc(0, 4);
+    let desc_handle = scope.root_raw_mut_ptr(desc);
+    for (name, field) in [
+        (b"value".as_slice(), value_root.get_nanbox_f64()),
+        (b"writable".as_slice(), f64::from_bits(TAG_TRUE)),
+        (b"enumerable".as_slice(), f64::from_bits(TAG_TRUE)),
+        (b"configurable".as_slice(), f64::from_bits(TAG_TRUE)),
+    ] {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(
+            desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
+            key,
+            field,
+        );
+    }
+    f64::from_bits(POINTER_TAG | ((desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as u64) & POINTER_MASK))
+}
+
 fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bool {
     if !reflect_value_is_object(receiver) {
         return false;
+    }
+    // #5129: a Proxy receiver — e.g. a `set` trap forwarding
+    // `Reflect.set(target, key, value, proxy)` (the 4-arg form) — must route
+    // through the proxy's `[[DefineOwnProperty]]` (its `defineProperty` trap,
+    // or, absent a trap, a define on the proxy's target), NOT an ordinary data
+    // store. This is OrdinarySetWithOwnDescriptor's tail
+    // `CreateDataProperty(Receiver, P, V)`. Treating the proxy id as a heap
+    // object (the `target_set` fall-through below) segfaulted; re-invoking the
+    // `set` trap would have recursed infinitely.
+    if lookup(receiver).is_some() {
+        let desc = unsafe { build_create_data_descriptor(value) };
+        return crate::value::js_is_truthy(js_reflect_define_property(receiver, key, desc)) != 0;
     }
     if let Some(desc) = own_set_descriptor(receiver, key) {
         match desc {
