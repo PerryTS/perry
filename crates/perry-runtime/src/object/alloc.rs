@@ -466,6 +466,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         unsafe {
             for i in 0..parent_len as usize {
                 let bits = (*src.add(i)).to_bits();
+                // GC_STORE_AUDIT(INIT): initializing fresh longlived keys-array slot
+                // with a longlived parent key; layout recorded below.
                 *dst.add(i) = f64::from_bits(bits);
                 crate::array::note_array_slot_layout_only(arr, i, bits);
             }
@@ -478,6 +480,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
                     crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
                 );
                 let idx = parent_len as usize + j;
+                // GC_STORE_AUDIT(INIT): initializing fresh longlived keys-array slot
+                // with a freshly interned longlived key string; layout recorded below.
                 *dst.add(idx) = nanboxed;
                 crate::array::note_array_slot_layout_only(arr, idx, nanboxed.to_bits());
             }
