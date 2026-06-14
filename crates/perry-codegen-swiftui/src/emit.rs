@@ -650,46 +650,55 @@ pub fn emit_widget_bundle(widget: &WidgetDecl, name: &str) -> String {
     out
 }
 
-/// Emit native provider bridge (glue code for calling LLVM-compiled provider)
-pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
+/// Emit the shared per-bundle runtime FFI block (`PerryWidgetRuntime.swift`).
+///
+/// This block — the `@_silgen_name` perry-runtime imports, the two
+/// `perry_nanbox_string` overloads, the `perry_get_string` wrapper, and the
+/// `@_cdecl("perry_widget_shared_storage_get")` bridge — must be emitted
+/// **once per bundle**, `internal`. A widget bundle is compiled as a single
+/// Swift module (`swiftc *.swift`), so:
+///
+/// - `private` (the #1294 fix) scopes each declaration to its own glue file,
+///   but the helpers are *called* from a different generated file
+///   (`{Name}.swift`), so the call site can't see them → "inaccessible due to
+///   'private'" (#5069).
+/// - non-`private` per-widget emits N copies across N glue files →
+///   "redeclaration" (the original #1294 failure).
+///
+/// Emitting the shared block once, `internal`, satisfies both: a single
+/// definition, visible module-wide. The `@_cdecl` shared-storage bridge
+/// exports a fixed C symbol, so it likewise must appear exactly once per
+/// bundle (≥2 widgets sharing an app group would otherwise duplicate it).
+pub fn emit_shared_runtime(app_group: Option<&str>) -> String {
     let mut out = String::new();
 
     writeln!(out, "// Auto-generated native bridge — do not edit").unwrap();
     writeln!(out, "import Foundation").unwrap();
     writeln!(out).unwrap();
 
-    // Extern declarations for perry-runtime functions.
-    //
-    // #1294: `private` on the @_silgen_name FFI imports + the
-    // String-overload helper / get_string wrapper scopes each
-    // declaration to its enclosing file, so the bundle's `swiftc
-    // *.swift` invocation doesn't see N copies of the same symbol
-    // across N widget glue files. The C symbol name (`js_nanbox_string`
-    // / `js_get_string_pointer_unified`) is still shared at the
-    // linker level — `@_silgen_name` just maps a Swift name onto it.
-    writeln!(out, "// Perry runtime FFI").unwrap();
+    writeln!(
+        out,
+        "// Perry runtime FFI (shared across every widget in this bundle)"
+    )
+    .unwrap();
     writeln!(out, "@_silgen_name(\"perry_runtime_widget_init\")").unwrap();
-    writeln!(out, "private func perry_runtime_widget_init()").unwrap();
+    writeln!(out, "func perry_runtime_widget_init()").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_nanbox_string\")").unwrap();
     writeln!(
         out,
-        "private func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"
+        "func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"
     )
     .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_get_string_pointer_unified\")").unwrap();
     writeln!(
         out,
-        "private func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>"
+        "func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>"
     )
     .unwrap();
     writeln!(out).unwrap();
-    writeln!(
-        out,
-        "private func perry_nanbox_string(_ s: String) -> Int64 {{"
-    )
-    .unwrap();
+    writeln!(out, "func perry_nanbox_string(_ s: String) -> Int64 {{").unwrap();
     writeln!(
         out,
         "    return s.withCString {{ perry_nanbox_string($0) }}"
@@ -697,24 +706,14 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
     .unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
-    writeln!(
-        out,
-        "private func perry_get_string(_ val: Int64) -> String {{"
-    )
-    .unwrap();
+    writeln!(out, "func perry_get_string(_ val: Int64) -> String {{").unwrap();
     writeln!(out, "    return String(cString: perry_get_string_ptr(val))").unwrap();
     writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
 
-    // Provider function extern
-    if let Some(ref func_name) = widget.provider_func_name {
-        writeln!(out, "@_silgen_name(\"{}\")", func_name).unwrap();
-        writeln!(out, "func {}(_ configJson: Int64) -> Int64", func_name).unwrap();
+    // sharedStorage bridge — emitted once per bundle because @_cdecl exports a
+    // fixed C symbol (`perry_widget_shared_storage_get`).
+    if let Some(app_group) = app_group {
         writeln!(out).unwrap();
-    }
-
-    // sharedStorage bridge
-    if let Some(ref app_group) = widget.app_group {
         writeln!(
             out,
             "// Shared storage bridge — called from native provider code"
@@ -735,6 +734,29 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
         .unwrap();
         writeln!(out, "    return perry_nanbox_string(value)").unwrap();
         writeln!(out, "}}").unwrap();
+    }
+
+    out
+}
+
+/// Emit the per-widget native bridge: just the widget-unique provider extern.
+///
+/// The shared runtime FFI (`perry_runtime_widget_init`, `perry_nanbox_string`,
+/// `perry_get_string`, …) and the shared-storage `@_cdecl` bridge live in
+/// `PerryWidgetRuntime.swift` (see [`emit_shared_runtime`]); this file declares
+/// only the `@_silgen_name` import of *this* widget's LLVM-compiled provider,
+/// which is uniquely named per widget and so is safe to emit per-file.
+pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
+    let mut out = String::new();
+
+    writeln!(out, "// Auto-generated native bridge — do not edit").unwrap();
+    writeln!(out, "import Foundation").unwrap();
+    writeln!(out).unwrap();
+
+    // Provider function extern (unique per widget).
+    if let Some(ref func_name) = widget.provider_func_name {
+        writeln!(out, "@_silgen_name(\"{}\")", func_name).unwrap();
+        writeln!(out, "func {}(_ configJson: Int64) -> Int64", func_name).unwrap();
     }
 
     let _ = name; // suppress unused warning
@@ -1516,6 +1538,44 @@ mod tests {
         assert!(view.contains("Text(\"\\(Int(entry.totalClicks.rounded()))\")"));
         // And it must not collapse to the empty-string bug.
         assert!(!view.contains("Text(\"\")"));
+    }
+
+    #[test]
+    fn shared_runtime_emits_internal_ffi_once() {
+        // #5069: the perry-runtime FFI helpers must be `internal` (not
+        // `private`) so they're callable from the sibling `{Name}.swift`
+        // files in the same swiftc module.
+        let runtime = emit_shared_runtime(None);
+        assert!(runtime.contains("func perry_runtime_widget_init()"));
+        assert!(runtime.contains("func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"));
+        assert!(runtime.contains("func perry_get_string(_ val: Int64) -> String"));
+        // No `private` — that's exactly the inaccessibility bug.
+        assert!(!runtime.contains("private func"));
+        // The shared-storage @_cdecl bridge is gated on an app group.
+        assert!(!runtime.contains("@_cdecl"));
+    }
+
+    #[test]
+    fn shared_runtime_includes_storage_bridge_with_app_group() {
+        let runtime = emit_shared_runtime(Some("group.com.example.app"));
+        assert!(runtime.contains("@_cdecl(\"perry_widget_shared_storage_get\")"));
+        assert!(runtime.contains("UserDefaults(suiteName: \"group.com.example.app\")"));
+    }
+
+    #[test]
+    fn per_widget_glue_only_declares_provider_extern() {
+        // The per-widget glue must NOT re-emit the shared FFI helpers (that's
+        // what caused the duplicate-symbol / inaccessibility regression). It
+        // carries only this widget's unique provider import.
+        let mut widget = make_widget("com.test.Glue", vec![], vec![]);
+        widget.provider_func_name = Some("__widget_provider_quickstats".to_string());
+        let glue = emit_glue(&widget, "Glue");
+        assert!(glue.contains("@_silgen_name(\"__widget_provider_quickstats\")"));
+        assert!(glue.contains("func __widget_provider_quickstats(_ configJson: Int64) -> Int64"));
+        // Shared helpers and the @_cdecl bridge live in PerryWidgetRuntime.swift.
+        assert!(!glue.contains("perry_runtime_widget_init"));
+        assert!(!glue.contains("perry_get_string"));
+        assert!(!glue.contains("@_cdecl"));
     }
 
     #[test]

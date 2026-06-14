@@ -290,6 +290,21 @@ pub(super) fn compile_for_ios_widget(
         bundle_info_plist = Some(bundle.info_plist.clone());
     }
 
+    // Emit the shared per-bundle runtime FFI block exactly once (#5069). It's
+    // only needed when a widget calls a native provider or uses shared storage;
+    // a fully static bundle never touches the perry-runtime helpers. The app
+    // group is bundle-wide, so the first widget that configures one wins.
+    if widgets
+        .iter()
+        .any(|w| w.provider_func_name.is_some() || w.app_group.is_some())
+    {
+        let app_group = widgets.iter().find_map(|w| w.app_group.as_deref());
+        let runtime_source = perry_codegen_swiftui::emit_shared_runtime(app_group);
+        let runtime_path = output_dir.join("PerryWidgetRuntime.swift");
+        fs::write(&runtime_path, &runtime_source)?;
+        all_swift_files.push(("PerryWidgetRuntime.swift".to_string(), runtime_source));
+    }
+
     // Report results
     let total_size: usize = all_swift_files.iter().map(|(_, s)| s.len()).sum();
     let is_simulator = args.target.as_deref() == Some("ios-widget-simulator");
@@ -542,6 +557,19 @@ pub(super) fn compile_for_watchos_widget(
         let plist_path = output_dir.join("Info.plist");
         fs::write(&plist_path, &bundle.info_plist)?;
         bundle_info_plist = Some(bundle.info_plist.clone());
+    }
+
+    // Emit the shared per-bundle runtime FFI block exactly once (#5069); see the
+    // ios-widget path for the rationale.
+    if widgets
+        .iter()
+        .any(|w| w.provider_func_name.is_some() || w.app_group.is_some())
+    {
+        let app_group = widgets.iter().find_map(|w| w.app_group.as_deref());
+        let runtime_source = perry_codegen_swiftui::emit_shared_runtime(app_group);
+        let runtime_path = output_dir.join("PerryWidgetRuntime.swift");
+        fs::write(&runtime_path, &runtime_source)?;
+        all_swift_files.push(("PerryWidgetRuntime.swift".to_string(), runtime_source));
     }
 
     let total_size: usize = all_swift_files.iter().map(|(_, s)| s.len()).sum();
