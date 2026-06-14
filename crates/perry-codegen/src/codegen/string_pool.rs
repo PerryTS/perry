@@ -309,7 +309,20 @@ pub(super) fn emit_string_pool(
                 (I32, &len_str),
             ],
         );
-        crate::expr::emit_root_heap_word_store_on_block(blk, &arr, &format!("@{}", global_name));
+        let global_ref = format!("@{}", global_name);
+        crate::expr::emit_root_heap_word_store_on_block(blk, &arr, &global_ref);
+        // #5042: register the per-class keys global as a GC root so the
+        // evacuation rewrite pass fixes up its raw pointer after the keys
+        // array is moved. The array lives in the longlived (old-gen) arena
+        // and is held alive by the shape-cache scanner, so old-page defrag
+        // (C4b) can relocate it; without registering this slot the codegen
+        // global keeps a stale pointer and every `new ClassName()` afterwards
+        // builds an instance over a forwarded/freed keys array. Mirrors the
+        // module-var data-table and string-handle registrations above (this
+        // global holds a *raw* I64 pointer, which `mark_global_root_bits` and
+        // the evacuation `try_rewrite_value` raw fallback already handle).
+        let addr_i64 = blk.ptrtoint(&global_ref, I64);
+        blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }
 
     // Register the parent-class chain for every class with a parent.
