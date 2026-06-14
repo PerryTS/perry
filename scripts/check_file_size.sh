@@ -54,6 +54,17 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 # Allowlist (one file per line; blank lines + `#` comments OK).
 ALLOWLIST=$(cat <<'EOF'
 crates/perry-runtime/src/gc/tests.rs
+# RegExp runtime trunk. Crossed 2000 LOC (2041) when the user's regex engine
+# was gated behind the `regex-engine` cargo feature — the per-fn `#[cfg]`
+# attributes, the no-engine fallbacks, and the `CompiledRegex` header type alias
+# added ~60 lines. The engine itself is already split across the
+# regex/{compile,exec_array,grammar,match_all,replace_expand,replace_fn,escape}
+# submodules; the trunk that remains is the always-compiled identity/display
+# layer (RegExpHeader + accessors + `is_regex_pointer`, referenced by
+# always-linked formatting/dispatch) plus the shared exec/cache state, which
+# can't move without scattering the thread-local last-match state. Further
+# trunk extraction is a reasonable follow-up.
+crates/perry-runtime/src/regex.rs
 crates/perry-codegen-arkts/src/tests.rs
 crates/perry-api-manifest/src/entries.rs
 crates/perry/src/commands/compile.rs

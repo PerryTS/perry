@@ -2156,6 +2156,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return crate::value::js_nanbox_pointer(error as i64);
             }
             // #2889: `new (rebound RegExp)(pattern, flags)`.
+            #[cfg(feature = "regex-engine")]
             "RegExp" => {
                 let pattern = if args.is_empty() {
                     std::ptr::null_mut()

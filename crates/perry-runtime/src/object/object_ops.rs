@@ -2459,6 +2459,7 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     // and crash. The reflective prototype is reachable directly as
     // `Temporal.<Type>.prototype`, so for a cell receiver return `null` rather
     // than faulting on the cell.
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(obj_value) {
         return f64::from_bits(TAG_NULL);
     }

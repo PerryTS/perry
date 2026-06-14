@@ -283,7 +283,17 @@ perry-dispatch = { path = "crates/perry-dispatch" }
 # Cargo.toml, and external users never need perry-runtime in their
 # Cargo graph (Perry's compiler driver links `libperry_runtime.a`
 # into the final binary directly).
-perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011" }
+# `default-features = false` so dependency EDGES (perry-stdlib, ext crates, the
+# perry binary) don't force perry-runtime's heavy default features (`full`,
+# `regex-engine`, `temporal`, `url-engine`, `string-normalize`, `intl-segmenter`)
+# back on. The auto-optimize build selects perry-runtime with
+# `--no-default-features` and re-adds only what a given program needs (see
+# optimized_libs.rs), so an edge requesting defaults would defeat that (cargo
+# unifies features additively). A plain `cargo build`/`cargo test --workspace`
+# still builds perry-runtime as a *selected* package, so its own `default`
+# applies — tests and the shipped prebuilt keep every engine. This mirrors why
+# `wasm-host` must stay out of `default`, generalized to all heavy features.
+perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
 perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }

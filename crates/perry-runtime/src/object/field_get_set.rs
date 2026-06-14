@@ -3191,6 +3191,7 @@ pub extern "C" fn js_object_get_field_by_name(
     // bare value is rare; the `value.method()` call form is handled in
     // `js_native_call_method`). `obj` may be NaN-boxed (top16 0x7FFD) or a
     // raw-I64 pointer (top16 0).
+    #[cfg(feature = "temporal")]
     {
         let bits = obj as u64;
         let top16 = bits >> 48;

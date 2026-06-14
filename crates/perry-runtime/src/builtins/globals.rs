@@ -751,6 +751,7 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                     // arena slot with GC_TYPE_OBJECT but tracked in
                     // REGEX_POINTERS). Clone by reading source/flags and
                     // building a fresh one via js_regexp_new.
+                    #[cfg(feature = "regex-engine")]
                     if crate::regex::is_regex_pointer(ptr as *const u8) {
                         let re_ptr = ptr as *const crate::regex::RegExpHeader;
                         let src = crate::regex::js_regexp_get_source(re_ptr);

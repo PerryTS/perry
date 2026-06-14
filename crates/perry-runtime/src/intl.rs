@@ -14,6 +14,7 @@ use crate::object::{
 use crate::string::{js_string_from_bytes, str_bytes_from_jsvalue};
 use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
 use crate::StringHeader;
+#[cfg(feature = "intl-segmenter")]
 use unicode_segmentation::UnicodeSegmentation;
 
 const KIND_NUMBER: &str = "NumberFormat";
@@ -566,6 +567,7 @@ fn normalize_granularity(value: Option<String>) -> String {
 /// A segment is "word-like" when it contains at least one alphanumeric
 /// character — i.e. it is not pure whitespace/punctuation. This mirrors the
 /// `isWordLike` flag the spec attaches to word-granularity segments.
+#[cfg(feature = "intl-segmenter")]
 fn segment_is_word_like(segment: &str) -> bool {
     segment.chars().any(|c| c.is_alphanumeric())
 }
@@ -601,6 +603,7 @@ fn build_segments(granularity: &str, value: f64) -> f64 {
     let input_value = string_value(&input);
     let mut arr = js_array_alloc(0);
     let mut index = 0u32;
+    #[cfg(feature = "intl-segmenter")]
     match granularity {
         "word" => {
             for segment in input.split_word_bounds() {
@@ -629,6 +632,26 @@ fn build_segments(granularity: &str, value: f64) -> f64 {
                 arr = js_array_push_f64(arr, record);
                 index += utf16_len(segment);
             }
+        }
+    }
+    // Segmenter engine gated off: no UAX #29 tables. Fall back to per-code-point
+    // segmentation (one segment per `char`) for every granularity — enough to
+    // keep iteration / spread working without the segmentation crate.
+    #[cfg(not(feature = "intl-segmenter"))]
+    {
+        // Preserve the `isWordLike` field for word granularity so the record
+        // shape matches the engine-enabled path (this block is dead in practice
+        // — the compiler enables `intl-segmenter` on any `Intl.Segmenter` use).
+        let is_word = granularity == "word";
+        for segment in input.chars().map(|c| c.to_string()).collect::<Vec<_>>() {
+            let word_like = if is_word {
+                Some(segment.chars().any(|c| c.is_alphanumeric()))
+            } else {
+                None
+            };
+            let record = make_segment_record(&segment, index, input_value, word_like);
+            arr = js_array_push_f64(arr, record);
+            index += utf16_len(&segment);
         }
     }
     js_nanbox_pointer(arr as i64)

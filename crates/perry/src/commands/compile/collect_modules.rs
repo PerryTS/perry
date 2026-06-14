@@ -1839,6 +1839,94 @@ fn collect_module_finish(
         }
     }
 
+    // Detect whether this module needs the regex engine. The engine
+    // (`regex`/`fancy-regex`, ~1.2 MB) is gated behind `perry-runtime/
+    // regex-engine` and the RegExp object's identity/display layer stays
+    // always-compiled, so a program that can never produce a RegExp at
+    // runtime links none of the matching machinery. A regex value can only
+    // exist if a regex literal / `RegExp` was evaluated, OR a regex-coercing
+    // string method (`.match`/`.matchAll`/`.search`, which build a RegExp from
+    // even a string arg per spec) ran, OR a glob API was used (the runtime
+    // compiles globs to regexes internally). We grep the serialized Debug form
+    // for the unambiguous HIR variant tokens and the generic-dispatch method
+    // names. Over-matching only over-includes the engine (a size, not a
+    // correctness, cost); the goal is zero false negatives. `eval` is
+    // non-functional in Perry so it can't create a regex at runtime.
+    {
+        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        if hir_debug.contains("RegExp")            // RegExp / RegExpDynamic / RegExpTest / RegExpExec / RegExpEscape / RegExpReplaceFn / RegExpExec{Index,Groups}
+            || hir_debug.contains("StringMatch")   // dedicated .match / .matchAll variants
+            || hir_debug.contains("PathMatchesGlob")
+            || hir_debug.contains("property: \"search\"")
+            || hir_debug.contains("property: \"match\"")
+            || hir_debug.contains("property: \"matchAll\"")
+            || hir_debug.contains("property: \"glob\"")
+            || hir_debug.contains("property: \"globSync\"")
+        {
+            ctx.uses_regex = true;
+        }
+    }
+
+    // Detect TC39 `Temporal.*` usage. The engine (`temporal_rs` + transitive
+    // tz/calendar deps, ~580 KB) is gated behind `perry-runtime/temporal`;
+    // the Temporal cell's identity layer stays always-compiled, so a program
+    // that never touches `Temporal` links none of the date-math machinery.
+    // `Temporal` is a global namespace (like `Intl`/`Math`): accessing it (even
+    // when aliased, e.g. `const now = Temporal.Now`) materializes a
+    // `PropertyGet { property: "Temporal" }`, so we match that exact token
+    // rather than a bare `"Temporal"` substring — the latter also fires on
+    // user identifiers like `myTemporal` / `temporalLog`, spuriously enabling
+    // the engine and undercutting the size win. JS `Date` is a separate impl.
+    {
+        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        if hir_debug.contains("property: \"Temporal\"") {
+            ctx.uses_temporal = true;
+        }
+    }
+
+    // Detect WHATWG URL API usage. The `url`+`idna` host-canonicalization
+    // engine (~195 KB) is gated behind `perry-runtime/url-engine`; Perry's URL
+    // parsing is otherwise hand-rolled, so a program with no URL API links none
+    // of it. Web `URL`/`URLPattern`/`URLSearchParams` lower to dedicated `Url*`
+    // HIR variants (always `Url` + an uppercase letter, e.g. `UrlNew`,
+    // `UrlSet…`, `UrlSearchParams…`); `node:url` lowers to a
+    // `NativeMethodCall { module: "url", … }`. We match those exact tokens
+    // instead of a bare `"Url"`/`"URL"` substring, which would also fire on
+    // common camelCase identifiers like `baseUrl` / `imageUrl` and spuriously
+    // link the engine. Over-matching within the URL family (e.g. enabling for a
+    // URLSearchParams-only program that doesn't strictly need the host parser)
+    // is a benign size cost; the rule is zero false negatives.
+    {
+        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        if hir_debug.contains("UrlNew")
+            || hir_debug.contains("UrlParse")
+            || hir_debug.contains("UrlCanParse")
+            || hir_debug.contains("UrlPattern")
+            || hir_debug.contains("UrlGet")
+            || hir_debug.contains("UrlSet")
+            || hir_debug.contains("UrlInstance")
+            || hir_debug.contains("UrlSearchParams")
+            || hir_debug.contains("module: \"url\"")
+        {
+            ctx.uses_url = true;
+        }
+    }
+
+    // Detect `String.prototype.normalize` (gates `unicode-normalization`,
+    // ~113 KB) and `Intl.Segmenter` (gates `unicode-segmentation`, ~73 KB).
+    // Both lower to method/namespace nodes carrying the name as a `property`,
+    // so we match the exact `property: "<name>"` token. (A bare `"Segmenter"`
+    // substring would also fire on a user identifier named `Segmenter`.)
+    {
+        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        if hir_debug.contains("property: \"normalize\"") {
+            ctx.uses_string_normalize = true;
+        }
+        if hir_debug.contains("property: \"Segmenter\"") {
+            ctx.uses_intl_segmenter = true;
+        }
+    }
+
     // Detect readline usage via process.stdin raw/lifecycle methods. These
     // don't go through an `import 'readline'` statement, so the import-based
     // needs_stdlib detection above misses them.

@@ -1698,6 +1698,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // `Temporal.*` value is a NaN-boxed pointer to a custom cell with no
     // codegen fast-path, so every method call funnels through here. The router
     // throws `TypeError` for an unknown method name on a real Temporal receiver.
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(object) {
         let args = refreshed_args();
         return crate::temporal::dispatch::call_method(object, method_name, &args);
@@ -1968,6 +1969,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // function result the codegen `Expr::RegExpTest` fast path can't see; without
     // this it throws `test is not a function`, breaking Hono `app.use('*', …)`
     // (#1731). The helper returns None for non-regex so generic dispatch resumes.
+    #[cfg(feature = "regex-engine")]
     if matches!(method_name, "test" | "exec" | "toString") && jsval.is_pointer() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let arg0 = refreshed_args().first().copied().unwrap_or(undef);
@@ -1980,6 +1982,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // `RegExp.prototype.compile(pattern, flags)` (Annex B) re-initializes the
     // receiver in place. Needs both args, so it is dispatched here rather than
     // through the single-arg `dispatch_regex_receiver_method`.
+    #[cfg(feature = "regex-engine")]
     if method_name == "compile" && jsval.is_pointer() {
         let p = jsval.as_pointer::<u8>();
         if crate::regex::is_regex_pointer(p) {
@@ -2375,34 +2378,49 @@ pub unsafe extern "C" fn js_native_call_method(
                 // function`) because no runtime arm handled `match`.
                 "match" | "matchAll" => {
                     // Missing arg ⇒ `undefined` (→ empty `/(?:)/` regex).
-                    let pattern_val =
+                    let _pattern_val =
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
-                    if method_name == "matchAll" {
-                        let result_ptr =
-                            crate::regex::js_string_match_all_value(s_ptr, pattern_val);
+                    #[cfg(feature = "regex-engine")]
+                    {
+                        let pattern_val = _pattern_val;
+                        if method_name == "matchAll" {
+                            let result_ptr =
+                                crate::regex::js_string_match_all_value(s_ptr, pattern_val);
+                            if result_ptr.is_null() {
+                                return f64::from_bits(JSValue::null().bits());
+                            }
+                            return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
+                        }
+                        // Coerce a non-RegExp arg via `RegExpCreate(ToString(arg))`
+                        // (a string pattern / `undefined` / `{ toString }` object),
+                        // matching the codegen path.
+                        let result_ptr = crate::regex::js_string_match_value(s_ptr, pattern_val);
                         if result_ptr.is_null() {
                             return f64::from_bits(JSValue::null().bits());
                         }
                         return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
                     }
-                    // Coerce a non-RegExp arg via `RegExpCreate(ToString(arg))`
-                    // (a string pattern / `undefined` / `{ toString }` object),
-                    // matching the codegen path.
-                    let result_ptr = crate::regex::js_string_match_value(s_ptr, pattern_val);
-                    if result_ptr.is_null() {
-                        return f64::from_bits(JSValue::null().bits());
-                    }
-                    return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
+                    // Engine gated off: a string `.match`/`.matchAll` can only
+                    // be reached by a program that uses regex (which forces the
+                    // engine on), so this is dead — `null` (no match) is benign.
+                    #[cfg(not(feature = "regex-engine"))]
+                    return f64::from_bits(JSValue::null().bits());
                 }
                 "search" => {
-                    let regex_val =
+                    let _regex_val =
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
-                    let i32_v = crate::regex::js_string_search_value(s_ptr, regex_val);
-                    // Return a RAW `f64` (not NaN-boxed INT32_TAG): a boxed-int
-                    // result fails `aString.search(x) === 5` strict-equality
-                    // against a plain number literal. Mirrors the `indexOf`
-                    // arm's `as f64` convention.
-                    return i32_v as f64;
+                    #[cfg(feature = "regex-engine")]
+                    {
+                        let i32_v = crate::regex::js_string_search_value(s_ptr, _regex_val);
+                        // Return a RAW `f64` (not NaN-boxed INT32_TAG): a boxed-int
+                        // result fails `aString.search(x) === 5` strict-equality
+                        // against a plain number literal. Mirrors the `indexOf`
+                        // arm's `as f64` convention.
+                        return i32_v as f64;
+                    }
+                    // Engine gated off: dead (see `match` arm) — `-1` (not found).
+                    #[cfg(not(feature = "regex-engine"))]
+                    return -1.0_f64;
                 }
                 // Refs #421 — common string methods on any-typed receivers.
                 // Hono's compiled JS (and most npm packages with stripped TS
@@ -2668,11 +2686,15 @@ pub unsafe extern "C" fn js_native_call_method(
                             .unwrap_or(std::ptr::null())
                     };
                     if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
+                        // `pat_jsv` is only consulted by the regex-engine-gated
+                        // branch below (RegExp pattern + callback replacer).
+                        #[cfg_attr(not(feature = "regex-engine"), allow(unused_variables))]
                         let pat_jsv = JSValue::from_bits(pat_val.to_bits());
                         let repl_jsv = JSValue::from_bits(repl_val.to_bits());
                         if repl_jsv.is_pointer() {
                             let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
                             if crate::closure::is_closure_ptr(repl_raw) {
+                                #[cfg(feature = "regex-engine")]
                                 if pat_jsv.is_pointer() {
                                     let regex_ptr =
                                         pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
@@ -2713,6 +2735,7 @@ pub unsafe extern "C" fn js_native_call_method(
                         }
                     }
                     // Detect RegExp pattern: NaN-boxed pointer to a RegExpHeader.
+                    #[cfg(feature = "regex-engine")]
                     if let Some(v) = arg_at(0) {
                         let jsv = JSValue::from_bits(v.to_bits());
                         if jsv.is_pointer() {
@@ -3528,6 +3551,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            #[cfg(feature = "regex-engine")]
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
                 return crate::regex::dispatch_regexp_string_iterator_method(
                     obj as *mut ObjectHeader,
@@ -4071,6 +4095,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            #[cfg(feature = "regex-engine")]
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
                 return crate::regex::dispatch_regexp_string_iterator_method(
                     obj as *mut ObjectHeader,

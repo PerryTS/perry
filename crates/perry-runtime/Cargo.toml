@@ -9,7 +9,49 @@ description = "Runtime library: GC, JSValue, builtins"
 crate-type = ["rlib", "staticlib"]
 
 [features]
-default = ["full"]
+# `default` keeps the shipped prebuilt libperry_runtime.a and plain
+# `cargo build`/test full-featured. The auto-optimize path builds with
+# `--no-default-features` and re-adds only the features a given program
+# actually needs (see optimized_libs.rs), so the heavy subsystems below
+# (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
+# app* and absent from binaries that never use them.
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter"]
+# The user's regular-expression engine (`regex` + `fancy-regex`, ~1.2 MB of
+# DFA/NFA machinery). A program that never evaluates a regex literal, `RegExp`,
+# a regex-coercing string method, or a glob API can't produce a RegExp at
+# runtime, so the compiler leaves this off and the engine is never linked. The
+# RegExp object's identity/display layer (header, `is_regex_pointer`, `toString`)
+# stays always compiled, so console-formatting / value-to-string paths keep
+# working with no engine present.
+regex-engine = ["dep:regex", "dep:fancy-regex"]
+# The TC39 `Temporal.*` API (`temporal_rs` + its transitive tz/calendar deps:
+# jiff-tzdb, icu_calendar, timezone_provider, calendrical_calculations —
+# ~580 KB). Independent of JS `Date` (which has its own `date.rs` impl), so a
+# program that uses `Date` but never `Temporal.*` links none of this. The
+# compiler enables it on `Temporal` usage; the Temporal cell's identity layer
+# (is_temporal_value / GC class-id range) stays compiled so value
+# formatting/JSON/instanceof on non-Temporal values keep working.
+temporal = ["dep:temporal_rs"]
+# WHATWG URL host canonicalization: the `url` crate's full host parser (IPv4
+# shorthand / numeric hosts) + `idna` (Unicode domain ↔ punycode), ~195 KB
+# incl. the transitive `percent_encoding`. Perry's URL parsing is otherwise
+# hand-rolled (url/parse.rs), so the crates are only reached from 4 host/IDNA
+# sites behind URL APIs (`new URL`, hostname setter, url.domainTo*, legacy
+# url.resolve). A program that never uses a URL API links none of it; each gated
+# site has a benign hand-rolled fallback. (`unicode-normalization`/`-segmentation`
+# are NOT gated here — they're shared with Intl / String.normalize.)
+url-engine = ["dep:url", "dep:idna"]
+# `String.prototype.normalize` (NFC/NFD/NFKC/NFKD) via `unicode-normalization`
+# (~113 KB of Unicode decomposition/composition tables). Only `string/compare.rs`
+# uses it; a program that never calls `.normalize()` links none of it. (This is
+# the *old* `unicode-normalization` crate, distinct from `idna`'s `icu_normalizer`,
+# so it's independent of `url-engine`.)
+string-normalize = ["dep:unicode-normalization"]
+# `Intl.Segmenter` (UAX #29 grapheme/word/sentence segmentation) via
+# `unicode-segmentation` (~73 KB) — the grapheme path backs string-width@7+/
+# wrap-ansi@9+ (and thus ink). Only `intl.rs` uses it; a program that never
+# constructs an `Intl.Segmenter` links none of it.
+intl-segmenter = ["dep:unicode-segmentation"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`
@@ -50,11 +92,11 @@ thiserror.workspace = true
 anyhow.workspace = true
 libc = "0.2"
 rand = "0.8"
-regex = "1"
+regex = { version = "1", optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
 taffy = { version = "0.7", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
-fancy-regex = "0.18"
+fancy-regex = { version = "0.18", optional = true }
 itoa = "1"
 ryu = "1"
 base64 = "0.22"
@@ -67,16 +109,16 @@ lazy_static = "1.4"
 # our code is binding glue per type. `compiled_data` vendors the IANA tz DB
 # hermetically (needed by ZonedDateTime / Now), `sys-local` adds the
 # current-system-zone lookup used by Temporal.Now.*ISO() with no argument.
-temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data", "sys-local"] }
+temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data", "sys-local"], optional = true }
 
 serde_json = "1"
-unicode-normalization = "0.1"
+unicode-normalization = { version = "0.1", optional = true }
 # #4877: extended grapheme-cluster / word / sentence segmentation backing
 # Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,
 # so it gates ink). Pure-Rust UAX #29 implementation, already in our lock graph.
-unicode-segmentation = "1"
-idna = "1"
-url = "2"
+unicode-segmentation = { version = "1", optional = true }
+idna = { version = "1", optional = true }
+url = { version = "2", optional = true }
 # #4911: real node:dns resolve*/reverse. hickory-proto provides DNS wire-format
 # encode/decode + record types; we drive it synchronously over a blocking
 # std::net::UdpSocket (TCP fallback on truncation), so — unlike hickory-resolver

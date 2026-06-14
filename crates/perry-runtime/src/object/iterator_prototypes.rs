@@ -75,6 +75,7 @@ unsafe fn dispatch_on_implicit_this(method: &str) -> f64 {
         crate::string::STRING_ITERATOR_CLASS_ID => {
             crate::string::dispatch_string_iterator_method(obj, method)
         }
+        #[cfg(feature = "regex-engine")]
         crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => {
             crate::regex::dispatch_regexp_string_iterator_method(obj, method)
         }

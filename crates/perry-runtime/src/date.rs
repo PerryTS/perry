@@ -1059,6 +1059,7 @@ pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
     // hard `TypeError` (the spec bans implicit numeric coercion / ordering), so
     // route a Temporal receiver to its brand dispatch, which throws — rather
     // than returning the opaque cell as a pseudo-Date timestamp.
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(timestamp) {
         return crate::temporal::dispatch::call_method(timestamp, "valueOf", &[]);
     }

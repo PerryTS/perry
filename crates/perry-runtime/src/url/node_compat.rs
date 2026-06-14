@@ -457,7 +457,11 @@ pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
         // Numeric / IPv4-shorthand → canonical IPv4 address (Node yields the IP).
         Some(canon) if is_ipv4_host(&canon) => canon,
         // Registrable hostname → Unicode IDN form.
+        #[cfg(feature = "url-engine")]
         Some(_) => idna::domain_to_unicode(&input).0,
+        // URL engine gated off: no IDNA, so return the input host unchanged.
+        #[cfg(not(feature = "url-engine"))]
+        Some(_) => input.clone(),
     };
     create_string_f64(&out)
 }
@@ -859,6 +863,24 @@ fn protocol_null_or_slashes(input: &str, protocol_is_null: bool, host: &str) -> 
     protocol_is_null || input.starts_with("//") || input.contains("://") || !host.is_empty()
 }
 
+/// WHATWG `URL.join` of `to` onto base `from`, or `None` when `from` isn't a
+/// parseable absolute URL. Cfg-paired: the off twin returns `None` (no `url`
+/// crate), so the caller falls back to the hand-rolled `resolve_url`.
+#[cfg(feature = "url-engine")]
+fn legacy_url_join(from: &str, to: &str) -> Option<String> {
+    let base = url::Url::parse(from).ok()?;
+    Some(
+        base.join(to)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| resolve_url(to, from)),
+    )
+}
+
+#[cfg(not(feature = "url-engine"))]
+fn legacy_url_join(_from: &str, _to: &str) -> Option<String> {
+    None
+}
+
 #[no_mangle]
 pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
     if !is_js_string_value(from) {
@@ -871,10 +893,8 @@ pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
     let to_s = get_string_content(to);
     let resolved = if to_s.starts_with('/') && !is_valid_absolute_url(&from_s) {
         to_s
-    } else if let Ok(base) = url::Url::parse(&from_s) {
-        base.join(&to_s)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| resolve_url(&to_s, &from_s))
+    } else if let Some(j) = legacy_url_join(&from_s, &to_s) {
+        j
     } else {
         resolve_url(&to_s, &from_s)
     };

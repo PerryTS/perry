@@ -34,6 +34,7 @@ mod pad;
 mod raw;
 mod slice_ops;
 mod split;
+#[cfg(feature = "regex-engine")]
 pub(crate) use split::spec_regex_split;
 
 #[cfg(test)]

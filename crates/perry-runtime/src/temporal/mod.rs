@@ -26,16 +26,27 @@
 
 use crate::value::JSValue;
 
+#[cfg(feature = "temporal")]
 pub mod dispatch;
+#[cfg(feature = "temporal")]
 pub mod duration;
+#[cfg(feature = "temporal")]
 pub mod instant;
+#[cfg(feature = "temporal")]
 pub mod now;
+#[cfg(feature = "temporal")]
 pub mod options;
+#[cfg(feature = "temporal")]
 pub mod plain_date;
+#[cfg(feature = "temporal")]
 pub mod plain_date_time;
+#[cfg(feature = "temporal")]
 pub mod plain_month_day;
+#[cfg(feature = "temporal")]
 pub mod plain_time;
+#[cfg(feature = "temporal")]
 pub mod plain_year_month;
+#[cfg(feature = "temporal")]
 pub mod zoned_date_time;
 
 const NANBOX_PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -43,6 +54,7 @@ const NANBOX_PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 /// The concrete `temporal_rs` value carried by a [`TemporalCell`]. The active
 /// variant is the type's brand sub-kind; [`TemporalValue::kind`] exposes it
 /// cheaply for dispatch without re-matching.
+#[cfg(feature = "temporal")]
 pub enum TemporalValue {
     Duration(temporal_rs::Duration),
     Instant(temporal_rs::Instant),
@@ -53,6 +65,12 @@ pub enum TemporalValue {
     PlainMonthDay(temporal_rs::PlainMonthDay),
     ZonedDateTime(temporal_rs::ZonedDateTime),
 }
+
+/// Temporal gated off: no `temporal_rs` linked, so a Temporal value can never be
+/// constructed. The uninhabited twin keeps `TemporalCell` / the identity layer
+/// type-checking without the engine dependency.
+#[cfg(not(feature = "temporal"))]
+pub enum TemporalValue {}
 
 /// Stable sub-kind discriminator for a Temporal cell. Used by the brand checks
 /// in `js_native_call_method` / `js_object_get_field_by_name` to route to the
@@ -97,6 +115,7 @@ pub fn temporal_value_matches_class_id(value: f64, class_id: u32) -> bool {
     }
 }
 
+#[cfg(feature = "temporal")]
 impl TemporalValue {
     #[inline]
     pub fn kind(&self) -> TemporalKind {
@@ -129,6 +148,22 @@ impl TemporalValue {
     }
 }
 
+/// Temporal gated off: `TemporalValue` is uninhabited, so these methods can only
+/// be reached via an impossible value — the `match *self {}` arms are exhaustive
+/// over zero variants.
+#[cfg(not(feature = "temporal"))]
+impl TemporalValue {
+    #[inline]
+    pub fn kind(&self) -> TemporalKind {
+        match *self {}
+    }
+
+    #[inline]
+    pub fn type_name(&self) -> &'static str {
+        match *self {}
+    }
+}
+
 /// 1-slot heap cell holding a `temporal_rs` value behind a shared GC tag. See
 /// the module docs for the non-movable / pointer-free rationale.
 ///
@@ -147,6 +182,7 @@ pub struct TemporalCell {
 
 /// Allocate a fresh Temporal cell wrapping `value` and return it as a NaN-boxed
 /// pointer (an f64 carrying `POINTER_TAG`).
+#[cfg(feature = "temporal")]
 pub fn alloc_temporal_cell(value: TemporalValue) -> f64 {
     let boxed = Box::new(value);
     unsafe {
@@ -222,6 +258,7 @@ pub fn temporal_kind(value: f64) -> Option<TemporalKind> {
 /// # Safety
 /// `cell` must point at a live, fully-initialized `TemporalCell` that the GC is
 /// about to reclaim; it is not read again afterwards.
+#[cfg(feature = "temporal")]
 pub unsafe fn finalize_temporal_cell_for_gc(cell: *mut TemporalCell) {
     if cell.is_null() {
         return;
@@ -229,9 +266,16 @@ pub unsafe fn finalize_temporal_cell_for_gc(cell: *mut TemporalCell) {
     std::ptr::drop_in_place(cell);
 }
 
+/// Temporal gated off: no Temporal cell is ever allocated, so the GC never
+/// reaches this finalize hook. Kept as a no-op so `gc/types.rs`'s registration
+/// resolves without the engine.
+#[cfg(not(feature = "temporal"))]
+pub unsafe fn finalize_temporal_cell_for_gc(_cell: *mut TemporalCell) {}
+
 /// Render a Temporal value as its canonical ISO-8601 / IXDTF string — the form
 /// `toString` and `toJSON` use. Returns `None` only if `value` is not a
 /// Temporal cell.
+#[cfg(feature = "temporal")]
 pub fn temporal_iso_string(value: f64) -> Option<String> {
     temporal_value_ref(value).map(temporal_value_iso_string)
 }
@@ -239,6 +283,7 @@ pub fn temporal_iso_string(value: f64) -> Option<String> {
 /// `console.log` / `util.inspect` form: `Temporal.Duration <P1Y…>` — the brand
 /// tag followed by the canonical string in angle brackets, matching V8's custom
 /// Temporal inspect output. Returns `None` if `value` is not a Temporal cell.
+#[cfg(feature = "temporal")]
 pub fn temporal_inspect_string(value: f64) -> Option<String> {
     temporal_value_ref(value)
         .map(|v| format!("{} <{}>", v.type_name(), temporal_value_iso_string(v)))
@@ -247,6 +292,7 @@ pub fn temporal_inspect_string(value: f64) -> Option<String> {
 /// ISO/IXDTF string for an already-borrowed [`TemporalValue`]. `temporal_rs`
 /// implements `Display` for each type as its canonical string form, so we defer
 /// to that (no formatting options = spec-default precision).
+#[cfg(feature = "temporal")]
 pub fn temporal_value_iso_string(v: &TemporalValue) -> String {
     match v {
         TemporalValue::Duration(d) => d.to_string(),

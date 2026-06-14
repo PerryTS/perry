@@ -725,6 +725,28 @@ unsafe fn date_inspect_string(value: f64) -> String {
         .to_string()
 }
 
+/// `util.inspect` arm for a Temporal cell: `Temporal.X <iso>` (or
+/// `[object Object]` if the cell can't be read). Returns `None` when `addr` is
+/// not a Temporal cell, so the caller's `else if let Some(..)` chain falls
+/// through. Cfg-paired: with the Temporal engine gated off no cell can exist, so
+/// the off twin is a constant `None` (and doesn't reference the gated module).
+#[cfg(feature = "temporal")]
+fn temporal_inspect_arm(addr: usize, value: f64) -> Option<String> {
+    if crate::temporal::is_temporal_cell_addr(addr) {
+        Some(
+            crate::temporal::temporal_inspect_string(value)
+                .unwrap_or_else(|| "[object Object]".to_string()),
+        )
+    } else {
+        None
+    }
+}
+
+#[cfg(not(feature = "temporal"))]
+fn temporal_inspect_arm(_addr: usize, _value: f64) -> Option<String> {
+    None
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -819,12 +841,11 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // `Invalid Date`). Handle before the GC-header object dispatch
                 // below, which would deref the 8-byte cell as an ObjectHeader.
                 date_inspect_string(value)
-            } else if crate::temporal::is_temporal_cell_addr(ptr as usize) {
+            } else if let Some(s) = temporal_inspect_arm(ptr as usize, value) {
                 // Temporal (#4686): `util.inspect` prints `Temporal.Duration
                 // <P1Y…>`. Handle before the GC-header object dispatch (the cell
                 // is smaller than an ObjectHeader).
-                crate::temporal::temporal_inspect_string(value)
-                    .unwrap_or_else(|| "[object Object]".to_string())
+                s
             } else if crate::value::addr_class::is_handle_band(ptr as usize) {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
                 // POINTER_TAG values whose payload is a small registry id, NOT
@@ -1560,10 +1581,9 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     // unquoted (or `Invalid Date`), not the 8-byte cell deref'd
                     // as an object.
                     date_inspect_string(value)
-                } else if crate::temporal::is_temporal_cell_addr(ptr as usize) {
+                } else if let Some(s) = temporal_inspect_arm(ptr as usize, value) {
                     // Temporal value inside an inspected object → `Temporal.X <iso>`.
-                    crate::temporal::temporal_inspect_string(value)
-                        .unwrap_or_else(|| "[object Object]".to_string())
+                    s
                 } else if crate::value::addr_class::is_handle_band(ptr as usize) {
                     "[object Object]".to_string()
                 } else if crate::symbol::is_registered_symbol(ptr as usize)

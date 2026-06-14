@@ -3,41 +3,70 @@
 //! Provides JavaScript-compatible regular expression operations using the Rust regex crate.
 //! RegExp objects are heap-allocated and store the compiled pattern and flags.
 
+#[cfg(feature = "regex-engine")]
 use regex::Regex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr;
+#[cfg(feature = "regex-engine")]
 use std::sync::Arc;
 
+#[cfg(feature = "regex-engine")]
 use crate::array::ArrayHeader;
 use crate::string::StringHeader;
+#[cfg(feature = "regex-engine")]
 use crate::value::js_nanbox_string;
 
 use crate::object::ObjectHeader;
 
+/// The compiled standard-engine regex type. When the regex engine is gated
+/// off, `RegExpHeader::regex_ptr` is typed `*mut ()` (a never-dereferenced
+/// dangling field) so the identity/display layer keeps the same struct
+/// layout without pulling in the `regex` crate.
+#[cfg(feature = "regex-engine")]
+type CompiledRegex = regex::Regex;
+#[cfg(not(feature = "regex-engine"))]
+type CompiledRegex = ();
+
+#[cfg(feature = "regex-engine")]
 mod compile;
 mod escape;
+#[cfg(feature = "regex-engine")]
 mod exec_array;
+#[cfg(feature = "regex-engine")]
 mod grammar;
+#[cfg(feature = "regex-engine")]
 mod match_all;
+#[cfg(feature = "regex-engine")]
 mod replace_expand;
 mod replace_fn;
+#[cfg(feature = "regex-engine")]
 pub use compile::js_regexp_compile_value;
 pub use escape::js_regexp_escape;
+#[cfg(feature = "regex-engine")]
 use exec_array::{
     byte_index_to_char_index, char_index_to_byte, set_exec_array_groups, set_exec_array_indices,
     set_exec_array_indices_fancy, set_exec_array_metadata,
 };
+#[cfg(feature = "regex-engine")]
 use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
+#[cfg(feature = "regex-engine")]
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
-    REGEXP_STRING_ITERATOR_CLASS_ID,
 };
+
+/// Class id for `RegExp String Iterator` exotic objects. Referenced by the
+/// always-linked iterator-prototype dispatch, so it stays ungated even when
+/// the regex engine (which produces these iterators) is compiled out.
+pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
+#[cfg(feature = "regex-engine")]
 use replace_expand::{expand_js_replacement, replace_regex_fn_fancy};
+#[cfg(feature = "regex-engine")]
 pub use replace_expand::{
     js_string_replace_all_regex_fn, js_string_replace_all_regex_named, js_string_replace_regex_fn,
     js_string_replace_regex_named,
 };
+#[cfg(feature = "regex-engine")]
 use replace_fn::call_replace_callback;
 pub use replace_fn::{
     js_string_replace_all_string, js_string_replace_all_string_fn, js_string_replace_string,
@@ -83,6 +112,7 @@ pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
     REGEX_POINTERS.with(|s| s.borrow().contains(&(ptr as usize)))
 }
 
+#[cfg(feature = "regex-engine")]
 thread_local! {
     /// Cache of compiled regex objects, keyed by (pattern, flags).
     static REGEX_CACHE: RefCell<HashMap<(String, String), Arc<Regex>>> = RefCell::new(HashMap::new());
@@ -90,6 +120,7 @@ thread_local! {
     static FANCY_CACHE: RefCell<HashMap<(String, String), Arc<fancy_regex::Regex>>> = RefCell::new(HashMap::new());
 }
 
+#[cfg(feature = "regex-engine")]
 fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
     REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -149,8 +180,11 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
 /// Header for heap-allocated RegExp objects
 #[repr(C)]
 pub struct RegExpHeader {
-    /// Pointer to the compiled Regex object (boxed)
-    regex_ptr: *mut Regex,
+    /// Pointer to the compiled Regex object (boxed). Typed via the
+    /// `CompiledRegex` alias so the struct layout is identical whether or not
+    /// the regex engine is linked (it's `*mut ()` when gated off and never
+    /// dereferenced — all dereferencing sites are themselves engine-gated).
+    regex_ptr: *mut CompiledRegex,
     /// Original pattern string (for debugging/serialization)
     pattern_ptr: *const StringHeader,
     /// Flags string (e.g., "gi" for global+ignoreCase)
@@ -177,6 +211,7 @@ pub struct RegExpHeader {
 /// stored value may be any JSValue (e.g. `re.lastIndex = { valueOf() {…} }`), so
 /// coerce via `ToNumber` (which invokes `valueOf`/`toString`), then `ToInteger`,
 /// clamped to ≥ 0.
+#[cfg(feature = "regex-engine")]
 pub(crate) fn regex_last_index_offset(re: *const RegExpHeader) -> usize {
     let stored = f64::from_bits(unsafe { (*re).last_index });
     let n = crate::builtins::js_number_coerce(stored);
@@ -187,6 +222,7 @@ pub(crate) fn regex_last_index_offset(re: *const RegExpHeader) -> usize {
     }
 }
 
+#[cfg(feature = "regex-engine")]
 #[inline]
 fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
     unsafe {
@@ -238,6 +274,7 @@ pub(super) fn js_string_from_str(s: &str) -> *mut StringHeader {
     crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
+#[cfg(feature = "regex-engine")]
 fn throw_replace_all_non_global_regex() -> ! {
     let message = b"String.prototype.replaceAll called with a non-global RegExp argument";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -245,6 +282,7 @@ fn throw_replace_all_non_global_regex() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+#[cfg(feature = "regex-engine")]
 fn throw_match_all_non_global_regex() -> ! {
     let message = b"String.prototype.matchAll called with a non-global RegExp argument";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -252,6 +290,7 @@ fn throw_match_all_non_global_regex() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+#[cfg(feature = "regex-engine")]
 #[inline]
 fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
     unsafe {
@@ -262,6 +301,7 @@ fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
 }
 
 /// Throw a `SyntaxError` with the given message and never return.
+#[cfg(feature = "regex-engine")]
 fn throw_regexp_syntax_error(message: &str) -> ! {
     let msg = js_string_from_str(message);
     let err = crate::error::js_syntaxerror_new(msg);
@@ -277,6 +317,7 @@ fn throw_regexp_syntax_error(message: &str) -> ! {
 /// Note: the `v` flag (unicodeSets) is accepted as a valid flag for parity but
 /// its set-notation matching semantics are not implemented (the regex crate
 /// has no equivalent); it behaves like an ordinary unicode pattern.
+#[cfg(feature = "regex-engine")]
 fn validate_and_canonicalize_flags(flags: &str) -> String {
     // Spec order of the flag bits: d g i m s u v y.
     const FLAG_ORDER: &[char] = &['d', 'g', 'i', 'm', 's', 'u', 'v', 'y'];
@@ -314,6 +355,7 @@ fn validate_and_canonicalize_flags(flags: &str) -> String {
 /// Uses the thread-local REGEX_CACHE so repeated regex literals (e.g. in a
 /// loop) reuse the same compiled Regex instead of leaking a fresh one each
 /// time. The raw pointer stored in RegExpHeader is kept alive by the cache.
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_new(
     pattern: *const StringHeader,
@@ -437,6 +479,7 @@ pub extern "C" fn js_regexp_new(
 ///
 /// `ToString` runs through the coercing method path so a throwing
 /// `toString`/`valueOf` propagates.
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_construct(pattern: f64, flags: f64) -> *mut RegExpHeader {
     let pv = crate::value::JSValue::from_bits(pattern.to_bits());
@@ -484,6 +527,7 @@ pub extern "C" fn js_regexp_construct(pattern: f64, flags: f64) -> *mut RegExpHe
 
 /// Test if a string matches the regex pattern
 /// regex.test(string) -> boolean
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader) -> i32 {
     if !is_valid_regex_ptr(re) || !is_valid_ptr(s) {
@@ -521,6 +565,7 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
 /// Look up a fancy-regex fallback for the given header, if one was
 /// registered at compile-time because the `regex` crate rejected the
 /// pattern (backreferences, lookbehind, etc.).
+#[cfg(feature = "regex-engine")]
 fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>> {
     unsafe {
         let pat = string_as_str((*re).pattern_ptr);
@@ -539,6 +584,7 @@ fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>
 /// is `ToString(arg)` (running user `toString`/`valueOf`, which may throw),
 /// with `undefined` mapped to the empty pattern (the `/(?:)/` regex that
 /// matches at index 0). Flags default to none.
+#[cfg(feature = "regex-engine")]
 fn coerce_search_arg_to_regex(arg: f64) -> *const RegExpHeader {
     let jv = crate::value::JSValue::from_bits(arg.to_bits());
     if jv.is_pointer() {
@@ -565,6 +611,7 @@ fn coerce_search_arg_to_regex(arg: f64) -> *const RegExpHeader {
 /// coercion: a non-RegExp arg is turned into `RegExpCreate(ToString(arg))`
 /// (so `"x".search("pat")`, `.search(undefined)`, and `.search({toString})`
 /// all work). `s` is the already-`ToString`-coerced `this`.
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_search_value(s: *const StringHeader, arg: f64) -> i32 {
     // Root the receiver across the (possibly allocating / GC-triggering)
@@ -579,6 +626,7 @@ pub extern "C" fn js_string_search_value(s: *const StringHeader, arg: f64) -> i3
 /// `String.prototype.match(regexp)` (ECMA-262 §22.1.3.11) with full argument
 /// coercion (see [`js_string_search_value`]). Returns the match array pointer,
 /// or null on no match.
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_match_value(s: *const StringHeader, arg: f64) -> *mut ArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -590,6 +638,7 @@ pub extern "C" fn js_string_match_value(s: *const StringHeader, arg: f64) -> *mu
 
 /// Find matches in a string
 /// string.match(regex) -> string[] | null (returns array pointer, null if no match)
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_match(
     s: *const StringHeader,
@@ -856,6 +905,7 @@ pub extern "C" fn js_string_match(
 /// `js_string_replace_regex_fn` pairing already in this file. Used so a pattern
 /// the `regex` crate can't compile (lookbehind/backreferences) still gets full
 /// `$1`/`$<name>`/`$&`/`` $` ``/`$'`/`$$` substitution.
+#[cfg(feature = "regex-engine")]
 fn expand_js_replacement_fancy(
     repl: &str,
     caps: &fancy_regex::Captures,
@@ -963,6 +1013,7 @@ fn expand_js_replacement_fancy(
 /// (fresh per-result object + by-name setters so each match grows its own
 /// shape). The returned object must be stored into a GC-visible slot by the
 /// caller immediately; it is rooted via `scope` until then.
+#[cfg(feature = "regex-engine")]
 pub(crate) unsafe fn build_fancy_groups(
     fre: &fancy_regex::Regex,
     caps: &fancy_regex::Captures,
@@ -996,6 +1047,7 @@ pub(crate) unsafe fn build_fancy_groups(
 /// match loop with `fancy_regex` and expands the replacement string via
 /// [`expand_js_replacement_fancy`]. Used when the pattern needs
 /// lookbehind/backreferences the `regex` crate can't compile.
+#[cfg(feature = "regex-engine")]
 unsafe fn replace_regex_str_fancy(
     str_data: &str,
     fre: &fancy_regex::Regex,
@@ -1029,6 +1081,7 @@ unsafe fn replace_regex_str_fancy(
 }
 
 /// string.replace(regex, replacement) -> string
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_replace_regex(
     s: *const StringHeader,
@@ -1085,6 +1138,7 @@ pub extern "C" fn js_string_replace_regex(
 }
 
 /// string.replaceAll(regex, replacement) -> string
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_replace_all_regex(
     s: *const StringHeader,
@@ -1106,6 +1160,7 @@ pub extern "C" fn js_string_replace_all_regex(
 
 /// Split a string by a regex delimiter
 /// string.split(regex) -> string[] (array of NaN-boxed string pointers)
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_split_regex(
     s: *const StringHeader,
@@ -1116,6 +1171,7 @@ pub extern "C" fn js_string_split_regex(
 
 /// string.split(regex, limit) — limit<0 means no limit, limit==0 means empty
 /// (issue #567).
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_split_regex_n(
     s: *const StringHeader,
@@ -1201,6 +1257,7 @@ pub extern "C" fn js_string_split_regex_n(
 
 /// Search for a regex match in a string
 /// string.search(regex) -> number (index of first match, -1 if none)
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegExpHeader) -> i32 {
     if !is_valid_ptr(s) || !is_valid_regex_ptr(re) {
@@ -1236,6 +1293,7 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
 /// For global regexes, starts matching at lastIndex and updates it.
 /// Returns *mut ArrayHeader (null for no match). Stores .index and .groups
 /// in thread-locals, retrieved via js_regexp_exec_get_index / js_regexp_exec_get_groups.
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_exec(
     re: *mut RegExpHeader,
@@ -1500,6 +1558,7 @@ pub extern "C" fn js_regexp_exec(
 /// AND `method` is `test`/`exec`; `None` otherwise so the generic method
 /// dispatch in `js_native_call_method` continues. The argument is coerced to a
 /// string (`re.test(123)` tests against `"123"`). (#1731)
+#[cfg(feature = "regex-engine")]
 pub(crate) fn dispatch_regex_receiver_method(
     ptr: *const u8,
     method: &str,
@@ -1536,6 +1595,7 @@ pub(crate) fn dispatch_regex_receiver_method(
 }
 
 /// Get the .index from the last exec() call
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_exec_get_index() -> f64 {
     LAST_EXEC_INDEX.with(|idx| *idx.borrow())
@@ -1543,6 +1603,7 @@ pub extern "C" fn js_regexp_exec_get_index() -> f64 {
 
 /// Get the .groups object from the last exec() call
 /// Returns I64 pointer (0 for no groups)
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_exec_get_groups() -> i64 {
     LAST_EXEC_GROUPS.with(|g| {
@@ -1574,14 +1635,14 @@ pub fn scan_last_exec_groups_root_mut(visitor: &mut crate::gc::RuntimeRootVisito
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "regex-engine"))]
 pub(crate) fn test_set_last_exec_groups(ptr: *mut ObjectHeader) {
     LAST_EXEC_GROUPS.with(|g| {
         *g.borrow_mut() = ptr;
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "regex-engine"))]
 pub(crate) fn test_last_exec_groups() -> usize {
     LAST_EXEC_GROUPS.with(|g| *g.borrow() as usize)
 }
@@ -1713,7 +1774,7 @@ pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "regex-engine"))]
 mod tests {
     use super::*;
     use crate::string::js_string_from_bytes;

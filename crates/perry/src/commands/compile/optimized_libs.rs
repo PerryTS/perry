@@ -670,11 +670,16 @@ pub(super) fn build_optimized_libs(
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
     let key_input = format!(
-        "{}|{}|{}|wasm={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|url={}|norm={}|seg={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
         ctx.needs_wasm_runtime,
+        ctx.uses_regex,
+        ctx.uses_temporal,
+        ctx.uses_url,
+        ctx.uses_string_normalize,
+        ctx.uses_intl_segmenter,
         env!("CARGO_PKG_VERSION"),
     );
     let mut hash: u64 = 5381;
@@ -762,6 +767,34 @@ pub(super) fn build_optimized_libs(
     // unresolved `perry_wasm_host_*` references at link time.
     if ctx.needs_wasm_runtime {
         cross_features.push("perry-runtime/wasm-host".to_string());
+    }
+    // Enable the regex engine (`regex` + `fancy-regex`, ~1.2 MB) only when the
+    // program can actually produce or use a RegExp — detected in
+    // collect_modules. A program that never evaluates a regex literal/`RegExp`,
+    // a regex-coercing string method, or a glob API links none of it. The
+    // RegExp identity/display layer is always compiled, so non-regex programs
+    // still format/compare values correctly with the engine absent.
+    if ctx.uses_regex {
+        cross_features.push("perry-runtime/regex-engine".to_string());
+    }
+    // Enable the TC39 Temporal engine (`temporal_rs` + tz/calendar deps,
+    // ~580 KB) only when the program references `Temporal.*`. JS `Date` is a
+    // separate implementation and does not require this.
+    if ctx.uses_temporal {
+        cross_features.push("perry-runtime/temporal".to_string());
+    }
+    // Enable the WHATWG URL host/IDNA engine (`url`+`idna`+transitive
+    // `percent_encoding`, ~195 KB) only when the program uses a URL API.
+    if ctx.uses_url {
+        cross_features.push("perry-runtime/url-engine".to_string());
+    }
+    // `String.prototype.normalize` tables (~113 KB) and `Intl.Segmenter`
+    // UAX #29 tables (~73 KB) — each enabled only on its specific usage.
+    if ctx.uses_string_normalize {
+        cross_features.push("perry-runtime/string-normalize".to_string());
+    }
+    if ctx.uses_intl_segmenter {
+        cross_features.push("perry-runtime/intl-segmenter".to_string());
     }
     if !cross_features.is_empty() {
         cargo_cmd.arg("--features").arg(cross_features.join(","));

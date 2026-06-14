@@ -254,6 +254,7 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     }
     // A `Temporal.*` value is an opaque immutable cell — a dynamic property
     // write (`temporalValue[key] = v`) is a no-op, never an ObjectHeader write.
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(obj) {
         return value;
     }
