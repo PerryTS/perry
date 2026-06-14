@@ -28,6 +28,34 @@ pub(crate) fn wants_continue(headers: &HashMap<String, String>) -> bool {
     })
 }
 
+/// #5080 — if the freshly-built request carries `Expect: 100-continue`
+/// (plain `http://` only), flush its head now and arm the deferred-body
+/// channel. Node puts the head on the wire before `end()` for a continue
+/// request and withholds the body until the server's interim `100 Continue`
+/// drives the `'continue'` event. A no-op otherwise; the reqwest path keeps
+/// the buffered-dispatch-at-`end()` behavior for every other request.
+pub(crate) fn arm_expect_continue(handle: Handle) {
+    let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if req.ended || req.expects_continue || !req.url.starts_with("http://") {
+            return None;
+        }
+        if !wants_continue(&req.headers) {
+            return None;
+        }
+        req.expects_continue = true;
+        Some((
+            req.method.clone(),
+            req.url.clone(),
+            req.headers.clone(),
+            req.timeout_ms,
+        ))
+    })
+    .flatten();
+    if let Some((method, url, headers, timeout_ms)) = snapshot {
+        dispatch_expect_continue(handle, method, url, headers, timeout_ms);
+    }
+}
+
 /// Serialize the request head for the continue exchange. The body is
 /// withheld, so frame it `Transfer-Encoding: chunked` unless the caller
 /// pinned an explicit `Content-Length` / `Transfer-Encoding`; force

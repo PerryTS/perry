@@ -526,34 +526,6 @@ fn make_request_handle(
     handle
 }
 
-/// #5080 — if the freshly-built request carries `Expect: 100-continue`
-/// (plain `http://` only), flush its head now and arm the deferred-body
-/// channel. Node puts the head on the wire before `end()` for a continue
-/// request and withholds the body until the server's interim `100 Continue`
-/// drives the `'continue'` event. A no-op otherwise; the reqwest path keeps
-/// the buffered-dispatch-at-`end()` behavior for every other request.
-fn arm_expect_continue(handle: Handle) {
-    let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        if req.ended || req.expects_continue || !req.url.starts_with("http://") {
-            return None;
-        }
-        if !continue_client::wants_continue(&req.headers) {
-            return None;
-        }
-        req.expects_continue = true;
-        Some((
-            req.method.clone(),
-            req.url.clone(),
-            req.headers.clone(),
-            req.timeout_ms,
-        ))
-    })
-    .flatten();
-    if let Some((method, url, headers, timeout_ms)) = snapshot {
-        continue_client::dispatch_expect_continue(handle, method, url, headers, timeout_ms);
-    }
-}
-
 /// Parse the client-side TLS options (#4906) off a request options value
 /// and store them on the freshly-built request handle. A no-op for
 /// string-URL requests / plain http (parse yields the default).
@@ -889,7 +861,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     };
     let handle = make_request_handle(method, url, headers, timeout, callback, agent_handle);
     attach_tls_options(handle, arg_f64); // #4906
-    arm_expect_continue(handle); // #5080
+    continue_client::arm_expect_continue(handle); // #5080
     handle
 }
 
@@ -996,7 +968,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
         // `get()` auto-`end()`s, kicking off the request.
         js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
     } else {
-        arm_expect_continue(handle); // #5080
+        continue_client::arm_expect_continue(handle); // #5080
     }
     handle
 }
