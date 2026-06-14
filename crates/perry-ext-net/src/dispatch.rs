@@ -182,12 +182,14 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
 
     let result = match method {
         "write" if !args.is_empty() => {
-            crate::js_net_socket_write(handle, args[0].to_bits() as i64);
+            // #5021 — call the DISTINCT, twin-free symbol directly so the
+            // write reaches ext-net's registry regardless of link order.
+            crate::js_ext_net_socket_write(handle, args[0].to_bits() as i64);
             undefined()
         }
         "end" => {
             let chunk = args.first().copied().unwrap_or_else(undefined);
-            crate::js_net_socket_end(handle, chunk.to_bits() as i64);
+            crate::js_ext_net_socket_end(handle, chunk.to_bits() as i64);
             undefined()
         }
         "destroy" | "destroySoon" => {

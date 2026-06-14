@@ -1600,11 +1600,19 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         f64::from_bits(0x7FFD_0000_0000_0000u64 | (h as u64 & 0x0000_FFFF_FFFF_FFFF))
     }
     extern "C" {
-        fn js_net_socket_write(handle: i64, buf_ptr: i64);
-        // Issue #1852 — `js_net_socket_end` now takes the optional final
+        // #5021 — route write/end/destroy through perry-ext-net's DISTINCT
+        // `js_ext_net_*` symbols, NOT the shared `js_net_socket_*` names. The
+        // bundled stdlib net exports same-named twins, so in a workspace /
+        // jsruntime build the shared names bind to the bundled twin's EMPTY
+        // socket registry and the command (write bytes / FIN / teardown) is
+        // silently dropped — no `write()` syscall ever fires. The distinct
+        // symbols have no twin and always reach ext-net's own registry.
+        // Mirrors how `js_ext_net_destroy_socket` was already split out (#5010).
+        fn js_ext_net_socket_write(handle: i64, buf_ptr: i64);
+        // Issue #1852 — `js_ext_net_socket_end` takes the optional final
         // chunk (NA_JSV bits) so `socket.end(data)` writes before FIN.
-        fn js_net_socket_end(handle: i64, chunk_bits: i64);
-        fn js_net_socket_destroy(handle: i64);
+        fn js_ext_net_socket_end(handle: i64, chunk_bits: i64);
+        fn js_ext_net_destroy_socket(handle: i64);
         fn js_net_socket_on(handle: i64, event_ptr: i64, cb_ptr: i64);
         fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64);
         fn js_net_socket_upgrade_tls(
@@ -1646,9 +1654,10 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
     match method {
         "write" if !args.is_empty() => {
             // Issue #1131 — pass the full NaN-box bits, not the
-            // pre-stripped pointer. perry-ext-net's js_net_socket_write
-            // now probes Buffer-vs-string itself.
-            js_net_socket_write(handle, args[0].to_bits() as i64);
+            // pre-stripped pointer. ext-net's write probes Buffer-vs-string
+            // itself. #5021 — distinct symbol so the bytes can't be dropped
+            // into the bundled twin's empty registry.
+            js_ext_net_socket_write(handle, args[0].to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "end" => {
@@ -1658,11 +1667,11 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
                 .first()
                 .copied()
                 .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
-            js_net_socket_end(handle, chunk.to_bits() as i64);
+            js_ext_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "destroy" | "destroySoon" => {
-            js_net_socket_destroy(handle);
+            js_ext_net_destroy_socket(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "on" | "addListener" if args.len() >= 2 => {

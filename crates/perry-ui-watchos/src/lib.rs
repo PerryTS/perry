@@ -604,6 +604,16 @@ pub extern "C" fn perry_ui_state_bind_toggle(state_handle: i64, toggle_handle: i
     state::bind_toggle(state_handle, toggle_handle);
 }
 
+/// Set an existing Toggle's on/off state (issue #5076). `on` is 0 for
+/// off, non-zero for on. Updates the node's `toggle_on` flag so the
+/// next host render reflects the new state.
+#[no_mangle]
+pub extern "C" fn perry_ui_toggle_set_state(handle: i64, on: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.toggle_on = on != 0;
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_state_bind_text_template(
     text_handle: i64,

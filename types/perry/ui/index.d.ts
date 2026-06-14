@@ -391,6 +391,9 @@ export function SecureField(placeholder: string, onChange: (value: string) => vo
 /** Boolean toggle switch. */
 export function Toggle(label: string, onChange: (value: boolean) => void): Widget;
 
+/** Programmatically set a Toggle's on/off state. Pass `1` for on, `0` for off. */
+export function toggleSetState(widget: Widget, on: number): void;
+
 /** Numeric slider. */
 export function Slider(min: number, max: number, onChange: (value: number) => void): Widget;
 
