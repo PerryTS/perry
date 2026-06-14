@@ -121,8 +121,16 @@ pub(crate) fn dispatch_expect_continue(
         }
         let handle = tokio::runtime::Handle::current();
         let jh = handle.spawn(async move {
-            if let Err(error_message) =
-                run_exchange(request_handle, host, port, head, use_chunked, body_rx, deadline).await
+            if let Err(error_message) = run_exchange(
+                request_handle,
+                host,
+                port,
+                head,
+                use_chunked,
+                body_rx,
+                deadline,
+            )
+            .await
             {
                 push_event(PendingHttpEvent::Error {
                     request_handle,
@@ -154,10 +162,7 @@ async fn run_exchange(
     .await
     .map_err(|_| "request timed out".to_string())?
     .map_err(|e| e.to_string())?;
-    stream
-        .write_all(&head)
-        .await
-        .map_err(|e| e.to_string())?;
+    write_all(&mut stream, &head, deadline).await?;
 
     // Read until the first complete header block. A 1xx status (e.g.
     // `100 Continue`) drives the `'continue'` event; a final (>=200)
@@ -198,10 +203,7 @@ async fn run_exchange(
         } else {
             body
         };
-        stream
-            .write_all(&framed)
-            .await
-            .map_err(|e| e.to_string())?;
+        write_all(&mut stream, &framed, deadline).await?;
     }
 
     // Read the rest of the (final) response to EOF — the head forces
@@ -244,6 +246,19 @@ async fn read_chunk(
     deadline: std::time::Duration,
 ) -> Result<usize, String> {
     tokio::time::timeout(deadline, stream.read(chunk))
+        .await
+        .map_err(|_| "request timed out".to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Deadline-bounded `write_all` so a stalled peer can't hang the exchange
+/// even when the request set a `timeout`.
+async fn write_all(
+    stream: &mut tokio::net::TcpStream,
+    bytes: &[u8],
+    deadline: std::time::Duration,
+) -> Result<(), String> {
+    tokio::time::timeout(deadline, stream.write_all(bytes))
         .await
         .map_err(|_| "request timed out".to_string())?
         .map_err(|e| e.to_string())

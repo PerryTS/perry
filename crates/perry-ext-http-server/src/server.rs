@@ -1040,7 +1040,10 @@ async fn handle_request(
                 s.listeners.get("request").cloned().unwrap_or_default(),
                 s.handler,
                 s.keep_alive_timeout,
-                s.listeners.get("checkContinue").cloned().unwrap_or_default(),
+                s.listeners
+                    .get("checkContinue")
+                    .cloned()
+                    .unwrap_or_default(),
             ),
             None => (Vec::new(), 0, 5_000.0, Vec::new()),
         };
