@@ -358,6 +358,73 @@ fn effective_constructor_param_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) 
     0
 }
 
+/// True when the standalone `<class>_constructor` symbol exists (so the
+/// recursion-guard / capture-collision redirect can call it instead of
+/// inlining). Mirrors the lookup in `call_local_constructor_symbol`.
+fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
+    let ctor_method_name = format!("{}_constructor", class.name);
+    ctx.methods
+        .contains_key(&(class.name.clone(), ctor_method_name))
+}
+
+/// Collect every LocalId DECLARED (via `Stmt::Let`, incl. nested in compound
+/// statements) within a constructor body. Used to detect the wall-44 inline
+/// collision: a ctor local whose id is also a capture of the enclosing closure.
+/// Mirrors `collect_let_ids` in `class_members.rs`.
+fn collect_decl_local_ids(stmts: &[perry_hir::Stmt], out: &mut std::collections::HashSet<u32>) {
+    use perry_hir::Stmt;
+    for s in stmts {
+        match s {
+            Stmt::Let { id, .. } => {
+                out.insert(*id);
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_decl_local_ids(then_branch, out);
+                if let Some(e) = else_branch {
+                    collect_decl_local_ids(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_decl_local_ids(body, out)
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init_stmt) = init {
+                    if let Stmt::Let { id, .. } = init_stmt.as_ref() {
+                        out.insert(*id);
+                    }
+                }
+                collect_decl_local_ids(body, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_decl_local_ids(body, out);
+                if let Some(c) = catch {
+                    collect_decl_local_ids(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_decl_local_ids(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_decl_local_ids(&case.body, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_decl_local_ids(std::slice::from_ref(body.as_ref()), out)
+            }
+            _ => {}
+        }
+    }
+}
+
 fn call_local_constructor_symbol(
     ctx: &mut FnCtx<'_>,
     class: &perry_hir::Class,
@@ -945,7 +1012,26 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // same constructor body forever at compile time. Use the standalone
     // constructor symbol for the nested construction instead; it preserves
     // the ordinary initializer path without recursively cloning HIR.
-    if ctx.class_stack.iter().any(|active| active == class_name) {
+    //
+    // Same redirect when inlining would alias the constructor's own locals
+    // with the ENCLOSING closure's captures. `class F { constructor(){ const
+    // t = this; t.mk = () => new F(t._cc); } }` lifts the arrow to a separate
+    // function that captures `t` (the `const t = this` alias). When `new F`
+    // inside that arrow is inlined, the inlined ctor's `const t = this` reuses
+    // the same LocalId — which is a capture in this closure — so reads/writes
+    // of `t` resolve through `js_closure_get_capture_f64` and land on the
+    // CAPTURED outer instance instead of the freshly-allocated one (the new
+    // instance gets no fields → wall 44 `BaseContext.setValue` → "Cannot read
+    // properties of undefined"). The standalone symbol takes `this` as an
+    // explicit parameter, so it is immune to the collision.
+    let ctor_alias_collision = !ctx.closure_captures.is_empty()
+        && local_constructor_symbol_exists(ctx, class)
+        && class.constructor.as_ref().is_some_and(|c| {
+            let mut ids: std::collections::HashSet<u32> = c.params.iter().map(|p| p.id).collect();
+            collect_decl_local_ids(&c.body, &mut ids);
+            ids.iter().any(|id| ctx.closure_captures.contains_key(id))
+        });
+    if ctx.class_stack.iter().any(|active| active == class_name) || ctor_alias_collision {
         call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
         return Ok(obj_box);
     }

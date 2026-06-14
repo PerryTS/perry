@@ -72,6 +72,60 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
             }
             let Some(fn_name) = resolved_fn else {
+                // Static resolution failed. For a class with a DYNAMIC parent
+                // (`class X extends _mod.default` — the interop ESM
+                // default-export base, wall 38/42), `extends_name` is "default"
+                // and never resolves to a compile-time class, so the chain walk
+                // above finds nothing. Dispatch `super.method(...)` at runtime
+                // via the registered parent edge instead of returning the bogus
+                // numeric `0.0` (which made `super.getRequestHandler()` in
+                // Next.js's `NextNodeServer.makeRequestHandler` yield a number,
+                // and the handler it built threw "value is not a function").
+                let has_dyn_parent = ctx
+                    .classes
+                    .get(&current_class_name)
+                    .map(|c| c.extends_expr.is_some())
+                    .unwrap_or(false);
+                let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
+                if has_dyn_parent && cid != 0 {
+                    let this_box = match ctx.this_stack.last().cloned() {
+                        Some(slot) => ctx.block().load(DOUBLE, &slot),
+                        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                    };
+                    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered_args.push(lower_expr(ctx, a)?);
+                    }
+                    let (args_ptr, args_len) = if lowered_args.is_empty() {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let n = lowered_args.len();
+                        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                        for (i, v) in lowered_args.iter().enumerate() {
+                            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                            ctx.block().store(DOUBLE, v, &slot);
+                        }
+                        let ptr_reg = ctx.block().next_reg();
+                        ctx.block().emit_raw(format!(
+                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                            ptr_reg, n, buf
+                        ));
+                        (ptr_reg, n.to_string())
+                    };
+                    let name_global = emit_string_literal_global(ctx, method);
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_super_method_call_dynamic",
+                        &[
+                            (I32, &cid.to_string()),
+                            (PTR, &name_global),
+                            (I64, &method.len().to_string()),
+                            (DOUBLE, &this_box),
+                            (PTR, &args_ptr),
+                            (I64, &args_len),
+                        ],
+                    ));
+                }
                 for a in args {
                     let _ = lower_expr(ctx, a)?;
                 }

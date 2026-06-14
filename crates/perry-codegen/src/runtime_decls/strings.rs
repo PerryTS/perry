@@ -1123,6 +1123,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // class_id from the value (ClassRef payload or ObjectHeader.class_id)
     // and wires the (child, parent) edge into CLASS_REGISTRY.
     module.declare_function("js_register_class_parent_dynamic", VOID, &[I32, DOUBLE]);
+    // Read back the parent VALUE stashed by `js_register_class_parent_dynamic`
+    // at decl time, so `super()` resolves the parent from the module-init scope
+    // instead of re-evaluating its extends expression in the constructor scope.
+    module.declare_function("js_get_dynamic_parent_value", DOUBLE, &[I32]);
     // Decl-site snapshot of a function-nested class's captured locals —
     // consumed by the dynamic-construction replay (`new mod.C()`).
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);
@@ -1130,6 +1134,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
     // `super(...spread)` — dynamic-arity ancestor ctor invocation on `this`.
     module.declare_function("js_super_construct_apply", VOID, &[I32, DOUBLE, DOUBLE]);
+    // `super.method(...)` on a class with a runtime-registered (dynamic) parent
+    // — resolve the method from the registered parent chain and call on `this`.
+    module.declare_function(
+        "js_super_method_call_dynamic",
+        DOUBLE,
+        &[I32, PTR, I64, DOUBLE, PTR, I64],
+    );
     module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
     // Issue #711 part 2: prototype-based class declaration via
     // `<func>.prototype = <obj>`. Binds an object as the function's

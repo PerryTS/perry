@@ -627,7 +627,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
-        throw new Error('require() is not supported: ' + specifier);
+        throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
     }}
     Object.defineProperty(require, 'name', {{
         value: 'require',

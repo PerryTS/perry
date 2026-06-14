@@ -3635,19 +3635,42 @@ pub unsafe extern "C" fn js_native_call_method(
                         has_rest,
                     );
                 }
+                // Refs #420: walk the parent chain via the class registry. Per
+                // JS spec, `subInstance.method()` for a method defined on a
+                // parent dispatches to the parent's implementation — drizzle's
+                // `serial("id").primaryKey()` where primaryKey is on
+                // ColumnBuilder (grandparent) but the receiver is a
+                // PgSerialBuilder (grandchild). The codegen-side dispatch tower
+                // in `lower_call.rs` only registers classes the importing module
+                // knows about; for not-by-name-imported subclasses (return
+                // values of imported functions) we depend on this runtime walk.
+                //
+                // DEADLOCK SAFETY: resolve the target under the registry READ
+                // lock, then DROP the lock before invoking the method body.
+                // A user method body can lazily init a module (function-local
+                // `require()` — Next.js `getServerImpl()` → `require('./next-
+                // server')`) whose top-level `class` declarations call
+                // `js_register_class_method` → a registry WRITE lock. std
+                // `RwLock` is not re-entrant, so holding the read guard across
+                // the call deadlocked the (single) main thread.
+                enum ResolvedMethod {
+                    Vtable {
+                        func_ptr: usize,
+                        param_count: u32,
+                        has_synthetic_arguments: bool,
+                        has_rest: bool,
+                        this_i64: i64,
+                    },
+                    // #711 part 2 / #321: a method that is an own-property of a
+                    // registered prototype object (`Function.prototype = X`,
+                    // effect's `EffectPrototype.pipe`).
+                    ProtoClosure {
+                        field_bits: u64,
+                    },
+                }
+                let mut resolved_method: Option<ResolvedMethod> = None;
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                     if let Some(ref reg) = *registry {
-                        // Refs #420: walk the parent chain via the class
-                        // registry. Per JS spec, `subInstance.method()` for
-                        // a method defined on a parent dispatches to the
-                        // parent's implementation — drizzle's
-                        // `serial("id").primaryKey()` where primaryKey is on
-                        // ColumnBuilder (grandparent) but the receiver is a
-                        // PgSerialBuilder (grandchild). The codegen-side
-                        // dispatch tower in `lower_call.rs` only registers
-                        // classes the importing module knows about; for
-                        // not-by-name-imported subclasses (return values of
-                        // imported functions) we depend on this runtime walk.
                         let mut cur_cid = class_id;
                         let mut depth = 0u32;
                         while depth < 32 {
@@ -3661,26 +3684,16 @@ pub unsafe extern "C" fn js_native_call_method(
                                         entry.has_synthetic_arguments,
                                         entry.has_rest,
                                     );
-                                    let this_i64 = jsval.as_pointer::<u8>() as i64;
-                                    return call_vtable_method(
-                                        entry.func_ptr,
-                                        this_i64,
-                                        args_ptr,
-                                        args_len,
-                                        entry.param_count,
-                                        entry.has_synthetic_arguments,
-                                        entry.has_rest,
-                                    );
+                                    resolved_method = Some(ResolvedMethod::Vtable {
+                                        func_ptr: entry.func_ptr,
+                                        param_count: entry.param_count,
+                                        has_synthetic_arguments: entry.has_synthetic_arguments,
+                                        has_rest: entry.has_rest,
+                                        this_i64: jsval.as_pointer::<u8>() as i64,
+                                    });
+                                    break;
                                 }
                             }
-                            // Issue #711 part 2: if this class id has a
-                            // registered prototype object (from
-                            // `Function.prototype = X`), look up the
-                            // method as a regular property of that
-                            // object. Effect's `EffectPrototype.pipe()`
-                            // and friends are own-properties of the
-                            // proto object; the value is a closure that
-                            // expects `this = receiver`.
                             let proto_obj = class_prototype_object(cur_cid);
                             if !proto_obj.is_null() {
                                 let method_key = crate::string::js_string_from_bytes(
@@ -3692,37 +3705,10 @@ pub unsafe extern "C" fn js_native_call_method(
                                     method_key as *const crate::StringHeader,
                                 );
                                 if !field_val.is_undefined() && !field_val.is_null() {
-                                    // #321 (effect Context/Layer/Scope): the
-                                    // method we just read is an *inherited*
-                                    // own-property of the prototype object
-                                    // `proto_obj`, not of the receiver. When
-                                    // it is an object-literal method
-                                    // (`captures_this:true`), its reserved
-                                    // capture slot was baked to the PROTOTYPE
-                                    // at construction time, so invoking it
-                                    // with `IMPLICIT_THIS = receiver` still
-                                    // reads `this === proto`. Rebind the
-                                    // closure's `this` slot to the receiver
-                                    // first (same treatment as the symbol path
-                                    // #1969 and the `#809` arm below).
-                                    // `clone_closure_rebind_this` is a no-op
-                                    // for closures that don't capture `this`
-                                    // (e.g. effect's `EffectPrototype.pipe`,
-                                    // which reads `this` from `IMPLICIT_THIS`)
-                                    // and for non-closure values, so those
-                                    // paths are unaffected.
-                                    let bound = crate::closure::clone_closure_rebind_this(
-                                        field_val.bits(),
-                                        f64::from_bits(jsval.bits()),
-                                    );
-                                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
-                                    let result = crate::closure::js_native_call_value(
-                                        f64::from_bits(bound),
-                                        args_ptr,
-                                        args_len,
-                                    );
-                                    IMPLICIT_THIS.with(|c| c.set(prev_this));
-                                    return result;
+                                    resolved_method = Some(ResolvedMethod::ProtoClosure {
+                                        field_bits: field_val.bits(),
+                                    });
+                                    break;
                                 }
                             }
                             match get_parent_class_id(cur_cid) {
@@ -3734,6 +3720,46 @@ pub unsafe extern "C" fn js_native_call_method(
                             }
                         }
                     }
+                }
+                // Registry guard released — safe to run the method body (which
+                // may register classes via lazy module init).
+                match resolved_method {
+                    Some(ResolvedMethod::Vtable {
+                        func_ptr,
+                        param_count,
+                        has_synthetic_arguments,
+                        has_rest,
+                        this_i64,
+                    }) => {
+                        return call_vtable_method(
+                            func_ptr,
+                            this_i64,
+                            args_ptr,
+                            args_len,
+                            param_count,
+                            has_synthetic_arguments,
+                            has_rest,
+                        );
+                    }
+                    Some(ResolvedMethod::ProtoClosure { field_bits }) => {
+                        // #321 (effect Context/Layer/Scope): rebind the closure's
+                        // `this` slot to the receiver — `clone_closure_rebind_this`
+                        // is a no-op for closures that don't capture `this` and for
+                        // non-closure values, so those paths are unaffected.
+                        let bound = crate::closure::clone_closure_rebind_this(
+                            field_bits,
+                            f64::from_bits(jsval.bits()),
+                        );
+                        let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                        let result = crate::closure::js_native_call_value(
+                            f64::from_bits(bound),
+                            args_ptr,
+                            args_len,
+                        );
+                        IMPLICIT_THIS.with(|c| c.set(prev_this));
+                        return result;
+                    }
+                    None => {}
                 }
                 // #809: independent prototype-object resolution. The walk
                 // above only runs when `CLASS_VTABLE_REGISTRY` is `Some` —

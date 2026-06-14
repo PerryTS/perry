@@ -353,8 +353,22 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
                         // in which case hoisting would sever the closure (#2310).
                         let block_text = std::str::from_utf8(&bytes[line_start..r]).unwrap_or("");
                         let body_text = std::str::from_utf8(&bytes[body_start..r]).unwrap_or("");
+                        // The `extends` clause head (between the class name and the
+                        // body's opening `{`) can reference an IIFE-local require
+                        // alias, e.g. `class Derived extends _suffix.default { ... }`
+                        // (the Next.js `NextNodeServer extends base-server.default`
+                        // interop pattern). Hoisting the class above its
+                        // `const _suffix = _interop(require(...))` evaluates the
+                        // parent before the alias is assigned, so the dynamic
+                        // parent-registration sees `undefined` and throws "Class
+                        // extends value is not a constructor". Treat an extends-head
+                        // reference to an IIFE-local the same as a body reference:
+                        // keep the class inside the IIFE at its source position.
+                        let extends_head =
+                            std::str::from_utf8(&bytes[name_end..body_start]).unwrap_or("");
                         let references_iife_local =
-                            class_body_references_any(body_text, &iife_locals);
+                            class_body_references_any(body_text, &iife_locals)
+                                || class_body_references_any(extends_head, &iife_locals);
                         if !hoisted_names.contains(&class_name) && !references_iife_local {
                             hoisted_blocks.push(block_text);
                             hoisted_names.push(class_name);

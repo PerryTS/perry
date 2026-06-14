@@ -229,6 +229,149 @@ pub unsafe extern "C" fn js_super_construct_apply(
 static KEEP_JS_SUPER_CONSTRUCT_APPLY: unsafe extern "C" fn(u32, f64, f64) -> f64 =
     js_super_construct_apply;
 
+/// Dynamic `super.method(...)` dispatch for a class whose parent was registered
+/// at runtime (`class X extends _mod.default` — wall 38/42). Static codegen
+/// can't resolve the parent method (the textual parent name is "default", which
+/// matches no compile-time class), so it falls back to this helper: resolve
+/// `method_name` starting from the REGISTERED parent of `child_class_id` (NOT
+/// the child itself — otherwise the child's own override is re-selected and
+/// `super.m()` recurses forever) and invoke it on `this` with a flat f64 arg
+/// buffer. Returns `undefined` when the method is not found on the parent chain.
+///
+/// # Safety
+/// `name_ptr` must be valid for `name_len` bytes; `args_ptr` for `args_len`
+/// `f64`s (or null when `args_len == 0`).
+#[no_mangle]
+pub unsafe extern "C" fn js_super_method_call_dynamic(
+    child_class_id: u32,
+    name_ptr: *const u8,
+    name_len: usize,
+    this_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if child_class_id == 0 || name_ptr.is_null() {
+        return undef;
+    }
+    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        Ok(s) => s,
+        Err(_) => return undef,
+    };
+    let parent_cid = match crate::object::get_parent_class_id(child_class_id) {
+        Some(p) if p != 0 => p,
+        _ => return undef,
+    };
+    // `lookup_class_method_in_chain` resolves under the registry read lock and
+    // DROPS it before returning — the invoked method body may take the registry
+    // write lock (a lazy `require()` registering a module class), so we must not
+    // hold it across the call (the wall-37 deadlock).
+    let resolved = super::class_registry::lookup_class_method_in_chain(parent_cid, name);
+    if let Some((func_ptr, param_count, has_synth, has_rest)) = resolved {
+        let this_raw = (this_value.to_bits() & crate::value::POINTER_MASK) as i64;
+        return call_vtable_method(
+            func_ptr,
+            this_raw,
+            args_ptr,
+            args_len,
+            param_count,
+            has_synth,
+            has_rest,
+        );
+    }
+    // The parent may be a function-style class whose method lives in the
+    // runtime prototype-method registry (`Base.prototype.m = ...` via
+    // `js_register_function_prototype_method`, or a synthetic prototype object
+    // wired by `js_set_function_prototype`) rather than the class vtable —
+    // these never land in `lookup_class_method_in_chain`. `lookup_prototype_method`
+    // walks the parent chain and drops its read lock before returning, so the
+    // invoked body may re-take the registry lock without deadlocking (wall-37).
+    if let Some(method_value) = super::class_registry::lookup_prototype_method(parent_cid, name) {
+        let prev_this = super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits()));
+        let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
+        super::IMPLICIT_THIS.with(|c| c.set(prev_this));
+        return result;
+    }
+    undef
+}
+
+/// Keepalive anchor (generated-code-only callee).
+#[used]
+static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC: unsafe extern "C" fn(
+    u32,
+    *const u8,
+    usize,
+    f64,
+    *const f64,
+    usize,
+) -> f64 = js_super_method_call_dynamic;
+
+/// Run the constructor of class `parent_cid` (or its nearest ctor-bearing
+/// ancestor) on the EXISTING `this`, taking arguments from a flat f64 buffer —
+/// the codegen `super()` ABI. Returns `true` when a constructor was found and
+/// invoked.
+///
+/// Used by `js_fetch_or_value_super` for the `class X extends _mod.default`
+/// case where the dynamic parent value resolves to a ClassRef (a real
+/// registered Perry class — Next.js `NextNodeServer extends base-server`'s
+/// default `Server`). A ClassRef is NaN-tagged, so it is NOT callable via
+/// `js_native_call_value` (that path early-returns `undefined`); the base
+/// constructor would never run and parent `this.<field> = …` writes would be
+/// lost. This invokes the class constructor directly, mirroring
+/// `js_super_construct_apply` but starting from `parent_cid` inclusive and
+/// reading a flat arg buffer instead of an array handle.
+///
+/// # Safety
+/// `this_raw` must be a valid `ObjectHeader` pointer (as `i64`); `args_ptr`
+/// must point to `args_len` valid `f64`s (or be null when `args_len == 0`).
+pub(crate) unsafe fn run_class_constructor_on_this_flat(
+    parent_cid: u32,
+    this_raw: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> bool {
+    if this_raw == 0 || parent_cid == 0 {
+        return false;
+    }
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let mut cur = parent_cid;
+    let mut depth = 0usize;
+    while cur != 0 && depth < 64 {
+        if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
+            let caps = class_capture_values(cur).unwrap_or_default();
+            let user_params = (total_params as usize).saturating_sub(caps.len());
+            let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
+            for i in 0..user_params {
+                if !args_ptr.is_null() && i < args_len {
+                    final_args.push(*args_ptr.add(i));
+                } else {
+                    final_args.push(undef);
+                }
+            }
+            for bits in &caps {
+                final_args.push(f64::from_bits(*bits));
+            }
+            let _ = call_vtable_method(
+                ctor_ptr,
+                this_raw,
+                final_args.as_ptr(),
+                final_args.len(),
+                total_params,
+                false,
+                false,
+            );
+            return true;
+        }
+        let next = crate::object::get_parent_class_id(cur).unwrap_or(0);
+        if next == cur {
+            break;
+        }
+        cur = next;
+        depth += 1;
+    }
+    false
+}
+
 /// Append the spread of `value` to `target` (array handle), handling BOTH
 /// real arrays AND array-likes (Perry's `arguments` object is an
 /// ObjectHeader with "0".."n-1" + "length" props — `super(...arguments)`

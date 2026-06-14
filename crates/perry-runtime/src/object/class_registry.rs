@@ -269,6 +269,20 @@ pub static CLASS_DECL_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = R
 /// Stored as `usize` (raw address) for Send + Sync; converted back at use.
 pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 
+/// Maps a child class_id to the raw NaN-boxed bits of the parent constructor
+/// VALUE that `js_register_class_parent_dynamic` evaluated at class-definition
+/// time. For `class X extends _mod.default {}` (the interop ESM
+/// default-export-class pattern), the extends expression references a require
+/// alias (`_mod`) that is an IIFE-local — bound only in the module-init scope.
+/// The decl-time registration evaluates it there correctly, so we stash the
+/// resulting value here keyed by the child's class id. `super()` then reads it
+/// back via `js_get_dynamic_parent_value` instead of re-evaluating the extends
+/// expression inside the constructor (where the IIFE-local alias is NOT
+/// captured and the member read would throw "Cannot read properties of
+/// undefined"). Stored as raw `u64` bits (Send + Sync), covering both ClassRef
+/// (INT32-tagged) and object/closure (POINTER-tagged) parents.
+pub static CLASS_DYNAMIC_PARENT_VALUE: RwLock<Option<HashMap<u32, u64>>> = RwLock::new(None);
+
 pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
     if class_id == 0 || proto_ptr.is_null() {
         return;
@@ -3111,6 +3125,20 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         }
     }
 
+    // The dynamic-parent value stash (`class X extends _mod.default`) holds
+    // raw NaN-boxed parent-constructor bits. For a ClassRef (INT32-tagged)
+    // parent this is inert, but a function/object parent (Effect's
+    // `extends <runtime value>`) is a live heap pointer that a moving GC must
+    // visit + forward — otherwise `js_get_dynamic_parent_value` later hands
+    // `super()` a stale pointer.
+    if let Ok(mut guard) = CLASS_DYNAMIC_PARENT_VALUE.write() {
+        if let Some(map) = guard.as_mut() {
+            for value_bits in map.values_mut() {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
+        }
+    }
+
     scan_class_symbol_member_keys_mut(visitor);
     scan_function_class_id_keys_mut(visitor);
 }
@@ -4345,6 +4373,24 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// recursive helper that returns its receiver can't create a cycle.
 #[no_mangle]
 pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: f64) {
+    // Stash the parent VALUE keyed by child class id so `super()` can read it
+    // back (`js_get_dynamic_parent_value`) instead of re-evaluating the extends
+    // expression inside the constructor scope. The decl-time call here runs in
+    // the module-init scope where the extends expression's free variables
+    // (require aliases such as `_suffix` in `class X extends _suffix.default`)
+    // are bound. Skip undefined (the bare placeholder) — a genuinely undefined
+    // superclass throws below anyway.
+    {
+        const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+        let bits = parent_value.to_bits();
+        if bits != TAG_UNDEFINED && class_id != 0 {
+            let mut guard = CLASS_DYNAMIC_PARENT_VALUE.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(HashMap::new());
+            }
+            guard.as_mut().unwrap().insert(class_id, bits);
+        }
+    }
     // A globalThis builtin constructor closure is a valid superclass
     // (`class CloseEvent extends Event` — the `ws` package's WebSocket
     // events). Resolve it through the same name table the dynamic
@@ -4462,6 +4508,27 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
             // only inheritance link for a function-valued superclass.
             class_parent_closure_root_store(class_id, ptr as usize);
         }
+    }
+}
+
+/// Read back the parent constructor value stashed at class-definition time by
+/// `js_register_class_parent_dynamic` (see `CLASS_DYNAMIC_PARENT_VALUE`).
+/// `super()` in a `class X extends <runtime-value>` body uses this so the
+/// parent is resolved from the value captured in the module-init scope, not
+/// re-evaluated in the constructor scope (where an IIFE-local require alias
+/// like `_suffix` in `extends _suffix.default` is not in scope). Returns
+/// `undefined` when nothing was stashed for this class id — the caller then
+/// falls back to re-evaluating its extends expression.
+#[no_mangle]
+pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if class_id == 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let guard = CLASS_DYNAMIC_PARENT_VALUE.read().unwrap();
+    match guard.as_ref().and_then(|m| m.get(&class_id)) {
+        Some(&bits) => f64::from_bits(bits),
+        None => f64::from_bits(TAG_UNDEFINED),
     }
 }
 

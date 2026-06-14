@@ -290,6 +290,27 @@ pub fn lower_class_decl(
             // this keeps the colliding-name case on par with the rest.
             if parent_name == name {
                 (None, None, None, None)
+            } else if parent_name == "default" {
+                // `class X extends _mod.default` — the interop ESM
+                // default-export-class pattern (Next.js `NextNodeServer
+                // extends base-server`'s default `Server`). The trailing
+                // property `default` never resolves through `lookup_class`,
+                // and a `.default` export is always a real user/registered
+                // class — never a native-module member like `http.Agent`
+                // (which inherits via a *named* property and is handled by
+                // the colliding-name / parentless branches). Route through
+                // the dynamic `extends_expr` path so `super(opts)`
+                // re-evaluates the alias at construction time and runs the
+                // base constructor, and the decl-time
+                // `RegisterClassParentDynamic` wires the real parent edge
+                // (inherited methods / `instanceof`). The companion hoist
+                // guard in `extract_top_level_class_decls` keeps this class
+                // inside the IIFE so the require alias is assigned before the
+                // registration runs.
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (None, Some(parent_name), None, None),
+                }
             } else {
                 // Refs #488 drizzle-sqlite: also try resolving the parent
                 // class by name across modules. Pre-fix the Member arm set
@@ -1271,6 +1292,16 @@ pub fn lower_class_from_ast(
             // the non-colliding native-member-base behavior.
             if parent_name == name {
                 (None, None, None, None)
+            } else if parent_name == "default" {
+                // `class X extends _mod.default` — the interop ESM
+                // default-export-class pattern. Keep in lockstep with the
+                // matching `.default` arm in `lower_class_decl` above: route
+                // through `extends_expr` so `super()` re-evaluates the alias
+                // at construction time and the parent edge is registered.
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (None, Some(parent_name), None, None),
+                }
             } else {
                 (
                     ctx.lookup_class(&parent_name),

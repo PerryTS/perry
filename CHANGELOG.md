@@ -1,3 +1,17 @@
+## v0.5.1168 — Next.js standalone bring-up: walls 36–44 (rebased on main)
+
+Dynamic-parent classes, forward-capture, super.method, cjs export-hint, self-new in capturing closure. (Same content as PR #5125, re-applied cleanly onto current main.)
+
+- **36** pre-register sibling class names in function-expression bodies (cjs IIFE forward refs).
+- **37** don't hold the class-vtable read lock across a method body (lazy `require()` write-lock deadlock).
+- **38** `class X extends _mod.default` runs the base constructor + inherits: cjs hoist guard scans the `extends` head; `.default` member-extends routes through `extends_expr`; super/`new` use the decl-time-stashed parent (`CLASS_DYNAMIC_PARENT_VALUE`) and invoke a ClassRef parent via `run_class_constructor_on_this_flat`.
+- **39** ignore the dead `0 && (module.exports = {…})` Babel export hint (statement-boundary guard) so it doesn't override real `_export` getters.
+- **40** dynamic `require()` of an unresolvable specifier throws `MODULE_NOT_FOUND` (Node parity).
+- **41** closures forward-capture later-declared function-scope `let`/`const` (shared `pre_register_forward_captured_lets`).
+- **42** `super.method()` on a dynamic-parent class dispatches at runtime (`js_super_method_call_dynamic`).
+- **43** forward-capture of destructured `let`/`const` + cjs-IIFE bodies.
+- **44** `new SelfClass(...)` inside a `this`-alias-capturing closure (redirect to the standalone ctor symbol).
+
 ## v0.5.1167 — fix(runtime): relink node:http/net — restore `js_node_system_error_value` (#5124)
 
 Release-blocking regression fix folded in via #5124. PR #5112 (Next.js

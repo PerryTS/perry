@@ -477,6 +477,32 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
             const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+            const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+            // A dynamic parent that resolved to a ClassRef (INT32-tagged) is a
+            // real registered Perry class — `class X extends _mod.default`
+            // where the default export is a user class (Next.js
+            // `NextNodeServer extends base-server`'s default `Server`). A
+            // ClassRef is NaN-tagged, so `js_native_call_value` below would
+            // early-return `undefined` (it treats NaN as not callable) and the
+            // base constructor would never run — parent `this.<field> = …`
+            // writes (e.g. `this.nextConfig = opts`) would be lost. Invoke the
+            // class constructor directly on `this` instead.
+            if bits & TAG_MASK == INT32_TAG {
+                let parent_cid = bits as u32;
+                if let Some(obj) = subclass_this_object_ptr(this_box) {
+                    super::class_constructors::run_class_constructor_on_this_flat(
+                        parent_cid, obj as i64, args_ptr, args_len,
+                    );
+                }
+                // A ClassRef is NaN-tagged and is NEVER callable via
+                // `js_native_call_value` (it early-returns `undefined`). Return
+                // here unconditionally — whether or not a constructor was found
+                // and run — instead of falling through to the closure-dispatch
+                // path below, which would (a) silently produce `undefined` and
+                // (b) skip the `parent_closure_in_chain` recovery that only
+                // applies to closure/object parents, not a ClassRef.
+                return undef;
+            }
             let usable = if bits & TAG_MASK == POINTER_TAG {
                 let p = (bits & PTR_MASK) as usize;
                 // A real callability test: a closure, or a per-evaluation class

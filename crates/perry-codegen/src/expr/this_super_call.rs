@@ -279,10 +279,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 lowered_args.push(lower_expr(ctx, a)?);
                             }
 
-                            // Evaluate the parent expression (the runtime function
-                            // value). The HIR layer already lowered it as part of
-                            // class.extends_expr.
-                            let parent_val = lower_expr(ctx, extends_expr)?;
+                            // Resolve the parent constructor VALUE. The decl-time
+                            // `js_register_class_parent_dynamic` already evaluated
+                            // `extends_expr` in the module-init scope (where its free
+                            // variables — e.g. a require alias `_suffix` in
+                            // `class X extends _suffix.default` — are bound) and
+                            // stashed the result keyed by this class's id. Prefer the
+                            // stashed value: re-evaluating `extends_expr` HERE runs in
+                            // the constructor scope, where an IIFE-local require alias
+                            // is NOT captured, so the member read would throw "Cannot
+                            // read properties of undefined". Fall back to a fresh eval
+                            // only when the class id is unknown at codegen time (the
+                            // value was never stashed) or the stash is empty.
+                            // The decl-time `RegisterClassParentDynamic` runs at
+                            // module init, before any `new X()`, so a class that
+                            // reaches this branch has reliably stashed its parent.
+                            // Fall back to a fresh eval only when the class id is
+                            // unknown at codegen time (no stash key).
+                            let parent_val = match ctx.class_ids.get(&current_class_name).copied() {
+                                Some(cid) if cid != 0 => ctx.block().call(
+                                    DOUBLE,
+                                    "js_get_dynamic_parent_value",
+                                    &[(crate::types::I32, &cid.to_string())],
+                                ),
+                                _ => lower_expr(ctx, extends_expr)?,
+                            };
 
                             // Spill args into a contiguous double[] for the
                             // js_native_call_value(ptr, len) ABI. Mirrors the

@@ -600,6 +600,11 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // with that index or higher was defined in the current scope.
     let outer_locals_len = scope_mark.0;
     let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
+    // Forward-captured `let`/`const` boxes pre-registered for THIS fn-expr body
+    // (the cjs `const _cjs = (function(){…})()` wrapper) — see
+    // `pre_register_forward_captured_lets`. Kept out of `hoisted_id_set` and
+    // preallocated directly at the assembly below.
+    let mut forward_boxed_ids: Vec<LocalId> = Vec::new();
     // #4950: undefined-initialised `Stmt::Let`s for `var`s found nested in
     // compound statements — prepended to the lowered body below.
     let mut nested_var_prologue: Vec<Stmt> = Vec::new();
@@ -788,6 +793,16 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                 }
             }
         }
+        // Forward-captured `let`/`const` (incl. destructuring) referenced by an
+        // EARLIER closure than their declaration. The `#4973` pass above only
+        // covers `Pat::Ident` and only when the body has a `function`
+        // declaration; the cjs IIFE's `_export(exports, { SpanKind: () =>
+        // SpanKind })` getter forward-captures the later `const { SpanKind } =
+        // api` (Next.js tracer), which it misses. Shared with arrow / fn-decl
+        // bodies (`lower_fn_body_block_stmt`). Bindings already pre-registered
+        // above are skipped (the `already_in_scope` guard inside).
+        forward_boxed_ids =
+            crate::lower_decl::pre_register_forward_captured_lets(ctx, block, outer_locals_len);
     }
 
     // Lower body with JS hoisting: only function declarations are fully
@@ -809,6 +824,26 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // threw `TypeError: value is not a function`. Function declarations
     // must run before any var-init in the body, then var-inits and other
     // executable statements run in source order.
+    // Pre-register sibling class DECLARATION names so forward references in
+    // earlier statements (and nested closures lowered before the class) resolve
+    // to `ClassRef` rather than the unknown-global sentinel — the same Phase 1.5
+    // that `lower_fn_body_block_stmt` (arrow / fn-decl bodies) performs. Plain
+    // function expressions previously skipped it: the cjs_wrap IIFE is exactly
+    // such an expression, and a class it can't hoist out (one whose body
+    // references an IIFE-local, e.g. `class X extends imp.Base { constructor(){
+    // super(imp2.CONST) } }`) stays inside the IIFE with its export getter
+    // `() => X` lowered ABOVE it — that forward read fell through to
+    // `js_global_get_or_throw_unresolved("X")` → `ReferenceError: X is not
+    // defined` (Next.js RSCPathnameNormalizer). Scoped: restored after the body.
+    let saved_forward_class_names = ctx.forward_class_names.clone();
+    if let Some(ref block) = fn_expr.function.body {
+        for stmt in &block.stmts {
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                ctx.forward_class_names
+                    .insert(class_decl.ident.sym.to_string());
+            }
+        }
+    }
     let mut body = if let Some(ref block) = fn_expr.function.body {
         // #4795: a `using` / `await using` declaration in a function-expression
         // body must be desugared (scope-exit disposal + declaration-time
@@ -842,12 +877,21 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             combined.extend(std::mem::take(&mut nested_var_prologue));
             combined.extend(func_decls);
             combined.extend(exec_stmts);
-            // Issue #633: prealloc-box for sibling/forward captures.
-            if !hoisted_id_set.is_empty() {
-                let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
+            // Issue #633: prealloc-box for sibling/forward captures. Merge the
+            // forward-captured `let`/`const` boxes (kept out of `hoisted_id_set`
+            // to avoid hoist-reordering their non-hoistable declarations) so
+            // their boxes exist before the earlier capturing closure literal.
+            if !hoisted_id_set.is_empty() || !forward_boxed_ids.is_empty() {
+                let mut prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
                     &combined,
                     &hoisted_id_set,
                 );
+                for id in &forward_boxed_ids {
+                    if !prealloc.contains(id) {
+                        prealloc.push(*id);
+                    }
+                }
+                prealloc.sort();
                 if !prealloc.is_empty() {
                     let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
                     with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
@@ -861,6 +905,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         Vec::new()
     };
     ctx.current_strict = outer_strict;
+    ctx.forward_class_names = saved_forward_class_names;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {

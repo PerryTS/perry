@@ -385,6 +385,46 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     let mut search_from = 0usize;
     while let Some(idx) = source[search_from..].find("module.exports") {
         let abs = search_from + idx;
+        // Skip a `module.exports = { … }` that is in EXPRESSION position rather
+        // than at a statement boundary. The dominant case is the
+        // `0 && (module.exports = { X: null, Y: null })` idiom that Babel /
+        // TypeScript emit as a DEAD type-only export hint (the values are `null`
+        // placeholders; the real exports are installed separately, e.g. via
+        // `_export(exports, { X: () => X })` getters). Treating the
+        // placeholder's keys as named exports overrode the real getter exports
+        // with `undefined` (Next.js `built/pages` → `PagesNormalizers`
+        // undefined → "undefined is not a constructor").
+        //
+        // A real top-level assignment is fine even when it's not at column 0
+        // (`exports.a = 1; module.exports = { b, c }`) — accept it at a true
+        // statement boundary. The dead `0 && (module.exports = …)` hint (and
+        // its newline-split form `0 && (\n  module.exports = …\n)`) sits in
+        // EXPRESSION position, so the nearest preceding non-whitespace token —
+        // searched ACROSS newlines, not just the current line — is `(` (or an
+        // operator), never a statement terminator.
+        let prefix = &source[..abs];
+        let prev_token = prefix.bytes().rev().find(|b| !b.is_ascii_whitespace());
+        // Statement terminator / block brace / start-of-file → real statement.
+        let stmt_boundary = matches!(prev_token, None | Some(b';') | Some(b'}') | Some(b'{'));
+        // Operator / open-bracket / comma → the assignment continues an
+        // expression (`0 && (…`, `x =`, `a,`), so it is NOT a real export.
+        let expr_continuation = matches!(
+            prev_token,
+            Some(b'(' | b'&' | b'|' | b',' | b'=' | b'?' | b':' | b'+' | b'-' | b'*' | b'<' | b'>')
+        );
+        // A clean column-0 / ASI line start is also acceptable (e.g. after a
+        // block comment) — but only when the previous token isn't a dangling
+        // expression continuation.
+        let line_start_ok = prefix
+            .bytes()
+            .rev()
+            .take_while(|&b| b != b'\n')
+            .all(|b| b == b' ' || b == b'\t');
+        let accept = stmt_boundary || (line_start_ok && !expr_continuation);
+        if !accept {
+            search_from = abs + 1;
+            continue;
+        }
         // Skip past `module.exports`
         let mut p = abs + "module.exports".len();
         // Skip whitespace
