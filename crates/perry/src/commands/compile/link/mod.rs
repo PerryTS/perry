@@ -882,7 +882,11 @@ pub(super) fn build_and_run_link(
             "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang{}",
             ndk_home,
             host_tag,
-            if cfg!(target_os = "windows") { ".cmd" } else { "" }
+            if cfg!(target_os = "windows") {
+                ".cmd"
+            } else {
+                ""
+            }
         );
         let stub_ok = Command::new(&ndk_clang)
             .args(["-c", "-fPIC", "-target", "aarch64-linux-android24"])

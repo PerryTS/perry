@@ -1927,6 +1927,23 @@ fn collect_module_finish(
         }
     }
 
+    // Detect heap-snapshot / `process.report` usage, the only user-facing APIs
+    // behind the `diagnostics` feature (~95 KB of cold-path JSON serializers +
+    // the `serde_json` pulled only by them). `v8.getHeapSnapshot` /
+    // `v8.writeHeapSnapshot` lower to `NativeMethodCall { method: "…" }`;
+    // `process.report.*` surfaces as `property: "report"`. The env-driven dev
+    // diagnostics (GC-diag / typed-feedback JSON) ride the same feature and
+    // degrade gracefully when off, so they need no detection.
+    {
+        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        if hir_debug.contains("method: \"getHeapSnapshot\"")
+            || hir_debug.contains("method: \"writeHeapSnapshot\"")
+            || hir_debug.contains("property: \"report\"")
+        {
+            ctx.uses_diagnostics = true;
+        }
+    }
+
     // Detect readline usage via process.stdin raw/lifecycle methods. These
     // don't go through an `import 'readline'` statement, so the import-based
     // needs_stdlib detection above misses them.

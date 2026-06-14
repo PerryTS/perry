@@ -1,3 +1,4 @@
+#[cfg(feature = "diagnostics")]
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -225,6 +226,7 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
     snapshot
 }
 
+#[cfg(feature = "diagnostics")]
 pub fn typed_feedback_trace_json() -> serde_json::Value {
     let snapshot = typed_feedback_snapshot();
     serde_json::json!({
@@ -283,6 +285,7 @@ pub fn typed_feedback_trace_json() -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "diagnostics")]
 fn typed_feedback_trace_path_from_env() -> Option<PathBuf> {
     let value = std::env::var("PERRY_TYPED_FEEDBACK_TRACE").ok()?;
     if value.is_empty() || value == "0" {
@@ -295,6 +298,7 @@ fn typed_feedback_trace_path_from_env() -> Option<PathBuf> {
     }
 }
 
+#[cfg(feature = "diagnostics")]
 fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -304,28 +308,38 @@ fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// The extern symbol must ALWAYS be compiled: codegen emits an unconditional
+// call to it from `main` (the program-exit trace-dump hook), so gating the
+// whole function breaks the final link under auto-optimize (`Undefined symbols:
+// _js_typed_feedback_maybe_dump_trace`). Only the JSON-building body is gated
+// behind `diagnostics`; with the feature off this is a no-op (the
+// `PERRY_TYPED_FEEDBACK` trace is a dev diagnostic, absent from size-optimized
+// binaries).
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_maybe_dump_trace() {
-    let Some(path) = typed_feedback_trace_path_from_env() else {
-        return;
-    };
-    if TRACE_DUMPED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let json = typed_feedback_trace_json();
-    let bytes = match serde_json::to_vec_pretty(&json) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            eprintln!("perry typed-feedback trace: failed to encode JSON: {err}");
+    #[cfg(feature = "diagnostics")]
+    {
+        let Some(path) = typed_feedback_trace_path_from_env() else {
+            return;
+        };
+        if TRACE_DUMPED.swap(true, Ordering::AcqRel) {
             return;
         }
-    };
-    if let Err(err) = ensure_parent_dir(&path).and_then(|_| std::fs::write(&path, bytes)) {
-        eprintln!(
-            "perry typed-feedback trace: failed to write {}: {err}",
-            path.display()
-        );
+
+        let json = typed_feedback_trace_json();
+        let bytes = match serde_json::to_vec_pretty(&json) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                eprintln!("perry typed-feedback trace: failed to encode JSON: {err}");
+                return;
+            }
+        };
+        if let Err(err) = ensure_parent_dir(&path).and_then(|_| std::fs::write(&path, bytes)) {
+            eprintln!(
+                "perry typed-feedback trace: failed to write {}: {err}",
+                path.display()
+            );
+        }
     }
 }
 
@@ -373,5 +387,6 @@ mod keep_typed_feedback {
     #[used] static K20: extern "C" fn(u64, i64, f64, f64) = js_typed_feedback_object_set_index_polymorphic;
     #[used] static K21: extern "C" fn(u64, *mut ObjectHeader, u32, *const crate::StringHeader, f64) = js_typed_feedback_object_set_unboxed_f64_field;
     #[used] static K22: extern "C" fn(u64, f64) -> f64 = js_typed_feedback_observe_helper_return;
+    #[cfg(feature = "diagnostics")]
     #[used] static K23: extern "C" fn() = js_typed_feedback_maybe_dump_trace;
 }

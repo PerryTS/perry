@@ -334,7 +334,12 @@ pub extern "C" fn js_v8_cached_data_version_tag() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_v8_get_heap_snapshot(options: f64) -> f64 {
     validate_heap_snapshot_options(options);
+    #[cfg(feature = "diagnostics")]
     let json = crate::gc::gc_build_v8_heap_snapshot_json();
+    // OFF stub: the compiler enables `diagnostics` whenever a program uses the
+    // v8 heap-snapshot APIs, so this branch is unreachable in practice.
+    #[cfg(not(feature = "diagnostics"))]
+    let json = String::from("{}");
     snapshot_readable_stream(&json)
 }
 
@@ -352,7 +357,12 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
         }
     };
     validate_heap_snapshot_options(options);
+    #[cfg(feature = "diagnostics")]
     let json = crate::gc::gc_build_v8_heap_snapshot_json();
+    // OFF stub: unreachable in practice (compiler enables `diagnostics` when a
+    // program uses the v8 heap-snapshot APIs).
+    #[cfg(not(feature = "diagnostics"))]
+    let json = String::from("{}");
     match std::fs::write(&path, json.as_bytes()) {
         Ok(()) => string_value(&path),
         Err(err) => unsafe {

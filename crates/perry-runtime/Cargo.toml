@@ -15,7 +15,15 @@ crate-type = ["rlib", "staticlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "diagnostics"]
+# Cold-path diagnostic JSON serializers (~67 KB of code + the `serde_json`
+# pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
+# (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8
+# heap-snapshot builder (`v8.getHeapSnapshot`/`writeHeapSnapshot`), and
+# `process.report`. None are on a hot path. The env-driven dev diagnostics
+# degrade gracefully when off (auto-optimize leaves this off unless the program
+# uses a heap-snapshot / `process.report` API, which the compiler detects).
+diagnostics = []
 # The user's regular-expression engine (`regex` + `fancy-regex`, ~1.2 MB of
 # DFA/NFA machinery). A program that never evaluates a regex literal, `RegExp`,
 # a regex-coercing string method, or a glob API can't produce a RegExp at

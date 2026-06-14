@@ -107,6 +107,7 @@ impl Default for EvacuationPolicyDecision {
 }
 
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct SweepTraceStats {
     pub(super) dead_bytes: u64,
     // Compatibility alias for dead_bytes.

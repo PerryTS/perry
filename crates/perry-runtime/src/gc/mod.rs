@@ -58,7 +58,9 @@ mod cycle;
 use cycle::*;
 mod verify;
 pub use verify::*;
+#[cfg(feature = "diagnostics")]
 mod heap_snapshot;
+#[cfg(feature = "diagnostics")]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 
 pub fn gc_collect_minor() -> u64 {

@@ -143,6 +143,7 @@ pub(super) enum ConservativeStackScanDecision {
 }
 
 impl ConservativeStackScanDecision {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {

@@ -5,10 +5,11 @@
 //! has actually seen at runtime.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    LazyLock, Mutex,
-};
+#[cfg(any(feature = "diagnostics", test))]
+use std::sync::atomic::AtomicBool;
+#[cfg(any(feature = "diagnostics", test))]
+use std::sync::atomic::Ordering;
+use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
@@ -21,6 +22,7 @@ const POLYMORPHIC_CAP: usize = 4;
 
 static REGISTRY: LazyLock<Mutex<TypedFeedbackRegistry>> =
     LazyLock::new(|| Mutex::new(TypedFeedbackRegistry::default()));
+#[cfg(any(feature = "diagnostics", test))]
 static TRACE_DUMPED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(not(test))]
@@ -961,9 +963,9 @@ pub use guards::{
 
 #[path = "typed_feedback/trace.rs"]
 mod trace;
-pub use trace::{
-    js_typed_feedback_maybe_dump_trace, typed_feedback_snapshot, typed_feedback_trace_json,
-};
+pub use trace::typed_feedback_snapshot;
+#[cfg(feature = "diagnostics")]
+pub use trace::{js_typed_feedback_maybe_dump_trace, typed_feedback_trace_json};
 
 fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;

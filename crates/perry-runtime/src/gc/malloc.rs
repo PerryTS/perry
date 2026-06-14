@@ -30,6 +30,7 @@ impl MallocKindTelemetry {
         }
     }
 
+    #[cfg(feature = "diagnostics")]
     pub(super) fn reset_cycle_deltas(&mut self) {
         self.allocated_count = 0;
         self.allocated_bytes = 0;
@@ -273,6 +274,7 @@ impl MallocState {
             counters.copied_minor_validation_lookups.saturating_add(1);
     }
 
+    #[cfg(feature = "diagnostics")]
     pub(super) fn take_kind_telemetry(
         &mut self,
     ) -> [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT] {

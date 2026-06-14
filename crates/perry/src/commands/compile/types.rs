@@ -570,6 +570,14 @@ pub struct CompilationContext {
     /// `perry-runtime/intl-segmenter` (`unicode-segmentation`, ~73 KB of UAX #29
     /// grapheme/word/sentence tables). Other `Intl.*` APIs don't need it.
     pub uses_intl_segmenter: bool,
+    /// Whether any TS module uses a heap-snapshot API (`v8.getHeapSnapshot` /
+    /// `v8.writeHeapSnapshot`) or `process.report`. Gates
+    /// `perry-runtime/diagnostics` (the cold-path JSON serializers + the
+    /// `serde_json` pulled only by them, ~95 KB). The env-driven dev
+    /// diagnostics (`PERRY_GC_DIAG` JSON trace, typed-feedback trace dump) ride
+    /// the same feature and degrade gracefully when it's off, so they're absent
+    /// from size-optimized binaries unless one of these APIs is also used.
+    pub uses_diagnostics: bool,
     /// Whether `perry/thread` is imported. When true, the runtime must
     /// keep `panic = "unwind"` so that worker-thread panics translate to
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
@@ -818,6 +826,7 @@ impl CompilationContext {
             uses_url: false,
             uses_string_normalize: false,
             uses_intl_segmenter: false,
+            uses_diagnostics: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             min_windows_version: "10".to_string(),
