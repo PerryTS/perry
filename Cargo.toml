@@ -262,6 +262,9 @@ flate2 = "1"
 tar = "0.4"
 base64 = "0.22"
 zip = "2"
+# zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
+# Statically vendored (no system libzstd dependency on the user's machine).
+zstd = "0.13"
 
 # Internal crates
 perry-parser = { path = "crates/perry-parser" }

@@ -5334,6 +5334,7 @@ dependencies = [
  "url",
  "walkdir",
  "zip",
+ "zstd",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ mod bundle_ios;
 mod cjs_wrap;
 mod codegen_steps;
 mod collect_modules;
+mod compressed_libs;
 mod env_fold;
 mod harmonyos_shim;
 mod host_config;

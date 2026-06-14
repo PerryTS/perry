@@ -48,6 +48,7 @@ flate2.workspace = true
 tar.workspace = true
 base64.workspace = true
 zip.workspace = true
+zstd.workspace = true
 jsonwebtoken.workspace = true
 semver = "1.0"
 dotenvy = "0.15"

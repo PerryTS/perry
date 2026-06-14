@@ -646,6 +646,18 @@ pub(super) fn find_library_with_candidates(
         if path.exists() {
             return Ok(path.clone());
         }
+        // npm per-platform packages ship `*.a.zst` (the raw archives exceed
+        // npm's tarball upload limit). When only the compressed sibling is
+        // present, decompress it once into a per-user cache and link that.
+        let compressed = super::compressed_libs::compressed_sibling(path);
+        if compressed.exists() {
+            let lib_name = path.file_name().and_then(|s| s.to_str()).unwrap_or(name);
+            if let Ok(decompressed) =
+                super::compressed_libs::decompressed_archive(&compressed, lib_name)
+            {
+                return Ok(decompressed);
+            }
+        }
     }
     Err(candidates)
 }

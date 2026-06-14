@@ -174,6 +174,28 @@ for entry in "${PLATFORMS[@]}"; do
     done
   fi
 
+  # Compress the static archives so the published npm tarball stays under
+  # npm's registry upload limit (the raw archives total ~750 MB per platform;
+  # npm rejects the upload with HTTP 413). The perry binary decompresses them
+  # transparently on first use into a per-user cache (see compressed_libs.rs).
+  # The binary in bin/ is left raw — it is exec'd directly. Set
+  # PERRY_NPM_NO_COMPRESS=1 for local staging where uncompressed libs are handy.
+  if [ "${PERRY_NPM_NO_COMPRESS:-0}" != "1" ] && [ -d "$pkg_dir/lib" ]; then
+    if ! command -v zstd >/dev/null 2>&1; then
+      echo "  error: zstd not found but archive compression is required" >&2
+      echo "         install zstd or set PERRY_NPM_NO_COMPRESS=1" >&2
+      exit 1
+    fi
+    for f in "$pkg_dir"/lib/*; do
+      [ -f "$f" ] || continue
+      case "$f" in
+        *.zst) continue ;;
+      esac
+      zstd -19 -T0 -q -f --rm "$f"
+      echo "  compressed $(basename "$f") -> $(basename "$f").zst"
+    done
+  fi
+
   render_template "$pkg_dir/package.json.tmpl" "$pkg_dir/package.json"
   if [ -f "$LICENSE_SRC" ]; then
     cp "$LICENSE_SRC" "$pkg_dir/LICENSE"
