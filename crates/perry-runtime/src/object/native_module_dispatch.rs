@@ -1524,6 +1524,12 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ("punycode.ucs2", "encode") => crate::punycode::js_punycode_ucs2_encode(arg(0)),
 
         // ── dgram namespace (`node:dgram` / `dgram`) ──
+        // Gated behind `mod-dgram`: `crate::dgram` is only compiled when the
+        // program imports `dgram` (the compiler enables the feature on
+        // `module: "dgram"` usage), so this arm — and the `js_dgram_*` externs
+        // it calls — are absent otherwise. Unreachable when off (a dgram
+        // namespace can't exist without the import that enables the feature).
+        #[cfg(feature = "mod-dgram")]
         ("dgram", "createSocket") | ("dgram", "Socket") => {
             crate::dgram::js_dgram_create_socket(pack_args())
         }

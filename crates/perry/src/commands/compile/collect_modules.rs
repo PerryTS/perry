@@ -1942,6 +1942,12 @@ fn collect_module_finish(
         {
             ctx.uses_diagnostics = true;
         }
+        // `node:dgram` (UDP) → gates `perry-runtime/mod-dgram` (~43 KB; dgram
+        // lowers to `NativeMethodCall { module: "dgram" }`, runtime-only so not
+        // in `native_module_imports`).
+        if hir_debug.contains("module: \"dgram\"") {
+            ctx.uses_dgram = true;
+        }
     }
 
     // Detect readline usage via process.stdin raw/lifecycle methods. These

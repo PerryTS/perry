@@ -15,7 +15,16 @@ crate-type = ["rlib", "staticlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "diagnostics"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "diagnostics", "mod-dgram"]
+# Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
+# implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
+# `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
+# when the program imports `dgram`. The compiler enables it on `module: "dgram"`
+# usage (see the auto-optimize import-detection path), so a program that never
+# imports `dgram` links none of its code. Pure cfg gate, no extra deps. (This is
+# the first instance of a general per-module gating pattern; more modules can
+# follow the same shape.)
+mod-dgram = []
 # Cold-path diagnostic JSON serializers (~67 KB of code + the `serde_json`
 # pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
 # (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8
