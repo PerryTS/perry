@@ -703,18 +703,23 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // the `+`/template concat path delivers the operand as a raw
             // pointer (upper-16 == 0), and `js_url_href_if_url`'s
             // `object_from_f64` only recognizes `POINTER_TAG`. `String(url)`
-            // already arrives tagged.
-            let boxed = f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK));
-            let url_href = crate::url::url_class::js_url_href_if_url(boxed);
-            if url_href.to_bits() != crate::value::TAG_UNDEFINED {
-                return js_jsvalue_to_string(url_href);
-            }
-            if crate::url::try_read_as_search_params(ptr as *mut crate::object::ObjectHeader)
-                .is_some()
-            {
-                return crate::url::search_params::js_url_search_params_to_string(
-                    ptr as *mut crate::object::ObjectHeader,
-                );
+            // already arrives tagged. Skip the probe for small-handle values
+            // (`< 0x100000` — sockets / timers / widget handles): those are
+            // registry ids, not heap `ObjectHeader`s, so the shape check would
+            // dereference unmapped memory.
+            if (ptr as usize) >= 0x100000 {
+                let boxed = f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK));
+                let url_href = crate::url::url_class::js_url_href_if_url(boxed);
+                if url_href.to_bits() != crate::value::TAG_UNDEFINED {
+                    return js_jsvalue_to_string(url_href);
+                }
+                if crate::url::try_read_as_search_params(ptr as *mut crate::object::ObjectHeader)
+                    .is_some()
+                {
+                    return crate::url::search_params::js_url_search_params_to_string(
+                        ptr as *mut crate::object::ObjectHeader,
+                    );
+                }
             }
             // OrdinaryToPrimitive(obj, "string"): the object has no
             // `[Symbol.toPrimitive]` (checked above) and is not an
