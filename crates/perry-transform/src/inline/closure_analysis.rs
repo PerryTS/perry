@@ -148,6 +148,64 @@ pub fn body_references_dynamic_this(stmts: &[Stmt]) -> bool {
     stmts.iter().any(check_stmt)
 }
 
+/// Like `body_references_dynamic_this`, but tolerates a *direct* `Expr::This`,
+/// which the method-inliner rewrites to the concrete receiver via
+/// `substitute_this_in_stmts`. Returns true only for constructs the
+/// substitution can NOT safely rewrite, so the method must stay un-inlined:
+/// `new.target` (left untouched), and any nested closure (a regular function
+/// has its own `this`/`new.target`; an arrow captures the enclosing one —
+/// neither binding is rewritten here). Conservative: rejecting *all* nested
+/// closures keeps `this.field` accessors/mutators inlinable without risking a
+/// mis-bound `this` inside a nested function.
+pub fn method_body_blocks_this_substitution(stmts: &[Stmt]) -> bool {
+    fn check_expr(expr: &Expr) -> bool {
+        if matches!(expr, Expr::NewTarget | Expr::Closure { .. }) {
+            return true;
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            if !found && check_expr(child) {
+                found = true;
+            }
+        });
+        found
+    }
+    fn check_stmt(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
+            Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
+            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                check_expr(condition)
+                    || then_branch.iter().any(check_stmt)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|b| b.iter().any(check_stmt))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                check_expr(condition) || body.iter().any(check_stmt)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref().is_some_and(|i| check_stmt(i))
+                    || condition.as_ref().is_some_and(check_expr)
+                    || update.as_ref().is_some_and(check_expr)
+                    || body.iter().any(check_stmt)
+            }
+            _ => false,
+        }
+    }
+    stmts.iter().any(check_stmt)
+}
+
 /// Check if statements contain a closure that captures any of the given local IDs
 pub fn body_contains_closure_capturing(
     stmts: &[Stmt],

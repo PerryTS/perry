@@ -1368,6 +1368,16 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str, ArgKind::Closure],
         ret: ReturnKind::Widget,
     },
+    // Programmatically set a Toggle's on/off state (issue #5076). `on`
+    // is a raw i64 (0 = off, non-zero = on); `Toggle(label, onChange)`
+    // has no initial-state param, so this is the documented way to show
+    // a non-default ON state in a rebuild/re-create render model.
+    MethodRow {
+        method: "toggleSetState",
+        runtime: "perry_ui_toggle_set_state",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "Slider",
         runtime: "perry_ui_slider_create",

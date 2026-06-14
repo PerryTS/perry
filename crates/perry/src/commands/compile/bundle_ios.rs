@@ -18,6 +18,7 @@ use crate::OutputFormat;
 
 use super::apple_info_plist::{
     inject_google_auth_info_plist, inject_ios_app_group_entitlement, inject_ios_deeplinks,
+    inject_ios_push_entitlement,
 };
 use super::resources::stage_native_library_artifacts;
 use super::targets::compile_metallib_for_bundle;
@@ -445,6 +446,12 @@ pub(super) fn build_ios_app_bundle(
     // existing entitlements (associated-domains, hand-written
     // entries) intact.
     inject_ios_app_group_entitlement(&app_dir, ctx.app_metadata.app_group.as_deref(), format);
+
+    // #5074 — emit the `aps-environment` entitlement when
+    // `[ios] push_notifications = true` is set in perry.toml. Without it
+    // `registerForRemoteNotifications` always fails and no APNs token is
+    // produced. Idempotent with the deeplinks / app-group passes above.
+    inject_ios_push_entitlement(&input, &app_dir, format);
 
     // #1138 — `[google_auth]` block in perry.toml feeds the
     // GoogleSignIn SDK via Info.plist keys the Swift bridge in

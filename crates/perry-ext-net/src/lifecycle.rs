@@ -269,12 +269,28 @@ pub unsafe extern "C" fn js_net_socket_get_auto_select_family_attempted_addresse
 /// `jsvalue_to_socket_bytes` probes Buffer/Uint8Array/string/number/bool and
 /// reads through the correct layout (#1131).
 ///
+/// Carries a DISTINCT `#[no_mangle]` symbol (`js_ext_net_socket_write`),
+/// deliberately NOT the `js_net_socket_write` name that the bundled stdlib net
+/// ALSO exports. In a workspace / jsruntime build both crates are linked, so
+/// `js_net_socket_write` is a duplicate symbol that the link binds to whichever
+/// twin wins (the bundled stdlib's). A socket created here lives in ext-net's
+/// registry; when it's then written to via the runtime's `HANDLE_METHOD_DISPATCH`
+/// fallback (`dispatch_external_net_socket` in perry-stdlib — the path a
+/// captured-by-closure `s.write(...)` inside an `'data'` handler takes), routing
+/// through the shared `js_net_socket_write` symbol landed in the bundled twin's
+/// EMPTY registry: `sockets.get(&handle)` missed, the `SocketCommand::Write` was
+/// never enqueued, no `write()` syscall fired, and the bytes were silently
+/// dropped. The dispatch helper calls THIS uniquely-named entry point instead —
+/// a symbol with no twin — so the write always reaches ext-net's own registry.
+/// Mirrors the `js_ext_net_destroy_socket` / `js_ext_net_drain_pending` fix.
+/// (#5021, follows #5010.)
+///
 /// # Safety
 ///
 /// `chunk_bits` must be a valid NaN-boxed JS value; string / Buffer pointers
 /// must reference live runtime allocations.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
+pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) {
     let bytes = match crate::jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
         Some(b) => b,
         None => return,
@@ -286,16 +302,34 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     }
 }
 
+/// `socket.write(chunk)` under the name the static NATIVE_MODULE_TABLE path
+/// emits. Delegates to the collision-proof [`js_ext_net_socket_write`] via a
+/// crate-local call, so even when the bundled stdlib's same-named twin wins the
+/// link this body still reaches ext-net's own registry.
+///
+/// # Safety
+///
+/// See [`js_ext_net_socket_write`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
+    js_ext_net_socket_write(handle, chunk_bits);
+}
+
 /// `socket.end([data])` — optionally write a final chunk, then half-close the
 /// write side (#1852). `undefined`/`null` (the no-arg form, padded with
 /// `TAG_UNDEFINED`) yields `None` and we just send FIN.
+///
+/// Carries a DISTINCT `#[no_mangle]` symbol for the same reason as
+/// [`js_ext_net_socket_write`] — the shared `js_net_socket_end` name collides
+/// with the bundled stdlib twin, so the dispatch fallback would drop the
+/// optional final chunk into the bundled twin's empty registry. (#5021.)
 ///
 /// # Safety
 ///
 /// `chunk_bits` must be a valid NaN-boxed JS value; string / Buffer pointers
 /// must reference live runtime allocations.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
+pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
         if let Some(bytes) = crate::jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
@@ -306,6 +340,17 @@ pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
         }
         let _ = s.cmd_tx.send(crate::SocketCommand::End);
     }
+}
+
+/// `socket.end([data])` under the name the static NATIVE_MODULE_TABLE path
+/// emits. Delegates to the collision-proof [`js_ext_net_socket_end`].
+///
+/// # Safety
+///
+/// See [`js_ext_net_socket_end`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
+    js_ext_net_socket_end(handle, chunk_bits);
 }
 
 /// `socket.destroy()` — hard close. Flags the handle destroyed (so

@@ -18,6 +18,13 @@ pub extern "C" fn perry_ui_state_bind_toggle(state_handle: i64, toggle_handle: i
     state::bind_toggle(state_handle, toggle_handle);
 }
 
+/// Set an existing Toggle's on/off state (issue #5076). `on` is 0 for
+/// off, non-zero for on.
+#[no_mangle]
+pub extern "C" fn perry_ui_toggle_set_state(handle: i64, on: i64) {
+    widgets::toggle::set_state(handle, on);
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_state_bind_text_template(
     text_handle: i64,

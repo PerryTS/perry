@@ -1,124 +1,9 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
+use perry_hir::walker::walk_expr_children_mut;
 use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
 use perry_types::{FuncId, LocalId, Type};
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use super::*;
-
-const MAX_INLINE_EXPR_RECURSION_DEPTH: usize = 128;
-
-thread_local! {
-    static INLINE_EXPR_RECURSION_DEPTH: Cell<usize> = const { Cell::new(0) };
-}
-
-struct InlineExprRecursionGuard;
-
-impl Drop for InlineExprRecursionGuard {
-    fn drop(&mut self) {
-        INLINE_EXPR_RECURSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-fn enter_inline_expr_recursion() -> Option<InlineExprRecursionGuard> {
-    let entered = INLINE_EXPR_RECURSION_DEPTH.with(|depth| {
-        let current = depth.get();
-        if current >= MAX_INLINE_EXPR_RECURSION_DEPTH {
-            false
-        } else {
-            depth.set(current + 1);
-            true
-        }
-    });
-    entered.then_some(InlineExprRecursionGuard)
-}
-
-fn expr_contains_lexical_super_set(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperPropertySet { .. }) {
-        return true;
-    }
-    let mut found = false;
-    walk_expr_children(expr, &mut |child| {
-        if !found && expr_contains_lexical_super_set(child) {
-            found = true;
-        }
-    });
-    found
-}
-
-fn stmt_contains_lexical_super_set(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_contains_lexical_super_set),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-            expr_contains_lexical_super_set(expr)
-        }
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_contains_lexical_super_set(condition)
-                || then_branch.iter().any(stmt_contains_lexical_super_set)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|branch| branch.iter().any(stmt_contains_lexical_super_set))
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_contains_lexical_super_set(condition)
-                || body.iter().any(stmt_contains_lexical_super_set)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref()
-                .is_some_and(|stmt| stmt_contains_lexical_super_set(stmt.as_ref()))
-                || condition
-                    .as_ref()
-                    .is_some_and(expr_contains_lexical_super_set)
-                || update.as_ref().is_some_and(expr_contains_lexical_super_set)
-                || body.iter().any(stmt_contains_lexical_super_set)
-        }
-        Stmt::Labeled { body, .. } => stmt_contains_lexical_super_set(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body.iter().any(stmt_contains_lexical_super_set)
-                || catch
-                    .as_ref()
-                    .is_some_and(|catch| catch.body.iter().any(stmt_contains_lexical_super_set))
-                || finally
-                    .as_ref()
-                    .is_some_and(|body| body.iter().any(stmt_contains_lexical_super_set))
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_contains_lexical_super_set(discriminant)
-                || cases.iter().any(|case| {
-                    case.test
-                        .as_ref()
-                        .is_some_and(expr_contains_lexical_super_set)
-                        || case.body.iter().any(stmt_contains_lexical_super_set)
-                })
-        }
-        Stmt::Return(None)
-        | Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
-    }
-}
-
-fn method_contains_lexical_super_set(method: &Function) -> bool {
-    method.body.iter().any(stmt_contains_lexical_super_set)
-}
 
 pub fn stmt_contains_return(s: &Stmt) -> bool {
     match s {
@@ -235,6 +120,41 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
 /// recognizes `Expr::LocalGet(obj_id)` as a method receiver. The Phase 6
 /// driver passes the class name; Phases 4 (init) and 5 (top-level functions)
 /// pass `None`.
+/// Exact-receiver facts that stay valid on *every* iteration of a loop body:
+/// the subset of `outer` whose receiver local is never reassigned anywhere in
+/// the loop (`body` plus any condition/update exprs in `extra_exprs`). A
+/// receiver reassigned mid-loop could hold a different (sub)class on a later
+/// iteration, so its fact is dropped — keeping direct method inlining sound
+/// while still inlining calls on loop-invariant receivers declared *before* the
+/// loop (e.g. `const c = new Counter(); for (…) c.increment();`). Before this,
+/// loop bodies were seeded with empty facts, so such calls were never inlined.
+///
+/// `collect_mutated_local_ids` recurses into closures and nested loops and
+/// catches every `LocalSet`/`Update`, so "not mutated in the loop" is a sound
+/// (conservative) proxy for "fact holds on every iteration".
+fn loop_invariant_seed_facts(
+    outer: &ExactReceiverFacts,
+    body: &[Stmt],
+    extra_exprs: &[&Expr],
+) -> ExactReceiverFacts {
+    if outer.is_empty() {
+        return ExactReceiverFacts::new();
+    }
+    let mut mutated = std::collections::HashSet::new();
+    collect_mutated_local_ids(body, &mut mutated);
+    for e in extra_exprs {
+        collect_mutated_local_ids(
+            std::slice::from_ref(&Stmt::Expr((*e).clone())),
+            &mut mutated,
+        );
+    }
+    outer
+        .iter()
+        .filter(|(id, _)| !mutated.contains(*id))
+        .map(|(id, f)| (*id, f.clone()))
+        .collect()
+}
+
 pub fn inline_calls_in_stmts(
     stmts: &mut Vec<Stmt>,
     func_candidates: &HashMap<FuncId, Function>,
@@ -572,7 +492,8 @@ pub fn inline_calls_in_stmts(
                 if hoisted.is_empty() {
                     *condition = condition_candidate;
                 }
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -588,7 +509,8 @@ pub fn inline_calls_in_stmts(
                 exact_effect_handled = true;
             }
             Stmt::DoWhile { body, condition } => {
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -672,7 +594,29 @@ pub fn inline_calls_in_stmts(
                         class_field_types,
                     );
                 }
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut for_extra: Vec<&Expr> = Vec::new();
+                if let Some(c) = condition.as_ref() {
+                    for_extra.push(c);
+                }
+                if let Some(u) = update.as_ref() {
+                    for_extra.push(u);
+                }
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &for_extra);
+                // The for-init can also rebind a receiver local (e.g.
+                // `for (c = makeOther(); …)`), so drop facts it mutates too —
+                // otherwise a stale pre-loop class could survive into the body
+                // and allow an unsound inline. (`init` is a Stmt, not an Expr,
+                // so it can't go through `for_extra`.)
+                if let Some(init_stmt) = init.as_ref() {
+                    let mut init_mutated: std::collections::HashSet<LocalId> =
+                        std::collections::HashSet::new();
+                    collect_mutated_local_ids(
+                        std::slice::from_ref(init_stmt.as_ref()),
+                        &mut init_mutated,
+                    );
+                    body_facts.retain(|id, _| !init_mutated.contains(id));
+                }
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -1559,7 +1503,7 @@ pub fn try_inline_simple_call(
                     if !method_candidate.method_lookup_safe {
                         return None;
                     }
-                    if method_contains_lexical_super_set(&method_candidate.func) {
+                    if method_contains_lexical_super(&method_candidate.func) {
                         return None;
                     }
 
@@ -1825,7 +1769,7 @@ pub fn try_inline_call(
                     // extra actual args plus their side effects.
                     if !method_candidate.method_lookup_safe
                         || args.len() > method_candidate.func.params.len()
-                        || method_contains_lexical_super_set(&method_candidate.func)
+                        || method_contains_lexical_super(&method_candidate.func)
                     {
                         return None;
                     }

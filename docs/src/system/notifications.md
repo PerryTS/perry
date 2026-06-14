@@ -47,6 +47,25 @@ Firebase Messaging on Android — wired via JNI through
 No-op on platforms without a push pipeline (tvOS, visionOS, watchOS, GTK4,
 Windows, Web).
 
+### Enabling APNs on iOS
+
+`registerForRemoteNotifications` only succeeds when the signed `.app` carries
+the `aps-environment` entitlement. Opt in from `perry.toml`
+([#5074](https://github.com/PerryTS/perry/issues/5074)):
+
+```toml
+[ios]
+push_notifications = true          # emit the aps-environment entitlement
+# push_environment = "production"  # default "development"; set for distribution
+```
+
+With this set, `perry compile --target ios` writes `aps-environment` into the
+bundle's `app.entitlements` (defaulting to `development`, which matches
+dev-signed builds), and `perry setup ios` / `perry run --target ios` enable the
+Push Notifications capability on the App ID when minting the development
+provisioning profile. For App Store / Ad Hoc distribution set
+`push_environment = "production"`.
+
 ## Platform Implementation
 
 | Platform | Backend |

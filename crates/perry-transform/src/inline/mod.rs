@@ -16,6 +16,7 @@ mod exact_receivers;
 mod factory_specialize;
 mod imul;
 mod substitute;
+mod super_detect;
 
 // Public re-exports (explicit named — globs don't propagate transitively
 // through `pub(crate) use crate::inline::*` consumers).
@@ -28,7 +29,7 @@ pub use cross_module::{
 pub(crate) use analysis::{
     body_calls_func, class_chain_property_sets, construction_expr_can_affect_method_lookup,
     construction_stmt_can_affect_method_lookup, construction_stmts_can_affect_method_lookup,
-    find_max_local_id_in_module, is_inlinable, method_lookup_is_unshadowed,
+    find_max_local_id_in_module, is_inlinable, is_inlinable_method, method_lookup_is_unshadowed,
 };
 pub(crate) use call_inliner::{
     build_inline_arg_bindings, convert_returns_in_stmts, inline_calls_in_expr,
@@ -39,7 +40,7 @@ pub(crate) use clamp::{is_clamp3, is_clamp_u8};
 pub(crate) use closure_analysis::{
     body_contains_closure_capturing, body_contains_super_call, body_references_dynamic_this,
     collect_closure_captured_local_ids, collect_mutated_local_ids, find_max_local_id,
-    has_simple_control_flow, is_pure_function,
+    has_simple_control_flow, is_pure_function, method_body_blocks_this_substitution,
 };
 pub(crate) use cross_module::{
     body_references_class_in_set, collect_nonexported_class_names,
@@ -59,6 +60,9 @@ pub(crate) use imul::{
 pub(crate) use substitute::{
     collect_body_local_ids, substitute_locals, substitute_locals_in_stmts, substitute_this,
     substitute_this_in_stmts,
+};
+pub(crate) use super_detect::{
+    enter_inline_expr_recursion, method_contains_lexical_super, MAX_INLINE_EXPR_RECURSION_DEPTH,
 };
 
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
@@ -510,7 +514,7 @@ pub fn inline_functions(
             continue;
         }
         for method in &class.methods {
-            if is_inlinable(method) {
+            if is_inlinable_method(method) {
                 // Methods don't have 'this' as a parameter in the HIR;
                 // they access it via Expr::This. So this_param_id is
                 // None.
