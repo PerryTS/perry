@@ -330,6 +330,50 @@ pub unsafe extern "C" fn js_throw_error_with_code(
     ))
 }
 
+/// Build a Node-style *system* `Error` value carrying `.message`, `.code`
+/// (a Node `E*` string like `"ECONNREFUSED"`), `.syscall` (the failing call,
+/// e.g. `"connect"`) and `.errno` (the libuv-negative number). This is the
+/// shape Node hands to `socket`/`request` `'error'` listeners for transport
+/// failures, so consumers branching on `err.code === 'ECONNREFUSED'` work.
+///
+/// Like [`js_error_value_with_code`], building + registering through this
+/// single extern symbol guarantees the message→{code,syscall,errno} side-table
+/// registrations and the later `.code`/`.syscall`/`.errno` getter reads resolve
+/// through the same runtime copy (the getters live in
+/// `object::field_get_set`). The `code`/`syscall` strings are interned to
+/// `&'static str` so they outlive the call.
+///
+/// # Safety
+/// `msg_ptr`/`code_ptr`/`syscall_ptr` must each point to the corresponding
+/// `*_len` valid bytes, or be null with their length `0`.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_system_error_value(
+    msg_ptr: *const u8,
+    msg_len: usize,
+    code_ptr: *const u8,
+    code_len: usize,
+    syscall_ptr: *const u8,
+    syscall_len: usize,
+    errno: f64,
+) -> f64 {
+    let msg = js_string_from_bytes(msg_ptr, msg_len as u32);
+    if !code_ptr.is_null() && code_len > 0 {
+        let bytes = std::slice::from_raw_parts(code_ptr, code_len);
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            crate::node_submodules::register_error_code_pub(msg, intern_error_code(s));
+        }
+    }
+    if !syscall_ptr.is_null() && syscall_len > 0 {
+        let bytes = std::slice::from_raw_parts(syscall_ptr, syscall_len);
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            crate::node_submodules::register_error_syscall(msg, intern_error_code(s));
+        }
+    }
+    crate::node_submodules::register_error_errno(msg, errno as i32);
+    let err = js_error_new_with_message(msg);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
 // These FFI entries are referenced only from extension archives (linked after
 // the runtime's bitcode is optimized), so the auto-optimize LTO pass would
 // otherwise dead-strip them (see project_auto_optimize_keepalive_3320). The
@@ -342,6 +386,17 @@ static KEEP_JS_ERROR_VALUE_WITH_CODE: unsafe extern "C" fn(
     usize,
     i32,
 ) -> f64 = js_error_value_with_code;
+
+#[used]
+static KEEP_JS_NODE_SYSTEM_ERROR_VALUE: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    f64,
+) -> f64 = js_node_system_error_value;
 
 #[used]
 static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
