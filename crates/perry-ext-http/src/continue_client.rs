@@ -28,6 +28,16 @@ pub(crate) fn wants_continue(headers: &HashMap<String, String>) -> bool {
     })
 }
 
+/// Queue an `arm_expect_continue` for the next event-loop tick. Node flushes a
+/// request's head on `nextTick`, not at construction, so deferring lets a
+/// post-construction `setHeader(...)` (including a late `Expect:
+/// 100-continue`) reach the wire before the head is snapshotted.
+pub(crate) fn defer_arm(handle: Handle) {
+    crate::push_event(crate::PendingHttpEvent::DeferredArmContinue {
+        request_handle: handle,
+    });
+}
+
 /// #5080 — if the freshly-built request carries `Expect: 100-continue`
 /// (plain `http://` only), flush its head now and arm the deferred-body
 /// channel. Node puts the head on the wire before `end()` for a continue

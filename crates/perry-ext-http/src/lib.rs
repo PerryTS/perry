@@ -177,6 +177,12 @@ pub(crate) enum PendingHttpEvent {
     /// an interim `100 Continue`. Drains to the request's `'continue'`
     /// listeners; the canonical handler then sends the withheld body.
     Continue { request_handle: Handle },
+    /// #5080 — arm the `Expect: 100-continue` head flush on the next
+    /// event-loop tick. Node flushes a request's head on `nextTick`, not at
+    /// construction, so deferring lets post-construction `setHeader(...)`
+    /// (including a late `Expect: 100-continue`) reach the wire before the
+    /// head is snapshotted. A no-op for non-continue or already-sent requests.
+    DeferredArmContinue { request_handle: Handle },
 }
 
 lazy_static! {
@@ -861,7 +867,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     };
     let handle = make_request_handle(method, url, headers, timeout, callback, agent_handle);
     attach_tls_options(handle, arg_f64); // #4906
-    continue_client::arm_expect_continue(handle); // #5080
+    continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     handle
 }
 
@@ -968,7 +974,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
         // `get()` auto-`end()`s, kicking off the request.
         js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
     } else {
-        continue_client::arm_expect_continue(handle); // #5080
+        continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     }
     handle
 }
@@ -1036,6 +1042,10 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
             req.body.extend_from_slice(&body);
         });
     }
+
+    // #5080 — `end()` is a send boundary: arm the continue path now if it
+    // carries `Expect: 100-continue` and the next-tick arm hasn't run yet.
+    continue_client::arm_expect_continue(handle);
 
     // #5080 — an `Expect: 100-continue` request flushed its head up front;
     // this `end()` just hands the (now-known) body to the in-flight continue
@@ -1119,6 +1129,13 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
 /// dispatch-at-`end()` behavior, since the head can't go out alone.
 pub(crate) unsafe fn client_request_flush_headers(handle: Handle) {
     if client_request_surface::request_destroyed(handle) {
+        return;
+    }
+    // #5080 — `flushHeaders()` is a send boundary; when it arms the continue
+    // path, that exchange owns the head, so don't also dispatch via reqwest.
+    continue_client::arm_expect_continue(handle);
+    if with_handle_mut::<ClientRequestHandle, _, _>(handle, |r| r.expects_continue).unwrap_or(false)
+    {
         return;
     }
     let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
@@ -1678,6 +1695,12 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 // request's `'continue'` listeners (the canonical handler then
                 // sends the withheld body via `req.end(...)`).
                 client_events::fire_request_event_listeners(request_handle, "continue");
+            }
+            PendingHttpEvent::DeferredArmContinue { request_handle } => {
+                // #5080 — next-tick arming: post-construction `setHeader(...)`
+                // has run, so the header set is final. Self-guards to a no-op
+                // unless `Expect: 100-continue` is set and unsent.
+                continue_client::arm_expect_continue(request_handle);
             }
         }
     }
