@@ -308,7 +308,9 @@ fn combined_headers_json(raw: &[(String, String)]) -> String {
         match map.get_mut(&key) {
             Some(Value::String(existing)) => {
                 if !is_single_value_header(&key) {
-                    existing.push_str(", ");
+                    // Node's `matchKnownFields`: duplicate `cookie` headers are
+                    // joined with "; ", everything else with ", ".
+                    existing.push_str(if key == "cookie" { "; " } else { ", " });
                     existing.push_str(value);
                 }
             }

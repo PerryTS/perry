@@ -328,7 +328,9 @@ fn build_response_headers_object(raw: &[(String, String)]) -> f64 {
         match combined.get_mut(&key) {
             Some(existing) => {
                 if !is_single_value_header(&key) {
-                    existing.push_str(", ");
+                    // Node's `matchKnownFields`: duplicate `cookie` headers join
+                    // with "; ", everything else with ", ".
+                    existing.push_str(if key == "cookie" { "; " } else { ", " });
                     existing.push_str(value);
                 }
             }
