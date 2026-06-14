@@ -351,6 +351,45 @@ pub(crate) fn js_string_alloc_ascii_uninit(len: u32) -> (*mut StringHeader, *mut
     (ptr, data_ptr)
 }
 
+/// GC-safe copy of `byte_len` bytes starting at `byte_start` of source string
+/// `s` into a freshly allocated `StringHeader`.
+///
+/// Why this exists (issue #5062): the normal `js_string_from_bytes` family
+/// allocates the destination *before* copying, and `string_storage_alloc` can
+/// trip a moving/sweeping GC. Slice/substring fast paths hand it a raw pointer
+/// derived from a GC-managed source string (`string_data(s) + offset`), so if a
+/// collection relocates or sweeps `s` during the destination allocation, the
+/// subsequent copy reads from a dangling buffer. Under sustained server GC
+/// pressure this surfaced as a chunked `String.prototype.slice` loop stamping
+/// the new slice's own length word over the first bytes of the payload.
+///
+/// Rooting `s` in a `RuntimeHandleScope` keeps it alive across the allocation
+/// AND refreshes its address if the GC moves it, so the copy always reads from
+/// the live source. `byte_start`/`byte_len` are byte offsets into the source
+/// payload (callers translate UTF-16 indices first); `utf16_len`/`flags` become
+/// the new header's fields.
+pub(crate) fn string_copy_range(
+    s: *const StringHeader,
+    byte_start: usize,
+    byte_len: u32,
+    utf16_len: u32,
+    flags: u32,
+) -> *mut StringHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_string_ptr(s);
+    let (ptr, data_ptr) = string_storage_alloc(byte_len);
+    unsafe {
+        init_string_header(ptr, utf16_len, byte_len, byte_len, 0, flags);
+        if byte_len > 0 {
+            // Re-read the (possibly relocated) source AFTER the allocation.
+            let s_now = handle.get_raw_const_ptr::<StringHeader>();
+            let src = string_data(s_now).add(byte_start);
+            ptr::copy_nonoverlapping(src, data_ptr, byte_len as usize);
+        }
+    }
+    ptr
+}
+
 /// Count UTF-16 code units for a WTF-8 byte slice without using from_utf8.
 /// Lone surrogate sequences (0xED 0xA0..0xBF 0x80..0xBF) each count as 1 unit,
 /// same as any other BMP codepoint. Astral sequences (4-byte) count as 2.

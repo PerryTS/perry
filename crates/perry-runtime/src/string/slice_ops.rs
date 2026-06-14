@@ -33,21 +33,24 @@ pub extern "C" fn js_string_slice(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    // ASCII fast path: byte offsets == UTF-16 offsets, skip utf16_len scan
+    // ASCII fast path: byte offsets == UTF-16 offsets, skip utf16_len scan.
+    // Copy GC-safely: the destination allocation can move/sweep `s` (#5062).
     if is_ascii_string(s) {
         let slice_len = (end - start) as u32;
-        unsafe {
-            let src = string_data(s).add(start as usize);
-            return js_string_from_ascii_bytes(src, slice_len);
-        }
+        return string_copy_range(s, start as usize, slice_len, slice_len, 0);
     }
 
     // Convert UTF-16 offsets to byte offsets
     let str_data = string_as_str(s);
     let byte_start = utf16_offset_to_byte_offset(str_data, start as usize);
     let byte_end = utf16_offset_to_byte_offset(str_data, end as usize);
-    let slice_bytes = &str_data.as_bytes()[byte_start..byte_end];
-    js_string_from_bytes(slice_bytes.as_ptr(), slice_bytes.len() as u32)
+    string_copy_range(
+        s,
+        byte_start,
+        (byte_end - byte_start) as u32,
+        (end - start) as u32,
+        0,
+    )
 }
 
 /// Get a substring (similar to slice but different behavior)
@@ -79,20 +82,23 @@ pub extern "C" fn js_string_substring(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    // ASCII fast path: skip utf16_len scan in allocator
+    // ASCII fast path: skip utf16_len scan in allocator.
+    // Copy GC-safely: the destination allocation can move/sweep `s` (#5062).
     if is_ascii_string(s) {
         let slice_len = (end - start) as u32;
-        unsafe {
-            let src = string_data(s).add(start as usize);
-            return js_string_from_ascii_bytes(src, slice_len);
-        }
+        return string_copy_range(s, start as usize, slice_len, slice_len, 0);
     }
 
     let str_data = string_as_str(s);
     let byte_start = utf16_offset_to_byte_offset(str_data, start as usize);
     let byte_end = utf16_offset_to_byte_offset(str_data, end as usize);
-    let slice_bytes = &str_data.as_bytes()[byte_start..byte_end];
-    js_string_from_bytes(slice_bytes.as_ptr(), slice_bytes.len() as u32)
+    string_copy_range(
+        s,
+        byte_start,
+        (byte_end - byte_start) as u32,
+        (end - start) as u32,
+        0,
+    )
 }
 
 /// Legacy `String.prototype.substr(start, length)`.
@@ -143,19 +149,22 @@ pub extern "C" fn js_string_substr(
     }
 
     // ASCII fast path: byte offsets == UTF-16 offsets.
+    // Copy GC-safely: the destination allocation can move/sweep `s` (#5062).
     if is_ascii_string(s) {
         let slice_len = (end - start) as u32;
-        unsafe {
-            let src = string_data(s).add(start as usize);
-            return js_string_from_ascii_bytes(src, slice_len);
-        }
+        return string_copy_range(s, start as usize, slice_len, slice_len, 0);
     }
 
     let str_data = string_as_str(s);
     let byte_start = utf16_offset_to_byte_offset(str_data, start as usize);
     let byte_end = utf16_offset_to_byte_offset(str_data, end as usize);
-    let slice_bytes = &str_data.as_bytes()[byte_start..byte_end];
-    js_string_from_bytes(slice_bytes.as_ptr(), slice_bytes.len() as u32)
+    string_copy_range(
+        s,
+        byte_start,
+        (byte_end - byte_start) as u32,
+        (end - start) as u32,
+        0,
+    )
 }
 
 // `#[used]` keepalive: `js_string_substr` is reached only from generated `.o`,
