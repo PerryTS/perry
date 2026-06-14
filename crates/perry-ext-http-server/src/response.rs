@@ -1395,13 +1395,18 @@ pub unsafe extern "C" fn js_node_http_res_write_early_hints(
     }
 }
 
-/// `res.writeContinue()` — emits an HTTP/1.1 100-continue. Phase 1
-/// stores the intent only; the actual 100-continue sequence requires
-/// a streaming body path that we'll wire up in a follow-up.
+/// `res.writeContinue()` — acknowledge an `Expect: 100-continue` request.
+///
+/// #5080: the interim `HTTP/1.1 100 Continue` is written by hyper the moment
+/// the request body is polled (`req.collect()` in the service fn), which is
+/// what unblocks the client's withheld body before `'checkContinue'` even
+/// fires on the main thread. So by the time the handler calls
+/// `writeContinue()` the 100 is already on the wire; this entry point exists
+/// for API parity (the canonical `checkContinue` handler calls it) and is a
+/// confirmation no-op rather than a second 100 line.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_continue(_handle: i64) {
-    // No-op stub. Acceptable per #577 — most modern clients don't
-    // negotiate Expect: 100-continue against a server that buffers.
+    // Interim 100 already flushed by hyper on first body poll — see above.
 }
 
 /// `res.writeProcessing()` — emits an HTTP/1.1 102-Processing. Stub.

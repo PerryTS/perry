@@ -171,6 +171,15 @@ pub struct HttpPendingRequest {
     /// dispatch loop doesn't need to re-borrow the server handle.
     pub request_listeners: Vec<i64>,
     pub handler: i64,
+    /// #5080 — `'checkContinue'` listeners snapshotted at request time.
+    /// When `is_check_continue` is set these fire *instead of* the
+    /// `'request'` listeners + handler (Node dispatches an
+    /// `Expect: 100-continue` request to `'checkContinue'` when a listener
+    /// exists, and only emits `'request'` otherwise).
+    pub check_continue_listeners: Vec<i64>,
+    /// #5080 — route this request to `'checkContinue'` rather than the
+    /// normal `'request'` path.
+    pub is_check_continue: bool,
 }
 
 /// Phase 4 — pending WebSocket upgrade ready to fire `'upgrade'`
@@ -951,6 +960,14 @@ async fn handle_request(
     // `headers_lower`) are consumed below.
     let http_version = req.version();
     let req_connection = headers_lower.get("connection").cloned();
+    // #5080 — `Expect: 100-continue` routes to `'checkContinue'` when a
+    // listener exists. hyper auto-sends the interim `100 Continue` once the
+    // body below is polled, so the client's withheld body arrives before
+    // `req.collect()` completes.
+    let expects_continue = headers_lower
+        .get("expect")
+        .map(|v| v.to_ascii_lowercase().contains("100-continue"))
+        .unwrap_or(false);
 
     // Phase 4 — WebSocket upgrade detection. If the request looks
     // like a WS upgrade, branch into the handshake path: build the
@@ -1017,15 +1034,18 @@ async fn handle_request(
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
     let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
 
-    let (request_listeners, handler, keep_alive_timeout) =
+    let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
         match get_handle::<HttpServer>(server_handle) {
             Some(s) => (
                 s.listeners.get("request").cloned().unwrap_or_default(),
                 s.handler,
                 s.keep_alive_timeout,
+                s.listeners.get("checkContinue").cloned().unwrap_or_default(),
             ),
-            None => (Vec::new(), 0, 5_000.0),
+            None => (Vec::new(), 0, 5_000.0, Vec::new()),
         };
+
+    let is_check_continue = expects_continue && !check_continue_listeners.is_empty();
 
     let pending = HttpPendingRequest {
         server_handle,
@@ -1036,6 +1056,8 @@ async fn handle_request(
         h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
+        check_continue_listeners,
+        is_check_continue,
     };
 
     if request_tx.send(pending).await.is_err() {
@@ -1662,6 +1684,31 @@ fn process_pending(pending: HttpPendingRequest) {
     // `function (req, res) { this.address().port }` handler idiom works
     // (#4903). Bind for the synchronous call only — microtasks run outside.
     let server_this = handle_to_pointer_f64(pending.server_handle);
+
+    // #5080 — an `Expect: 100-continue` request with a `'checkContinue'`
+    // listener fires that listener *instead of* `'request'` + the handler
+    // (Node's dispatch). The listener calls `res.writeContinue()` and then
+    // drives the exchange itself.
+    if pending.is_check_continue {
+        for cb in &pending.check_continue_listeners {
+            if *cb == 0 {
+                continue;
+            }
+            unsafe {
+                let raw = *cb as *const RawClosureHeader;
+                let closure = JsClosure::from_raw(raw);
+                if !closure.is_null() {
+                    with_implicit_this(server_this, || {
+                        let _ = closure.call2(req_f64, res_f64);
+                    });
+                }
+                js_promise_run_microtasks();
+            }
+        }
+        finalize_or_park_request(&pending);
+        return;
+    }
+
     for cb in &pending.request_listeners {
         if *cb == 0 {
             continue;

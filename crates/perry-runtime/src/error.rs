@@ -352,6 +352,67 @@ static KEEP_JS_THROW_ERROR_WITH_CODE: unsafe extern "C" fn(
     i32,
 ) -> ! = js_throw_error_with_code;
 
+/// Runtime entry: build a Node-style system `Error` value carrying
+/// `.message`, `.code` (a Node `E*` string, e.g. `ECONNREFUSED`),
+/// `.syscall` (the failing syscall, e.g. `"connect"`) and `.errno` (the
+/// libuv-negative number). Out-of-crate twin of
+/// [`perry_ffi::system_error_value`] (#5078): extension archives such as
+/// `perry-ext-http` can't touch the runtime's object internals directly, so
+/// transport-error construction (`request.on('error')`) routes through this
+/// single symbol. Mirrors `util_mime::build_system_error`'s property shape.
+///
+/// # Safety
+/// Each `*_ptr`/`*_len` pair must describe a valid UTF-8 byte range, or be
+/// null with a zero length.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_system_error_value(
+    msg_ptr: *const u8,
+    msg_len: usize,
+    code_ptr: *const u8,
+    code_len: usize,
+    syscall_ptr: *const u8,
+    syscall_len: usize,
+    errno: f64,
+) -> f64 {
+    let msg = js_string_from_bytes(msg_ptr, msg_len as u32);
+    let err = js_error_new_with_message(msg);
+    let obj = err as *mut crate::object::ObjectHeader;
+
+    unsafe fn set_string_prop(
+        obj: *mut crate::object::ObjectHeader,
+        key: &str,
+        ptr: *const u8,
+        len: usize,
+    ) {
+        if ptr.is_null() || len == 0 {
+            return;
+        }
+        let value_ptr = js_string_from_bytes(ptr, len as u32);
+        let value = crate::value::js_nanbox_string(value_ptr as i64);
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key_ptr, value);
+    }
+
+    set_string_prop(obj, "code", code_ptr, code_len);
+    set_string_prop(obj, "syscall", syscall_ptr, syscall_len);
+    // Node's `.errno` is the (negative) libuv errno as a plain number.
+    let errno_key = js_string_from_bytes(b"errno".as_ptr(), 5);
+    crate::object::js_object_set_field_by_name(obj, errno_key, errno);
+
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+#[used]
+static KEEP_JS_NODE_SYSTEM_ERROR_VALUE: unsafe extern "C" fn(
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    f64,
+) -> f64 = js_node_system_error_value;
+
 /// Throw `ERR_PERRY_UNIMPLEMENTED` for a registered-but-stub API. Used
 /// by the stub-elimination epic's strict mode (#4918/#4919): a runtime
 /// stub calls [`crate::stub_diag::perry_runtime_stub`] to warn, then —
