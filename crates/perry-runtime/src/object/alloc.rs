@@ -712,15 +712,20 @@ unsafe fn object_assign_throw_if_set_rejected(
     if target.is_null() || (target as usize) <= 0x10000 {
         return;
     }
+    // Accessor own property: a setter must exist, else the write fails. Check
+    // this BEFORE `own_key_present`: an accessor-only property (`{ set foo(){} }`)
+    // lives in the accessor side table and may have no `keys_array` entry, so
+    // `own_key_present` can report it absent — which on a frozen/non-extensible
+    // target would mis-classify the setter call as a forbidden new-property add
+    // (test262 assign/target-is-frozen-accessor-property-set-succeeds).
+    if let Some(acc) = super::get_accessor_descriptor(target as usize, name) {
+        if acc.set == 0 {
+            throw_object_assign_readonly(name);
+        }
+        return;
+    }
     let exists = own_key_present(target, key_ptr);
     if exists {
-        // Accessor own property: a setter must exist, else the write fails.
-        if let Some(acc) = super::get_accessor_descriptor(target as usize, name) {
-            if acc.set == 0 {
-                throw_object_assign_readonly(name);
-            }
-            return;
-        }
         // Data own property: must be writable.
         if let Some(attrs) = super::get_property_attrs(target as usize, name) {
             if !attrs.writable() {

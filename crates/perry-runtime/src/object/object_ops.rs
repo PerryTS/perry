@@ -1278,7 +1278,9 @@ pub extern "C" fn js_object_define_property(
         // `[[DefineOwnProperty]]` trap, and throw a TypeError if it reports
         // failure. (Proxy crash cluster.)
         if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-            if !value_is_object_like(descriptor_value) {
+            if !value_is_object_like(descriptor_value)
+                || crate::symbol::js_is_symbol(descriptor_value) != 0
+            {
                 let desc = describe_value_for_type_error(descriptor_value);
                 throw_object_type_error_with_suffix(
                     "Property description must be an object: ",
@@ -1328,7 +1330,12 @@ pub extern "C" fn js_object_define_property(
         if !target_is_class_ref && !value_is_object_like(obj_value) {
             throw_object_type_error(b"Object.defineProperty called on non-object");
         }
-        if !value_is_object_like(descriptor_value) {
+        // A descriptor must be an Object; a Symbol is pointer-tagged but not an
+        // object, so `ToPropertyDescriptor(Symbol())` throws (test262
+        // property-description-must-be-an-object-not-symbol).
+        if !value_is_object_like(descriptor_value)
+            || crate::symbol::js_is_symbol(descriptor_value) != 0
+        {
             let desc = describe_value_for_type_error(descriptor_value);
             throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
         }

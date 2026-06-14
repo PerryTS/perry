@@ -114,6 +114,20 @@ pub extern "C" fn js_object_delete_field(
                             index,
                         );
                     }
+                    // Named (non-index) property: drop the value-store entry AND
+                    // any accessor / attribute side-table state. A named
+                    // accessor (`Object.defineProperty(arr, "p", {get})`) lives
+                    // ONLY in the side tables, so without these clears the
+                    // delete was a no-op and `hasOwnProperty("p")` stayed true
+                    // (test262 verifyProperty's configurable check deletes then
+                    // asserts the key is gone).
+                    crate::array::array_named_property_delete(
+                        obj as *const crate::array::ArrayHeader,
+                        key,
+                    );
+                    super::clear_accessor_descriptor(obj as usize, name);
+                    super::clear_property_attrs(obj as usize, name);
+                    return 1;
                 }
                 crate::array::array_named_property_delete(
                     obj as *const crate::array::ArrayHeader,
