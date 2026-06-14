@@ -1,3 +1,22 @@
+## v0.5.1167 — fix(runtime): relink node:http/net — restore `js_node_system_error_value` (#5124)
+
+Release-blocking regression fix folded in via #5124. PR #5112 (Next.js
+standalone walls) refactored `crates/perry-runtime/src/error.rs` and dropped the
+`#[no_mangle] pub unsafe extern "C" fn js_node_system_error_value` definition
+**and** its `#[used] KEEP_JS_NODE_SYSTEM_ERROR_VALUE` anchor, while `perry-ffi`'s
+`error::system_error_value` still calls that symbol. The result: compiling any
+program that links the http/net extension archive failed at the link step with
+`undefined reference to 'js_node_system_error_value'` (`collect2: ld returned 1`).
+
+It went unseen because perry-runtime's own `cargo test` builds with the full
+feature set, so the symbol was present there — only the auto-optimize compile
+path (minimal feature set, extension archives linked after LTO) hit it. The
+`issue_4903_listen_callback_deferred` integration tests, which actually run
+`perry compile` on a net program, are what surfaced it on the v0.5.1166 release
+tag (whose cargo-test gate failed for this reason). The symbol + keepalive anchor
+are restored verbatim (same construct as the three sibling `KEEP_JS_*` FFI
+entries). Added in #5078, dropped by #5112, restored by #5124.
+
 ## v0.5.1166 — Node-parity & robustness sweep (10 fixes)
 
 Rolls up the issue-fix batch merged on top of 0.5.1165. Per-PR detail lives on
