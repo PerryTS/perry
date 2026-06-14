@@ -19,25 +19,50 @@
 
 import { createConnection } from 'net';
 
+const FIRST = 'PING';
+const SECOND = 'FROM-DATA-HANDLER';
+
 const s = createConnection(17891 as never, '127.0.0.1' as never);
-let phase = 0;
+// Accumulate echoed bytes per phase: TCP gives no 1-write-to-1-'data'
+// guarantee, so a fragmented "PING" echo must NOT be mistaken for the
+// second-write response. We only advance / succeed once the *full* expected
+// payload has arrived, which is what actually proves the round-trip.
+let firstEcho = '';
+let secondEcho = '';
 
 s.on('connect', () => {
     // Kick off the exchange: the echo server replies with whatever we send,
     // which gives us a 'data' event to write back from.
-    s.write(Buffer.from('PING'));
+    s.write(Buffer.from(FIRST));
 });
 
 s.on('data', (b: Buffer) => {
-    phase++;
-    if (phase === 1) {
-        // First echo received. Now issue a write FROM INSIDE the data handler
-        // — the exact path that #5021 dropped on the floor.
-        s.write(Buffer.from('FROM-DATA-HANDLER'));
-    } else {
-        // If the write-from-data-handler reached the wire, the echo server
-        // bounced it back here.
-        console.log('got', JSON.stringify(b.toString('utf8')));
+    const chunk = b.toString('utf8');
+    if (firstEcho !== FIRST) {
+        // Still draining the echo of the first write.
+        firstEcho += chunk;
+        if (firstEcho !== FIRST.slice(0, firstEcho.length)) {
+            console.log('FAIL first echo', JSON.stringify(firstEcho));
+            process.exit(1);
+        }
+        if (firstEcho === FIRST) {
+            // First echo complete. Now issue a write FROM INSIDE the data
+            // handler — the exact path that #5021 dropped on the floor.
+            s.write(Buffer.from(SECOND));
+        }
+        return;
+    }
+
+    // Past the first echo: this is the bounce of the write-from-data-handler.
+    secondEcho += chunk;
+    if (secondEcho !== SECOND.slice(0, secondEcho.length)) {
+        console.log('FAIL second echo', JSON.stringify(secondEcho));
+        process.exit(1);
+    }
+    if (secondEcho === SECOND) {
+        // The write issued from the 'data' handler reached the wire and the
+        // echo server bounced the full payload back.
+        console.log('got', JSON.stringify(secondEcho));
         s.end();
         process.exit(0);
     }
