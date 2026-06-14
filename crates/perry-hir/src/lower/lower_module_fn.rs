@@ -480,6 +480,33 @@ pub fn lower_module_full(
         }
     }
 
+    // #5134: a *named* `export default function foo() {}` also introduces a
+    // hoisted `foo` binding in module scope — usable for self-recursion and
+    // same-module references, exactly like a plain `function foo`. The earlier
+    // loop only handles `Stmt::Decl(Fn)` / `export function`, so without this
+    // the name went unregistered and references to it (e.g. ramda's
+    // `_curryN` calling itself inside its returned closure) lowered to an
+    // unresolved global → `ReferenceError: _curryN is not defined`. The
+    // dedicated lowering in `module_decl.rs` reuses this pre-registered id
+    // (`lower_fn_decl`: `lookup_func(name).unwrap_or_else(fresh_func)`).
+    for item in &ast_module.body {
+        if let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultDecl(export_default)) =
+            item
+        {
+            if let ast::DefaultDecl::Fn(fn_expr) = &export_default.decl {
+                if let Some(ident) = &fn_expr.ident {
+                    if fn_expr.function.body.is_some() {
+                        let func_name = ident.sym.to_string();
+                        if ctx.lookup_func(&func_name).is_none() {
+                            let func_id = ctx.fresh_func();
+                            ctx.register_func(func_name, func_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Pre-register module-level variable declarations so function bodies
     // declared before the variable can still reference them via lookup_local
     for item in &ast_module.body {
