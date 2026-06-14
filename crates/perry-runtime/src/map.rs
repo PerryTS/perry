@@ -755,7 +755,9 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
 
     let new_entries = realloc((*map).entries as *mut u8, old_layout, new_layout.size()) as *mut f64;
     if new_entries.is_null() {
-        panic!("Failed to grow map entries");
+        // #5067 — a constructor-driven `new Map(hugeIterable)` can hit this
+        // growth path; surface a catchable RangeError instead of aborting.
+        crate::error::throw_allocation_failed();
     }
 
     // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
