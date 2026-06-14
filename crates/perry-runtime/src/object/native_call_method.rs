@@ -2061,7 +2061,17 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
-    if crate::date::is_date_value(object) && method_name == "toString" {
+    // A `DateCell` is a NaN-boxed pointer but NOT an `ObjectHeader`, so a date
+    // receiver must never reach the generic object dispatch below — that path
+    // reinterprets the cell's bytes as an object and returns garbage. Every
+    // `Date.prototype` method (getters, setters, `toISOString`, `toJSON`,
+    // `toString`, …) is installed on `Date.prototype` and reads the
+    // `IMPLICIT_THIS` receiver, so resolve the method there and dispatch with
+    // `this` bound to the cell. Previously only `toString` was routed this way;
+    // every other dynamic/computed call (`date[m](...)`, `Reflect.apply`) fell
+    // through and silently dropped setter mutations — e.g. dayjs's
+    // `this.$d[l]($)` made `.add()`/`.date(n)` no-ops (#5133).
+    if crate::date::is_date_value(object) {
         let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
         let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
         if ctor_ptr != 0 {
@@ -2082,8 +2092,10 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
             }
         }
-        let string = crate::date::js_date_to_string(object);
-        return f64::from_bits(JSValue::string_ptr(string).bits());
+        if method_name == "toString" {
+            let string = crate::date::js_date_to_string(object);
+            return f64::from_bits(JSValue::string_ptr(string).bits());
+        }
     }
 
     // Symbols: Symbol.for() pointers are Box-leaked (no GcHeader), so the
