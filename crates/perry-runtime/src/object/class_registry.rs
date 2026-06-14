@@ -4291,9 +4291,94 @@ pub(crate) unsafe fn call_vtable_method(
                 arg_or_undefined(call_args_ptr, call_args_len, 8),
             )
         }
+        // Arities above the explicit arms: the generated method/ctor signature is
+        // `double(double this, double×param_count)`. Rust can't form a
+        // param_count-arity fn pointer dynamically, so transmute to a generous
+        // fixed arity (64) and pass `param_count` real args plus `undefined`
+        // padding (`arg_or_undefined` yields undefined past `call_args_len`).
+        // Passing MORE args than the callee declares is safe on every target —
+        // the arg area is caller-allocated and caller-cleaned, and the callee
+        // reads only its declared params. This is the runtime-dispatch counterpart
+        // to the codegen direct call, and matters for ctors/methods that take many
+        // params — notably a class capturing dozens of module-level `require`s
+        // (`__perry_cap_*` params), the wall-45 `Derived extends _mod.default`
+        // shape, where the pre-fix 10-arg cap silently dropped captures 10+.
+        // (The prior `_` arm called every >9-arity function as if it had 10
+        // params.) `debug_assert` flags the rare class that would still exceed
+        // the bound so it surfaces in tests rather than as silent corruption.
         _ => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
+            debug_assert!(
+                param_count as usize <= 64,
+                "call_vtable_method: param_count {} exceeds fixed dispatch arity 64",
+                param_count
+            );
+            let f: extern "C" fn(
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+            ) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
                 arg_or_undefined(call_args_ptr, call_args_len, 0),
@@ -4306,6 +4391,60 @@ pub(crate) unsafe fn call_vtable_method(
                 arg_or_undefined(call_args_ptr, call_args_len, 7),
                 arg_or_undefined(call_args_ptr, call_args_len, 8),
                 arg_or_undefined(call_args_ptr, call_args_len, 9),
+                arg_or_undefined(call_args_ptr, call_args_len, 10),
+                arg_or_undefined(call_args_ptr, call_args_len, 11),
+                arg_or_undefined(call_args_ptr, call_args_len, 12),
+                arg_or_undefined(call_args_ptr, call_args_len, 13),
+                arg_or_undefined(call_args_ptr, call_args_len, 14),
+                arg_or_undefined(call_args_ptr, call_args_len, 15),
+                arg_or_undefined(call_args_ptr, call_args_len, 16),
+                arg_or_undefined(call_args_ptr, call_args_len, 17),
+                arg_or_undefined(call_args_ptr, call_args_len, 18),
+                arg_or_undefined(call_args_ptr, call_args_len, 19),
+                arg_or_undefined(call_args_ptr, call_args_len, 20),
+                arg_or_undefined(call_args_ptr, call_args_len, 21),
+                arg_or_undefined(call_args_ptr, call_args_len, 22),
+                arg_or_undefined(call_args_ptr, call_args_len, 23),
+                arg_or_undefined(call_args_ptr, call_args_len, 24),
+                arg_or_undefined(call_args_ptr, call_args_len, 25),
+                arg_or_undefined(call_args_ptr, call_args_len, 26),
+                arg_or_undefined(call_args_ptr, call_args_len, 27),
+                arg_or_undefined(call_args_ptr, call_args_len, 28),
+                arg_or_undefined(call_args_ptr, call_args_len, 29),
+                arg_or_undefined(call_args_ptr, call_args_len, 30),
+                arg_or_undefined(call_args_ptr, call_args_len, 31),
+                arg_or_undefined(call_args_ptr, call_args_len, 32),
+                arg_or_undefined(call_args_ptr, call_args_len, 33),
+                arg_or_undefined(call_args_ptr, call_args_len, 34),
+                arg_or_undefined(call_args_ptr, call_args_len, 35),
+                arg_or_undefined(call_args_ptr, call_args_len, 36),
+                arg_or_undefined(call_args_ptr, call_args_len, 37),
+                arg_or_undefined(call_args_ptr, call_args_len, 38),
+                arg_or_undefined(call_args_ptr, call_args_len, 39),
+                arg_or_undefined(call_args_ptr, call_args_len, 40),
+                arg_or_undefined(call_args_ptr, call_args_len, 41),
+                arg_or_undefined(call_args_ptr, call_args_len, 42),
+                arg_or_undefined(call_args_ptr, call_args_len, 43),
+                arg_or_undefined(call_args_ptr, call_args_len, 44),
+                arg_or_undefined(call_args_ptr, call_args_len, 45),
+                arg_or_undefined(call_args_ptr, call_args_len, 46),
+                arg_or_undefined(call_args_ptr, call_args_len, 47),
+                arg_or_undefined(call_args_ptr, call_args_len, 48),
+                arg_or_undefined(call_args_ptr, call_args_len, 49),
+                arg_or_undefined(call_args_ptr, call_args_len, 50),
+                arg_or_undefined(call_args_ptr, call_args_len, 51),
+                arg_or_undefined(call_args_ptr, call_args_len, 52),
+                arg_or_undefined(call_args_ptr, call_args_len, 53),
+                arg_or_undefined(call_args_ptr, call_args_len, 54),
+                arg_or_undefined(call_args_ptr, call_args_len, 55),
+                arg_or_undefined(call_args_ptr, call_args_len, 56),
+                arg_or_undefined(call_args_ptr, call_args_len, 57),
+                arg_or_undefined(call_args_ptr, call_args_len, 58),
+                arg_or_undefined(call_args_ptr, call_args_len, 59),
+                arg_or_undefined(call_args_ptr, call_args_len, 60),
+                arg_or_undefined(call_args_ptr, call_args_len, 61),
+                arg_or_undefined(call_args_ptr, call_args_len, 62),
+                arg_or_undefined(call_args_ptr, call_args_len, 63),
             )
         }
     }

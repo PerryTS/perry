@@ -472,6 +472,28 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
             ast::BlockStmtOrExpr::BlockStmt(b) => body_uses_arguments(&b.stmts),
             ast::BlockStmtOrExpr::Expr(e) => expr_uses_arguments(e),
         },
+        // Sequence (comma) expressions: `return n.date = t, n.args = arguments, x`.
+        // Minified bundlers (e.g. dayjs) hide `arguments` inside these, so the
+        // synthetic-arguments pre-scan must descend through every operand.
+        ast::Expr::Seq(s) => s.exprs.iter().any(|e| expr_uses_arguments(e)),
+        ast::Expr::Await(a) => expr_uses_arguments(&a.arg),
+        ast::Expr::Yield(y) => y.arg.as_deref().map(expr_uses_arguments).unwrap_or(false),
+        ast::Expr::OptChain(o) => match &*o.base {
+            ast::OptChainBase::Member(m) => {
+                expr_uses_arguments(&m.obj)
+                    || matches!(&m.prop, ast::MemberProp::Computed(c) if expr_uses_arguments(&c.expr))
+            }
+            ast::OptChainBase::Call(c) => {
+                expr_uses_arguments(&c.callee)
+                    || c.args.iter().any(|a| expr_uses_arguments(&a.expr))
+            }
+        },
+        ast::Expr::SuperProp(sp) => {
+            matches!(&sp.prop, ast::SuperProp::Computed(c) if expr_uses_arguments(&c.expr))
+        }
+        ast::Expr::TaggedTpl(t) => {
+            expr_uses_arguments(&t.tag) || t.tpl.exprs.iter().any(|e| expr_uses_arguments(e))
+        }
         // Don't descend into nested function declarations or function
         // expressions — those have their own `arguments` binding that
         // shadows the enclosing scope.

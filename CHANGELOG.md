@@ -1,3 +1,40 @@
+## v0.5.1171 — fix(dayjs): `arguments` in sequence exprs + computed Date-method dispatch (#5133)
+
+`compilePackages: dayjs` threw `ReferenceError: arguments is not defined`, and once that was resolved `.add()`/`.date(n)` silently no-op'd. Two distinct, general root causes:
+
+1. **`arguments` hidden inside a sequence expression.** Minified dayjs builds the wrapper as `O=function(t,e){...return n.date=t,n.args=arguments,new _(n)}` — the `arguments` reference lives inside a comma/sequence expression in the `return`. The synthetic-arguments pre-scan `expr_uses_arguments` (`crates/perry-hir/src/lower_decl/helpers.rs`) had no `Expr::Seq` arm, fell through its `_ => false` catch-all, so the enclosing function never synthesized its hidden raw-`arguments` param. Fix: descend into `Expr::Seq`, plus the other operand-bearing forms the catch-all skipped — `Await`, `Yield`, `OptChain`, computed `SuperProp`, `TaggedTpl`.
+
+2. **Computed/dynamic Date-method calls dropped to generic dispatch.** dayjs mutates dates via `this.$d[l]($)` (e.g. `date["setDate"](44)`). A `DateCell` is a NaN-boxed pointer but not an `ObjectHeader`; `js_native_call_method` special-cased only `toString` for date receivers, so every other computed/dynamic call fell through to generic object dispatch, returned `[object Object]` and dropped the mutation. Fix: route any method on a date receiver through `Date.prototype` (where all getter/setter/`toISOString`/`toJSON` thunks are installed and read `IMPLICIT_THIS`), with `this` bound to the cell.
+
+Known residual: a SIGSEGV in dayjs's month arithmetic (`.endOf('month')` / `.set('month', …)` — a number-as-pointer deref in `js_object_get_field_by_name`, unrelated to either fix here) is left for a follow-up.
+
+## v0.5.1170 — fix(codegen): register rest/`arguments` metadata for renamed-export value wrappers (#5134)
+
+`.apply()`/`.call()` on a cross-module **default**-exported (or otherwise
+renamed) *variadic* function forwarded **zero** arguments. ramda's `compose`
+is `export default function compose() { … return pipe.apply(this,
+reverse(arguments)); }`, and `pipe` is `export default function pipe()` with a
+synthesized `arguments` param — so `union.js`'s init (`_curry2(compose(uniq,
+_concat))`) threw `Error: pipe requires at least one argument`.
+
+Root cause: a renamed export gets a forwarding value wrapper
+`__perry_wrap_perry_fn_<src>__<exported>`, but the rest/synthetic-`arguments`
+registration loops (`string_pool.rs`, consumed by `lookup_closure_rest_full` in
+`js_native_call_value`) keyed only on the function's **local** name
+(`__perry_wrap_..._<local>`). When a consumer referenced the renamed export as a
+value and invoked it via `.apply`, the runtime found no rest entry for the
+wrapper's `func_ptr` and dispatched positionally instead of bundling all args
+into the rest/`arguments` slot — so the variadic callee saw
+`arguments.length === 0`. Named exports (local == exported) were unaffected.
+
+Fix (`artifacts.rs`): for each `Export::Named { local, exported }` rename whose
+local function has a rest / synthetic-`arguments` param, also register the
+`__perry_wrap_perry_fn_<src>__<exported>` alias wrapper with the matching
+metadata. Together with #5134's `export default function` hoisting (PR #5149),
+the full ramda repro (`R.pipe(R.filter(...), R.map(...), R.sum)([...])`) now
+returns `120`, matching Node byte-for-byte. Validated no regression on named /
+non-variadic-default `.apply`.
+
 ## v0.5.1168 — Next.js standalone bring-up: walls 36–44 (rebased on main)
 
 Dynamic-parent classes, forward-capture, super.method, cjs export-hint, self-new in capturing closure. (Same content as PR #5125, re-applied cleanly onto current main.)

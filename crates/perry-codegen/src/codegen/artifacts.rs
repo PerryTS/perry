@@ -1308,7 +1308,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         })
         .collect();
-    let user_fn_wrapper_rest_and_arguments: std::collections::HashSet<String> = hir
+    let mut user_fn_wrapper_rest_and_arguments: std::collections::HashSet<String> = hir
         .functions
         .iter()
         .filter_map(|f| {
@@ -1326,6 +1326,65 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         })
         .collect();
+    let mut user_fn_wrapper_rest = user_fn_wrapper_rest;
+    let mut user_fn_wrapper_synthetic_arguments = user_fn_wrapper_synthetic_arguments;
+
+    // #5134-followup: a renamed export (`export { local as exported }`, which
+    // includes `export default function local`) gets a forwarding value wrapper
+    // `__perry_wrap_perry_fn_<src>__<exported>` (emitted above), but the
+    // rest/synthetic-`arguments` *metadata* loops below key only on the local
+    // function name (`__perry_wrap_..._<local>`). So a consumer that referenced
+    // the renamed export as a VALUE and called it via `.apply`/`.call`
+    // (`compose`'s `pipe.apply(this, reverse(arguments))` in ramda — `pipe` is
+    // `export default function pipe()` with a synthetic `arguments`) reached
+    // `js_native_call_value` with an unregistered wrapper func_ptr, so
+    // `lookup_closure_rest_full` missed and the args were dispatched positionally
+    // instead of bundled — the variadic function saw `arguments.length === 0`.
+    // Register the exported-alias wrapper symbol with the same metadata as the
+    // local one so the runtime bundles correctly through the rename.
+    {
+        let func_by_local_name: HashMap<&str, &perry_hir::Function> =
+            hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
+        for export in &hir.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            if local == exported {
+                continue;
+            }
+            let Some(f) = func_by_local_name.get(local.as_str()) else {
+                continue;
+            };
+            let alias_wrap = format!(
+                "__perry_wrap_perry_fn_{}__{}",
+                module_prefix,
+                sanitize(exported)
+            );
+            // The registration loop (`string_pool.rs`) iterates
+            // `user_fn_wrapper_rest`; the synthetic/rest_and_arguments sets only
+            // *refine* which runtime fn each entry uses. So the alias must be
+            // added to `user_fn_wrapper_rest` (keyed on the rest param index) in
+            // EVERY case, plus the matching refinement set.
+            let Some(rest_idx) = f.params.iter().position(|p| p.is_rest) else {
+                continue;
+            };
+            let last_is_synth_args = f
+                .params
+                .last()
+                .map(|p| p.arguments_object.is_some())
+                .unwrap_or(false);
+            let has_user_rest = f
+                .params
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
+            user_fn_wrapper_rest.push((alias_wrap.clone(), rest_idx));
+            if last_is_synth_args && has_user_rest {
+                user_fn_wrapper_rest_and_arguments.insert(alias_wrap);
+            } else if last_is_synth_args {
+                user_fn_wrapper_synthetic_arguments.insert(alias_wrap);
+            }
+        }
+    }
 
     // Wrapper arities — ABI param count per top-level user-function wrapper.
     // Used by dynamic closure dispatch to pad omitted trailing parameters
