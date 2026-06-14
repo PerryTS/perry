@@ -36,7 +36,16 @@ const SIGTERM: i32 = 15;
 #[cfg(unix)]
 const SIGKILL: i32 = 9;
 
-const COMPILED_BINARY_TIMEOUT: Duration = Duration::from_secs(120);
+// These stress binaries run under the slowest GC configuration —
+// `PERRY_GC_FORCE_EVACUATE=1` copies every marked object on every cycle and
+// `PERRY_GC_VERIFY_EVACUATION=1` adds a full-heap pointer-verification scan
+// after each one. The churn workload takes ~1.5s normally but ~20s under
+// that config on a fast host, which scales to ~60-130s on the slower, shared,
+// heavily-parallel CI runners — right at the old 120s budget, so the job
+// flaked (timeout panic) whenever the runner was loaded. The test asserts
+// *correctness* (`BARRIER_STRESS_OK`), not speed, so give it generous
+// wall-clock headroom rather than trimming the stress coverage.
+const COMPILED_BINARY_TIMEOUT: Duration = Duration::from_secs(300);
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
