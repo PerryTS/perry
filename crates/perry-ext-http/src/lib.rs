@@ -177,11 +177,9 @@ pub(crate) enum PendingHttpEvent {
     /// an interim `100 Continue`. Drains to the request's `'continue'`
     /// listeners; the canonical handler then sends the withheld body.
     Continue { request_handle: Handle },
-    /// #5080 — arm the `Expect: 100-continue` head flush on the next
-    /// event-loop tick. Node flushes a request's head on `nextTick`, not at
-    /// construction, so deferring lets post-construction `setHeader(...)`
-    /// (including a late `Expect: 100-continue`) reach the wire before the
-    /// head is snapshotted. A no-op for non-continue or already-sent requests.
+    /// #5080 — arm the `Expect: 100-continue` head flush on the next event-loop
+    /// tick (Node's nextTick), so post-construction `setHeader(...)` — including
+    /// a late `Expect` — reaches the wire. No-op for non-continue/sent requests.
     DeferredArmContinue { request_handle: Handle },
 }
 
@@ -1697,9 +1695,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 client_events::fire_request_event_listeners(request_handle, "continue");
             }
             PendingHttpEvent::DeferredArmContinue { request_handle } => {
-                // #5080 — next-tick arming: post-construction `setHeader(...)`
-                // has run, so the header set is final. Self-guards to a no-op
-                // unless `Expect: 100-continue` is set and unsent.
+                // #5080 — next-tick arming (see the enum variant docs).
                 continue_client::arm_expect_continue(request_handle);
             }
         }
@@ -1714,6 +1710,10 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
 
 #[cfg(test)]
 mod tests;
+// Test-only `perry_ffi_*` async-bridge shims so the lib test links without the
+// host stdlib archive (mirrors perry-ext-net / perry-ext-http-server).
+#[cfg(test)]
+mod test_async_shims;
 
 // Suppress unused-import warnings for FFI-only types.
 #[allow(dead_code)]
