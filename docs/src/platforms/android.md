@@ -91,5 +91,6 @@ See [Project Configuration](../getting-started/project-config.md#splash) for the
 
 ## Next Steps
 
+- [Wear OS](wearos.md) — full watch apps on the same Android backend
 - [Platform Overview](overview.md) — All platforms
 - [UI Overview](../ui/overview.md) — UI system

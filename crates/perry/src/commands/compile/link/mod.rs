@@ -271,7 +271,8 @@ pub(super) fn build_and_run_link(
 
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
-    let is_android = matches!(target, Some("android"));
+    // Wear OS links exactly like Android (same triple, NDK, cdylib + TLS model).
+    let is_android = matches!(target, Some("android") | Some("wearos"));
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
     let is_linux = matches!(target, Some(t) if t.starts_with("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));

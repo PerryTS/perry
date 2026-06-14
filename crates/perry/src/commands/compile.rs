@@ -1703,6 +1703,7 @@ pub fn run_with_parse_cache(
                 | Some("visionos")
                 | Some("visionos-simulator")
                 | Some("android")
+                | Some("wearos")
                 | Some("watchos")
                 | Some("watchos-simulator")
                 | Some("tvos")
@@ -4499,7 +4500,7 @@ pub fn run_with_parse_cache(
         }
         // Platform detection for nm tool and symbol prefix
         let _is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
-        let is_android = matches!(target.as_deref(), Some("android"));
+        let is_android = matches!(target.as_deref(), Some("android") | Some("wearos"));
         let is_harmonyos = matches!(
             target.as_deref(),
             Some("harmonyos") | Some("harmonyos-simulator")
@@ -5051,7 +5052,7 @@ pub fn run_with_parse_cache(
         target.as_deref(),
         Some("visionos-simulator") | Some("visionos")
     );
-    let is_android = matches!(target.as_deref(), Some("android"));
+    let is_android = matches!(target.as_deref(), Some("android") | Some("wearos"));
     let is_harmonyos = matches!(
         target.as_deref(),
         Some("harmonyos") | Some("harmonyos-simulator")

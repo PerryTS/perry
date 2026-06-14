@@ -55,7 +55,8 @@ pub(super) fn native_manifest_target_key(target: Option<&str>) -> &'static str {
     match target {
         Some("ios-simulator") | Some("ios") => "ios",
         Some("visionos-simulator") | Some("visionos") => "visionos",
-        Some("android") => "android",
+        // Wear OS resolves native-addon config from the [android] target.
+        Some("android") | Some("wearos") => "android",
         Some("tvos-simulator") | Some("tvos") => "tvos",
         Some("watchos-simulator") | Some("watchos") => "watchos",
         Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
@@ -1314,7 +1315,7 @@ fn arch_for_target_key(target: Option<&str>) -> Option<&'static str> {
         Some("macos") => Some("arm64"),
         Some("linux") => Some("x64"),
         Some("windows") | Some("windows-winui") => Some("x64"),
-        Some("android") => Some("arm64"),
+        Some("android") | Some("wearos") => Some("arm64"),
         Some("harmonyos") => Some("arm64"),
         Some("harmonyos-simulator") => Some("x64"),
         // ios/tvos/watchos/visionos: device builds are always arm64 (or

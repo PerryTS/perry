@@ -70,6 +70,7 @@
 - [watchOS](platforms/watchos.md)
   - [Publishing to the App Store](platforms/watchos-app-store.md)
 - [Android](platforms/android.md)
+- [Wear OS](platforms/wearos.md)
 - [HarmonyOS NEXT](platforms/harmonyos.md)
 - [Windows](platforms/windows.md)
   - [Windows 7 Compatibility](platforms/windows-7.md)

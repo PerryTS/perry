@@ -42,6 +42,9 @@ pub(super) fn strip_final_binary(
         || is_watchos
         || is_harmonyos
         || target == Some("android")
+        // Wear OS ships the same dlopen'd .so — stripping would drop the
+        // no_mangle JNI/FFI symbols PerryActivity resolves at load.
+        || target == Some("wearos")
         || std::env::var("PERRY_DEBUG_SYMBOLS").is_ok()
     {
         return;

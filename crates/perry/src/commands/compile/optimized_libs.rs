@@ -793,7 +793,10 @@ pub(super) fn build_optimized_libs(
     // #1508: same shape for Android — cc-rs can't find the NDK clang
     // otherwise (silent on Unix where `clang` happens to exist, hard fail
     // on Windows with `clang.exe not found`).
-    if matches!(target, Some("android") | Some("android-x86_64")) {
+    if matches!(
+        target,
+        Some("android") | Some("android-x86_64") | Some("wearos")
+    ) {
         if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
             for (k, v) in
                 super::library_search::android_cross_env(std::path::Path::new(&ndk), target)
@@ -821,7 +824,10 @@ pub(super) fn build_optimized_libs(
     // shadow stack), so those IE TLS relocations get baked into the final
     // cdylib. Force global-dynamic so the dynamic linker can resolve TLS
     // slots after the process has started.
-    if matches!(target, Some("android") | Some("android-x86_64")) {
+    if matches!(
+        target,
+        Some("android") | Some("android-x86_64") | Some("wearos")
+    ) {
         rustflags.push(android_global_dynamic_tls_rustflag(&mut cargo_cmd));
     }
     if !rustflags.is_empty() {
@@ -1108,7 +1114,7 @@ pub(super) fn build_optimized_libs(
                 | Some("ios-widget")
                 | Some("ios-widget-simulator") => "perry-ui-ios",
                 Some("visionos-simulator") | Some("visionos") => "perry-ui-visionos",
-                Some("android") => "perry-ui-android",
+                Some("android") | Some("wearos") => "perry-ui-android",
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
                 Some("linux") => "perry-ui-gtk4",
