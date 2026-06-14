@@ -573,8 +573,10 @@ pub fn select_linker_command(
             "linux-x86_64"
         };
         let clang = format!(
-            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang",
-            ndk_home, host_tag
+            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang{}",
+            ndk_home,
+            host_tag,
+            if cfg!(target_os = "windows") { ".cmd" } else { "" }
         );
         if !PathBuf::from(&clang).exists() {
             return Err(anyhow!("Android NDK clang not found at: {}", clang));
