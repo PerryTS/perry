@@ -847,10 +847,7 @@ pub(super) fn declaration_sidecar_for_resolved_import(
         return canonical_existing_declaration(resolved_path.to_path_buf());
     }
 
-    if !(import_source.starts_with("./")
-        || import_source.starts_with("../")
-        || import_source.starts_with('/'))
-    {
+    if !(is_relative_specifier(import_source) || import_source.starts_with('/')) {
         let (package_name, subpath) = parse_package_specifier(import_source);
         if let Some(package_dir) = package_dir_for_resolved_path(resolved_path, &package_name) {
             if let Some(sidecar) = resolve_package_declaration_entry(
@@ -897,13 +894,28 @@ pub(super) fn resolve_relative_import_path(
     import_source: &str,
     importer_path: &Path,
 ) -> Option<PathBuf> {
-    if !import_source.starts_with("./") && !import_source.starts_with("../") {
+    if !is_relative_specifier(import_source) {
         return None;
     }
     let parent = importer_path.parent()?;
     let resolved = parent.join(import_source);
     let path = resolve_with_extensions(&resolved)?;
     path.canonicalize().ok()
+}
+
+/// True for ECMAScript relative-import specifiers. Besides the obvious `./x`
+/// and `../x`, the bare `"."` and `".."` are also relative — they resolve to
+/// the current / parent **directory**'s `index` file. `@tanstack/table-core`'s
+/// source uses `import { _getVisibleLeafColumns } from '..'` (the package
+/// barrel); without matching `".."` here it fell through to bare-package
+/// resolution, `import.resolved_path` never matched the index module, and every
+/// name imported through it lowered to an unresolved raw extern symbol → link
+/// failure (`__getVisibleLeafColumns`). Refs #5141.
+pub(super) fn is_relative_specifier(import_source: &str) -> bool {
+    import_source.starts_with("./")
+        || import_source.starts_with("../")
+        || import_source == "."
+        || import_source == ".."
 }
 
 /// Resolve an import specifier to a file path
@@ -938,11 +950,8 @@ pub(super) fn resolve_import(
         None
     };
 
-    // Handle relative imports (./ or ../)
-    if import_source.starts_with("./")
-        || import_source.starts_with("../")
-        || subpath_import_target.is_some()
-    {
+    // Handle relative imports (./ or ../, plus bare "." / ".." directory imports)
+    if is_relative_specifier(import_source) || subpath_import_target.is_some() {
         if let Some(canonical) = subpath_import_target
             .or_else(|| resolve_relative_import_path(import_source, importer_path))
         {
