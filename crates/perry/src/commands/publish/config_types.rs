@@ -41,6 +41,9 @@ pub(super) struct GoogleAuthConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct ProjectConfig {
     pub(super) name: Option<String>,
+    /// Home Screen / Finder display name (CFBundleDisplayName). Platform tables
+    /// ([ios]/[macos]/[tvos]) may override per-platform; falls back here.
+    pub(super) display_name: Option<String>,
     pub(super) version: Option<String>,
     pub(super) build_number: Option<u64>,
     pub(super) bundle_id: Option<String>,
@@ -73,6 +76,7 @@ pub(super) struct IconsConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct MacosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) display_name: Option<String>,
     pub(super) category: Option<String>,
     pub(super) minimum_os: Option<String>,
     pub(super) entitlements: Option<Vec<String>>,
@@ -99,6 +103,7 @@ pub(super) struct MacosConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct IosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) display_name: Option<String>,
     pub(super) deployment_target: Option<String>,
     /// Alias for deployment_target (perry.toml uses minimum_version)
     pub(super) minimum_version: Option<String>,
@@ -184,6 +189,7 @@ pub(super) struct WatchosConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct TvosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) display_name: Option<String>,
     pub(super) entry: Option<String>,
     pub(super) deployment_target: Option<String>,
     pub(super) encryption_exempt: Option<bool>,

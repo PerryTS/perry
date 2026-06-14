@@ -78,6 +78,46 @@ pub(super) fn read_apple_app_version(input: &Path) -> (String, String) {
     read.unwrap_or_else(|| ("1.0.0".to_string(), "1".to_string()))
 }
 
+/// Read the human-facing app display name from `perry.toml`, used for the
+/// `CFBundleDisplayName` Info.plist key — the name shown under the icon on the
+/// Home Screen. Prefers the platform's own `[<platform>].display_name` (e.g.
+/// `[ios]`, `[tvos]`), falling back to `[project].display_name`. Returns `None`
+/// when neither is set, in which case the bundler omits CFBundleDisplayName and
+/// the Home Screen falls back to CFBundleName — i.e. the sanitized executable
+/// stem, e.g. `bloom-jump` instead of the intended `Bloom Jump`.
+pub(super) fn read_app_display_name(input: &Path, platform: &str) -> Option<String> {
+    let mut dir = input.canonicalize().ok()?;
+    for _ in 0..5 {
+        dir = dir.parent()?.to_path_buf();
+        let toml_path = dir.join("perry.toml");
+        if !toml_path.exists() {
+            continue;
+        }
+        let doc: toml::Table = fs::read_to_string(&toml_path).ok()?.parse().ok()?;
+        let from_table = |name: &str| {
+            doc.get(name)
+                .and_then(|v| v.as_table())
+                .and_then(|t| t.get("display_name"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        // First perry.toml on the walk is the project manifest; stop here
+        // whether or not it carries the key (mirrors read_apple_app_version).
+        return from_table(platform).or_else(|| from_table("project"));
+    }
+    None
+}
+
+/// Minimal XML escape for text interpolated into an Info.plist `<string>`.
+/// Display names are user-controlled (perry.toml), so an `&` or `<` would
+/// otherwise produce a malformed plist that the bundle tooling rejects.
+pub(super) fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// Read the SDK marketing version (e.g. `26.2`) from the cross sysroot's
 /// `SDKSettings.json` so the plist DT* version matches the SDK that actually
 /// links the binary (its Mach-O `LC_BUILD_VERSION` sdk field). Returns `None`
@@ -313,6 +353,18 @@ pub(super) fn bundle_for_tvos(
     };
     let dt_block = apple_dt_plist_block(dt_platform_name, dt_sysroot_env, dt_default_sysroot);
 
+    // CFBundleDisplayName — name shown under the icon on the tvOS Home Screen.
+    // Prefers [tvos]/[project] display_name; without it tvOS falls back to
+    // CFBundleName (the executable stem, e.g. "bloom-jump").
+    let display_name_block = read_app_display_name(input, "tvos")
+        .map(|name| {
+            format!(
+                "    <key>CFBundleDisplayName</key>\n    <string>{}</string>\n",
+                xml_escape(&name)
+            )
+        })
+        .unwrap_or_default();
+
     let info_plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -324,7 +376,7 @@ pub(super) fn bundle_for_tvos(
     <string>{bundle_id}</string>
     <key>CFBundleName</key>
     <string>{exe_stem}</string>
-    <key>CFBundleVersion</key>
+{display_name_block}    <key>CFBundleVersion</key>
     <string>{app_build_number}</string>
     <key>CFBundleShortVersionString</key>
     <string>{app_version}</string>
