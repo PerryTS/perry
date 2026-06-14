@@ -449,7 +449,114 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     })
 }
 
+/// #5126: a named function expression binds its own name as a read-only
+/// local *inside its own body* (the FunctionExpression name scope per
+/// spec) — `const fact = function f(n){ return n<=1?1:n*f(n-1); }` must
+/// see `f` from within the body even though the outer binding is `fact`.
+///
+/// We model this without a new HIR node by wrapping the (otherwise
+/// anonymous) function in an immediately-invoked arrow that binds the
+/// name to the function value:
+///   (() => { let f = <function expr>; return f; })()
+/// The `let f = <closure that references f>` shape is exactly the
+/// self-recursive-`const` pattern that `collect_boxed_vars` already
+/// boxes (step 5: a `Stmt::Let` whose `Closure` init references the
+/// Let's own id). So `f` resolves to the function through its heap box,
+/// reusing the proven recursion machinery.
 pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
+    // A named function expression with a non-empty ident may reference its
+    // own name from within its body. Lower it through the self-binding path,
+    // which keeps the IIFE wrapper only when the body actually captures the
+    // name (so plain `function f(){...}` and the synthetic `Function(...)`
+    // body stay a bare `Closure`).
+    if let Some(ident) = &fn_expr.ident {
+        let own_name = ident.sym.to_string();
+        if !own_name.is_empty() {
+            return lower_named_fn_expr(ctx, fn_expr, own_name);
+        }
+    }
+    lower_fn_expr_anon(ctx, fn_expr)
+}
+
+/// Lower a *named* function expression, binding its own name inside the
+/// body. We put the name in scope, lower the function anonymously, and
+/// inspect whether the lowered closure actually captured the name. If it
+/// didn't (the common case — no recursive self-reference), we discard the
+/// scaffolding and return the bare closure unchanged. If it did, we wrap
+/// it in an immediately-invoked arrow that binds the name to the function
+/// value:
+///   (() => { let f = <function expr>; return f; })()
+/// The `let f = <closure that references f>` shape is exactly the
+/// self-recursive-`const` pattern that `collect_boxed_vars` already boxes
+/// (a `Stmt::Let` whose `Closure` init references the Let's own id), so the
+/// name resolves to the function through its heap box — reusing the proven
+/// recursion machinery without a dedicated HIR node.
+fn lower_named_fn_expr(
+    ctx: &mut LoweringContext,
+    fn_expr: &ast::FnExpr,
+    own_name: String,
+) -> Result<Expr> {
+    // Wrapper scope: holds just the self-binding local. Collect the
+    // enclosing scope's locals first so they (not the self-binding) are
+    // what the wrapper itself captures and threads through to the inner
+    // function.
+    let wrapper_scope = ctx.enter_scope();
+    let outer_locals: Vec<(String, LocalId)> = ctx
+        .locals
+        .iter()
+        .map(|(name, id, _)| (name.clone(), *id))
+        .collect();
+    let self_id = ctx.define_local(own_name.clone(), Type::Any);
+
+    // Lower the function itself as an anonymous closure. With `self_id`
+    // already in scope, any reference to the name inside the body resolves
+    // to it (correctly shadowing any outer binding of the same name) and is
+    // captured.
+    let inner = lower_fn_expr_anon(ctx, fn_expr)?;
+
+    let self_referenced = matches!(&inner, Expr::Closure { captures, .. } if captures.contains(&self_id));
+    if !self_referenced {
+        // No recursive self-reference — drop the scaffolding.
+        ctx.exit_scope(wrapper_scope);
+        return Ok(inner);
+    }
+
+    let wrapper_func_id = ctx.fresh_func();
+    let body = vec![
+        Stmt::Let {
+            id: self_id,
+            name: own_name,
+            ty: Type::Any,
+            mutable: false,
+            init: Some(inner),
+        },
+        Stmt::Return(Some(Expr::LocalGet(self_id))),
+    ];
+    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &[]);
+    ctx.exit_scope(wrapper_scope);
+
+    Ok(Expr::Call {
+        callee: Box::new(Expr::Closure {
+            func_id: wrapper_func_id,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body,
+            captures,
+            mutable_captures,
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: ctx.current_strict,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    })
+}
+
+fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
     // Lower function expression to a closure (similar to arrow but
     // without `this` capture — function expressions have their own
     // `this` binding determined by how they're called).
