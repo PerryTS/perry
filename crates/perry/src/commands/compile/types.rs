@@ -578,6 +578,14 @@ pub struct CompilationContext {
     /// the same feature and degrade gracefully when it's off, so they're absent
     /// from size-optimized binaries unless one of these APIs is also used.
     pub uses_diagnostics: bool,
+    /// Whether any TS module imports `node:dgram` (UDP sockets). Gates
+    /// `perry-runtime/mod-dgram` (`crate::dgram` + `crate::dgram_reactor`,
+    /// ~43 KB, incl. the `js_dgram_*` externs codegen emits direct calls to).
+    /// Detected from `module: "dgram"` in the HIR (a `dgram` namespace can only
+    /// arise from importing it), so a program that never imports `dgram` links
+    /// none of it. NB: not via `native_module_imports`, which only tracks
+    /// `requires_stdlib` modules — dgram is runtime-only.
+    pub uses_dgram: bool,
     /// Whether `perry/thread` is imported. When true, the runtime must
     /// keep `panic = "unwind"` so that worker-thread panics translate to
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
@@ -827,6 +835,7 @@ impl CompilationContext {
             uses_string_normalize: false,
             uses_intl_segmenter: false,
             uses_diagnostics: false,
+            uses_dgram: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             min_windows_version: "10".to_string(),

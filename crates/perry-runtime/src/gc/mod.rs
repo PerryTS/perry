@@ -362,6 +362,7 @@ pub fn gc_init() {
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC
     // between ticks doesn't reclaim the object whose `message` handlers fire.
+    #[cfg(feature = "mod-dgram")]
     gc_register_mutable_root_scanner(crate::dgram_reactor::scan_roots_mut);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
