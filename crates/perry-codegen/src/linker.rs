@@ -50,11 +50,31 @@ fn native_tuning_arg_for_host() -> &'static str {
     }
 }
 
+/// Default IR-size cutoff above which a module is compiled at `-O0` instead
+/// of `-O3` (#4880). A module dominated by a huge generated literal
+/// (config / lookup table) lowers to one enormous function whose
+/// thousands of `alloca`s make LLVM's `-O1+` pipeline (SROA / mem2reg /
+/// GVN) super-linear: a 2800-key object literal is ~10 MB of IR that
+/// `clang -c -O3` chews on for ~18 s (and multi-thousand-key literals were
+/// reported taking minutes / getting killed), versus ~3 s at `-O0`.
+/// `-O1`/`-O2` are no faster than `-O3` here, so `-O0` is the only escape.
+/// Such modules are almost always static data where optimization is
+/// irrelevant. Tunable via `PERRY_LL_O0_THRESHOLD_BYTES`.
+const DEFAULT_LL_O0_THRESHOLD_BYTES: usize = 6 * 1024 * 1024;
+
+fn ll_o0_threshold_bytes() -> usize {
+    std::env::var("PERRY_LL_O0_THRESHOLD_BYTES")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_LL_O0_THRESHOLD_BYTES)
+}
+
 fn build_clang_compile_plan(
     clang: PathBuf,
     ll_path: PathBuf,
     obj_path: PathBuf,
     target_triple: Option<&str>,
+    ll_byte_size: usize,
 ) -> ClangCompilePlan {
     let effective_target = target_triple
         .map(|s| s.to_string())
@@ -64,7 +84,24 @@ fn build_clang_compile_plan(
         .then(|| native_tuning_arg_for_host().to_string());
     let stderr_remarks_path = PathBuf::from(format!("{}.clang-stderr", obj_path.display()));
 
-    let mut clang_args = vec!["-c".to_string(), "-O3".to_string()];
+    // #4880: fall back to -O0 for pathologically-large modules so a giant
+    // generated literal doesn't make `clang -c` super-linear (see
+    // DEFAULT_LL_O0_THRESHOLD_BYTES).
+    let o0_threshold = ll_o0_threshold_bytes();
+    let opt_flag = if o0_threshold > 0 && ll_byte_size > o0_threshold {
+        eprintln!(
+            "perry: module IR is {:.1} MB (> {:.1} MB); compiling it at -O0 instead of -O3 \
+             so LLVM's -O1+ pipeline doesn't blow up on the oversized function (#4880). \
+             Override with PERRY_LL_O0_THRESHOLD_BYTES.",
+            ll_byte_size as f64 / (1024.0 * 1024.0),
+            o0_threshold as f64 / (1024.0 * 1024.0),
+        );
+        "-O0"
+    } else {
+        "-O3"
+    };
+
+    let mut clang_args = vec!["-c".to_string(), opt_flag.to_string()];
     if std::env::var("PERRY_DEBUG_SYMBOLS").is_ok() {
         clang_args.push("-g".to_string());
     }
@@ -151,6 +188,7 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
         ll_path.clone(),
         obj_path.clone(),
         target_triple,
+        ll_text.len(),
     );
 
     // Pre-flight probe: capture clang's default Target: line once per process,
@@ -822,8 +860,11 @@ mod tests {
             PathBuf::from("/tmp/input.ll"),
             PathBuf::from("/tmp/output.o"),
             None,
+            0,
         );
         assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
+        // Small module → optimized at -O3 (#4880).
+        assert!(plan.clang_args.contains(&"-O3".to_string()));
         assert!(plan.clang_args.contains(&"-target".to_string()));
         assert!(plan.analysis_clang_args.contains(&"-target".to_string()));
         assert_eq!(
@@ -834,12 +875,29 @@ mod tests {
     }
 
     #[test]
+    fn compile_plan_downgrades_to_o0_for_oversized_module() {
+        // #4880: a module whose IR exceeds the threshold compiles at -O0
+        // (avoiding LLVM's super-linear -O1+ pipeline on a giant function).
+        let huge = ll_o0_threshold_bytes() + 1;
+        let plan = build_clang_compile_plan(
+            PathBuf::from("clang"),
+            PathBuf::from("/tmp/input.ll"),
+            PathBuf::from("/tmp/output.o"),
+            None,
+            huge,
+        );
+        assert!(plan.clang_args.contains(&"-O0".to_string()));
+        assert!(!plan.clang_args.contains(&"-O3".to_string()));
+    }
+
+    #[test]
     fn compile_plan_skips_native_tuning_for_explicit_target() {
         let plan = build_clang_compile_plan(
             PathBuf::from("clang"),
             PathBuf::from("/tmp/input.ll"),
             PathBuf::from("/tmp/output.o"),
             Some("x86_64-unknown-linux-gnu"),
+            0,
         );
         assert_eq!(plan.effective_target, "x86_64-unknown-linux-gnu");
         assert_eq!(plan.native_tuning_arg, None);
@@ -861,6 +919,7 @@ mod tests {
             PathBuf::from("/tmp/input.ll"),
             PathBuf::from("/tmp/output.o"),
             Some("x86_64-unknown-linux-gnu"),
+            0,
         );
         write_compile_plan_metadata(&plan, &temp).unwrap();
         let text = fs::read_to_string(&temp).unwrap();
