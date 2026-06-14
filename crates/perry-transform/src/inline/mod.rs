@@ -16,6 +16,7 @@ mod exact_receivers;
 mod factory_specialize;
 mod imul;
 mod substitute;
+mod super_detect;
 
 // Public re-exports (explicit named — globs don't propagate transitively
 // through `pub(crate) use crate::inline::*` consumers).
@@ -60,6 +61,7 @@ pub(crate) use substitute::{
     collect_body_local_ids, substitute_locals, substitute_locals_in_stmts, substitute_this,
     substitute_this_in_stmts,
 };
+pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexical_super_set};
 
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
