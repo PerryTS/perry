@@ -79,7 +79,10 @@ pub extern "C" fn perry_ui_state_bind_toggle(state_handle: i64, toggle_handle: i
 /// off, non-zero for on.
 #[no_mangle]
 pub extern "C" fn perry_ui_toggle_set_state(handle: i64, on: i64) {
-    widgets::toggle::set_state(handle, on as i32);
+    // Normalize to 0/1 before narrowing: a plain `on as i32` truncates,
+    // so a non-zero i64 like 0x1_0000_0000 would wrap to 0 and read as
+    // "off", violating the documented non-zero-means-on contract.
+    widgets::toggle::set_state(handle, if on != 0 { 1 } else { 0 });
 }
 
 /// Bind a text widget to multiple states with a template.
