@@ -151,7 +151,17 @@ fn assert_ok_output(run: &std::process::Output, expected: &str) {
 /// globals) to point at freshly allocated nursery values, GC again, and
 /// verify every value survived. Any missed barrier on those store paths
 /// shows up as corrupt reads, an evacuation-verify panic, or a crash.
+///
+/// Optional / non-blocking (#5029): runs under the slowest GC config
+/// (force-evacuate + verify-evacuation) and hunts a *rare* corruption
+/// window, so it's nondeterministic and ~200s long — a poor fit for the
+/// blocking per-PR `cargo-test` gate (one flake blocks every unrelated PR).
+/// `#[ignore]`d by default; the `gc-stress` CI job runs it with `--ignored`
+/// (opt-in via the `run-extended-tests` label or `workflow_dispatch`), and
+/// you can run it locally with `cargo test -p perry --test
+/// gc_write_barrier_stress -- --ignored`.
 #[test]
+#[ignore = "#5029: nondeterministic GC-corruption stress test; runs in the opt-in gc-stress CI job, not the blocking gate"]
 fn tenured_mutation_stress() {
     let run = compile_and_run(
         r#"
@@ -221,7 +231,10 @@ console.log(bad === 0 ? "BARRIER_STRESS_OK" : "BARRIER_STRESS_CORRUPT " + bad);
 /// deep-clone loop in `js_structured_clone` now routes through the shared
 /// barriered store). Uses a 300-key literal (all fields inline) plus a deep
 /// nested chain so the clone itself allocates enough to run GCs mid-clone.
+///
+/// Optional / non-blocking (#5029) — see `tenured_mutation_stress` above.
 #[test]
+#[ignore = "#5029: nondeterministic GC-corruption stress test; runs in the opt-in gc-stress CI job, not the blocking gate"]
 fn structured_clone_gc_churn_stress() {
     let mut fields = String::new();
     for i in 0..300 {

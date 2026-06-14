@@ -259,6 +259,51 @@ jobs:
           done
 
   # ---------------------------------------------------------------------------
+  # GC write-barrier stress (optional / non-blocking)
+  #
+  # `crates/perry/tests/gc_write_barrier_stress.rs` runs compiled binaries
+  # under the slowest GC configuration (PERRY_GC_FORCE_EVACUATE +
+  # PERRY_GC_VERIFY_EVACUATION) to hunt a *rare* corruption window (#5029).
+  # Those tests are ~200s each and nondeterministic by nature, so they are a
+  # poor fit for the blocking per-PR `cargo-test` gate (one flake blocked
+  # every unrelated PR). They are `#[ignore]`d there and run here instead.
+  #
+  # Opt-in + informational: `continue-on-error` so a flake never fails the
+  # workflow; triggered by the `run-extended-tests` PR label, a
+  # `workflow_dispatch` with `run_extended_tests=true`, or a tag push.
+  # ---------------------------------------------------------------------------
+  gc-stress:
+    continue-on-error: true
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Run GC write-barrier stress tests
+        env:
+          # Match the cargo-test gate's linker workaround (lld SIGBUS on the
+          # shared runner during large test links).
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: cargo test -p perry --test gc_write_barrier_stress -- --ignored
+
+  # ---------------------------------------------------------------------------
   # Compiler-output regression gate
   #
   # Retains HIR, pre/post-opt LLVM IR, assembly, benchmark output, runtime
