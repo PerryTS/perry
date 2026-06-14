@@ -21,7 +21,8 @@ Hello from Perry!
 - **Terminal UI** — Build interactive CLIs with [ink-shape React hooks](tui/overview.md) (`useState`, `useEffect`, `useApp`) on a native cell-grid renderer. No Node, no reconciler — just a single static binary.
 - **7 targets** — macOS, iOS, Android, Windows, Linux, Web, and WebAssembly from the same source code.
 - **Familiar ecosystem** — Use npm packages like `fastify`, `mysql2`, `redis`, `bcrypt`, `lodash`, and more — compiled natively.
-- **Zero config** — Point Perry at a `.ts` file and get a binary. No `tsconfig.json` required.
+- **Node.js compatibility** — ~95% behavioral parity with Node, including real (non-stub) implementations of `fs`, `http`/`https`/`http2`, `net`/`tls`, `crypto`, `stream`, `events`, `child_process`, `worker_threads`, `process`, and the WHATWG web globals. Against Node's own test suite (node v26), Perry passes ~97% of cases.
+- **Zero config** — Point Perry at a `.ts` (or `.js`) file and get a binary. No `tsconfig.json` required.
 
 ## What Perry Compiles
 
@@ -34,6 +35,11 @@ Perry supports a practical subset of TypeScript:
 - Regular expressions, JSON, Promises
 - Module imports/exports
 - Generic type erasure
+
+Perry also compiles **plain JavaScript** — `.js`, `.cjs`, `.mjs`, and `.jsx`
+source files are parsed as JavaScript and lowered through the same native
+pipeline, so no TypeScript annotations are required. Dynamic JS patterns aren't
+all guaranteed, but most JavaScript projects compile and run.
 
 See [Supported Features](language/supported-features.md) for the complete list.
 

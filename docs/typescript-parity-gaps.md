@@ -1,5 +1,17 @@
 # TypeScript/Node.js Parity Gaps
 
+> **⚠️ This document is historical (captured at v0.4.56) and is no longer
+> accurate.** Most items listed below as "Missing" or "Partial" — generators and
+> the full iterator protocol, `Symbol` / well-known symbols, `Proxy`, `Reflect`,
+> async generators, `for await...of`, and more — have since landed. As of
+> v0.5.x Perry sits at roughly **95% Node.js/TypeScript compatibility** and
+> passes **~97%** of Node's own test suite (node v26, 53 `node:*` modules).
+> For the current, maintained gap analysis see
+> [`runtime-parity-gaps.md`](runtime-parity-gaps.md); for the language-feature
+> status see [`src/language/supported-features.md`](src/language/supported-features.md)
+> and [`src/language/limitations.md`](src/language/limitations.md). The rows below
+> are kept only for historical reference.
+
 Everything the Perry compiler is missing for absolute parity with Node.js running TypeScript, as of v0.4.56.
 
 **Current status:** 100% pass rate on 87 parity tests (27 edge-case + 60 existing). The gaps below are features NOT covered by those tests — they either aren't tested or aren't implemented.

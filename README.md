@@ -17,6 +17,25 @@ perry compile src/main.ts -o myapp
 
 Perry uses [SWC](https://swc.rs/) for TypeScript parsing and [LLVM](https://llvm.org/) for native code generation. The output is a single binary with no runtime dependencies.
 
+### Node.js compatibility
+
+Perry targets close behavioral parity with Node.js. Against Node's own test suite
+(node v26.3.0, 53 `node:*` modules), Perry's native runtime passes **~97%**
+(2792 / 2863 cases), and overall Node/TypeScript compatibility sits around **95%**.
+Real implementations — not stubs — cover `fs`, `http`/`https`/`http2`, `net`/`tls`,
+`dns`/`dgram`, `crypto`, `stream` (+ `stream/web`), `events`, `child_process`,
+`cluster`, `worker_threads`, `zlib`, `process`, `async_hooks` /
+`AsyncLocalStorage`, `Atomics` / `SharedArrayBuffer` (cross-thread), the WHATWG
+web globals (`fetch`, `URL`, streams, `structuredClone`, WebCrypto, …), and ~50
+popular npm packages. The remaining gap is a long tail of edge-case options and a
+few categorical items (lookbehind regex, some `console` formatting). See
+[`docs/runtime-parity-gaps.md`](docs/runtime-parity-gaps.md).
+
+**Perry also compiles `.js` / `.cjs` / `.mjs` / `.jsx` source directly** (parsed as
+JavaScript, lowered through the same native pipeline as TypeScript) — no
+TypeScript annotations required. There are no guarantees for every dynamic JS
+pattern, but plain JavaScript projects compile and run in most cases.
+
 ---
 
 ## Built with Perry
@@ -491,7 +510,7 @@ perry publish macos   # or: ios / android / linux
 | Spread operator in calls and literals | ✅ |
 | RegExp (test, match, replace) | ✅ |
 | BigInt (256-bit) | ✅ |
-| Decorators | ❌ ([not supported](docs/src/language/limitations.md#no-decorators)) |
+| Decorators | ⚠️ Legacy TS decorators + `emitDecoratorMetadata` ([details](docs/src/language/limitations.md#decorators)) |
 
 ### Standard Library
 

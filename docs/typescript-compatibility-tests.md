@@ -2,6 +2,15 @@
 
 A comprehensive edge-case test suite for the Perry TypeScript compiler, designed to surface bugs and compatibility gaps by comparing Perry's native output against Node.js running the same TypeScript source.
 
+> **⚠️ The status figure below is historical (v0.4.50).** Perry's compatibility
+> has moved far past this snapshot: as of v0.5.x it sits at roughly **95%
+> Node.js/TypeScript parity** and passes **~97%** of Node's own test suite
+> (node v26). Day-to-day parity is now tracked by the gap test suite
+> (`test-files/test_gap_*.ts`, byte-for-byte vs `node --experimental-strip-types`)
+> and the Node module suite (`scripts/node_suite_run.py` against
+> `test-parity/node_suite_baseline.json`). See
+> [`runtime-parity-gaps.md`](runtime-parity-gaps.md) for the maintained gap list.
+
 **Status (v0.4.50):** 7 of 26 tests pass with full parity against Node.js. Several others are within 1–6 output-line diffs of passing.
 
 ---

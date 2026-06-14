@@ -2,6 +2,16 @@
 
 This document is a structured gap analysis comparing the public Node.js + Bun runtime API surface (catalogued in `runtime-parity.md`) against the APIs Perry can dispatch at compile time. Coverage sources are: the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`, ~590 (module, method) entries), `Expr::*` HIR variants in `crates/perry-hir/src/ir.rs` that lower stdlib APIs directly to dedicated codegen arms (~301 stdlib-shaped variants), and `js_*` FFI exports across `perry-runtime` (~984), `perry-stdlib` (~633), and 35 `perry-ext-*` crates (~553). Output is intended for prioritizing which APIs to implement next.
 
+> **Behavioral status (v0.5.x).** This list counts individual API *surface* gaps,
+> not behavioral pass rate. Measured against Node's own test suite
+> (`scripts/node_suite_run.py` vs `test-parity/node_suite_baseline.json`, node
+> v26.3.0, 53 `node:*` modules), Perry's runtime passes **~97%** (2792 / 2863
+> cases); overall Node.js/TypeScript compatibility is around **95%**. The heavily
+> used modules (`fs`, `http`/`https`/`http2`, `net`/`tls`, `crypto`, `stream`,
+> `events`, `child_process`, `worker_threads`, `process`, `zlib`) are real, not
+> stubs — the gaps below are concentrated in less-common modules and edge-case
+> option surfaces.
+
 ## Summary
 
 | Category | Modules | Gap APIs | Verified-covered |

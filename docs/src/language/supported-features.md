@@ -230,6 +230,34 @@ Caveat: this is Perry's TSX runtime, not React DOM or full React reconciler
 semantics. For `perry/ui`, or for `perry/tui` intrinsics whose JSX rewrite has
 not landed yet, the function-call form remains the canonical native API.
 
+## JavaScript (`.js`) Input
+
+Perry is a TypeScript compiler, but TypeScript is a superset of JavaScript — so
+Perry also compiles plain JavaScript. `.js`, `.cjs`, `.mjs`, and `.jsx` files are
+parsed as JavaScript (decorators, JSX, and import attributes enabled) and lowered
+through the exact same native pipeline as `.ts`. No type annotations are required.
+
+```bash
+perry compile src/main.js -o myapp
+./myapp
+```
+
+There are no guarantees for every dynamic JavaScript pattern (the
+[Limitations](limitations.md) still apply — no `eval`, no general dynamic
+`require()`), but most plain JavaScript projects compile and run.
+
+## Node.js Compatibility
+
+Perry implements a large, real (non-stub) slice of the Node.js standard library —
+`fs`, `http`/`https`/`http2`, `net`/`tls`, `dns`/`dgram`, `crypto`, `stream`
+(+ `stream/web`), `events`, `child_process`, `cluster`, `worker_threads`, `zlib`,
+`process`, `async_hooks` / `AsyncLocalStorage`, `Atomics` / `SharedArrayBuffer`,
+and the WHATWG web globals (`fetch`, `URL`, streams, `structuredClone`,
+WebCrypto, …). Against Node's own test suite (node v26, 53 `node:*` modules)
+Perry passes ~97% of cases, with overall Node/TypeScript compatibility around
+95%. The per-module surface and remaining gaps are tracked in
+`docs/runtime-parity-gaps.md`.
+
 ## Next Steps
 
 - [Type System](type-system.md) — Type inference and checking
