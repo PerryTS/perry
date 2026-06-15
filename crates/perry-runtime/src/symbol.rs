@@ -640,7 +640,10 @@ pub(crate) unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
 /// `None` for any other symbol. Used by `js_object_get_symbol_property` to
 /// resolve a user class's iterator method off its prototype.
 fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
-    for (wk, method) in [("iterator", "@@iterator"), ("asyncIterator", "@@asyncIterator")] {
+    for (wk, method) in [
+        ("iterator", "@@iterator"),
+        ("asyncIterator", "@@asyncIterator"),
+    ] {
         let s = well_known_symbol(wk);
         if !s.is_null() {
             let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
