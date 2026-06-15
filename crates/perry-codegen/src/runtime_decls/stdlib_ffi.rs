@@ -213,9 +213,6 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_node_http_im_remote_port", DOUBLE, &[I64]);
     module.declare_function("js_node_http_im_pause", VOID, &[I64]);
     module.declare_function("js_node_http_im_resume", VOID, &[I64]);
-    // #4975: self-returning variants (pause/resume return `this`).
-    module.declare_function("js_node_http_im_pause_self", I64, &[I64]);
-    module.declare_function("js_node_http_im_resume_self", I64, &[I64]);
     module.declare_function("js_node_http_im_destroy", VOID, &[I64]);
     module.declare_function("js_node_http_im_on", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_node_http_im_read", DOUBLE, &[I64]);
