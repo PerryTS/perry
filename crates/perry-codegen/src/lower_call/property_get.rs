@@ -414,11 +414,17 @@ pub fn try_lower_property_get_method_call(
             // startsWith / endsWith only exist on String — both 1-arg
             // and 2-arg (searchString, position) forms route here.
             "startsWith" | "endsWith" if args.len() == 1 || args.len() == 2 => true,
-            // `normalize` is string-exclusive only at 0/1 args. User classes
-            // commonly define 2-arg `normalize(pathname, matched)` methods
-            // (Next.js route normalizers) — those must fall through to the
-            // runtime dispatcher instead of erroring on String arity.
-            "normalize" if args.len() <= 1 => true,
+            // `normalize` is NOT force-routed to the string path for Any-typed
+            // receivers at any arity. User classes commonly define a 1-arg
+            // `normalize(pathname)` method (Next.js route normalizers:
+            // `this.normalize(matchedPath)`, `normalizer.normalize(initPathname)`)
+            // — forcing the string path made the pathname argument the Unicode
+            // `form`, throwing `RangeError: The normalization form should be one
+            // of NFC, NFD, NFKC, NFKD` (Next.js wall 50). A receiver that really
+            // is a string still gets `String.prototype.normalize` two ways: the
+            // statically-typed-string fast path above (`is_string_expr`), and the
+            // `jsval.is_string()` arm of `js_native_call_method` for Any-typed
+            // strings. So nothing is lost by falling through here.
             "lastIndexOf" if args.len() == 1 => true,
             _ => false,
         };
