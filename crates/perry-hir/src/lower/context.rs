@@ -715,6 +715,20 @@ impl LoweringContext {
         self.locals.iter().rposition(|(n, _, _)| n == name)
     }
 
+    /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a
+    /// module-var the top-level pre-scan registered for `const ns =
+    /// require("<native>")`. After this, a bare read of `name` resolves to its
+    /// native-module / builtin-alias registration instead of an
+    /// always-`undefined` `LocalGet`, matching how `import * as ns` (which
+    /// never creates a local) behaves. Returns the removed `LocalId`.
+    pub(crate) fn remove_local_binding(&mut self, name: &str) -> Option<LocalId> {
+        let idx = self.lookup_local_index(name)?;
+        let (_, id, _) = self.locals.remove(idx);
+        self.pre_registered_module_vars.remove(name);
+        self.pre_registered_module_var_decls.remove(name);
+        Some(id)
+    }
+
     pub(crate) fn push_with_env(&mut self, local_id: LocalId) {
         let local_mark = self.locals.len();
         self.with_env_stack.push(WithEnvFrame {

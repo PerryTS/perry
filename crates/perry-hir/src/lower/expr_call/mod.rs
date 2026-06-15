@@ -61,7 +61,7 @@ use intrinsics::{
     try_embed_wasm, try_function_return_this, try_iife_call_rewrite, try_iterator_from,
     try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
-    try_pod_layout_constants, try_precompile, try_require_literal_bail,
+    try_pod_layout_constants, try_precompile, try_require_literal,
     try_strict_eval_arguments_assignment,
 };
 use local_array_methods::try_local_array_methods;
@@ -162,7 +162,9 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
     // Compile-time intrinsics + legacy CJS/UMD bare-callee shapes
     // (require/embedWasm/IIFE.call/Function('return this')/RegExp).
-    try_require_literal_bail(ctx, call)?;
+    if let Some(expr) = try_require_literal(ctx, call)? {
+        return Ok(expr);
+    }
     if let Some(expr) = try_embed_wasm(ctx, call)? {
         return Ok(expr);
     }

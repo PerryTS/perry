@@ -37,3 +37,6 @@ pub(crate) use assignment_stmt::{
 pub(crate) use helpers::{ast_expr_contains_function_expr, rewrite_use_state_tuple};
 pub(crate) use pattern_binding::{lower_pattern_binding, lower_pattern_binding_into};
 pub(crate) use var_decl::lower_var_decl_with_destructuring;
+pub(crate) use var_decl_sources::{
+    require_resolvable_native_specifier, resolvable_native_module_for_spec,
+};

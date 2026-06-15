@@ -754,12 +754,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }
             }
 
-            // Check if this is a require() call for a built-in module
+            // #5216: `const <name> = require("<spec>")` of a statically
+            // resolvable native/Node-builtin module lowers to the same
+            // module-namespace binding `import * as <name> from "<spec>"`
+            // produces (native module + builtin alias, NO runtime `let` — a
+            // namespace import binds nothing observable). Subsumes the old
+            // fs/path/crypto-only `is_require_builtin_module` path. Non-literal
+            // / unresolvable specifiers fall through to the legacy compile-time
+            // refusal in `expr_call::intrinsics::try_require_literal`.
             if let Some(init_expr) = &decl.init {
-                if let Some(module_name) = is_require_builtin_module(init_expr) {
-                    // Register this variable as an alias to the built-in module
-                    ctx.register_builtin_module_alias(name.clone(), module_name);
-                    // Don't emit a variable declaration - the module is handled specially
+                if let Some(module_name) = require_resolvable_native_specifier(init_expr) {
+                    register_require_namespace_binding(ctx, &name, &module_name);
                     return Ok(result);
                 }
             }
