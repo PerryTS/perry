@@ -218,6 +218,53 @@ pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     make_require(undefined())
 }
 
+/// Next.js wall 54: registry mapping an AOT-compiled CJS module's absolute
+/// source path to its evaluated `module.exports`, so a RUNTIME
+/// `require(absolutePath.js)` (Next.js / turbopack load page + chunk modules by
+/// a path computed at request time, not a static specifier) resolves to the
+/// module Perry already compiled instead of throwing `MODULE_NOT_FOUND`. Keyed
+/// by canonicalized path so `/a/../b` and symlinks normalize to one entry. Each
+/// compiled module self-registers at the end of its CJS wrapper init.
+static MODULE_PATH_REGISTRY: std::sync::RwLock<Option<std::collections::HashMap<String, u64>>> =
+    std::sync::RwLock::new(None);
+
+fn canonicalize_module_path(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// Codegen FFI: register an AOT-compiled module's exports under its absolute
+/// source path (emitted at the tail of each CJS wrapper). See
+/// [`MODULE_PATH_REGISTRY`].
+#[no_mangle]
+pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
+    let path = value_to_string(path_value, "path");
+    let key = canonicalize_module_path(&path);
+    let mut guard = MODULE_PATH_REGISTRY.write().unwrap();
+    guard
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(key, exports.to_bits());
+}
+
+/// Codegen FFI: resolve a runtime `require(absolutePath.js)` to a registered
+/// AOT-compiled module's exports, or `undefined` when no module is registered
+/// for that path (caller then falls back to the `.json` disk read / throws
+/// `MODULE_NOT_FOUND`). Module exports are always objects, so `undefined`
+/// unambiguously signals "miss".
+#[no_mangle]
+pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
+    let path = value_to_string(path_value, "id");
+    let key = canonicalize_module_path(&path);
+    let guard = MODULE_PATH_REGISTRY.read().unwrap();
+    if let Some(map) = guard.as_ref() {
+        if let Some(bits) = map.get(&key) {
+            return f64::from_bits(*bits);
+        }
+    }
+    undefined()
+}
+
 /// Next.js wall 53: runtime `require(absolutePath)` of a `.json` file.
 ///
 /// Emitted only by the CJS wrapper's `require` fallback (cjs_wrap/wrap.rs) for a

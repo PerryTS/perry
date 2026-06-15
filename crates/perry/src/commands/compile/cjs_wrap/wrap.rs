@@ -627,6 +627,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
+        // Runtime `require(absolutePath.js)` of a module Perry AOT-compiled but
+        // that is only reachable via a runtime-computed path (Next.js / turbopack
+        // load page + chunk modules by a manifest path at request time, not a
+        // static specifier). Resolve it from the path->module registry that each
+        // compiled module self-registers into at init; `undefined` = not
+        // registered, fall through to the `.json` read / MODULE_NOT_FOUND throw.
+        {{
+            const __perry_path_mod = __perry_require_path_module(specifier);
+            if (__perry_path_mod !== undefined) return __perry_path_mod;
+        }}
         // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
         // manifests this way: `require(this.middlewareManifestPath)`). Node's
         // require reads + JSON.parses `.json` files; the statically-resolved
@@ -664,6 +674,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     require.main = module;"#
     );
 
+    // Wall 54: self-register this compiled module's exports under its absolute
+    // source path so a runtime `require(absolutePath.js)` (turbopack/Next.js
+    // page+chunk loading) resolves to it. `{:?}` debug-quotes to a valid JS
+    // string literal.
+    let path_register = format!(
+        "__perry_register_path_module({:?}, __cjs_module.exports);",
+        source_path.to_string_lossy()
+    );
     let wrapped = if let Some(flat_class) = &flat_default_class {
         // Issue #4933 — flat emission. Drop the IIFE and run the CommonJS body
         // at ESM module scope: `module.exports = {flat_class}` then resolves to
@@ -682,6 +700,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
 {body_for_iife}
 
 const _cjs = __cjs_module.exports;
+{path_register}
 export default {flat_class};
 export {{ {flat_class} }};
 {direct_class_exports}
@@ -700,6 +719,7 @@ const _cjs = (function() {{
 
     {body_for_iife}
 
+    {path_register}
     return __cjs_module.exports;
 }})();
 

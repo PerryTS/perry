@@ -145,6 +145,34 @@ pub(crate) fn lower_native_method_call(
                     &[(DOUBLE, &specifier)],
                 ));
             }
+            // Next.js wall 54: register an AOT-compiled module by absolute path.
+            "registerPathModule" => {
+                let path = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let exports = args.get(1).map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                ctx.block().call_void(
+                    "js_register_path_module",
+                    &[(DOUBLE, &path), (DOUBLE, &exports)],
+                );
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            // Next.js wall 54: resolve runtime `require(absolutePath.js)`.
+            "requirePathModule" => {
+                let path = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_require_path_module",
+                    &[(DOUBLE, &path)],
+                ));
+            }
             _ => {}
         }
     }

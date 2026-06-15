@@ -238,6 +238,43 @@ pub(super) fn try_global_builtins(
                     args: vec![specifier],
                 }));
             }
+            // Wall 54: register an AOT-compiled module's exports under its
+            // absolute source path (emitted at the tail of each CJS wrapper).
+            "__perry_register_path_module" => {
+                let path = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                let exports = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "registerPathModule".to_string(),
+                    args: vec![path, exports],
+                }));
+            }
+            // Wall 54: resolve a runtime `require(absolutePath.js)` to an
+            // AOT-compiled module's exports (or `undefined` on miss).
+            "__perry_require_path_module" => {
+                let path = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "requirePathModule".to_string(),
+                    args: vec![path],
+                }));
+            }
             "Symbol" => {
                 // Symbol() / Symbol(description)
                 if args.is_empty() {
