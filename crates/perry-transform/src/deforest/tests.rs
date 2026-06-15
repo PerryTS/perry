@@ -129,6 +129,153 @@ fn synthetic_out_params_are_assigned_by_function_id() {
     assert_eq!(func2.params.last().unwrap().id, 22);
 }
 
+#[test]
+fn rejects_producer_called_inside_closure() {
+    // Refs #5136. A producer whose ONLY call site lives inside a
+    // closure body must NOT be deforested: the call-site rewriter
+    // never descends into closures, so rewriting the producer's
+    // signature (adding the +1 accumulator param) while the in-closure
+    // call keeps the original arity miscompiles to a SIGSEGV.
+    //
+    //   function helper() { const out = []; out.push(1); return out; }
+    //   function factory() {
+    //     const generate = () => { const v = helper(); return v.length; };
+    //     return generate;
+    //   }
+    let helper = make_simple_producer(); // id=1, the producer
+
+    let closure = Expr::Closure {
+        func_id: 2,
+        params: vec![],
+        return_type: Type::Number,
+        body: vec![
+            // const v = helper();
+            Stmt::Let {
+                id: 30,
+                name: "v".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![],
+                    type_args: vec![],
+                }),
+            },
+            // return v.length;
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(30)),
+                property: "length".to_string(),
+            })),
+        ],
+        captures: vec![],
+        mutable_captures: vec![],
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: true,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+    };
+
+    let factory = Function {
+        id: 3,
+        name: "factory".to_string(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Let {
+                id: 31,
+                name: "generate".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(closure),
+            },
+            Stmt::Return(Some(Expr::LocalGet(31))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+
+    let mut module = Module::new("m");
+    module.functions = vec![helper, factory];
+
+    // Detection must drop the producer entirely.
+    assert!(
+        detect_producers(&module).is_empty(),
+        "producer called inside a closure must not be deforested"
+    );
+
+    // And `run` must leave the producer's signature untouched (no
+    // synthetic accumulator param added).
+    run(&mut module);
+    let helper_after = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert!(
+        helper_after.params.is_empty(),
+        "producer signature must be unchanged when only called from a closure"
+    );
+}
+
+#[test]
+fn still_deforests_when_caller_is_not_a_closure() {
+    // Control for `rejects_producer_called_inside_closure`: the SAME
+    // producer, but called from a plain statement, is still rewritten.
+    //
+    //   function helper() { const out = []; out.push(1); return out; }
+    //   function caller() { const v = helper(); /* ...used... */ }
+    let helper = make_simple_producer(); // id=1
+
+    let caller = Function {
+        id: 2,
+        name: "caller".to_string(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Any,
+        body: vec![Stmt::Let {
+            id: 30,
+            name: "v".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Call {
+                callee: Box::new(Expr::FuncRef(1)),
+                args: vec![],
+                type_args: vec![],
+            }),
+        }],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+
+    let mut module = Module::new("m");
+    module.functions = vec![helper, caller];
+
+    assert!(
+        !detect_producers(&module).is_empty(),
+        "producer with a plain (non-closure) caller should still deforest"
+    );
+
+    run(&mut module);
+    let helper_after = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert_eq!(
+        helper_after.params.len(),
+        1,
+        "producer should gain the synthetic accumulator param"
+    );
+}
+
 fn make_simple_producer() -> Function {
     Function {
         id: 1,

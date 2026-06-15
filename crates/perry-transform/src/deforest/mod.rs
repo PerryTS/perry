@@ -85,7 +85,7 @@ pub use call_sites::{rewrite_call_sites_in_stmts, rewrite_call_sites_in_stmts_wi
 pub use detect::{analyze_producer, body_has_closure, detect_producers, stmt_contains_return};
 pub use out_usage::OutUsageAnalyzer;
 pub use producer_rewrite::{rewrite_producer_body, SubstituteLocal};
-pub use scan::{scan_funcref_misuses, scan_unsafe_call_sites};
+pub use scan::{scan_funcref_misuses, scan_producers_used_in_closures, scan_unsafe_call_sites};
 pub use walk::{
     max_local_id, max_local_id_for_func, stmt_references_local, walk_expr_children,
     walk_expr_children_mut,
