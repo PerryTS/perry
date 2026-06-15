@@ -158,6 +158,15 @@ fn lower_method_prop(
     let method_key = match &method.key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
         ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        // A numeric-keyed method shorthand (`{ 900(e,t,r){} }`) — its key is the
+        // stringified number per spec (`{900(){}}` has own key "900"). Without
+        // this arm it fell through to `_ => Ok(None)` and the method was DROPPED
+        // entirely (invisible to `obj[900]` and `Object.keys`), so a webpack
+        // bundle's numeric-keyed module-factory table (`{900(e,t,r){…}}`,
+        // `t[900].call(…)`) lost its factories — Next.js's
+        // `app-page-turbo.runtime.prod.js` entry `a(900)`. Mirrors the KeyValue
+        // and closed-shape numeric-key handling (`number_to_js_key`).
+        ast::PropName::Num(n) => MethodKeyKind::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => match lower_expr(ctx, computed.expr.as_ref()) {
             Ok(e) => MethodKeyKind::Computed(e),
             Err(_) => return Ok(None),
