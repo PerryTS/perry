@@ -398,21 +398,30 @@ pub fn lower_class_decl(
                     Err(_) => (None, Some(parent_name), None, None),
                 }
             } else {
-                // Refs #488 drizzle-sqlite: also try resolving the parent
-                // class by name across modules. Pre-fix the Member arm set
-                // `extends = None`, so `class SQLiteIntegerBuilder extends
-                // import_mid.SQLiteColumnBuilder { ... }` lost its parent
-                // link entirely — inherited methods (drizzle's
-                // ColumnBuilder.setName etc.) were unreachable on instances.
-                // Class names are unique enough in practice that `lookup_class`
-                // resolves; if it doesn't, we fall back to the prior
-                // name-only behavior (no regression for unknown parents).
-                (
-                    ctx.lookup_class(&parent_name),
-                    Some(parent_name),
-                    None,
-                    None,
-                )
+                // A NAMED cross-module member-extends (`class NodeNextRequest
+                // extends _index.BaseNextRequest`). The static `extends_name`
+                // path requires the parent in codegen's class table, which a
+                // cross-module parent often is NOT — and `ctx.lookup_class` is
+                // module-order-dependent (the parent module may not be lowered
+                // yet) — so `super(...)` became a no-op and the parent ctor never
+                // ran (Next.js `BaseNextRequest`'s ctor sets `this.url`/
+                // `this.method` → "Invariant: url can not be undefined"). Route
+                // through the dynamic `extends_expr` path UNCONDITIONALLY, exactly
+                // like the `.default` arm (wall 38) and the unknown-Ident arm
+                // below: the decl-time `RegisterClassParentDynamic` records the
+                // parent value and `super()` runs the parent ctor at runtime via
+                // `js_fetch_or_value_super`, which already tolerates native /
+                // closure / class-ref / builtin parents (wall 38/42 hardening).
+                // Keep the (possibly-None) static `extends` link + `extends_name`
+                // for inherited-method / `instanceof` dispatch when resolvable.
+                // The colliding-name native case (`class Agent extends http.Agent`)
+                // is handled by the `parent_name == name` arm above. (Refs #488
+                // drizzle-sqlite for the original cross-module link.)
+                let resolved = ctx.lookup_class(&parent_name);
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (resolved, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (resolved, Some(parent_name), None, None),
+                }
             }
         } else {
             // Issue #711: `class X extends fn(...)` / `class X extends
@@ -1352,12 +1361,16 @@ pub fn lower_class_from_ast(
                     Err(_) => (None, Some(parent_name), None, None),
                 }
             } else {
-                (
-                    ctx.lookup_class(&parent_name),
-                    Some(parent_name),
-                    None,
-                    None,
-                )
+                // Named cross-module member-extends — route through `extends_expr`
+                // UNCONDITIONALLY so `super()` runs the parent ctor at runtime even
+                // when the parent isn't in codegen's class table / not yet lowered.
+                // Keep in lockstep with the matching arm in `lower_class_decl`
+                // (wall 48: NodeNextRequest extends _index.BaseNextRequest).
+                let resolved = ctx.lookup_class(&parent_name);
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (resolved, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (resolved, Some(parent_name), None, None),
+                }
             }
         } else {
             // Issue #711: see the matching arm in `lower_class_decl` above
