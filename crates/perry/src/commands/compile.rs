@@ -2179,6 +2179,24 @@ pub fn run_with_parse_cache(
                 .filter(|(_, m)| m.init_kind == perry_hir::ModuleInitKind::Deferred)
                 .map(|(_, m)| sanitize_name(&m.name))
                 .collect();
+            // Next.js wall 54 (part 2): `(absolute_path, prefix)` for every
+            // `.next/server/**` runtime module so the entry's `main` can record
+            // its `__init` address by path (`js_register_path_init`). Only the
+            // entry emits these; the runtime `require(absolutePath)` shim then
+            // triggers the matching module's lazy init on first load.
+            let nextjs_path_init_modules: Vec<(String, String)> = if is_entry {
+                ctx.native_modules
+                    .iter()
+                    .filter(|(p, _)| {
+                        self::collect_modules::is_nextjs_runtime_module(p)
+                    })
+                    .map(|(p, m)| {
+                        (p.to_string_lossy().into_owned(), sanitize_name(&m.name))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             // Issue #753: prefixes of this module's static-import +
             // re-export source modules (non-entry only — the entry's
             // body is in `main`, not a `__init`). The wrapper at
@@ -4021,6 +4039,7 @@ pub fn run_with_parse_cache(
                     .get(path)
                     .cloned()
                     .unwrap_or_default(),
+                nextjs_path_init_modules,
                 deferred_module_prefixes,
                 module_init_deps,
                 // Issue #842: signal side-effect-only dynamic-import

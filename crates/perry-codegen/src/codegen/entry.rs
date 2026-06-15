@@ -205,6 +205,22 @@ pub(super) fn compile_module_entry(
                 .filter(|s| !s.is_empty())
                 .map(|suite| llmod.add_string_constant(suite))
         };
+        // Next.js wall 54 (part 2): emit a string constant for every Deferred
+        // `.next/server/**` module path now (before `main` borrows `llmod`); the
+        // registration calls go in the block below. `(string_const_name,
+        // byte_len, sanitized_prefix)`.
+        let nextjs_path_inits: Vec<(String, usize, String)> = if is_dylib {
+            Vec::new()
+        } else {
+            cross_module
+                .nextjs_path_init_modules
+                .iter()
+                .map(|(path, prefix)| {
+                    let (cn, len) = llmod.add_string_constant(path);
+                    (cn, len, prefix.clone())
+                })
+                .collect()
+        };
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -315,6 +331,25 @@ pub(super) fn compile_module_entry(
                     continue;
                 }
                 blk.call_void(&format!("{}__init", prefix), &[]);
+            }
+            // Next.js wall 54 (part 2): record each Deferred `.next/server/**`
+            // module's `__init` address under its absolute path so a runtime
+            // `require(absolutePath)` (turbopack page/chunk loading) can trigger
+            // its init lazily. No init runs here — only the address is recorded.
+            // The `<prefix>__init` symbols are already declared above for every
+            // non-entry prefix, so `ptrtoint` of the symbol resolves at link.
+            for (const_name, byte_len, prefix) in &nextjs_path_inits {
+                let path_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                let init_addr = format!("ptrtoint (ptr @{}__init to i64)", prefix);
+                blk.call_void(
+                    "js_register_path_init",
+                    &[
+                        (PTR, path_ptr.as_str()),
+                        (I64, len_str.as_str()),
+                        (I64, init_addr.as_str()),
+                    ],
+                );
             }
         }
         // Mark the boundary between init prelude and user code so

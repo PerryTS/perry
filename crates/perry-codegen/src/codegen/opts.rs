@@ -335,6 +335,13 @@ pub struct CompileOptions {
     /// (multi-path). Empty if this module performs no dynamic imports.
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
 
+    /// Next.js wall 54 (part 2): `(absolute_source_path, sanitized_prefix)` for
+    /// every Deferred `.next/server/**` module. The entry's `main` emits a
+    /// `js_register_path_init(path, &<prefix>__init)` for each so a runtime
+    /// `require(absolutePath)` can lazily trigger the module's init. Only
+    /// populated for the entry module; empty otherwise.
+    pub nextjs_path_init_modules: Vec<(String, String)>,
+
     /// Issue #753: sanitized prefixes of modules whose init must NOT
     /// run as part of the entry module's eager init chain. Reachable
     /// from the entry only through dynamic `import()` edges, so their
@@ -733,6 +740,10 @@ pub(crate) struct CrossModuleCtx {
     /// dispatch site in `expr.rs::Expr::DynamicImport` to find the
     /// `@__perry_ns_<target_prefix>` global to load.
     pub dynamic_import_path_to_prefix: std::collections::HashMap<String, String>,
+    /// Next.js wall 54 (part 2): `(absolute_source_path, sanitized_prefix)` for
+    /// every Deferred `.next/server/**` module — see [`CompileOptions`]. The
+    /// entry's `main` emits one `js_register_path_init` per entry.
+    pub nextjs_path_init_modules: Vec<(String, String)>,
     /// Issue #753: sanitized prefixes of modules reached only through
     /// dynamic `import()` edges. Their `<prefix>__init` is excluded
     /// from the entry-main eager init call sequence and fires lazily
