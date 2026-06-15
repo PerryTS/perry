@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1940 entries across 113 modules
+// Coverage: 1943 entries across 113 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -3985,11 +3985,17 @@ declare module "uuid" {
   /** stdlib */
   export function v1(): string;
   /** stdlib */
+  export function v3(name: string, namespace: string): string;
+  /** stdlib */
   export function v4(): string;
+  /** stdlib */
+  export function v5(name: string, namespace: string): string;
   /** stdlib */
   export function v7(): string;
   /** stdlib */
   export function validate(id: string): boolean;
+  /** stdlib */
+  export function version(id: string): number;
 }
 
 declare module "v8" {
