@@ -670,13 +670,14 @@ pub(super) fn build_optimized_libs(
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
     let key_input = format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|url={}|norm={}|seg={}|diag={}|dgram={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|diag={}|dgram={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
         ctx.needs_wasm_runtime,
         ctx.uses_regex,
         ctx.uses_temporal,
+        ctx.uses_event_emitter,
         ctx.uses_url,
         ctx.uses_string_normalize,
         ctx.uses_intl_segmenter,

@@ -200,6 +200,20 @@ codegen-units = 16
 [profile.release.package.perry-stdlib]
 opt-level = "s"       # Optimize for size in stdlib
 
+# perry-ext-events exports #[no_mangle] EventEmitter FFI symbols
+# (js_event_emitter_*) that generated native code calls directly when a program
+# constructs a native EventEmitter by name (e.g. eventemitter3's default
+# export). It is a non-tokio wrapper, so the auto-optimize linker uses its
+# prebuilt standalone staticlib rather than rebuilding it alongside a crate that
+# references those symbols. Thin-LTO then internalizes and drops the whole C API
+# from that staticlib, so the program fails to link with undefined
+# _js_event_emitter_* symbols (#5140). Mirror the UI crates' settings (which
+# export #[no_mangle] extern "C" symbols for the same reason): more codegen
+# units + no strip keeps the exported C API in the staticlib.
+[profile.release.package.perry-ext-events]
+strip = false
+codegen-units = 16
+
 [workspace.package]
 version = "0.5.1171"
 edition = "2021"
