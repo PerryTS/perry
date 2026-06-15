@@ -326,6 +326,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);
     module.declare_function("js_math_max_array", DOUBLE, &[I64]);
+    module.declare_function("js_math_min2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
     module.declare_function("js_array_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_array_slice_values", I64, &[I64, DOUBLE, DOUBLE]);

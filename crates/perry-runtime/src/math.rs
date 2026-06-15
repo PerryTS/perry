@@ -278,6 +278,21 @@ pub extern "C" fn js_math_min_array(arr_ptr: i64) -> f64 {
     }
 }
 
+/// Math.min(a, b) -> number — fast path for the common two-arg form.
+#[no_mangle]
+pub extern "C" fn js_math_min2(a: f64, b: f64) -> f64 {
+    let a = js_math_to_number(a);
+    let b = js_math_to_number(b);
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a < b || (a == 0.0 && b == 0.0 && a.is_sign_negative()) {
+        a
+    } else {
+        b
+    }
+}
+
 /// Math.max(...array) -> number — find maximum value in an array
 #[no_mangle]
 pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
@@ -308,5 +323,61 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
         f64::NAN
     } else {
         result
+    }
+}
+
+/// Math.max(a, b) -> number — fast path for the common two-arg form.
+#[no_mangle]
+pub extern "C" fn js_math_max2(a: f64, b: f64) -> f64 {
+    let a = js_math_to_number(a);
+    let b = js_math_to_number(b);
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a > b || (a == 0.0 && b == 0.0 && a.is_sign_positive()) {
+        a
+    } else {
+        b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn js_math_min2_basic_and_signed_zero() {
+        assert_eq!(js_math_min2(4.0, -2.0), -2.0);
+        assert_eq!(js_math_min2(-2.0, 4.0), -2.0);
+
+        let neg_zero = js_math_min2(-0.0, 0.0);
+        assert_eq!(neg_zero, 0.0);
+        assert!(neg_zero.is_sign_negative());
+
+        let neg_zero_reversed = js_math_min2(0.0, -0.0);
+        assert_eq!(neg_zero_reversed, 0.0);
+        assert!(neg_zero_reversed.is_sign_negative());
+    }
+
+    #[test]
+    fn js_math_max2_basic_and_signed_zero() {
+        assert_eq!(js_math_max2(4.0, -2.0), 4.0);
+        assert_eq!(js_math_max2(-2.0, 4.0), 4.0);
+
+        let pos_zero = js_math_max2(-0.0, 0.0);
+        assert_eq!(pos_zero, 0.0);
+        assert!(pos_zero.is_sign_positive());
+
+        let pos_zero_reversed = js_math_max2(0.0, -0.0);
+        assert_eq!(pos_zero_reversed, 0.0);
+        assert!(pos_zero_reversed.is_sign_positive());
+    }
+
+    #[test]
+    fn js_math_minmax2_nan() {
+        assert!(js_math_min2(f64::NAN, 1.0).is_nan());
+        assert!(js_math_min2(1.0, f64::NAN).is_nan());
+        assert!(js_math_max2(f64::NAN, 1.0).is_nan());
+        assert!(js_math_max2(1.0, f64::NAN).is_nan());
     }
 }
