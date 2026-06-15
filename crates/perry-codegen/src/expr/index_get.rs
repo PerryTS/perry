@@ -290,11 +290,20 @@ fn lower_guarded_array_index_get(
     let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
     let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
     let fast_val = if require_numeric_layout {
-        fast_blk.call(
-            DOUBLE,
-            "js_array_numeric_get_f64_unboxed",
-            &[(I64, &arr_handle), (I32, idx_i32)],
-        )
+        // The `numeric_array_index_get_guard` on the way into this block already
+        // proved: a plain, non-forwarded `Array`, in raw-f64 numeric layout,
+        // with `index` in bounds (`plain_array_index_guard(.., in_bounds=true)`
+        // && `js_array_is_numeric_f64_layout`). So load the slot inline instead
+        // of calling `js_array_numeric_get_f64_unboxed`, whose hot path
+        // re-validates exactly those same conditions and then does this load.
+        // Raw-f64 arrays are dense (no HOLE slots) and the slot holds a raw f64,
+        // matching the runtime helper's `return *elements_ptr.add(index)`.
+        let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
+        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
+        let with_header = fast_blk.add(I64, &byte_offset, "8");
+        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
+        fast_blk.load(DOUBLE, &element_ptr)
     } else {
         let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
         let byte_offset = fast_blk.shl(I64, &idx_i64, "3");

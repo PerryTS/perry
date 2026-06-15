@@ -535,5 +535,9 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
 
     assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
     assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
-    assert!(ir.contains("call double @js_array_numeric_get_f64_unboxed"));
+    // The numeric fast path no longer calls `js_array_numeric_get_f64_unboxed`:
+    // the guard already proved raw-f64 layout + in-bounds, so the slot is loaded
+    // inline (a direct `load double` from the element address).
+    assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
+    assert!(ir.contains("load double"));
 }

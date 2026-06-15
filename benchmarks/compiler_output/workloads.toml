@@ -625,8 +625,10 @@ detail = "numeric Array.push uses the guarded raw-f64 helper"
 
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_get"
-contains = "js_array_numeric_get_f64_unboxed"
-detail = "numeric indexed read uses the guarded raw-f64 helper"
+contains = "js_typed_feedback_numeric_array_index_get_guard"
+regex = '''bidx\.num\.fast\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*%\w+ = load double, ptr %\w+[^\n]*\n\s*br label %bidx\.num\.merge'''
+regex_none = ["call double @js_array_numeric_get_f64_unboxed"]
+detail = "numeric indexed read takes the guarded raw-f64 fast path and loads the slot inline (inttoptr + load double in bidx.num.fast; helper call elided)"
 
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_set"
