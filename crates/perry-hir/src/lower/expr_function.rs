@@ -514,7 +514,8 @@ fn lower_named_fn_expr(
     // captured.
     let inner = lower_fn_expr_anon(ctx, fn_expr)?;
 
-    let self_referenced = matches!(&inner, Expr::Closure { captures, .. } if captures.contains(&self_id));
+    let self_referenced =
+        matches!(&inner, Expr::Closure { captures, .. } if captures.contains(&self_id));
     if !self_referenced {
         // No recursive self-reference — drop the scaffolding.
         ctx.exit_scope(wrapper_scope);
