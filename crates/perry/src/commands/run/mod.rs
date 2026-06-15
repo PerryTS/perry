@@ -26,7 +26,7 @@ pub use android::{
 pub use devices::{
     detect_android_devices, detect_booted_simulators, detect_booted_tv_simulators,
     detect_booted_visionos_simulators, detect_booted_watch_simulators, detect_ios_devices,
-    pick_device, pick_from_list, DeviceInfo,
+    is_wear_os_device, pick_device, pick_from_list, DeviceInfo,
 };
 pub use entry::{
     can_compile_locally, read_perry_toml_entry, resolve_entry_file, resolve_target,

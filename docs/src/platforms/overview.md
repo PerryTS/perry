@@ -1,6 +1,6 @@
 # Platform Overview
 
-Perry compiles TypeScript to native executables for 9 platform families from the same source code.
+Perry compiles TypeScript to native executables for 10 platform families from the same source code.
 
 ## Supported Platforms
 

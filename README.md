@@ -352,7 +352,7 @@ splitViewAddChild(split, content);
 App({ title: 'My App', width: 800, height: 500, body: split });
 ```
 
-**10 target outputs from one codebase:**
+**11 target outputs from one codebase:**
 
 | Platform | Backend | Target Flag |
 |----------|---------|-------------|
@@ -362,6 +362,7 @@ App({ title: 'My App', width: 800, height: 500, body: split });
 | tvOS | UIKit | `--target tvos` / `--target tvos-simulator` |
 | watchOS | WatchKit | `--target watchos` / `--target watchos-simulator` |
 | Android | Android Views (JNI) | `--target android` |
+| Wear OS | Android Views (JNI) | `--target wearos` |
 | Windows | Win32 | *(default on Windows)* |
 | Linux | GTK4 | *(default on Linux)* |
 | Web | DOM (JS codegen) | `--target web` |
@@ -446,6 +447,7 @@ perry compile src/main.ts --target android -o MyApp
 # TV / Watch
 perry compile src/main.ts --target tvos -o MyApp
 perry compile src/main.ts --target watchos -o MyApp
+perry compile src/main.ts --target wearos -o MyApp       # Wear OS (Android on a watch)
 
 # Web
 perry compile src/main.ts --target web -o app.html       # JavaScript output

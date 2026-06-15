@@ -107,9 +107,14 @@ pub fn resolve_target(
         }
         Some(Platform::Wearos) => {
             // Wear OS runs over adb just like a phone — the connected device is
-            // a watch or a Wear emulator. Same detection; the `wearos` target
-            // string routes packaging to the Wear Gradle template at launch.
-            let devices = detect_android_devices()?;
+            // a watch or a Wear emulator. Same detection, but filter to actual
+            // watches (`ro.build.characteristics` contains `watch`) so a paired
+            // phone on the same adb isn't selected. The `wearos` target string
+            // routes packaging to the Wear Gradle template at launch.
+            let devices: Vec<DeviceInfo> = detect_android_devices()?
+                .into_iter()
+                .filter(|d| is_wear_os_device(&d.udid))
+                .collect();
             if devices.is_empty() {
                 return Err(anyhow!(
                     "No Wear OS devices found. Pair a watch over adb or start a Wear OS emulator, then try again.\n\

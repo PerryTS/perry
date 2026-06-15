@@ -79,6 +79,7 @@ pub enum Platform {
     Android,
     /// Wear OS — Android on a watch. Shares the perry-ui-android backend and
     /// `aarch64-linux-android` toolchain; only the APK packaging differs.
+    #[value(alias = "wear", alias = "wear-os")]
     Wearos,
     Linux,
     Windows,

@@ -254,6 +254,20 @@ pub fn detect_android_devices() -> Result<Vec<DeviceInfo>> {
     Ok(devices)
 }
 
+/// True if the adb device with this serial is a Wear OS watch, i.e. its
+/// `ro.build.characteristics` property contains `watch`. Used to keep
+/// `perry run wearos` from selecting a paired phone connected over the same
+/// adb. Returns `false` if the property can't be read (treat as non-watch).
+pub fn is_wear_os_device(serial: &str) -> bool {
+    Command::new("adb")
+        .args(["-s", serial, "shell", "getprop", "ro.build.characteristics"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("watch"))
+        .unwrap_or(false)
+}
+
 /// Pick a device from a list using dialoguer, or auto-select if non-interactive
 pub fn pick_device(devices: &[DeviceInfo], label: &str) -> Result<String> {
     let names: Vec<String> = devices
