@@ -26,7 +26,8 @@ use crate::OutputFormat;
 use super::{
     cached_resolve_import, declaration_sidecar_for_resolved_import, extract_compile_package_dir,
     has_perry_native_library, is_declaration_file, is_in_compile_package,
-    is_in_perry_native_package, is_js_file, parse_cached, parse_native_library_manifest,
+    is_in_perry_native_package, is_js_file, is_recognized_text_asset, parse_cached,
+    parse_native_library_manifest,
     parse_package_specifier, CompilationContext, JsModule, ParseCache,
 };
 
@@ -377,6 +378,11 @@ fn collect_module_one(
     // Check if this file should be handled by JS runtime instead of native compilation
     // This includes: JS files, declaration files (.d.ts), JSON files, or any file in node_modules when JS runtime is enabled
     let is_json = canonical.extension().and_then(|e| e.to_str()) == Some("json");
+    // #5223: text-asset imports (`import s from "./x.txt"`). A recognized text
+    // extension is read verbatim and synthesized into a native module whose
+    // default export is the file contents as a JS string (see the text branch
+    // below, mirroring the JSON-module path). `.wasm` is out of scope.
+    let is_text_asset = is_recognized_text_asset(&canonical);
     let is_in_node_modules = canonical.to_string_lossy().contains("node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
@@ -528,6 +534,21 @@ fn collect_module_one(
             ));
         }
         format!("export default {};\n", raw_source.trim())
+    } else if is_text_asset {
+        // #5223: text-asset import. The file's contents are exposed verbatim as
+        // the module's default export (a JS string). We never TS-parse the raw
+        // text — instead we synthesize `export default "<escaped-contents>";`.
+        // `serde_json::to_string` of a string produces a valid double-quoted JS
+        // string literal with all required escaping (newlines, quotes, control
+        // chars, unicode), so the contents round-trip byte-for-byte.
+        let literal = serde_json::to_string(&raw_source).map_err(|e| {
+            anyhow!(
+                "Failed to encode text asset {} as a string literal: {}",
+                canonical.display(),
+                e
+            )
+        })?;
+        format!("export default {};\n", literal)
     } else {
         raw_source
     };

@@ -873,6 +873,29 @@ pub(super) fn is_js_file(path: &Path) -> bool {
     }
 }
 
+/// #5223: Recognized text-asset extensions. An import resolving to one of these
+/// is loaded as a string (its raw contents become the module's default export)
+/// rather than TS-parsed. `.wasm` is intentionally excluded (out of scope).
+pub(super) fn is_recognized_text_asset(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "txt" | "sql"
+                | "md"
+                | "html"
+                | "htm"
+                | "css"
+                | "graphql"
+                | "gql"
+                | "glsl"
+                | "vert"
+                | "frag"
+        )
+    } else {
+        false
+    }
+}
+
 /// Determine if a file is a TypeScript declaration file (.d.ts)
 pub(super) fn is_declaration_file(path: &Path) -> bool {
     let path = path.to_string_lossy();

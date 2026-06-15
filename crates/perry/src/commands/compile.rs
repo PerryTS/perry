@@ -91,8 +91,8 @@ pub(crate) use resolve::validate_native_library_manifest_value;
 use resolve::{
     cached_resolve_import, compute_module_prefix, declaration_sidecar_for_resolved_import,
     extract_compile_package_dir, has_perry_native_library, is_declaration_file,
-    is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
-    parse_package_specifier, resolve_import,
+    is_in_compile_package, is_in_perry_native_package, is_js_file, is_recognized_text_asset,
+    parse_native_library_manifest, parse_package_specifier, resolve_import,
 };
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
