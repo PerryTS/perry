@@ -38,11 +38,22 @@ if (captured) {
   console.log("action did not fire");
 }
 
+// Issue #5137: a top-level program (no subcommand) that declares a positional
+// via `.argument()`, reads `program.args`, and stringifies `program.opts()`.
+// Parsing an explicit argv array (commander's `from: 'node'` default) must be
+// honored, `opts()` must return a real object, and `args` a real array.
+const top = new Command();
+top.name("demo").option("-v, --verbose").argument("<file>");
+top.parse(["node", "x", "in.txt", "-v"]);
+console.log("positional:", top.args[0], "opts:", JSON.stringify(top.opts()));
+
 /*
 @covers
-crates/perry-stdlib/src/commander.rs:
+crates/perry-stdlib/src/commander.rs (mirrored in crates/perry-ext-commander/src/lib.rs):
   - js_commander_action
+  - js_commander_args_array
   - js_commander_args_count
+  - js_commander_argument
   - js_commander_command
   - js_commander_description
   - js_commander_get_arg

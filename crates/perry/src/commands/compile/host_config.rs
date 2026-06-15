@@ -499,6 +499,7 @@ pub(super) fn apply_pkg_and_toml_config(
     if has_universal || !scope_wildcards.is_empty() {
         let installed = super::resolve::enumerate_installed_packages(project_root);
         let mut added = 0usize;
+        let mut skipped_native = 0usize;
         for name in installed {
             let matches = has_universal
                 || scope_wildcards.iter().any(|scope| {
@@ -506,7 +507,28 @@ pub(super) fn apply_pkg_and_toml_config(
                         .map(|rest| rest.starts_with('/'))
                         .unwrap_or(false)
                 });
-            if matches && ctx.compile_packages.insert(name) {
+            if !matches {
+                continue;
+            }
+            // #5137: don't let the `"*"` / `@scope/*` wildcard sweep in packages
+            // Perry ships a native stdlib shim for (commander, dayjs, lru-cache,
+            // …). The shim is the supported, optimized path; compiling the real
+            // npm source instead routes the import away from the native module
+            // table, so hardcoded lowerings like `new Command()` →
+            // `js_commander_new` no longer fire and the binding resolves to
+            // `undefined` ("TypeError: undefined is not a constructor"). A user
+            // who genuinely wants the real source still lists that package
+            // explicitly in `perry.compilePackages` — that exact entry is added
+            // during package.json parsing and is honored via
+            // COMPILE_PACKAGES_OVERRIDE. The wildcard only declines to add it.
+            // (`is_native_module` consults COMPILE_PACKAGES_OVERRIDE, but that
+            // thread-local is installed later, in collect_modules, so it is empty
+            // here and the check reflects the raw NATIVE_MODULES manifest.)
+            if perry_hir::is_native_module(&name) {
+                skipped_native += 1;
+                continue;
+            }
+            if ctx.compile_packages.insert(name) {
                 added += 1;
             }
         }
@@ -521,6 +543,13 @@ pub(super) fn apply_pkg_and_toml_config(
                 "  Compile package wildcard: expanded to {} installed package(s)",
                 added
             );
+            if skipped_native > 0 {
+                println!(
+                    "  Compile package wildcard: kept {} package(s) on Perry's \
+                     native shim (list explicitly to compile the real source)",
+                    skipped_native
+                );
+            }
         }
     }
 

@@ -1401,6 +1401,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("commander", "action", true, None),
     method("commander", "parse", true, None),
     method("commander", "opts", true, None),
+    method("commander", "argument", true, None),
+    property("commander", "args"),
     property("async_hooks", "default"),
     property("async_hooks", "asyncWrapProviders"),
     method("async_hooks", "createHook", false, None),

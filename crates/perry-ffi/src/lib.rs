@@ -71,7 +71,7 @@ pub use handle::{
 
 mod jsvalue;
 pub use jsvalue::{
-    build_object_shape, js_array_alloc, js_array_get, js_array_push, js_array_set,
+    build_object_shape, js_array_alloc, js_array_get, js_array_length, js_array_push, js_array_set,
     js_object_alloc_with_shape, js_object_get_field, js_object_set_field, JsValue,
 };
 

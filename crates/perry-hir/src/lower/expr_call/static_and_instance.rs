@@ -392,6 +392,7 @@ pub(super) fn try_static_method_and_instance(
                         | "command"
                         | "parse"
                         | "opts"
+                        | "argument"
                 );
                 // #1048 — fastify Reply chainable methods. `reply.code(201)
                 // .type("application/json").send(payload)` ships every method

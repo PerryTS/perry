@@ -304,4 +304,26 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_PTR,
     },
+    // `.argument("<file>")` declares a positional; returns the same handle so
+    // the fluent chain continues (#5137).
+    NativeModSig {
+        module: "commander",
+        has_receiver: true,
+        method: "argument",
+        class_filter: None,
+        runtime: "js_commander_argument",
+        args: &[NA_STR],
+        ret: NR_PTR,
+    },
+    // `program.args` — a bare member read lowers to this 0-arg getter, which
+    // returns a JS array of the parsed positional arguments (#5137).
+    NativeModSig {
+        module: "commander",
+        has_receiver: true,
+        method: "args",
+        class_filter: None,
+        runtime: "js_commander_args_array",
+        args: &[],
+        ret: NR_PTR,
+    },
 ];
