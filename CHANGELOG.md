@@ -1,3 +1,43 @@
+## v0.5.1174 — fix(runtime): Object.getPrototypeOf returns the installed [[Prototype]] by identity (#3986)
+
+`Object.getPrototypeOf` now returns the exact prototype object that was
+installed, by identity, for two synthetic-class receiver shapes that
+previously fell through to a self-prototype fallback:
+
+- `Object.create(proto)` results — `Object.getPrototypeOf(Object.create(p)) === p`.
+- Plain function-constructor instances — `Object.getPrototypeOf(new F()) === F.prototype`.
+
+Both of these record the real `[[Prototype]]` object pointer in the runtime's
+`CLASS_PROTOTYPE_OBJECTS` side-table keyed by the instance's synthetic class id
+(Object.create allocates a synthetic id and maps it to `proto`; `new F()`
+instances carry the function-prototype synthetic id). `js_object_get_prototype_of`
+walked the iterator-prototype and declared-class-prototype tables but never
+consulted `CLASS_PROTOTYPE_OBJECTS`, so these instances hit the trailing
+`return obj_value` fallback and reported *themselves* as their prototype — the
+`=== proto` identity checks were false even though the chain walk
+(`isPrototypeOf`, inherited property/method dispatch) still worked.
+
+The fix adds a `class_prototype_object(class_id)` lookup in both pointer-shape
+branches of `js_object_get_prototype_of`, just after the existing iterator /
+declared-class checks and before the self-prototype fallback. Declared ES
+classes use the separate `CLASS_DECL_PROTOTYPE_OBJECTS` table (handled just
+above) and object literals resolve through `default_object_prototype_for_owner`,
+so neither is perturbed — the load-bearing
+`getPrototypeOf(classInstance) === classInstance` model that `.constructor`
+resolution relies on is preserved.
+
+Test262 `built-ins/Object --max 180` differential: 168 → 170 pass (93.3% →
+94.4%), 0 regressions; the newly-passing cases are
+`built-ins/Object/create/15.2.3.5-3-1.js` and
+`built-ins/Object/create/15.2.3.5-4-1.js`. Added node-suite parity fixture
+`test-parity/node-suite/object/create/getprototypeof-identity.ts` covering
+Object.create (literal / function-object / with-props prototypes), `new F()`
+prototype identity, and the unaffected declared-class / object-literal /
+`Object.create(null)` controls.
+
+Part of the #3986 object-model epic (ToObject / wrapper / prototype identity);
+follows the earlier #4161 / #4239 / #4269 cuts.
+
 ## v0.5.1173 — fix(hir): mirror @@iterator lowering in class-expression path (#5128 review)
 
 Follow-up to #5161 (CodeRabbit review). The #5128 fix that makes a user class
