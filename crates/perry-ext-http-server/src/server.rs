@@ -533,6 +533,165 @@ pub extern "C" fn js_node_http_server_unref(handle: i64) -> i64 {
     handle
 }
 
+/// Serve one accepted (or fd-passed, #4962) connection: register it for
+/// `closeAll/IdleConnections`, peek for raw `'upgrade'`, then drive hyper.
+/// Factored out of the accept loop so SCHED_RR workers (which receive fds from
+/// the primary instead of calling `accept()`) share the exact same path.
+fn serve_http_connection(
+    server_handle: i64,
+    stream: tokio::net::TcpStream,
+    peer: SocketAddr,
+    request_tx_for_spawn: Arc<mpsc::Sender<HttpPendingRequest>>,
+    upgrade_tx_for_spawn: Arc<mpsc::Sender<HttpPendingUpgrade>>,
+) {
+    let request_tx = request_tx_for_spawn.clone();
+    let upgrade_tx = upgrade_tx_for_spawn.clone();
+    // #4905 — register the connection so
+    // closeAllConnections/closeIdleConnections can
+    // reach this task from the main thread.
+    let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
+    let busy = Arc::new(AtomicUsize::new(0));
+    let read_active = Arc::new(AtomicBool::new(false));
+    let close = Arc::new(tokio::sync::Notify::new());
+    let read_active_for_io = read_active.clone();
+    let upgrade_tx_peek = upgrade_tx_for_spawn.clone();
+    CONNECTIONS.lock().unwrap().insert(
+        conn_id,
+        TrackedConnection {
+            server_handle,
+            close: close.clone(),
+            busy: busy.clone(),
+            read_active: read_active.clone(),
+        },
+    );
+    if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
+        q.push(server_handle);
+    }
+    tokio::spawn(async move {
+        // #4973 — when `'upgrade'` listeners exist, peek the
+        // request head before hyper writes anything: a keyless
+        // Upgrade request must reach JS as a raw net.Socket
+        // with NO response on the wire (Node semantics). Other
+        // connections replay the peeked bytes to hyper.
+        let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
+            .map(|s| {
+                s.listeners
+                    .get("upgrade")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        let stream = if has_upgrade_listeners {
+            match crate::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
+                server_handle,
+                peer,
+                stream,
+                &upgrade_tx_peek,
+            )
+            .await
+            {
+                crate::raw_upgrade::PeekResult::Handled => {
+                    CONNECTIONS.lock().unwrap().remove(&conn_id);
+                    return;
+                }
+                crate::raw_upgrade::PeekResult::Passthrough(s) => s,
+            }
+        } else {
+            crate::raw_upgrade::PrefixedStream::empty(stream)
+        };
+        let io = TokioIo::new(ReadActivity::new(stream, read_active_for_io));
+        let service = service_fn(move |req: Request<Incoming>| {
+            let request_tx = request_tx.clone();
+            let upgrade_tx = upgrade_tx.clone();
+            let busy = busy.clone();
+            let read_active = read_active.clone();
+            async move {
+                busy.fetch_add(1, Ordering::SeqCst);
+                // The pending head is now an in-flight
+                // request; `busy` covers activity until
+                // the response ships (#4971).
+                read_active.store(false, Ordering::SeqCst);
+                let res = handle_request(server_handle, peer, req, request_tx, upgrade_tx).await;
+                busy.fetch_sub(1, Ordering::SeqCst);
+                res
+            }
+        });
+        let conn = http1::Builder::new()
+            .serve_connection(io, service)
+            .with_upgrades();
+        tokio::pin!(conn);
+        tokio::select! {
+            result = &mut conn => {
+                // Common when client closes mid-request — silenced.
+                let _ = result;
+            }
+            _ = close.notified() => {
+                // closeAllConnections / closeIdleConnections:
+                // dropping the pinned connection closes the
+                // socket immediately (in-flight request gets
+                // a reset, matching Node's socket.destroy()).
+            }
+        }
+        CONNECTIONS.lock().unwrap().remove(&conn_id);
+    });
+}
+
+/// SCHED_RR worker accept loop (#4962): pull connection fds the primary passes
+/// over the IPC socketpair and serve each like a locally-accepted connection.
+/// `recv_fd` blocks off-runtime, so a bridge thread forwards fds into a tokio
+/// channel the async loop selects on (alongside `server.close()`'s shutdown).
+#[cfg(unix)]
+fn spawn_rr_inject_loop(
+    server_handle: i64,
+    key_id: u32,
+    mut shutdown_rx: oneshot::Receiver<()>,
+    request_tx_for_spawn: Arc<mpsc::Sender<HttpPendingRequest>>,
+    upgrade_tx_for_spawn: Arc<mpsc::Sender<HttpPendingUpgrade>>,
+) {
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    let (fd_tx, mut fd_rx) = mpsc::channel::<RawFd>(256);
+    // Off-runtime bridge: `recv_fd` blocks until the primary passes an fd (or
+    // the channel closes → fd < 0). The thread parks on `recv_fd` for the
+    // server's lifetime; it ends when the IPC channel closes.
+    std::thread::spawn(move || loop {
+        let fd = crate::cluster_bind::recv_fd(key_id);
+        if fd < 0 || fd_tx.blocking_send(fd).is_err() {
+            break;
+        }
+    });
+
+    perry_ffi::spawn_blocking_with_reactor(move || {
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    maybe_fd = fd_rx.recv() => {
+                        let Some(fd) = maybe_fd else { break };
+                        let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+                        if std_stream.set_nonblocking(true).is_err() {
+                            continue;
+                        }
+                        let peer = std_stream
+                            .peer_addr()
+                            .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+                        match tokio::net::TcpStream::from_std(std_stream) {
+                            Ok(stream) => serve_http_connection(
+                                server_handle,
+                                stream,
+                                peer,
+                                request_tx_for_spawn.clone(),
+                                upgrade_tx_for_spawn.clone(),
+                            ),
+                            Err(e) => eprintln!("[node:http] rr adopt failed: {}", e),
+                        }
+                    }
+                    _ = &mut shutdown_rx => break,
+                }
+            }
+        });
+    });
+}
+
 /// `server.listen(port?, host?, backlog?, cb?)` — bind + start accepting.
 /// Returns immediately after spawning the accept loop on the tokio runtime
 /// (non-blocking since #604); requests are drained from the main thread by
@@ -572,173 +731,134 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
     // standard listener to `tokio::net::TcpListener::from_std` for the
     // async accept loop. `set_nonblocking(true)` is required for
     // `from_std` to drive `.accept().await` correctly.
-    let bind_str = format!("{}:{}", host, port);
-    let addr: SocketAddr = match bind_str.parse() {
-        Ok(a) => a,
-        Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
-    };
-    // #4914 — cluster workers bind with SO_REUSEPORT so N workers share
-    // the port; `bind_listener` falls through to a plain bind otherwise.
-    let std_listener = match crate::cluster_bind::bind_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("[node:http] bind {}:{} failed: {}", host, port, e);
-            return server_handle;
-        }
-    };
-    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
-    if let Err(e) = std_listener.set_nonblocking(true) {
-        eprintln!("[node:http] set_nonblocking failed: {}", e);
-        return server_handle;
-    }
-    crate::cluster_bind::notify_listening(&host, actual_port);
-
-    if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
-        s.bound_port = actual_port;
-        s.bound_host = host.clone();
-        s.listening = true;
-        s.shutdown_tx = Some(shutdown_tx);
-        s.request_rx = Some(request_rx);
-        s.upgrade_rx = Some(upgrade_rx);
+    // #4962 — cluster workers coordinate the bind with the primary. Under
+    // SCHED_RR the primary owns the socket and passes accepted fds to this
+    // worker (no local bind); otherwise (SCHED_NONE, or off-cluster) the
+    // worker binds the primary-resolved port itself with SO_REUSEPORT so
+    // `listen(0)` still shares one ephemeral port (#4914).
+    let address_type: i32 = if host.contains(':') { 6 } else { 4 };
+    let is_worker = crate::cluster_bind::is_cluster_worker();
+    let rr = is_worker && crate::cluster_bind::worker_sched_is_rr();
+    let resolved = if is_worker {
+        crate::cluster_bind::worker_query_listen(&host, port as i32, address_type, rr)
     } else {
-        return server_handle;
-    }
-
-    // Hyper workers queue Rust request handles; JS callbacks run later in
-    // `js_node_http_server_process_pending` on the main thread. Keeping the
-    // whole listener lifetime in a GC-unsafe zone would disable `gc()` for
-    // long-running servers without adding safety.
+        None
+    };
+    #[cfg(unix)]
+    let rr_inject = rr && resolved.is_some();
+    #[cfg(not(unix))]
+    let rr_inject = false;
 
     let request_tx = Arc::new(request_tx);
     let upgrade_tx = Arc::new(upgrade_tx);
     let request_tx_for_spawn = request_tx.clone();
     let upgrade_tx_for_spawn = upgrade_tx.clone();
 
-    // The closure passed to `spawn_blocking_with_reactor` runs INSIDE
-    // a tokio worker task (perry-stdlib's shim wraps it in
-    // `runtime().spawn(async { invoke(...) })`), so calling
-    // `Handle::current().block_on(fut)` would panic with
-    // "Cannot start a runtime from within a runtime". Spawn the
-    // accept loop as a separate async task on the existing runtime
-    // and let the closure return immediately.
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        tokio::spawn(async move {
-            let listener = match TcpListener::from_std(std_listener) {
-                Ok(l) => l,
-                Err(e) => {
-                    eprintln!("[node:http] tokio adopt failed: {}", e);
-                    return;
-                }
-            };
-            loop {
-                tokio::select! {
-                    accepted = listener.accept() => {
-                        match accepted {
-                            Ok((stream, peer)) => {
-                                let request_tx = request_tx_for_spawn.clone();
-                                let upgrade_tx = upgrade_tx_for_spawn.clone();
-                                let server_handle = server_handle;
-                                // #4905 — register the connection so
-                                // closeAllConnections/closeIdleConnections can
-                                // reach this task from the main thread.
-                                let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
-                                let busy = Arc::new(AtomicUsize::new(0));
-                                let read_active = Arc::new(AtomicBool::new(false));
-                                let close = Arc::new(tokio::sync::Notify::new());
-                                let read_active_for_io = read_active.clone();
-                                let upgrade_tx_peek = upgrade_tx_for_spawn.clone();
-                                CONNECTIONS.lock().unwrap().insert(
-                                    conn_id,
-                                    TrackedConnection {
+    if rr_inject {
+        #[cfg(unix)]
+        {
+            let actual_port = resolved.unwrap();
+            crate::cluster_bind::notify_listening(&host, actual_port);
+            if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
+                s.bound_port = actual_port;
+                s.bound_host = host.clone();
+                s.listening = true;
+                s.shutdown_tx = Some(shutdown_tx);
+                s.request_rx = Some(request_rx);
+                s.upgrade_rx = Some(upgrade_rx);
+            } else {
+                return server_handle;
+            }
+            let key_id = crate::cluster_bind::compute_key_id(&host, actual_port, address_type);
+            spawn_rr_inject_loop(
+                server_handle,
+                key_id,
+                shutdown_rx,
+                request_tx_for_spawn,
+                upgrade_tx_for_spawn,
+            );
+        }
+    } else {
+        // The worker binds the primary-resolved port (shared listen(0)); a
+        // non-cluster server binds the requested port directly.
+        let bind_port = resolved.map(|p| p as i32).unwrap_or(port as i32);
+        let bind_str = format!("{}:{}", host, bind_port);
+        let addr: SocketAddr = match bind_str.parse() {
+            Ok(a) => a,
+            Err(_) => SocketAddr::from(([0, 0, 0, 0], bind_port as u16)),
+        };
+        // #4914 — cluster workers bind with SO_REUSEPORT so N workers share
+        // the port; `bind_listener` falls through to a plain bind otherwise.
+        let std_listener = match crate::cluster_bind::bind_listener(addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[node:http] bind {}:{} failed: {}", host, bind_port, e);
+                return server_handle;
+            }
+        };
+        let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
+        if let Err(e) = std_listener.set_nonblocking(true) {
+            eprintln!("[node:http] set_nonblocking failed: {}", e);
+            return server_handle;
+        }
+        crate::cluster_bind::notify_listening(&host, actual_port);
+
+        if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
+            s.bound_port = actual_port;
+            s.bound_host = host.clone();
+            s.listening = true;
+            s.shutdown_tx = Some(shutdown_tx);
+            s.request_rx = Some(request_rx);
+            s.upgrade_rx = Some(upgrade_rx);
+        } else {
+            return server_handle;
+        }
+
+        // Hyper workers queue Rust request handles; JS callbacks run later in
+        // `js_node_http_server_process_pending` on the main thread. Keeping the
+        // whole listener lifetime in a GC-unsafe zone would disable `gc()` for
+        // long-running servers without adding safety.
+
+        // The closure passed to `spawn_blocking_with_reactor` runs INSIDE
+        // a tokio worker task (perry-stdlib's shim wraps it in
+        // `runtime().spawn(async { invoke(...) })`), so calling
+        // `Handle::current().block_on(fut)` would panic with
+        // "Cannot start a runtime from within a runtime". Spawn the
+        // accept loop as a separate async task on the existing runtime
+        // and let the closure return immediately.
+        perry_ffi::spawn_blocking_with_reactor(move || {
+            tokio::spawn(async move {
+                let listener = match TcpListener::from_std(std_listener) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("[node:http] tokio adopt failed: {}", e);
+                        return;
+                    }
+                };
+                loop {
+                    tokio::select! {
+                        accepted = listener.accept() => {
+                            match accepted {
+                                Ok((stream, peer)) => {
+                                    serve_http_connection(
                                         server_handle,
-                                        close: close.clone(),
-                                        busy: busy.clone(),
-                                        read_active: read_active.clone(),
-                                    },
-                                );
-                                if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
-                                    q.push(server_handle);
+                                        stream,
+                                        peer,
+                                        request_tx_for_spawn.clone(),
+                                        upgrade_tx_for_spawn.clone(),
+                                    );
                                 }
-                                tokio::spawn(async move {
-                                    // #4973 — when `'upgrade'` listeners exist, peek the
-                                    // request head before hyper writes anything: a keyless
-                                    // Upgrade request must reach JS as a raw net.Socket
-                                    // with NO response on the wire (Node semantics). Other
-                                    // connections replay the peeked bytes to hyper.
-                                    let has_upgrade_listeners =
-                                        get_handle::<HttpServer>(server_handle)
-                                            .map(|s| {
-                                                s.listeners
-                                                    .get("upgrade")
-                                                    .map(|v| !v.is_empty())
-                                                    .unwrap_or(false)
-                                            })
-                                            .unwrap_or(false);
-                                    let stream = if has_upgrade_listeners {
-                                        match crate::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
-                                            server_handle,
-                                            peer,
-                                            stream,
-                                            &upgrade_tx_peek,
-                                        )
-                                        .await
-                                        {
-                                            crate::raw_upgrade::PeekResult::Handled => {
-                                                CONNECTIONS.lock().unwrap().remove(&conn_id);
-                                                return;
-                                            }
-                                            crate::raw_upgrade::PeekResult::Passthrough(s) => s,
-                                        }
-                                    } else {
-                                        crate::raw_upgrade::PrefixedStream::empty(stream)
-                                    };
-                                    let io =
-                                        TokioIo::new(ReadActivity::new(stream, read_active_for_io));
-                                    let service = service_fn(move |req: Request<Incoming>| {
-                                        let request_tx = request_tx.clone();
-                                        let upgrade_tx = upgrade_tx.clone();
-                                        let busy = busy.clone();
-                                        let read_active = read_active.clone();
-                                        async move {
-                                            busy.fetch_add(1, Ordering::SeqCst);
-                                            // The pending head is now an in-flight
-                                            // request; `busy` covers activity until
-                                            // the response ships (#4971).
-                                            read_active.store(false, Ordering::SeqCst);
-                                            let res = handle_request(server_handle, peer, req, request_tx, upgrade_tx).await;
-                                            busy.fetch_sub(1, Ordering::SeqCst);
-                                            res
-                                        }
-                                    });
-                                    let conn = http1::Builder::new()
-                                        .serve_connection(io, service)
-                                        .with_upgrades();
-                                    tokio::pin!(conn);
-                                    tokio::select! {
-                                        result = &mut conn => {
-                                            // Common when client closes mid-request — silenced.
-                                            let _ = result;
-                                        }
-                                        _ = close.notified() => {
-                                            // closeAllConnections / closeIdleConnections:
-                                            // dropping the pinned connection closes the
-                                            // socket immediately (in-flight request gets
-                                            // a reset, matching Node's socket.destroy()).
-                                        }
-                                    }
-                                    CONNECTIONS.lock().unwrap().remove(&conn_id);
-                                });
+                                Err(e) => eprintln!("[node:http] accept error: {}", e),
                             }
-                            Err(e) => eprintln!("[node:http] accept error: {}", e),
+                        }
+                        _ = &mut shutdown_rx => {
+                            break;
                         }
                     }
-                    _ = &mut shutdown_rx => {
-                        break;
-                    }
                 }
-            }
+            });
         });
-    });
+    }
 
     // #4903 — queue the `'listening'` emit + the optional `cb` argument for
     // the main-thread pump instead of firing them synchronously. Node emits

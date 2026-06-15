@@ -1,3 +1,54 @@
+## v0.5.1175 — feat(cluster): primary-coordinated shared port for listen(0) + SCHED_RR fd-passing (#4962)
+
+Follow-up to #4914, which gave cluster workers a shared listening port via
+SO_REUSEPORT (kernel-balanced, effectively `SCHED_NONE`). This lands the two
+Node-fidelity items #4914 scoped out, both riding the existing
+`child_process.fork()` IPC socketpair (fd 3 in the worker).
+
+**1. `listen(0)` shared ephemeral port.** A cluster worker that binds port 0 (or
+any shared port) now first asks the primary for the concrete port over a
+`queryServer` round-trip (`{cmd:"NODE_CLUSTER",act:"queryServer"}` →
+`act:"queryServerReply"`). The primary binds/reserves the address once and
+replies with the resolved port; every worker then reports the *same*
+`server.address().port` instead of N distinct OS-assigned ephemerals, matching
+Node. The worker blocks on the reply with a bounded timeout and degrades to its
+own bind if the primary doesn't answer.
+
+**2. `SCHED_RR` fd-passing distribution.** Under round-robin scheduling (Node's
+non-Windows default) the primary owns the listening socket, runs an accept loop,
+and hands each accepted connection's fd to the next worker in rotation via
+`SCM_RIGHTS` over that worker's IPC socketpair (tagged with a small binary frame
+— a leading NUL + 4-byte routing key — so the worker's reader distinguishes an
+fd from a JSON message). Workers under RR do not bind at all; they pull injected
+fds and serve them through the same hyper path as locally-accepted connections.
+`cluster.schedulingPolicy = cluster.SCHED_NONE` selects the #4914 SO_REUSEPORT
+mechanism instead; `SCHED_RR` (default) selects fd-passing.
+
+Implementation notes:
+
+- New `crates/perry-runtime/src/cluster_sched.rs`: the worker-side query/blocking
+  reply machinery, the `recvmsg`-based worker IPC reader (replaces
+  `BufReader::lines()` for cluster workers — `lines()` cannot receive ancillary
+  fds; the data buffer is sized equal to the cmsg fd capacity so `MSG_CTRUNC`
+  can never silently drop a passed fd), the per-key primary accept loop + worker
+  rotation, and `sendmsg`/`recvmsg` SCM_RIGHTS plumbing.
+- `child_process/reactor.rs` gains `cp_ipc_send_fd` (SCM_RIGHTS send under the
+  live-child lock, so it never interleaves with `cp_ipc_send`) and
+  `cp_ipc_send_raw_json` (the primary's `queryServerReply`).
+- `perry-ext-http-server` `js_node_http_server_listen` routes cluster workers
+  through the query, and a refactored `serve_http_connection` helper is shared
+  by the normal accept loop and a new SCHED_RR fd-injection loop. `net.rs` gets
+  the shared-port round-trip (SCHED_NONE-style).
+- macOS note: the primary's SCHED_NONE port-discovery socket is dropped after it
+  resolves the port (a bound primary socket would otherwise join the kernel
+  SO_REUSEPORT set and, on macOS, swallow a share of connections it never
+  accepts); the workers' own reuseport listeners own the port from there.
+
+Verified end-to-end (`test-files/cluster_4962.ts`, 3 workers, 12 connections):
+SCHED_RR distributes exactly 4/4/4 via fd-passing with all workers on one shared
+port; SCHED_NONE shares the same port with kernel-balanced distribution — both
+matching `node --experimental-strip-types`.
+
 ## v0.5.1173 — fix(hir): mirror @@iterator lowering in class-expression path (#5128 review)
 
 Follow-up to #5161 (CodeRabbit review). The #5128 fix that makes a user class

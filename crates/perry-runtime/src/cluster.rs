@@ -95,6 +95,23 @@ pub fn worker_reuseport_bind(addr: &str) -> std::io::Result<std::net::TcpListene
     Ok(socket.into())
 }
 
+/// Cluster-worker bind that first asks the primary for the shared concrete port
+/// (#4962 — so `listen(0)` lands every worker on one primary-assigned ephemeral
+/// port), then binds it with SO_REUSEPORT. Falls back to a plain reuseport bind
+/// on the requested port if the primary doesn't answer. SCHED_NONE-style: each
+/// worker still owns its socket; only the port is coordinated.
+#[cfg(unix)]
+pub fn worker_shared_reuseport_bind(
+    host: &str,
+    port: i32,
+    address_type: i32,
+) -> std::io::Result<std::net::TcpListener> {
+    let resolved = crate::cluster_sched::worker_query_listen(host, port, address_type, false)
+        .map(|p| p as i32)
+        .unwrap_or(port);
+    worker_reuseport_bind(&format!("{host}:{resolved}"))
+}
+
 /// Worker-side: report a successful `server.listen()` bind to the primary
 /// over the fork IPC channel so it can emit `cluster.on('listening')`
 /// (#4914). No-op outside cluster workers or when the channel is gone.
@@ -677,8 +694,35 @@ fn build_worker_env(env_arg: f64, worker_id: u32) -> f64 {
     copy_object_fields(crate::process::js_process_env(), env);
     copy_object_fields(env_arg, env);
     set_field(env, b"NODE_UNIQUE_ID", box_string(&worker_id.to_string()));
-    set_field(env, b"NODE_CLUSTER_SCHED_POLICY", box_string("rr"));
+    // #4962 — forward the primary's scheduling policy so the worker selects the
+    // matching listen mechanism (SCHED_RR fd-passing vs SCHED_NONE reuseport).
+    let policy = if scheduling_policy_is_sched_none() {
+        "none"
+    } else {
+        "rr"
+    };
+    set_field(env, b"NODE_CLUSTER_SCHED_POLICY", box_string(policy));
     env
+}
+
+/// Read the primary's `cluster.schedulingPolicy`. Node's non-Windows default is
+/// SCHED_RR (2); a user assignment lands in the native-namespace override table
+/// (CJS exports are mutable), so we read it back from there. SCHED_NONE is `1`.
+fn scheduling_policy_is_sched_none() -> bool {
+    for module in ["cluster", "cluster.default"] {
+        if let Some(v) =
+            crate::object::native_namespace_prop_override_get(module, "schedulingPolicy")
+        {
+            let jv = JSValue::from_bits(v.to_bits());
+            let n = if jv.is_int32() {
+                jv.as_int32()
+            } else {
+                v as i32
+            };
+            return n == 1;
+        }
+    }
+    false
 }
 
 fn decorate_worker(worker: f64, id: u32) {
@@ -744,6 +788,7 @@ pub(crate) fn consume_internal_message(worker: f64, message: f64) -> bool {
     if let Some(act) = value_to_string(get_field(message, b"act")) {
         match act.as_str() {
             "online" => mark_worker_online(worker),
+            "queryServer" => primary_handle_query_server(worker, message),
             "listening" => {
                 // Worker reported a successful SO_REUSEPORT bind (#4914).
                 // Mirror Node: `worker.on('listening', address)` and
@@ -760,6 +805,66 @@ pub(crate) fn consume_internal_message(worker: f64, message: f64) -> bool {
         }
     }
     true
+}
+
+/// Primary side of the `listen()` round-trip (#4962): bind/reserve the address
+/// once per key, register the worker in its round-robin set, and reply with the
+/// resolved port over the worker's IPC channel.
+#[cfg(unix)]
+fn primary_handle_query_server(worker: f64, message: f64) {
+    let Some(handle) = worker_reactor_handle(worker) else {
+        return;
+    };
+    let req_key = value_to_string(get_field(message, b"reqKey")).unwrap_or_default();
+    let host = value_to_string(get_field(message, b"host")).unwrap_or_default();
+    let req_port = number_field(message, b"port");
+    let addr_type = number_field(message, b"addressType");
+    let rr = number_field(message, b"rr") != 0;
+
+    let resolved =
+        crate::cluster_sched::primary_handle_query(handle, &host, req_port, addr_type, rr);
+    let port = resolved.map(|p| p as i32).unwrap_or(-1);
+    let json = format!(
+        "{{\"cmd\":\"NODE_CLUSTER\",\"act\":\"queryServerReply\",\"reqKey\":\"{}\",\"port\":{}}}",
+        req_key.replace('\\', "\\\\").replace('"', "\\\""),
+        port
+    );
+    crate::child_process::reactor::cp_ipc_send_raw_json(handle, &json);
+}
+
+#[cfg(not(unix))]
+fn primary_handle_query_server(_worker: f64, _message: f64) {}
+
+/// The reactor registry handle (`__cpHandle`) backing a decorated worker — the
+/// key used to send IPC frames/fds to that specific child.
+fn worker_reactor_handle(worker: f64) -> Option<u64> {
+    let h = get_field(worker, b"__cpHandle");
+    let jv = JSValue::from_bits(h.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return None;
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        h
+    };
+    if n >= 0.0 {
+        Some(n as u64)
+    } else {
+        None
+    }
+}
+
+/// Read a numeric field off a parsed IPC message (handles both raw-f64 and
+/// int32-tagged number representations).
+fn number_field(message: f64, name: &[u8]) -> i32 {
+    let v = get_field(message, name);
+    let jv = JSValue::from_bits(v.to_bits());
+    if jv.is_int32() {
+        jv.as_int32()
+    } else {
+        v as i32
+    }
 }
 
 /// Emit `online` exactly once per worker — both the child reactor's `spawn`
@@ -897,6 +1002,11 @@ extern "C" fn cluster_internal_exit(closure: *const ClosureHeader, code: f64, si
     let worker = closure_this(closure);
     set_field(worker, b"__clusterState", box_string("dead"));
     mark_worker_disconnected(worker);
+    // #4962 — drop the dead worker from any SCHED_RR rotation it joined.
+    #[cfg(unix)]
+    if let Some(handle) = worker_reactor_handle(worker) {
+        crate::cluster_sched::primary_remove_worker(handle);
+    }
     remove_worker(worker);
     cluster_emit_event("exit", &[worker, code, signal]);
     drain_disconnect_callbacks_if_idle();

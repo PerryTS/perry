@@ -533,6 +533,53 @@ pub(super) fn cp_ipc_send(handle: u64, message: f64) -> bool {
     }
 }
 
+/// Write an already-serialized JSON line on a child's IPC channel (newline
+/// appended). Used by the cluster primary's `queryServerReply` (#4962); shares
+/// the live-child lock so it never interleaves with `cp_ipc_send`.
+pub fn cp_ipc_send_raw_json(handle: u64, json: &str) -> bool {
+    #[cfg(not(unix))]
+    {
+        let _ = (handle, json);
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        let mut frame = Vec::with_capacity(json.len() + 1);
+        frame.extend_from_slice(json.as_bytes());
+        frame.push(b'\n');
+        let mut guard = cp_live_lock();
+        if let Some(map) = guard.as_mut() {
+            if let Some(lc) = map.get_mut(&handle) {
+                if let Some(sock) = lc.ipc_send.as_mut() {
+                    return sock.write_all(&frame).is_ok();
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Pass a connection fd to a child over its IPC socketpair via `SCM_RIGHTS`
+/// (#4962 SCHED_RR). Holds the live-child lock so the framed send is atomic
+/// against `cp_ipc_send`. Returns false (caller closes the fd) when the child
+/// is gone.
+#[cfg(unix)]
+pub fn cp_ipc_send_fd(handle: u64, key_id: u32, payload_fd: std::os::unix::io::RawFd) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let guard = cp_live_lock();
+    let Some(map) = guard.as_ref() else {
+        return false;
+    };
+    let Some(lc) = map.get(&handle) else {
+        return false;
+    };
+    let Some(sock) = lc.ipc_send.as_ref() else {
+        return false;
+    };
+    crate::cluster_sched::send_fd_over(sock.as_raw_fd(), key_id, payload_fd)
+}
+
 /// `child.disconnect()` — shut the IPC socket down (the reader thread then sees
 /// EOF and exits). Returns whether a channel was present. #1933.
 pub(super) fn cp_ipc_disconnect(handle: u64) -> bool {

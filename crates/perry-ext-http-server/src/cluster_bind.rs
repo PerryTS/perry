@@ -35,15 +35,75 @@ pub(crate) fn bind_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
 }
 
 extern "C" {
-    // Defined in perry-runtime's cluster.rs. This crate has no Cargo dep on
-    // perry-runtime (dev-dep only); the symbol resolves at final link, the
-    // same way perry-ffi's runtime helpers do.
+    // Defined in perry-runtime's cluster.rs / cluster_sched.rs. This crate has
+    // no Cargo dep on perry-runtime (dev-dep only); the symbols resolve at
+    // final link, the same way perry-ffi's runtime helpers do.
     fn perry_cluster_worker_listening(
         addr_ptr: *const u8,
         addr_len: u32,
         port: i32,
         address_type: i32,
     );
+    // #4962 — SCHED_RR / shared-port coordination.
+    fn perry_cluster_worker_sched_is_rr() -> i32;
+    fn perry_cluster_worker_query_listen(
+        host_ptr: *const u8,
+        host_len: u32,
+        port: i32,
+        address_type: i32,
+        rr: i32,
+    ) -> i32;
+    fn perry_cluster_worker_recv_fd(key_id: u32) -> i32;
+    fn perry_cluster_compute_key_id(
+        host_ptr: *const u8,
+        host_len: u32,
+        port: i32,
+        address_type: i32,
+    ) -> u32;
+}
+
+/// True when this worker uses SCHED_RR (primary-owned socket + fd-passing).
+pub(crate) fn worker_sched_is_rr() -> bool {
+    unsafe { perry_cluster_worker_sched_is_rr() != 0 }
+}
+
+/// Ask the primary for the concrete port to bind `host:port` (#4962). `rr`
+/// requests the fd-passing mode (primary owns the socket). Returns the resolved
+/// port, or `None` on timeout/failure (caller falls back to a local bind).
+pub(crate) fn worker_query_listen(
+    host: &str,
+    port: i32,
+    address_type: i32,
+    rr: bool,
+) -> Option<u16> {
+    let resolved = unsafe {
+        perry_cluster_worker_query_listen(
+            host.as_ptr(),
+            host.len() as u32,
+            port,
+            address_type,
+            if rr { 1 } else { 0 },
+        )
+    };
+    if (0..=u16::MAX as i32).contains(&resolved) {
+        Some(resolved as u16)
+    } else {
+        None
+    }
+}
+
+/// Routing key id for a resolved address — must match the primary's fd-frame
+/// tag for fds to land in this worker's queue.
+pub(crate) fn compute_key_id(host: &str, port: u16, address_type: i32) -> u32 {
+    unsafe {
+        perry_cluster_compute_key_id(host.as_ptr(), host.len() as u32, port as i32, address_type)
+    }
+}
+
+/// Block for the next SCHED_RR connection fd for `key_id`; -1 on channel close.
+#[cfg(unix)]
+pub(crate) fn recv_fd(key_id: u32) -> std::os::unix::io::RawFd {
+    unsafe { perry_cluster_worker_recv_fd(key_id) }
 }
 
 /// Worker→primary `'listening'` report; no-op unless this is a cluster
