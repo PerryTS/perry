@@ -1330,6 +1330,54 @@ pub extern "C" fn js_object_define_property(
         //   4. Present `get`/`set` must be callable.
         let target_is_class_ref = super::class_ref_id(obj_value).is_some();
         if !target_is_class_ref && !value_is_object_like(obj_value) {
+            // A native HANDLE target (a small pointer-tagged id — e.g. an http
+            // ServerResponse, Headers, a timer) is not a heap object, so Perry
+            // can't attach an arbitrary own property to it the way V8 can. Node
+            // framework code nonetheless calls `Object.defineProperty(handle, …)`:
+            // Next.js `patchSetHeaderWithCookieSupport` marks `res` with a Symbol
+            // (`Object.defineProperty(res, PATCHED_SET_HEADER, { value: true })`).
+            // Throwing here aborts the whole request (HTTP 500). Instead treat the
+            // define as a best-effort success: for a string key with a data
+            // descriptor, route the value through the handle property-set so
+            // `res[key]` round-trips; symbol keys / accessor descriptors degrade
+            // to a no-op (the framework's patch is idempotent, so re-running is
+            // harmless). Matches how `js_object_set_field_by_name` already tolerates
+            // small-handle receivers.
+            let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
+            let handle_id = if jv.is_pointer() {
+                let p = jv.as_pointer::<u8>() as usize;
+                if p >= 1 && p < 0x10000 {
+                    Some(p)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(hid) = handle_id {
+                // Best-effort: store a string-keyed data-descriptor value on the
+                // handle via the same dispatch `obj.key = value` uses.
+                let ks = crate::value::js_get_string_pointer_unified(key_value)
+                    as *const crate::StringHeader;
+                if !ks.is_null() {
+                    if let Some(dispatch) = super::class_handles::handle_property_set_dispatch() {
+                        let dval = if desc_has_field(descriptor_value, b"value") {
+                            Some(f64::from_bits(
+                                desc_read_field(descriptor_value, b"value").bits(),
+                            ))
+                        } else {
+                            None
+                        };
+                        if let Some(v) = dval {
+                            let name_ptr =
+                                (ks as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                            let name_len = (*ks).byte_len as usize;
+                            dispatch(hid as i64, name_ptr, name_len, v);
+                        }
+                    }
+                }
+                return obj_value;
+            }
             throw_object_type_error(b"Object.defineProperty called on non-object");
         }
         // A descriptor must be an Object; a Symbol is pointer-tagged but not an
