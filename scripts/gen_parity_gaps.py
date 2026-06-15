@@ -78,8 +78,7 @@ def parse_inventory():
             title = m.group(1)
             nm = re.search(r"node:([A-Za-z0-9_/]+)", title)
             if nm:
-                cur = nm.group(1).split("/")[0] if "/" not in title else nm.group(1)
-                cur = nm.group(1)  # keep full e.g. fs/promises
+                cur = nm.group(1)  # keep full module key, e.g. fs/promises
                 in_inventory = True
             elif title.startswith("Web"):
                 cur = "__web__"
