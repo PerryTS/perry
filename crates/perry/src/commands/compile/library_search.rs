@@ -1097,7 +1097,11 @@ pub(super) fn android_cross_env(ndk_home: &Path, target: Option<&str>) -> Vec<(S
     // dependencies (e.g. mimalloc) fail to build with
     // `failed to find tool "aarch64-linux-android-ar"`. `llvm-ar` has no `.cmd`
     // wrapper on Windows — it's the bare executable (+`.exe`).
-    let ar_ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let ar_ext = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     let llvm_ar = bin.join(format!("llvm-ar{}", ar_ext));
 
     let triple_upper = triple.to_uppercase().replace('-', "_");
@@ -1112,7 +1116,10 @@ pub(super) fn android_cross_env(ndk_home: &Path, target: Option<&str>) -> Vec<(S
             clangpp.display().to_string(),
         ),
         (format!("AR_{}", triple), llvm_ar.display().to_string()),
-        (format!("AR_{}", triple_under), llvm_ar.display().to_string()),
+        (
+            format!("AR_{}", triple_under),
+            llvm_ar.display().to_string(),
+        ),
         (
             format!("CARGO_TARGET_{}_LINKER", triple_upper),
             clang.display().to_string(),

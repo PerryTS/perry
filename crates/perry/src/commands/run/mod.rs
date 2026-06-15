@@ -19,9 +19,9 @@ mod resign;
 
 pub use android::{
     build_and_run_android, build_and_run_wearos, debug_sign_apk, find_apksigner,
-    find_latest_build_tool, get_android_pid,
-    inject_android_deeplinks, inject_google_auth_android_resources, inject_gradle_dependencies,
-    install_and_launch_android, wire_native_lib_kotlin_sources,
+    find_latest_build_tool, get_android_pid, inject_android_deeplinks,
+    inject_google_auth_android_resources, inject_gradle_dependencies, install_and_launch_android,
+    wire_native_lib_kotlin_sources,
 };
 pub use devices::{
     detect_android_devices, detect_booted_simulators, detect_booted_tv_simulators,

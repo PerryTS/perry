@@ -323,7 +323,8 @@ fn apply_wear_overlay(build_dir: &Path, format: OutputFormat) -> Result<()> {
         let mut manifest = std::fs::read_to_string(&manifest_path)?;
 
         // 1. Watch hardware feature — required, right after the <manifest> tag.
-        let manifest_open = "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">";
+        let manifest_open =
+            "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">";
         if manifest.contains(manifest_open) && !manifest.contains("android.hardware.type.watch") {
             manifest = manifest.replacen(
                 manifest_open,
@@ -336,7 +337,8 @@ fn apply_wear_overlay(build_dir: &Path, format: OutputFormat) -> Result<()> {
 
         // 2. Standalone meta-data + the wearable shared library, inserted just
         //    before the existing Maps API key meta-data inside <application>.
-        let maps_anchor = "        <meta-data\n            android:name=\"com.google.android.geo.API_KEY\"";
+        let maps_anchor =
+            "        <meta-data\n            android:name=\"com.google.android.geo.API_KEY\"";
         if manifest.contains(maps_anchor) && !manifest.contains("wearable.standalone") {
             let wear_meta = "        <meta-data\n            android:name=\"com.google.android.wearable.standalone\"\n            android:value=\"true\" />\n        <uses-library\n            android:name=\"com.google.android.wearable\"\n            android:required=\"false\" />\n";
             manifest = manifest.replacen(maps_anchor, &format!("{wear_meta}{maps_anchor}"), 1);
@@ -1044,8 +1046,8 @@ mod tests {
     #[test]
     fn wear_overlay_is_idempotent() {
         let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-ui-android/template");
-        let build_dir = std::env::temp_dir()
-            .join(format!("perry_wear_overlay_idem_{}", std::process::id()));
+        let build_dir =
+            std::env::temp_dir().join(format!("perry_wear_overlay_idem_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&build_dir);
         let app_main = build_dir.join("app/src/main");
         std::fs::create_dir_all(&app_main).unwrap();
