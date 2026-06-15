@@ -421,7 +421,8 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::None,
             large_object_policy: GcLargeObjectPolicy::MallocTracked,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::None,
+            // #5142: rekey address-keyed promise expandos on GC move.
+            move_hook_kind: GcMoveHookKind::ExoticExpandoOwner,
             rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::PromiseCleanup,
         },

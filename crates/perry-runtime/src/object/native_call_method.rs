@@ -1894,6 +1894,37 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // #5142: a promise can carry user-attached own expando methods.
+    // @tanstack/query-core's `pendingThenable()` stores `resolve`/`reject`
+    // closures on the thenable and invokes them as `thenable.resolve(value)`;
+    // an own expando function shadows the inherited prototype method, so
+    // resolve and call it here before the intrinsic then/catch/finally and the
+    // generic "<m> is not a function" fall-through. Only dispatch when the
+    // stored value is actually callable — a non-callable expando
+    // (`thenable.status()`) falls through to the normal not-a-function path.
+    if !matches!(method_name, "then" | "catch" | "finally")
+        && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
+    {
+        let recv = object_handle.get_nanbox_f64();
+        let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if let Some(v) = super::exotic_expando::exotic_get_own_property(
+            raw,
+            super::exotic_expando::ExoticKind::Promise,
+            method_name,
+            recv,
+        ) {
+            let cand = (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if (v.to_bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                && crate::closure::is_closure_ptr(cand)
+            {
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv.to_bits()));
+                let result = crate::closure::js_native_call_value(v, args_ptr, args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
+            }
+        }
+    }
+
     // Issue #489 followup: Promise's `then` / `catch` / `finally` are
     // intrinsic — when the dynamic dispatch path lands a `.then(cb)` on
     // a Promise (drizzle's `mysql-proxy/session.js`:
@@ -4323,7 +4354,9 @@ pub unsafe extern "C" fn js_native_call_method(
                                         raw as *mut crate::error::ErrorHeader,
                                         key,
                                     ),
-                                    ExoticKind::Date | ExoticKind::Temporal => false,
+                                    ExoticKind::Date
+                                    | ExoticKind::Temporal
+                                    | ExoticKind::Promise => false,
                                 }
                         })
                         .unwrap_or(false);

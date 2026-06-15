@@ -124,6 +124,10 @@ pub(crate) enum GcMoveHookKind {
     ClosureDynamicProps,
     MapSideTables,
     SetSideTables,
+    /// Rekey a movable exotic cell's address-keyed expando side table after a
+    /// move. Used by `GC_TYPE_PROMISE`, whose `status`/`value` expandos
+    /// (#5142) live in `object::exotic_expando` keyed by the promise address.
+    ExoticExpandoOwner,
 }
 
 #[allow(dead_code)]
@@ -273,7 +277,10 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::MallocTracked,
         false,
-        GcMoveHookKind::None,
+        // #5142: a promise is movable, but user-attached expando properties
+        // (`p.status = …`) live in `object::exotic_expando` keyed by the
+        // promise address — rekey that entry when the promise relocates.
+        GcMoveHookKind::ExoticExpandoOwner,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::PromiseCleanup,
     )),
@@ -566,6 +573,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         GcMoveHookKind::SetSideTables => {
             crate::set::set_header_moved_for_gc(old_user, new_user);
         }
+        GcMoveHookKind::ExoticExpandoOwner => {
+            crate::object::exotic_expando::exotic_expando_owner_moved(old_user, new_user);
+        }
     }
 }
 
@@ -577,7 +587,8 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         GcMoveHookKind::None
         | GcMoveHookKind::ClosureDynamicProps
         | GcMoveHookKind::MapSideTables
-        | GcMoveHookKind::SetSideTables => {}
+        | GcMoveHookKind::SetSideTables
+        | GcMoveHookKind::ExoticExpandoOwner => {}
     }
 }
 

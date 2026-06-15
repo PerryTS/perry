@@ -2291,8 +2291,9 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             ExoticKind::RegExp => name == "lastIndex",
             ExoticKind::Error => matches!(name, "message" | "stack"),
             // Temporal built-in fields (year/month/calendar/…) are prototype
-            // getters, not own data properties (like Date).
-            ExoticKind::Date | ExoticKind::Temporal => false,
+            // getters, not own data properties (like Date). Promise's
+            // then/catch/finally are prototype methods, not own props.
+            ExoticKind::Date | ExoticKind::Temporal | ExoticKind::Promise => false,
         };
         if builtin_own {
             return nanbox_true;
@@ -3457,13 +3458,37 @@ pub extern "C" fn js_object_get_field_by_name(
             {
                 unsafe {
                     let gc_header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                    if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
+                    // Buffers / typed arrays are `std::alloc`-backed and carry
+                    // NO GcHeader, so the byte at `raw - 8` is unrelated memory
+                    // that can read as `GC_TYPE_PROMISE` (5) by coincidence on
+                    // an IC-miss read. Exclude them before acting — otherwise a
+                    // genuine buffer metadata read would early-return undefined.
+                    if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE
+                        && !crate::buffer::is_registered_buffer(raw)
+                        && crate::typedarray::lookup_typed_array_kind(raw).is_none()
+                    {
                         let name_ptr =
                             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                         let name_len = (*key).byte_len as usize;
                         let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                        let prop = std::str::from_utf8_unchecked(name_bytes);
+                        // #5142: a user-attached own expando (`p.status = …`,
+                        // `Object.assign(p, …)`) wins over the inherited
+                        // prototype method. @tanstack/query-core's
+                        // `pendingThenable()` stores `status`/`value` on the
+                        // promise and gates its retryer on `thenable.status`;
+                        // without this the read came back `undefined`,
+                        // `isResolved()` was permanently true, and the fetch
+                        // never resolved.
+                        if let Some(v) = super::exotic_expando::exotic_get_own_property(
+                            raw,
+                            super::exotic_expando::ExoticKind::Promise,
+                            prop,
+                            f64::from_bits(obj as u64),
+                        ) {
+                            return JSValue::from_bits(v.to_bits());
+                        }
                         if matches!(name_bytes, b"then" | b"catch" | b"finally") {
-                            let prop = std::str::from_utf8_unchecked(name_bytes);
                             if let Some(v) = crate::promise::js_promise_bound_method(
                                 raw as *mut crate::promise::Promise,
                                 prop,
@@ -3471,6 +3496,10 @@ pub extern "C" fn js_object_get_field_by_name(
                                 return JSValue::from_bits(v.to_bits());
                             }
                         }
+                        // A Promise is a `GC_TYPE_PROMISE` cell, not an
+                        // `ObjectHeader`; never fall through to the field/vtable
+                        // path below (it would reinterpret the promise's bytes).
+                        return JSValue::from_bits(crate::value::TAG_UNDEFINED);
                     }
                 }
             }
