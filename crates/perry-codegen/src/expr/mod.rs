@@ -1413,6 +1413,7 @@ mod index_get;
 mod index_set;
 mod instance_misc1;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
+mod class_field_inline_guard;
 mod js_runtime;
 mod literals_vars;
 mod logical_collections;

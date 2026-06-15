@@ -12,7 +12,7 @@ use crate::JSValue;
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::RwLock;
 
 // Submodules (issue #1103): behavior-preserving split of the former
@@ -681,6 +681,30 @@ pub(crate) fn descriptors_in_use() -> bool {
     GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed)
 }
 
+/// #5093: sticky process-global that disables the codegen-inlined class-field
+/// shape-guard fast path. The emitted IR reads this byte directly (a single
+/// relaxed load, hoistable out of hot loops) via the
+/// `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` symbol and falls back to the full
+/// `js_typed_feedback_class_field_{get,set}_guard` call whenever it is non-zero.
+/// It flips to 1 the moment either (a) any accessor / property descriptor comes
+/// into use — the guard then has to perform descriptor-aware dispatch the inline
+/// path doesn't model — or (b) typed-feedback tracing is enabled, where the
+/// guard records observations the inline path would silently skip. Both are
+/// monotonic ("in use" never reverts), so the flag is set-only.
+#[no_mangle]
+pub static PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED: AtomicU8 = AtomicU8::new(0);
+
+/// Disable the codegen-inlined class-field fast path process-wide (see
+/// [`PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`]). Idempotent.
+pub(crate) fn disable_class_field_inline_guard() {
+    PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(1, Ordering::Relaxed);
+}
+
+/// True when the inline class-field fast path is still permitted.
+pub(crate) fn class_field_inline_guard_enabled() -> bool {
+    PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.load(Ordering::Relaxed) == 0
+}
+
 /// #5054: a descriptor (any kind) has been installed on the canonical
 /// `Object.prototype` — inherited setters / non-writable data props there
 /// must intercept writes of keys missing on the receiver, so the dynamic
@@ -725,6 +749,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     note_descriptor_target(obj);
     PROPERTY_ATTRS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
+    disable_class_field_inline_guard();
     PROPERTY_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), attrs);
     });
@@ -830,6 +855,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     note_descriptor_target(obj);
     ACCESSORS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
+    disable_class_field_inline_guard();
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), acc);
     });
