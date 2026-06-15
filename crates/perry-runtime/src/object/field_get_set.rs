@@ -1992,18 +1992,42 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
         // descriptor-free objects stay on the fast path.
         let has_descriptors =
             PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == obj as usize));
+
+        // Snapshot the enumerable key list before reading values, then read each
+        // through the name-keyed `[[Get]]` so own accessors fire and getter side
+        // effects don't perturb the key set (mirrors `js_object_entries`).
+        let mut snapshot_keys: Vec<f64> = Vec::with_capacity(count);
         for j in 0..count {
             let i = pos(j);
-            if !keys.is_null() && i < crate::array::js_array_length(keys) {
-                let key_val = crate::array::js_array_get(keys, i);
-                if instance_private_key_hidden(obj, key_val) {
-                    continue;
-                }
-                if has_descriptors && descriptor_marks_non_enumerable(obj, key_val) {
-                    continue;
-                }
+            if keys.is_null() || i >= crate::array::js_array_length(keys) {
+                continue;
             }
-            let value = js_object_get_field(obj as *mut ObjectHeader, i);
+            let key_val = crate::array::js_array_get(keys, i);
+            if instance_private_key_hidden(obj, key_val) {
+                continue;
+            }
+            if has_descriptors && descriptor_marks_non_enumerable(obj, key_val) {
+                continue;
+            }
+            snapshot_keys.push(f64::from_bits(key_val.bits()));
+        }
+        for key_f64 in snapshot_keys {
+            let key_str =
+                crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+            if key_str.is_null() {
+                continue;
+            }
+            // Re-check own + enumerable at read time (a prior getter may have
+            // removed/hidden the key) — see `js_object_entries`.
+            if !super::own_key_present(obj as *mut ObjectHeader, key_str) {
+                continue;
+            }
+            if has_descriptors
+                && descriptor_marks_non_enumerable(obj, JSValue::from_bits(key_f64.to_bits()))
+            {
+                continue;
+            }
+            let value = js_object_get_field_by_name(obj as *const ObjectHeader, key_str);
             crate::array::js_array_push_f64(result, f64::from_bits(value.bits()));
         }
 
@@ -2138,33 +2162,59 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
         // descriptor-free objects stay on the fast path.
         let has_descriptors =
             PROPERTY_DESCRIPTORS.with(|m| m.borrow().keys().any(|(ptr, _)| *ptr == obj as usize));
+
+        // Spec (EnumerableOwnProperties): the own enumerable key list is
+        // determined ONCE up front, then `[[Get]]` is invoked per key. A getter
+        // that adds, removes, or hides a future key during enumeration must not
+        // change the set of entries reported (test262 entries/getter-adding-key,
+        // getter-removing-future-key, getter-making-future-key-nonenumerable).
+        // Snapshot the enumerable string keys (NaN-boxed) before reading any
+        // value so getter side effects on `keys_array` can't perturb the loop.
+        let mut snapshot_keys: Vec<f64> = Vec::with_capacity(count);
         for j in 0..count {
             let i = pos(j);
-            if !keys.is_null() && i < crate::array::js_array_length(keys) {
-                let key_val = crate::array::js_array_get(keys, i);
-                if instance_private_key_hidden(obj, key_val) {
-                    continue;
-                }
-                if has_descriptors && descriptor_marks_non_enumerable(obj, key_val) {
-                    continue;
-                }
+            if keys.is_null() || i >= crate::array::js_array_length(keys) {
+                continue;
             }
-            // Create a pair array [key, value]
+            let key_val = crate::array::js_array_get(keys, i);
+            if instance_private_key_hidden(obj, key_val) {
+                continue;
+            }
+            if has_descriptors && descriptor_marks_non_enumerable(obj, key_val) {
+                continue;
+            }
+            snapshot_keys.push(f64::from_bits(key_val.bits()));
+        }
+
+        for key_f64 in snapshot_keys {
+            let key_str =
+                crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+            if key_str.is_null() {
+                continue;
+            }
+            // Spec EnumerableOwnProperties re-reads `[[GetOwnProperty]]` per key
+            // and skips it when the descriptor is now undefined or no longer
+            // enumerable — a getter earlier in the loop may have deleted or
+            // hidden a key that was in the initial snapshot (test262
+            // entries/getter-removing-future-key, getter-making-future-key-
+            // nonenumerable).
+            if !super::own_key_present(obj as *mut ObjectHeader, key_str) {
+                continue;
+            }
+            if has_descriptors
+                && descriptor_marks_non_enumerable(obj, JSValue::from_bits(key_f64.to_bits()))
+            {
+                continue;
+            }
+            // Create a pair array [key, value].
             let pair = crate::array::js_array_alloc(2);
+            crate::array::js_array_push_f64(pair, key_f64);
 
-            // Get the key (from keys array — already validated non-null
-            // when count came from there).
-            if !keys.is_null() && i < crate::array::js_array_length(keys) {
-                let key = crate::array::js_array_get_f64(keys, i);
-                crate::array::js_array_push_f64(pair, key);
-            } else {
-                crate::array::js_array_push_f64(pair, 0.0);
-            }
-
-            // Read the value. `js_object_get_field` handles the
-            // inline-vs-overflow split internally (inline if
-            // i < field_count, overflow_get otherwise).
-            let value = js_object_get_field(obj as *mut ObjectHeader, i);
+            // Read the value through the name-keyed `[[Get]]`, which fires an
+            // own accessor's getter (the raw index-based field read returned the
+            // empty data slot for accessor-defined properties — test262
+            // entries/getter-adding-key expected the getter's "B").
+            let value = js_object_get_field_by_name(obj as *const ObjectHeader, key_str);
             crate::array::js_array_push_f64(pair, f64::from_bits(value.bits()));
 
             // Push the pair to result (NaN-box the array pointer)

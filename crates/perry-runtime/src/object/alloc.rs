@@ -1060,17 +1060,42 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         }
     }
 
-    // 2) Copy own symbol-keyed enumerable properties from source to target.
-    //    The clone-then-iterate dance is non-negotiable — the inner
-    //    `js_object_set_symbol_property` re-acquires SYMBOL_PROPERTIES'
-    //    Mutex; holding the lock across the iteration would deadlock.
-    let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(src_raw);
-    for (sym_ptr, value_bits) in entries {
+    // 2) Copy own symbol-keyed enumerable properties from source to target,
+    //    in `[[OwnPropertyKeys]]` symbol order (after the string keys). Use the
+    //    full own-symbol-key list — `clone_symbol_entries_for_obj_ptr` only
+    //    surfaces symbols with a stored *value*, missing accessor-only symbols
+    //    (`Object.defineProperty(o, sym, { get })`), so a symbol getter never
+    //    ran during assign (test262 assign/strings-and-symbol-order). Snapshot
+    //    the symbol pointers first: the inner `[[Get]]` / set re-acquire
+    //    SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
+    let sym_keys: Vec<usize> = {
+        let arr_raw = crate::symbol::js_object_get_own_property_symbols(source_f64);
+        let mut v = Vec::new();
+        if arr_raw != 0 {
+            let arr = arr_raw as *const crate::array::ArrayHeader;
+            if !arr.is_null() {
+                let n = crate::array::js_array_length(arr);
+                for i in 0..n {
+                    let sv = crate::array::js_array_get(arr, i);
+                    let p = (sv.bits() & crate::value::POINTER_MASK) as usize;
+                    if p != 0 {
+                        v.push(p);
+                    }
+                }
+            }
+        }
+        v
+    };
+    for sym_ptr in sym_keys {
         if !crate::symbol::symbol_property_is_enumerable(src_raw, sym_ptr) {
             continue;
         }
         let sym_f64 = f64::from_bits(JSValue::pointer(sym_ptr as *const u8).bits());
-        let value_f64 = f64::from_bits(value_bits);
+        // Read the source value through `[[Get]]`, not the raw side-table bits,
+        // so a symbol-keyed accessor's getter runs during `Object.assign`
+        // (test262 assign/strings-and-symbol-order). The earlier string-key
+        // copy already uses `[[Get]]` via `js_object_get_field_by_name`.
+        let value_f64 = crate::symbol::js_object_get_symbol_property(source_f64, sym_f64);
         // Strict `Set` semantics for symbol-keyed writes too.
         {
             let owner = tgt_raw;

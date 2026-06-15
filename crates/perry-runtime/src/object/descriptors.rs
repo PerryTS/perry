@@ -1241,13 +1241,43 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
                 let key_val = crate::array::js_array_get(names_arr, i as u32);
                 let key_f64 = f64::from_bits(key_val.bits());
                 let desc = js_object_get_own_property_descriptor(obj_value, key_f64);
+                // Spec step: only add the entry when the descriptor is not
+                // undefined (the key was removed between key-collection and the
+                // descriptor read, e.g. by a Proxy trap).
+                if desc.to_bits() == crate::value::TAG_UNDEFINED {
+                    continue;
+                }
                 let key_str = crate::builtins::js_string_coerce(key_f64);
                 if !key_str.is_null() {
                     js_object_set_field_by_name(result, key_str, desc);
                 }
             }
         }
-        f64::from_bits((result as u64) | POINTER_TAG)
+
+        // [[OwnPropertyKeys]] includes symbol keys after the string keys, and
+        // `Object.getOwnPropertyDescriptors` must report a descriptor for each
+        // (including non-enumerable ones). `getOwnPropertyNames` above only
+        // covers the string subset, so enumerate the symbol keys separately and
+        // install each descriptor under its symbol key on the result object.
+        // (test262 getOwnPropertyDescriptors/symbols-included, order-after-*.)
+        let result_value = f64::from_bits((result as u64) | POINTER_TAG);
+        let sym_arr_raw = crate::symbol::js_object_get_own_property_symbols(obj_value);
+        if sym_arr_raw != 0 {
+            let sym_arr = sym_arr_raw as *const crate::array::ArrayHeader;
+            if !sym_arr.is_null() {
+                let slen = crate::array::js_array_length(sym_arr) as usize;
+                for i in 0..slen {
+                    let sym_val = crate::array::js_array_get(sym_arr, i as u32);
+                    let sym_f64 = f64::from_bits(sym_val.bits());
+                    let desc = js_object_get_own_property_descriptor(obj_value, sym_f64);
+                    if desc.to_bits() == crate::value::TAG_UNDEFINED {
+                        continue;
+                    }
+                    crate::symbol::js_object_set_symbol_property(result_value, sym_f64, desc);
+                }
+            }
+        }
+        result_value
     }
 }
 
