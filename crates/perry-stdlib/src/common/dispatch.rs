@@ -1126,7 +1126,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // `js_native_call_method` → small-handle range check → here. Each helper
     // does its own registry-membership + property-name gate; `None` means
     // "not us, try the next dispatcher or return undefined".
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     {
         // #1698: Request body methods (`req.json()`/`.text()`/`.arrayBuffer()`)
         // on an any-typed / computed-key receiver. Hono's `HonoRequest.#cachedBody`
@@ -2413,8 +2413,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // Each helper does its own registry-membership check; the order matches the
     // observed property-name disjointness (`url` / `method` only on Request,
     // `status` / `ok` only on Response, etc.). First match wins.
-    // Gated on `http-client` because fetch.rs itself is gated on that feature.
-    #[cfg(feature = "http-client")]
+    // Gated on `web-fetch` because fetch.rs itself is gated on that feature (#5174).
+    #[cfg(feature = "web-fetch")]
     {
         if let Some(v) = crate::fetch::dispatch_request_property(handle as usize, property_name) {
             return v;
@@ -3113,7 +3113,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             f: unsafe extern "C" fn(i64) -> bool,
         );
         fn js_register_event_emitter_on(f: EventEmitterOn);
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_with_options(
             f: unsafe extern "C" fn(
                 *const perry_runtime::StringHeader,
@@ -3122,7 +3122,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 *const perry_runtime::StringHeader,
             ) -> *mut perry_runtime::Promise,
         );
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_constructors(
             blob_new: unsafe extern "C" fn(f64, f64) -> f64,
             file_new: unsafe extern "C" fn(f64, f64, f64, f64) -> f64,
@@ -3162,7 +3162,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             ) -> f64,
             response_static_error: extern "C" fn() -> f64,
         );
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
@@ -3182,9 +3182,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
     js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
     crate::string_decoder::string_decoder_prototype_value();
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_fetch_constructors(
         crate::fetch_blob::js_blob_new,
         crate::fetch_blob::js_file_new,
@@ -3196,7 +3196,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::fetch::js_response_static_redirect,
         crate::fetch::js_response_static_error,
     );
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
     // Probe / `on` hook / constructor all route through the shared
     // `extern "C"` events surface declared above dispatch_event_emitter_method

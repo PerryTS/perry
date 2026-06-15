@@ -87,7 +87,22 @@ bundled-fastify = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:byt
 # `bundled-streams` directly, and also strips `http-client` when
 # axios / node-fetch / http / https is imported through the
 # well-known table — both ends move in lockstep.
-http-client = ["dep:reqwest", "async-runtime", "bundled-streams"]
+#
+# #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API —
+# `fetch()`, `Headers`, `Request`, `Response`, `Blob`/`File`, in
+# `src/fetch/` + `src/fetch_blob.rs`) plus the bundled node:http client
+# (`src/http.rs` + `src/axios.rs`). The halves share the
+# reqwest/async-runtime/streams deps but are otherwise independent.
+# Keeping them separable lets the well-known flip strip *only* the
+# bundled node:http client when `node:http` routes to perry-ext-http,
+# while preserving the Web Fetch FFIs a program needs for a bare
+# `new Headers()` / `new Response()`. Linking both the bundled client
+# and perry-ext-http previously produced duplicate
+# `js_http_process_pending` (et al.) symbols, and perry-ext-http's
+# aux-pump call bound to perry-stdlib's empty-queue copy — wedging the
+# in-process response pump (#5174).
+web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams"]
+http-client = ["web-fetch"]
 
 # Web Streams API (issue #237). Per-binding gate v0.5.572 — the
 # well-known flip routes `import 'streams'` to perry-ext-streams
