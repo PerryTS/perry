@@ -70,6 +70,32 @@ pub(super) fn try_regex_string_methods(
                     && args.len() == 1
                 {
                     let is_match_all = method_ident.sym.as_ref() == "matchAll";
+                    // Only fold to `String.prototype.match`/`matchAll` when the
+                    // RECEIVER is statically a string. `.match` is also a common
+                    // user-class method name (Next.js route matchers'
+                    // `RouteMatcher.match(pathname)`), so an unknown / `Any` /
+                    // class-instance receiver must NOT be assumed a string —
+                    // otherwise `m.match(p)` on a class instance compiled to
+                    // `js_string_match(m_as_string, p)`, reinterpreting the
+                    // instance pointer as a string and returning null (Next.js
+                    // wall 52: `DefaultRouteMatcherManager.validate` →
+                    // `matcher.match(pathname)` never matched the App-Router root
+                    // "/" → HTTP 500). A receiver that really is a string still
+                    // gets `match` two ways: this fold (statically-typed string),
+                    // and the `jsval.is_string()` arm of `js_native_call_method`
+                    // for `Any`-typed strings. Mirrors the wall-50 `normalize`
+                    // fix.
+                    let recv_is_string = match member.obj.as_ref() {
+                        ast::Expr::Lit(ast::Lit::Str(_)) => true,
+                        ast::Expr::Tpl(_) => true,
+                        ast::Expr::Ident(ident) => {
+                            matches!(ctx.lookup_local_type(ident.sym.as_ref()), Some(Type::String))
+                        }
+                        _ => false,
+                    };
+                    if !recv_is_string {
+                        return Ok(Err(args));
+                    }
                     // Check if the argument is a regex literal or a local holding a regex
                     let arg_is_regex = match call.args.first().map(|a| a.expr.as_ref()) {
                         Some(ast::Expr::Lit(ast::Lit::Regex(_))) => true,

@@ -133,6 +133,18 @@ pub(crate) fn lower_native_method_call(
                     &[(DOUBLE, &iter), (DOUBLE, &done)],
                 ));
             }
+            // Next.js wall 53: runtime `require(absolutePath.json)` fallback.
+            "requireJsonDisk" => {
+                let specifier = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_require_json_disk",
+                    &[(DOUBLE, &specifier)],
+                ));
+            }
             _ => {}
         }
     }

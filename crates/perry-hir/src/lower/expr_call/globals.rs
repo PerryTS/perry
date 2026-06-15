@@ -220,6 +220,24 @@ pub(super) fn try_global_builtins(
                 };
                 return Ok(Ok(Expr::QueueMicrotask(Box::new(callback))));
             }
+            // Internal intrinsic emitted only by the CJS wrapper's `require`
+            // fallback (cjs_wrap/wrap.rs): runtime `require(absolutePath.json)`.
+            // Reads + JSON.parses the file from disk via the runtime; `.json` is
+            // pure data so no eval is involved (Next.js wall 53).
+            "__perry_require_json_disk" => {
+                let specifier = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "requireJsonDisk".to_string(),
+                    args: vec![specifier],
+                }));
+            }
             "Symbol" => {
                 // Symbol() / Symbol(description)
                 if args.is_empty() {

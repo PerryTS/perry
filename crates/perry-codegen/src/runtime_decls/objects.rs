@@ -223,6 +223,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_rest", I64, &[I64, I64]);
     // RequireObjectCoercible for object destructuring (throws on null/undefined).
     module.declare_function("js_require_object_coercible", DOUBLE, &[DOUBLE]);
+    // Next.js wall 53: runtime `require(absolutePath.json)` disk fallback.
+    module.declare_function("js_require_json_disk", DOUBLE, &[DOUBLE]);
     // Array alloc variant that pre-sets length to N (for exclude_keys array filling).
     module.declare_function("js_array_alloc_with_length", I64, &[I32]);
     // Unchecked array set (plain array, no buffer/Set/Map dispatch).

@@ -217,3 +217,23 @@ pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
     make_require(undefined())
 }
+
+/// Next.js wall 53: runtime `require(absolutePath)` of a `.json` file.
+///
+/// Emitted only by the CJS wrapper's `require` fallback (cjs_wrap/wrap.rs) for a
+/// specifier computed at runtime (e.g. Next.js `require(this.middlewareManifestPath)`)
+/// — the statically-resolved relative cases can't cover it. Node's `require`
+/// reads + `JSON.parse`s `.json` files; `.json` is pure data so this needs no
+/// code evaluation. Reads the file from disk and parses it, throwing
+/// `MODULE_NOT_FOUND` (matching Node's require) when the path doesn't exist.
+#[no_mangle]
+pub extern "C" fn js_require_json_disk(specifier: f64) -> f64 {
+    let path = value_to_string(specifier, "id");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => throw_module_not_found(&path),
+    };
+    let text_ptr = js_string_from_bytes(content.as_ptr(), content.len() as u32);
+    let parsed = unsafe { crate::json::js_json_parse(text_ptr) };
+    f64::from_bits(parsed.bits())
+}

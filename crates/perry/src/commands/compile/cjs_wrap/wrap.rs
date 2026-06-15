@@ -627,6 +627,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
 {require_cases}
+        // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
+        // manifests this way: `require(this.middlewareManifestPath)`). Node's
+        // require reads + JSON.parses `.json` files; the statically-resolved
+        // cases above only cover specifiers known at compile time, so a path
+        // computed at runtime falls here. `.json` is pure data (no eval), so we
+        // read it from disk and parse it. `.js`/`.node` runtime require stays
+        // unsupported — that would require evaluating arbitrary code.
+        if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {{
+            return __perry_require_json_disk(specifier);
+        }}
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
     }}
     Object.defineProperty(require, 'name', {{
