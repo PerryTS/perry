@@ -2922,14 +2922,18 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     // `'prototype' in C.prototype.m === false`). (Test262 definition method/accessor
     // prop-desc.)
     //
-    // #4973 exception: bound NATIVE-MODULE *class* exports (`http.Server`,
-    // `https.Server`) are constructors in Node, and the util.inherits-era
-    // subclass pattern reads their `.prototype` as a setPrototypeOf operand
-    // (`Object.setPrototypeOf(testServer.prototype, http.Server.prototype)`).
-    // Returning None here made that read `undefined` and the setPrototypeOf
-    // threw "Object prototype may only be an Object or null". These exports
-    // are cached singleton closures (NATIVE_CALLABLE_EXPORTS), so the
-    // synthetic-class path below gives them a stable prototype object.
+    // #4973 / #3527 exception: bound NATIVE-MODULE *class* exports
+    // (`http.Server`, `http.IncomingMessage`, `http.ServerResponse`, …) are
+    // constructors in Node, and the util.inherits / `Object.create(Ctor.
+    // prototype)` subclass pattern reads their `.prototype` as a
+    // setPrototypeOf / Object.create operand. Returning None here made that
+    // read `undefined`, and `Object.create(undefined)` /
+    // `Object.setPrototypeOf(x, undefined)` then threw "Object prototype may
+    // only be an Object or null" — the exact blocker hit at Express init
+    // (`express/lib/request.js`: `Object.create(http.IncomingMessage.
+    // prototype)`). These exports are cached singleton closures
+    // (NATIVE_CALLABLE_EXPORTS), so the synthetic-class path below gives them
+    // a stable prototype object.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
         if jv.is_pointer() {
@@ -2942,7 +2946,20 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
                     super::native_module::bound_native_callable_module_and_method(func_value)
                 }
                 .map(|(module, method)| {
-                    matches!(module.as_str(), "http" | "https") && method == "Server"
+                    matches!(
+                        (module.as_str(), method.as_str()),
+                        // Shared http/https constructor classes.
+                        ("http" | "https", "Server" | "Agent")
+                            // http-only request/response constructor classes
+                            // that userland subclasses (Express, util.inherits).
+                            | (
+                                "http",
+                                "IncomingMessage"
+                                    | "ServerResponse"
+                                    | "OutgoingMessage"
+                                    | "ClientRequest"
+                            )
+                    )
                 })
                 .unwrap_or(false);
                 if !is_native_class_export {
