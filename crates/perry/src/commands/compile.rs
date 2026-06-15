@@ -2564,6 +2564,8 @@ pub fn run_with_parse_cache(
                                             .as_ref()
                                             .map(|c| c.params.len())
                                             .unwrap_or(0),
+                                        has_own_constructor: class.constructor.is_some(),
+                                        has_instance_fields: !class.fields.is_empty(),
                                         method_names: class
                                             .methods
                                             .iter()
@@ -2758,6 +2760,8 @@ pub fn run_with_parse_cache(
                                                 .as_ref()
                                                 .map(|c| c.params.len())
                                                 .unwrap_or(0),
+                                            has_own_constructor: class.constructor.is_some(),
+                                            has_instance_fields: !class.fields.is_empty(),
                                             method_names: class
                                                 .methods
                                                 .iter()
@@ -3004,6 +3008,8 @@ pub fn run_with_parse_cache(
                                     .as_ref()
                                     .map(|c| c.params.len())
                                     .unwrap_or(0),
+                                has_own_constructor: class.constructor.is_some(),
+                                has_instance_fields: !class.fields.is_empty(),
                                 method_names: class
                                     .methods
                                     .iter()
@@ -3068,6 +3074,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3219,6 +3227,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3677,6 +3687,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3869,6 +3881,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods

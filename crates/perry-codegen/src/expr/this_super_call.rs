@@ -625,29 +625,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // PgSerialBuilder → PgColumnBuilder → ColumnBuilder chain
             // where only ColumnBuilder has a ctor body).
             // Walk up the parent chain to find the first class with a
-            // local constructor body OR a cross-module ctor stub WITH
-            // declared params. JS spec requires `class Mid extends Base {}`
+            // local constructor body OR a cross-module ctor stub that must
+            // run. JS spec requires `class Mid extends Base {}`
             // followed by `class Leaf extends Mid` calling `super(...)` to
             // reach Base's ctor body (Mid has no ctor → implicit forward).
             // Refs #420 (drizzle's PgSerialBuilder → PgColumnBuilder →
             // ColumnBuilder where only ColumnBuilder has a body).
             //
-            // We must skip past imported ctors with param_count=0 too —
-            // those represent empty-bodied derived classes whose imported
-            // standalone ctor would otherwise eat the incoming args
-            // without forwarding. Walking past them and dispatching
-            // directly to the ancestor-with-real-params standalone ctor
-            // preserves the args end-to-end.
+            // Imported empty-derived classes with no fields still get walked
+            // past so their synthesized standalone ctor does not eat forwarded
+            // args. Explicit zero-arg ctors and field-initializer ctors stop
+            // the walk because their body/initializers must run.
             let mut effective_parent_name = parent_name.clone();
             let mut effective_parent_class = parent_class;
             loop {
                 let has_local_body = effective_parent_class.constructor.is_some();
-                let has_real_imported_ctor = ctx
+                let has_effectful_imported_ctor = ctx
                     .imported_class_ctors
                     .get(&effective_parent_name)
-                    .map(|(_, n)| *n > 0)
+                    .map(|ctor| ctor.stops_constructor_walk())
                     .unwrap_or(false);
-                if has_local_body || has_real_imported_ctor {
+                if has_local_body || has_effectful_imported_ctor {
                     break;
                 }
                 let Some(grandparent_name) = effective_parent_class
@@ -791,7 +789,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ],
                     );
                 }
-            } else if let Some((ctor_name, param_count)) = ctx
+            } else if let Some(ctor) = ctx
                 .imported_class_ctors
                 .get(&effective_parent_name)
                 .cloned()
@@ -807,7 +805,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // silently drops `super(...)` for imported parents and the subclass
                 // ends up with only its own fields, breaking hono-base inheritance.
                 let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered_args.len() < param_count {
+                while lowered_args.len() < ctor.param_count {
                     lowered_args.push(undef_lit.clone());
                 }
                 let this_slot = ctx.this_stack.last().cloned();
@@ -826,11 +824,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
                 ctx.pending_declares.push((
-                    ctor_name.clone(),
+                    ctor.symbol.clone(),
                     crate::types::VOID,
                     ctor_param_types,
                 ));
-                ctx.block().call_void(&ctor_name, &ctor_args);
+                ctx.block().call_void(&ctor.symbol, &ctor_args);
             }
 
             // After the parent body has run (which may have set `this.config`

@@ -351,25 +351,30 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     // through to the next ancestor when `class_table`'s
                     // entry for an imported class returned a stub with
                     // `constructor: None` (stubs always have None) — even
-                    // though the source module did have a real ctor with
-                    // params. Result: `class Child extends Parent { x =
+                    // though the source module did have a real ctor/effect.
+                    // Result: `class Child extends Parent { x =
                     // "y" }` (no own ctor, parent in another module) had
                     // its synthesized ctor with ZERO params, so the user's
                     // `new Child("arg")` lost the arg before reaching
-                    // Parent_constructor. Refs #420.
-                    let imported_ctor_params = opts
+                    // Parent_constructor. Explicit zero-arg ctors and
+                    // field-initializer ctors still stop the walk even with
+                    // zero adopted params. Refs #420.
+                    let imported_ctor = opts
                         .imported_classes
                         .iter()
                         .find(|i| i.local_alias.as_deref().unwrap_or(&i.name) == pname.as_str())
-                        .map(|ic| ic.constructor_param_count)
-                        .unwrap_or(0);
+                        .filter(|ic| {
+                            ic.constructor_param_count > 0
+                                || ic.has_own_constructor
+                                || ic.has_instance_fields
+                        });
                     if let Some(pclass) = class_table.get(pname.as_str()) {
                         if let Some(pctor) = &pclass.constructor {
                             found_params = pctor.params.clone();
                             break;
                         }
-                        if imported_ctor_params > 0 {
-                            for i in 0..imported_ctor_params {
+                        if let Some(imported_ctor) = imported_ctor {
+                            for i in 0..imported_ctor.constructor_param_count {
                                 found_params.push(perry_hir::Param {
                                     id: 0xFFFF_0000 + i as u32,
                                     name: format!("__forward_arg{}", i),
@@ -385,10 +390,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         cur = pclass.extends_name.clone();
                     } else if let Some(stub) = imported_class_stubs.iter().find(|c| c.name == pname)
                     {
-                        // Imported stub — params not in HIR; use its ctor
-                        // param count as a synthetic count of unnamed args.
-                        if imported_ctor_params > 0 {
-                            for i in 0..imported_ctor_params {
+                        // Imported stub — params not in HIR; use effectful
+                        // ctor metadata as a synthetic count of unnamed args.
+                        if let Some(imported_ctor) = imported_ctor {
+                            for i in 0..imported_ctor.constructor_param_count {
                                 found_params.push(perry_hir::Param {
                                     id: 0xFFFF_0000 + i as u32,
                                     name: format!("__forward_arg{}", i),

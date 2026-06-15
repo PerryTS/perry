@@ -342,8 +342,10 @@ fn effective_constructor_param_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) 
     }
     let mut parent = class.extends_name.as_deref();
     while let Some(pname) = parent {
-        if let Some((_sym, n)) = ctx.imported_class_ctors.get(pname) {
-            return *n;
+        if let Some(ctor) = ctx.imported_class_ctors.get(pname) {
+            if ctor.stops_constructor_walk() {
+                return ctor.param_count;
+            }
         }
         match ctx.classes.get(pname).copied() {
             Some(pc) => {
@@ -1352,21 +1354,20 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // SuperCall Error-like arm in expr.rs.
         //
         // BUT: if `class_name` is an imported stub with a cross-module
-        // ctor that has REAL params, defer to that path — the source
+        // ctor with a real body/effect, defer to that path — the source
         // module's ctor body knows the real param order
         // (e.g. `constructor(public statusCode, msg)` where args[0] is
         // statusCode, not message). Running Error-init here would
         // assign the wrong arg to `message` and corrupt the instance.
-        // When the imported ctor's param_count is 0, the source had no
-        // own ctor (codegen synthesized an empty 0-param ctor for the
-        // bare-extends-Error case), so calling it is a no-op and we
-        // still need Error-init to populate `this.message` / `this.name`.
-        let imported_ctor_has_real_params = ctx
+        // When the imported ctor is a synthesized empty 0-param ctor for the
+        // bare-extends-Error case, calling it is a no-op and we still need
+        // Error-init to populate `this.message` / `this.name`.
+        let imported_ctor_has_body_or_fields = ctx
             .imported_class_ctors
             .get(class_name)
-            .map(|(_, n)| *n > 0)
+            .map(|ctor| ctor.stops_constructor_walk())
             .unwrap_or(false);
-        if !found_inherited_ctor && !imported_ctor_has_real_params {
+        if !found_inherited_ctor && !imported_ctor_has_body_or_fields {
             // Trace the chain to find the first Error-like ancestor name.
             let mut error_kind: Option<String> = None;
             let mut cur = class.extends_name.clone();
@@ -1488,12 +1489,12 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             let mut effective_class_name = lookup_class.clone();
             let mut effective_extends = class.extends_name.clone();
             loop {
-                let has_real_ctor = ctx
+                let has_effectful_ctor = ctx
                     .imported_class_ctors
                     .get(&effective_class_name)
-                    .map(|(_, n)| *n > 0)
+                    .map(|ctor| ctor.stops_constructor_walk())
                     .unwrap_or(false);
-                if has_real_ctor {
+                if has_effectful_ctor {
                     break;
                 }
                 // v0.5.759: stop walking ONLY for the leaf class (the user's
@@ -1527,16 +1528,16 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 effective_class_name = parent;
                 effective_extends = parent_class.extends_name.clone();
             }
-            if let Some((ctor_name, param_count)) = ctx
+            if let Some(ctor) = ctx
                 .imported_class_ctors
                 .get(&effective_class_name)
                 .cloned()
-                .filter(|(_, _)| effective_class_name != lookup_class)
+                .filter(|_| effective_class_name != lookup_class)
             {
                 // Walked to an ancestor — call its ctor with this and forwarded args.
                 let undef_lit =
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered_args.len() < param_count {
+                while lowered_args.len() < ctor.param_count {
                     lowered_args.push(undef_lit.clone());
                 }
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
@@ -1549,19 +1550,17 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
                 ctx.pending_declares.push((
-                    ctor_name.clone(),
+                    ctor.symbol.clone(),
                     crate::types::VOID,
                     ctor_param_types,
                 ));
-                ctx.block().call_void(&ctor_name, &ctor_args);
-            } else if let Some((ctor_name, param_count)) =
-                ctx.imported_class_ctors.get(class_name).cloned()
-            {
+                ctx.block().call_void(&ctor.symbol, &ctor_args);
+            } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers.
                 let undef_lit =
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered_args.len() < param_count {
+                while lowered_args.len() < ctor.param_count {
                     lowered_args.push(undef_lit.clone());
                 }
                 // Pass `this` as NaN-boxed double (same as compile_method's this_arg).
@@ -1575,11 +1574,11 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
                 ctx.pending_declares.push((
-                    ctor_name.clone(),
+                    ctor.symbol.clone(),
                     crate::types::VOID,
                     ctor_param_types,
                 ));
-                ctx.block().call_void(&ctor_name, &ctor_args);
+                ctx.block().call_void(&ctor.symbol, &ctor_args);
             }
         } // end !found_inherited_ctor
     }

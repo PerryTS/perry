@@ -429,6 +429,10 @@ pub struct ImportedClass {
     pub source_prefix: String,
     /// Number of constructor parameters (needed for dispatch).
     pub constructor_param_count: usize,
+    /// Whether the source class declared its own constructor body.
+    pub has_own_constructor: bool,
+    /// Whether the source class has instance fields that require initializer replay.
+    pub has_instance_fields: bool,
     /// Method names defined on this class.
     pub method_names: Vec<String>,
     /// Per-method explicit param counts, parallel to `method_names`. Issue #235:
@@ -485,6 +489,23 @@ pub struct ImportedClass {
     /// instances by the source module's constructor. `None` falls back
     /// to a freshly-assigned id (legacy behavior).
     pub source_class_id: Option<u32>,
+}
+
+/// Constructor metadata for a class imported from another module.
+#[derive(Debug, Clone)]
+pub(crate) struct ImportedCtor {
+    pub symbol: String,
+    pub param_count: usize,
+    pub has_own_constructor: bool,
+    pub has_instance_fields: bool,
+}
+
+impl ImportedCtor {
+    /// True when constructor resolution must stop at this imported class even
+    /// when its standalone constructor takes zero user parameters.
+    pub(crate) fn stops_constructor_walk(&self) -> bool {
+        self.param_count > 0 || self.has_own_constructor || self.has_instance_fields
+    }
 }
 
 /// Cross-module import context, bundled into a single struct to avoid
@@ -603,7 +624,7 @@ pub(crate) struct CrossModuleCtx {
     /// Imported class constructor function names. Maps class_name →
     /// full constructor symbol (e.g. "Editor" → "hone_editor_...__Editor_constructor").
     /// Populated from `opts.imported_classes`.
-    pub imported_class_ctors: std::collections::HashMap<String, (String, usize)>,
+    pub imported_class_ctors: std::collections::HashMap<String, ImportedCtor>,
     /// Compile-time i18n table for resolving `Expr::I18nString` against
     /// the project's default locale. `None` when i18n is not configured.
     /// Built from `opts.i18n_table` once at the top of `compile_module`

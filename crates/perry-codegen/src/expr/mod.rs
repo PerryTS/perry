@@ -334,8 +334,8 @@ pub(crate) struct FnCtx<'a> {
     /// `ctx.classes` chain (which mis-picks same-named cross-module parents).
     pub class_init_chains:
         &'a std::collections::HashMap<String, Vec<(String, Vec<perry_hir::ClassField>)>>,
-    /// Imported class constructor names: class_name → (ctor_fn_name, param_count).
-    pub imported_class_ctors: &'a std::collections::HashMap<String, (String, usize)>,
+    /// Imported class constructor metadata, keyed by effective imported class name.
+    pub imported_class_ctors: &'a std::collections::HashMap<String, crate::codegen::ImportedCtor>,
     /// Per-function param signature: `(declared_param_count,
     /// has_rest_param)`. Used by FuncRef call sites to know whether
     /// to bundle trailing arguments into a rest array.
