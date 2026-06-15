@@ -3095,6 +3095,11 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         );
         #[cfg(feature = "http-client")]
         fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
+        // #4965: Headers → `res.setHeaders` entries-JSON producer.
+        #[cfg(feature = "http-client")]
+        fn js_register_global_headers_entries_json(
+            f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
+        );
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
@@ -3129,6 +3134,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     );
     #[cfg(feature = "http-client")]
     js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
+    #[cfg(feature = "http-client")]
+    js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
     // Probe / `on` hook / constructor all route through the shared
     // `extern "C"` events surface declared above dispatch_event_emitter_method
     // (#4995): the linker resolves them to whichever EventEmitter impl is in

@@ -21,8 +21,9 @@ use tokio::sync::oneshot;
 
 use crate::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
 use crate::types::{
-    js_json_stringify, js_value_is_closure, jsvalue_to_body_bytes, jsvalue_to_owned_string,
-    read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    js_json_stringify, js_node_setheaders_entries_json, js_value_is_closure, jsvalue_to_body_bytes,
+    jsvalue_to_owned_string, read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL,
+    TAG_TRUE, TAG_UNDEFINED,
 };
 
 /// Node's default `highWaterMark` for an HTTP `OutgoingMessage` (16 KiB).
@@ -198,6 +199,12 @@ pub struct ServerResponse {
     pub raw_header_names: HashMap<String, String>,
     pub raw_trailer_names: HashMap<String, String>,
     pub headers_sent: bool,
+    /// True once `writeHead()` has committed the status line + headers (Node's
+    /// `_header`). Distinct from `headers_sent` (the wire flush, set at
+    /// `write`/`end`) so the normal deferred-send path is unaffected, but a
+    /// post-`writeHead` `setHeaders()` still throws `ERR_HTTP_HEADERS_SENT`
+    /// like Node (#4965).
+    pub header_committed: bool,
     pub writable_ended: bool,
     pub writable_finished: bool,
     pub send_date: bool,
@@ -365,6 +372,7 @@ impl ServerResponse {
             header_value_lists: HashMap::new(),
             trailers: HashMap::new(),
             raw_header_names: HashMap::new(),
+            header_committed: false,
             raw_trailer_names: HashMap::new(),
             headers_sent: false,
             writable_ended: false,
@@ -724,25 +732,92 @@ pub extern "C" fn js_node_http_res_get_header_names_json(handle: i64) -> *mut St
     alloc_string(&s).as_raw()
 }
 
-/// `res.setHeaders(headers)` — accepts any JSON-stringifiable object shape
-/// Perry can inspect and returns the receiver. Native Node also accepts Map
-/// and Headers; those stringify to `{}` in the current runtime, so this remains
-/// a deterministic no-op for those inputs until iterable extraction lands.
+/// `res.setHeaders(headers)` — Node accepts only a `Headers` or a `Map`
+/// (anything else is `ERR_INVALID_ARG_TYPE`), and throws
+/// `ERR_HTTP_HEADERS_SENT` if the head was already committed. The runtime's
+/// `js_node_setheaders_entries_json` normalizes the argument into a JSON
+/// `[name, value]` entries array (or null for an invalid type) WITHOUT ever
+/// dereferencing a registry handle — the old path JSON-stringified the
+/// `Headers` handle directly, walking its fetch-band id (`0x40000`+) as a heap
+/// `GcHeader` and segfaulting nondeterministically (#4965).
 #[no_mangle]
 pub extern "C" fn js_node_http_res_set_headers(handle: i64, headers_value: f64) -> i64 {
-    let v = JsValue::from_bits(headers_value.to_bits());
-    if v.is_undefined() || v.is_null() {
-        return handle;
+    // Node order: the headers-sent check fires before the argument is
+    // validated. `header_committed` covers a prior `writeHead`; `headers_sent`
+    // covers an already-flushed body.
+    let committed = get_handle::<ServerResponse>(handle)
+        .map(|sr| sr.headers_sent || sr.header_committed)
+        .unwrap_or(false);
+    if committed {
+        perry_ffi::throw_with_code(
+            "Cannot set headers after they are sent to the client",
+            "ERR_HTTP_HEADERS_SENT",
+            perry_ffi::ErrorKind::Error,
+        );
     }
-    let Some(json) = perry_ffi::json_stringify(v) else {
-        return handle;
-    };
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
-        if !sr.headers_sent {
-            apply_headers_json(sr, &json);
+    let entries_ptr = unsafe { js_node_setheaders_entries_json(headers_value) };
+    if entries_ptr.is_null() {
+        perry_ffi::throw_with_code(
+            "The \"headers\" argument must be an instance of Headers or Map.",
+            "ERR_INVALID_ARG_TYPE",
+            perry_ffi::ErrorKind::TypeError,
+        );
+    }
+    if let Some(json) = read_string_header(entries_ptr) {
+        if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+            if !sr.headers_sent {
+                apply_headers_entries(sr, &json);
+            }
         }
     }
     handle
+}
+
+/// Apply a normalized `setHeaders` entries array: `[[name, value], …]` where
+/// `value` is a string or (for `Set-Cookie`/multi-valued headers) an array of
+/// strings. The pairwise (vs object) shape preserves a `Set-Cookie` array as a
+/// per-element list so the wire layer emits one line each (#4826/#4965).
+fn apply_headers_entries(sr: &mut ServerResponse, json: &str) {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
+    else {
+        return;
+    };
+    for item in items {
+        let serde_json::Value::Array(pair) = item else {
+            continue;
+        };
+        let mut pair = pair.into_iter();
+        let (Some(name_v), Some(value_v)) = (pair.next(), pair.next()) else {
+            continue;
+        };
+        let name = match name_v {
+            serde_json::Value::String(s) => s,
+            other => other.to_string(),
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_lowercase();
+        if let serde_json::Value::Array(elems) = value_v {
+            let elems: Vec<String> = elems
+                .into_iter()
+                .map(|item| match item {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                })
+                .collect();
+            sr.headers.insert(lower.clone(), elems.join(", "));
+            sr.header_value_lists.insert(lower.clone(), elems);
+        } else {
+            let value = match value_v {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            sr.headers.insert(lower.clone(), value);
+            sr.header_value_lists.remove(&lower);
+        }
+        sr.raw_header_names.insert(lower, name);
+    }
 }
 
 /// `res.statusMessage` getter.
@@ -926,8 +1001,62 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
             }
         }
         if let Some(json) = headers_json {
-            apply_headers_json(sr, &json);
+            // Node's `writeHead` accepts the headers as an object OR as a flat
+            // array `[name, value, name, value, …]` (even offsets are names,
+            // odd are values — NOT a list of tuples). Route the array form to
+            // the pairwise applier; objects keep the original path (#4965).
+            if json.trim_start().starts_with('[') {
+                apply_headers_flat_array(sr, &json);
+            } else {
+                apply_headers_json(sr, &json);
+            }
         }
+        // Mark the head committed (Node's `_header`) so a later
+        // `res.setHeaders(...)` throws `ERR_HTTP_HEADERS_SENT`. The actual wire
+        // flush still happens lazily at `write`/`end` (`headers_sent`), so the
+        // deferred-send path is unchanged (#4965).
+        sr.header_committed = true;
+    }
+}
+
+/// Apply a Node `writeHead` flat-array headers value (`[name, value, …]`).
+/// Even offsets are header names, odd offsets the associated values; an array
+/// element may itself be an array (multi-valued header). Mirrors
+/// `apply_headers_json`'s lowercase-key / original-case / array-list handling.
+fn apply_headers_flat_array(sr: &mut ServerResponse, json: &str) {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
+    else {
+        return;
+    };
+    let mut it = items.into_iter();
+    while let (Some(name_v), Some(value_v)) = (it.next(), it.next()) {
+        let name = match name_v {
+            serde_json::Value::String(s) => s,
+            other => other.to_string(),
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_lowercase();
+        if let serde_json::Value::Array(elems) = value_v {
+            let elems: Vec<String> = elems
+                .into_iter()
+                .map(|item| match item {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                })
+                .collect();
+            sr.headers.insert(lower.clone(), elems.join(", "));
+            sr.header_value_lists.insert(lower.clone(), elems);
+        } else {
+            let value = match value_v {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            sr.headers.insert(lower.clone(), value);
+            sr.header_value_lists.remove(&lower);
+        }
+        sr.raw_header_names.insert(lower, name);
     }
 }
 
@@ -1754,5 +1883,51 @@ mod tests {
         apply_headers_json(&mut sr, "null");
         apply_headers_json(&mut sr, "undefined");
         assert!(sr.headers.is_empty());
+    }
+
+    // #4965 — `setHeaders` entries normalizer output.
+
+    #[test]
+    fn apply_headers_entries_lowercases_and_preserves_case() {
+        let mut sr = empty_response();
+        apply_headers_entries(&mut sr, r#"[["Foo","1"],["Bar","2"]]"#);
+        assert_eq!(sr.headers.get("foo").map(String::as_str), Some("1"));
+        assert_eq!(sr.headers.get("bar").map(String::as_str), Some("2"));
+        assert_eq!(
+            sr.raw_header_names.get("foo").map(String::as_str),
+            Some("Foo")
+        );
+    }
+
+    #[test]
+    fn apply_headers_entries_set_cookie_array_keeps_per_element_list() {
+        let mut sr = empty_response();
+        apply_headers_entries(&mut sr, r#"[["set-cookie",["a=b","c=d"]]]"#);
+        assert_eq!(
+            sr.header_value_lists.get("set-cookie").map(Vec::as_slice),
+            Some(["a=b".to_string(), "c=d".to_string()].as_slice())
+        );
+        assert_eq!(
+            sr.headers.get("set-cookie").map(String::as_str),
+            Some("a=b, c=d")
+        );
+    }
+
+    #[test]
+    fn apply_headers_entries_ignores_non_array_and_short_pairs() {
+        let mut sr = empty_response();
+        apply_headers_entries(&mut sr, r#"[{"foo":"1"},["only-name"],["k","v"]]"#);
+        assert_eq!(sr.headers.get("k").map(String::as_str), Some("v"));
+        assert_eq!(sr.headers.len(), 1);
+    }
+
+    #[test]
+    fn write_head_flat_array_applies_pairs_and_overrides() {
+        let mut sr = empty_response();
+        sr.headers.insert("foo".into(), "1".into());
+        apply_headers_flat_array(&mut sr, r#"["foo","3","X-New","z"]"#);
+        // even/odd offsets are name/value; `foo` overrides the prior value.
+        assert_eq!(sr.headers.get("foo").map(String::as_str), Some("3"));
+        assert_eq!(sr.headers.get("x-new").map(String::as_str), Some("z"));
     }
 }

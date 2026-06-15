@@ -325,6 +325,47 @@ pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
     nanbox_array_pointer(arr)
 }
 
+/// #4965: produce the `[name, value]` entries JSON that the http-server
+/// `res.setHeaders(Headers)` path applies (routed through the runtime's
+/// `js_node_setheaders_entries_json` registration). Mirrors Node's
+/// `OutgoingMessage.setHeaders`: it walks the WHATWG sorted-by-name entries,
+/// collapsing `Set-Cookie` into a single `["set-cookie", [c1, c2, …]]` entry
+/// via `getSetCookie()` (the wire layer then emits one line per element).
+/// Returns null for an unknown handle so the caller raises
+/// `ERR_INVALID_ARG_TYPE`.
+#[no_mangle]
+pub extern "C" fn js_headers_setheaders_entries_json(handle: f64) -> *mut StringHeader {
+    let id = handle_id(handle);
+    let guard = HEADERS_REGISTRY.lock().unwrap();
+    let Some(store) = guard.get(&id) else {
+        return std::ptr::null_mut();
+    };
+    let mut names: Vec<String> = store.entries.iter().map(|(k, _)| k.clone()).collect();
+    names.sort();
+    names.dedup();
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(names.len());
+    for name in names {
+        if name == "set-cookie" {
+            let cookies: Vec<serde_json::Value> = store
+                .set_cookie_values()
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect();
+            out.push(serde_json::Value::Array(vec![
+                serde_json::Value::String(name),
+                serde_json::Value::Array(cookies),
+            ]));
+        } else if let Some(v) = store.get(&name) {
+            out.push(serde_json::Value::Array(vec![
+                serde_json::Value::String(name),
+                serde_json::Value::String(v),
+            ]));
+        }
+    }
+    let s = serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string());
+    js_string_from_bytes(s.as_ptr(), s.len() as u32)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_headers_has(handle: f64, key_ptr: *const StringHeader) -> f64 {
     let id = handle_id(handle);
