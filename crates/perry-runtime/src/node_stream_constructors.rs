@@ -415,6 +415,32 @@ pub extern "C" fn js_node_stream_readable_subclass_init(this: f64, opts: f64) ->
     this
 }
 
+/// #5137: `super()` for a source-compiled `class X extends EventEmitter`
+/// (from `node:events`). Installs the bare EventEmitter listener/emit
+/// methods directly onto `this` — the same generic `ns_*` closures the
+/// stream subclasses use — so `.on`/`.emit`/`.once`/… resolve as the
+/// instance's own bound methods. This is the EventEmitter analog of
+/// `js_node_stream_readable_subclass_init`; commander's `Command extends
+/// EventEmitter` reaches it when its real npm source is compiled (the
+/// package is in `perry.compilePackages`, so the `new Command()` → native
+/// `js_commander_*` shim path is deliberately off). Unlike the stream
+/// inits there is no option-driven state to seed — a plain EventEmitter
+/// has no `_read`/`highWaterMark`/etc.
+#[no_mangle]
+pub extern "C" fn js_event_emitter_subclass_init(this: f64) -> f64 {
+    let raw = raw_ptr_from_value(this);
+    if raw == 0 {
+        return this;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return this;
+    }
+    let obj = raw as *mut ObjectHeader;
+    let methods = emitter_methods();
+    install_methods_on_existing_object(obj, this, &methods, &[]);
+    this
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     let methods = writable_methods();

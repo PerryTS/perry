@@ -1079,6 +1079,19 @@ impl LoweringContext {
         module_name: String,
         class_name: String,
     ) {
+        // #5137: if the user opted this package into `perry.compilePackages`,
+        // its real npm source is being compiled and the binding resolves to
+        // the compiled-from-source class. Registering a native instance here
+        // would re-route the instance's fluent methods (`new Command()` →
+        // `.name()`/`.option()`/`.parse()`) to the `js_commander_*` native
+        // shim that was deliberately kept off the import path — so the call
+        // emits an FFI reference the source-compile build never links (or, in
+        // a shimless build, returns `undefined`). Back off so the source class
+        // is used. `is_native_module` already makes the same back-off for the
+        // import-resolution side (#665).
+        if is_compile_package_override(&module_name) {
+            return;
+        }
         self.native_instances
             .push((local_name, module_name, class_name));
     }

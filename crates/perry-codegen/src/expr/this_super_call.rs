@@ -443,6 +443,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         )?;
                         return Ok(result);
                     }
+                    // #5137: `class X extends EventEmitter` (node:events) —
+                    // `super()` installs the bare EventEmitter listener/emit
+                    // methods onto `this` so `.on`/`.emit`/`.once`/… resolve as
+                    // the instance's own bound methods. Reached when the real
+                    // npm source of an EventEmitter subclass is compiled — e.g.
+                    // commander's `Command extends EventEmitter` under
+                    // `perry.compilePackages: ["commander"]`, where the
+                    // `new Command()` → `js_commander_*` native-shim path is
+                    // intentionally off. (`super(opts)` for EventEmitter takes an
+                    // optional options bag in Node; we lower the args for their
+                    // side effects but the bare emitter has no option-driven
+                    // state to seed.)
+                    if parent_name.as_str() == "EventEmitter" {
+                        for a in super_args {
+                            let _ = lower_expr(ctx, a)?;
+                        }
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_event_emitter_subclass_init",
+                            &[(DOUBLE, &this_box)],
+                        );
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
                     // `class X extends Request` / `extends Response`:
                     // `super(input, init)` allocates the underlying native
                     // Web-Fetch handle and stashes its id on `this` under

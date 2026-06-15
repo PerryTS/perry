@@ -405,10 +405,6 @@ Total: 2808 entries across 115 modules.
 - `requiredOption` — instance
 - `version` — instance
 
-### Properties
-
-- `args`
-
 ## `console`
 
 ### Classes
