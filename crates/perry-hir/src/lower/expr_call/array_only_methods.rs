@@ -1012,32 +1012,42 @@ pub(super) fn try_array_only_methods(
                     }
                     "push" => {
                         // Generic expr.push(value) or expr.push(...spread)
-                        // GUARD: Skip if the receiver is a user-defined class instance
-                        // (e.g. Stack<T>.push()), or an object type literal (e.g.
-                        // { push: (v) => void, ... }), so its method dispatches correctly.
-                        let is_user_class_receiver = match member.obj.as_ref() {
+                        // GUARD: Skip the array fast-path if the receiver is a
+                        // user-defined class instance (e.g. Stack<T>.push()), an
+                        // object type literal (e.g. { push: (v) => void, ... }), or
+                        // an unknown/`any`-typed identifier we can't prove is an
+                        // array. The last case is the load-bearing one for #5139:
+                        // react-dom's SSR sink is `{ push(chunk){…} }` threaded
+                        // through `writeChunk(destination, c) { return destination.push(c); }`
+                        // where `destination` is an `any` param. Emitting the
+                        // `array.push_single` native call would read that plain
+                        // object as an `ArrayHeader` and silently corrupt it, so
+                        // the `push` closure never runs (markup comes back empty).
+                        // Falling through routes to the runtime method dispatch,
+                        // which handles real arrays (defensive `push` arm in
+                        // `js_native_call_method`) and object `push`
+                        // (`try_object_arraylike_mutator`) alike.
+                        let skip_array_push = match member.obj.as_ref() {
                             ast::Expr::This(_) => true,
                             ast::Expr::Ident(ident) => {
-                                ctx.lookup_local_type(ident.sym.as_ref())
-                                    .map(|ty| {
-                                        match ty {
-                                            Type::Named(name) => ctx.lookup_class(name).is_some(),
-                                            Type::Generic { base, .. } => {
-                                                let builtin =
-                                                    ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
-                                                !builtin.contains(&base.as_str())
-                                                    && ctx.lookup_class(base).is_some()
-                                            }
-                                            Type::Object(_) => true, // object type literal with push property
-                                            _ => false,
-                                        }
-                                    })
-                                    .unwrap_or(false)
+                                match ctx.lookup_local_type(ident.sym.as_ref()) {
+                                    Some(Type::Named(name)) => ctx.lookup_class(name).is_some(),
+                                    Some(Type::Generic { base, .. }) => {
+                                        let builtin =
+                                            ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
+                                        !builtin.contains(&base.as_str())
+                                            && ctx.lookup_class(base).is_some()
+                                    }
+                                    Some(Type::Object(_)) => true, // object type literal with push property
+                                    // Unknown/any receiver — can't prove it's an array.
+                                    None | Some(Type::Any) | Some(Type::Unknown) => true,
+                                    Some(_) => false,
+                                }
                             }
                             ast::Expr::New(_) => true, // new ClassName().push()
                             _ => false,
                         };
-                        if !is_user_class_receiver {
+                        if !skip_array_push {
                             let array_expr = lower_expr(ctx, &member.obj)?;
                             let any_spread = call.args.iter().any(|a| a.spread.is_some());
                             if !any_spread {

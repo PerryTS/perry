@@ -105,6 +105,18 @@ pub(super) fn try_local_array_methods(
                         | "reduceRight"
                         | "join"
                 );
+                // Stack/queue/deque mutators whose names plain objects commonly
+                // define too — react-dom's `{ push(chunk){…} }` SSR sink (#5139),
+                // a custom `Stack.push`, a Node-style stream. On an unknown (Any)
+                // receiver we can't prove it's an array, so we must route to the
+                // runtime method dispatch — which handles real arrays (the
+                // defensive arms in `js_native_call_method`'s dispatch tower) and
+                // plain-object methods (`try_object_arraylike_mutator`) alike.
+                // Emitting `Expr::ArrayPush` et al. here would read the object as
+                // an `ArrayHeader` and silently corrupt it, so the method's closure
+                // never runs and the call returns nothing.
+                let is_object_overlapping_mutator =
+                    matches!(method_name, "push" | "pop" | "shift" | "unshift");
                 let is_unknown_recv =
                     matches!(type_info, None | Some(Type::Any) | Some(Type::Unknown));
                 let is_known_not_string = type_info
@@ -153,10 +165,12 @@ pub(super) fn try_local_array_methods(
                     true // definitely not a string, enter array block
                 } else if is_ambiguous_method {
                     false // type unknown + ambiguous method, skip array block (fall through to general dispatch)
-                } else if is_unknown_recv && is_class_overlapping_method {
-                    false // type unknown + method commonly defined on user classes — fall through
+                } else if is_unknown_recv
+                    && (is_class_overlapping_method || is_object_overlapping_mutator)
+                {
+                    false // type unknown + method also common on plain objects/user classes — fall through to runtime dispatch
                 } else {
-                    true // type unknown + array-only method (push, pop, etc.), enter array block
+                    true // type unknown + unambiguously array-only method — enter array block
                 };
                 // Helper: if the callback arg is a bare Boolean/Number/String identifier,
                 // desugar to a synthetic closure: x => Boolean(x) / Number(x) / String(x).
