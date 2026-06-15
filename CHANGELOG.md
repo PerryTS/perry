@@ -1,3 +1,54 @@
+## v0.5.1175 — fix(http): `IncomingMessage.resume()`/`.pause()` return `this` so `res.resume().on('end', …)` chains (#4975)
+
+Part of the node:http/https behavioral-parity tail (#4975). `Readable.pause()`
+and `Readable.resume()` return `this` in Node, so the canonical body-drain
+chain `res.resume().on('end', cb)` keeps flowing. Under Perry both methods
+dropped the receiver, breaking the chain — `test-http-write-head-2` failed with
+`(number).on is not a function`.
+
+Two distinct dispatch paths returned the wrong thing, and there are **two**
+separate `IncomingMessage` representations (server-side `IncomingMessage` in
+`perry-ext-http-server`; client-side `IncomingMessageHandle` in
+`perry-ext-http`):
+
+- **Statically-typed receiver (native-table row).** The `class_filter:
+  Some("IncomingMessage")` rows for `pause`/`resume` in
+  `crates/perry-codegen/.../native_table/http_server.rs` used `ret: NR_VOID`,
+  so the call lowered to `undefined`. Added self-returning runtime wrappers
+  `js_node_http_im_pause_self` / `js_node_http_im_resume_self`
+  (`crates/perry-ext-http-server/src/request.rs`) that call the existing
+  impl and return the receiver handle, flipped the rows to `ret: NR_PTR`, and
+  wired the new symbols through `stdlib_ffi.rs`, `ext_registry.rs`, and the
+  `force_link_http_server` anchor table — mirroring the existing
+  `js_node_http_res_set_header_self` pattern (#5011/#2129 self-return).
+
+- **Dynamically-dispatched receiver (the actual `test-http-write-head-2`
+  failure).** The `http.get(...)` callback's `res` is the *client*
+  `IncomingMessageHandle`. It's an EventEmitter (so `res.on(...)` already
+  routed through the EventEmitter arm of `js_handle_method_dispatch`), but
+  `pause`/`resume` aren't EventEmitter methods and the *server*-IM probe
+  rejects the client handle — so they fell through to the unknown-handle
+  catch-all, which returns a NaN (`typeof` number). Added a scoped
+  `external-http-client-pump` arm in
+  `crates/perry-stdlib/src/common/dispatch.rs` that recognizes the client
+  IncomingMessage and returns the receiver for `pause`/`resume`. The buffered
+  response body already drains when an `'end'`/`'data'` listener attaches, so
+  returning `this` is the whole fix.
+
+Validation: `test-http-write-head-2` deterministically flips `runtime-fail →
+pass` — it now exits 0 under Perry, matching Node (both silent on success),
+verified directly under the radar's `common/` shim + fixtures staging.
+Re-measured the http/https slice of the #4975 corpus
+(`scripts/node_core_subset.py --api http https`, Node v22.x): http `pass`
+91 → 94, slice parity 31.1% → 31.7%. The change is purely additive on the
+return value (it never alters draining behavior), so server-side `req.resume()`
+sites that discard the return are unaffected. The other run-to-run sweep deltas
+(`test-http-dns-error`, `test-http-abort-before-end`, `test-https-agent-sni`)
+are pre-existing flakiness in the documented DNS / SNI-strict-equal / cold-build
+buckets — `test-https-agent-sni` in particular passes ~2/5 runs on the *same*
+post-fix binary (its assertion is on TLS SNI servername propagation, which has
+no causal path to a `resume()` return value), so it is not a regression.
+
 ## v0.5.1174 — fix(runtime): Object.getPrototypeOf returns the installed [[Prototype]] by identity (#3986)
 
 `Object.getPrototypeOf` now returns the exact prototype object that was
@@ -37,6 +88,7 @@ prototype identity, and the unaffected declared-class / object-literal /
 
 Part of the #3986 object-model epic (ToObject / wrapper / prototype identity);
 follows the earlier #4161 / #4239 / #4269 cuts.
+
 
 ## v0.5.1173 — fix(hir): mirror @@iterator lowering in class-expression path (#5128 review)
 

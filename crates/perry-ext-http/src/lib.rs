@@ -1829,6 +1829,8 @@ mod force_link_http_server {
         pub fn js_node_http_im_read();
         pub fn js_node_http_im_pause();
         pub fn js_node_http_im_resume();
+        pub fn js_node_http_im_pause_self();
+        pub fn js_node_http_im_resume_self();
         pub fn js_node_http_im_aborted();
         pub fn js_node_http_im_complete();
         pub fn js_node_http_im_destroy();
@@ -1959,6 +1961,8 @@ static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
         js_node_http_im_read,
         js_node_http_im_pause,
         js_node_http_im_resume,
+        js_node_http_im_pause_self,
+        js_node_http_im_resume_self,
         js_node_http_im_aborted,
         js_node_http_im_complete,
         js_node_http_im_destroy,

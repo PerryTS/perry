@@ -289,6 +289,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_node_http_im_on",                          OwnerKind::WellKnown("http")),
     ("js_node_http_im_pause",                       OwnerKind::WellKnown("http")),
     ("js_node_http_im_resume",                      OwnerKind::WellKnown("http")),
+    ("js_node_http_im_pause_self",                  OwnerKind::WellKnown("http")),
+    ("js_node_http_im_resume_self",                 OwnerKind::WellKnown("http")),
     ("js_node_http_im_destroy",                     OwnerKind::WellKnown("http")),
     ("js_node_http_im_read",                        OwnerKind::WellKnown("http")),
     ("js_node_http_im_set_timeout",                 OwnerKind::WellKnown("http")),
