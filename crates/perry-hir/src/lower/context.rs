@@ -938,6 +938,9 @@ impl LoweringContext {
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
+            // Synthetic anon-shape class; no static fields, so static-init
+            // timing is irrelevant.
+            is_nested: false,
         });
 
         self.anon_shape_classes

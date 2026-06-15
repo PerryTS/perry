@@ -265,5 +265,6 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
         decorators: class.decorators.clone(),
         is_exported: class.is_exported,
         aliases: class.aliases.clone(),
+        is_nested: class.is_nested,
     }
 }

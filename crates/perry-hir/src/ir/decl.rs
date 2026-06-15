@@ -240,6 +240,16 @@ pub struct Class {
     /// `var X = class _X { ... new _X() ... }` records `_X` here so codegen
     /// can look it up as the same class. Refs #486.
     pub aliases: Vec<String>,
+    /// Whether this class was declared/expressed INSIDE a function body (not at
+    /// module top level), even though HIR hoists it into `module.classes`. A
+    /// nested class's static-field initializers must run when the enclosing
+    /// function evaluates the class — NOT at module init. Running a nested
+    /// class's side-effectful static initializer (e.g. `static #a = new Self()`)
+    /// eagerly at module init both mistimes it and can crash before any user
+    /// code (Next.js wall 54: NextResponse's `static #a = this.EMPTY = new z()`
+    /// inside a turbopack factory threw at module init). Codegen
+    /// (`init_static_fields_*`) skips module-init static init for these.
+    pub is_nested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -372,6 +372,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
+            is_nested: false,
         };
         imported_class_stubs.push(stub);
         imported_stub_prefixes.push(ic.source_prefix.clone());

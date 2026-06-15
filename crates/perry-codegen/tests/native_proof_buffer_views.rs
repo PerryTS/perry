@@ -245,6 +245,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         decorators: Vec::new(),
         is_exported: false,
         aliases: Vec::new(),
+        is_nested: false,
     }
 }
 

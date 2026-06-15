@@ -31,6 +31,7 @@ impl SH for Class {
             decorators,
             is_exported,
             aliases,
+            is_nested,
         } = self;
         id.hash(h);
         name.hash(h);
@@ -52,6 +53,7 @@ impl SH for Class {
         decorators.hash(h);
         is_exported.hash(h);
         aliases.hash(h);
+        is_nested.hash(h);
     }
 }
 

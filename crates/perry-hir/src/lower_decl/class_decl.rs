@@ -1235,6 +1235,9 @@ pub fn lower_class_decl(
         decorators: lower_decorators(ctx, &class_decl.class.decorators),
         is_exported,
         aliases: Vec::new(),
+        // Declared inside a function body / non-module block → its static-field
+        // initializers must run on class evaluation, not at module init.
+        is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
     })
 }
 
@@ -1729,5 +1732,8 @@ pub fn lower_class_from_ast(
         decorators: lower_decorators(ctx, &class.decorators),
         is_exported,
         aliases: Vec::new(),
+        // Declared inside a function body / non-module block → its static-field
+        // initializers must run on class evaluation, not at module init.
+        is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
     })
 }
