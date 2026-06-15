@@ -1119,7 +1119,10 @@ unsafe fn build_create_data_descriptor(value: f64) -> f64 {
             field,
         );
     }
-    f64::from_bits(POINTER_TAG | ((desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as u64) & POINTER_MASK))
+    f64::from_bits(
+        POINTER_TAG
+            | ((desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as u64) & POINTER_MASK),
+    )
 }
 
 fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bool {
