@@ -352,6 +352,19 @@ fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringH
 
 #[no_mangle]
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
+    // #5135: a Proxy typed (statically) as an array (immer drafts) reaches here
+    // with the masked proxy id. Read `length` through the proxy `get` trap
+    // rather than deref-ing the id as an `ArrayHeader`.
+    if let Some(proxy) = array_ptr_as_proxy(arr) {
+        let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let key_f64 = crate::value::js_nanbox_string(key as i64);
+        let n = crate::builtins::js_number_coerce(crate::proxy::js_proxy_get(proxy, key_f64));
+        return if n.is_finite() && n > 0.0 {
+            n.min(u32::MAX as f64) as u32
+        } else {
+            0
+        };
+    }
     let arr = {
         let bits = arr as u64;
         let top16 = bits >> 48;

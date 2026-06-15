@@ -180,6 +180,27 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // #5135: the receiver may be a Proxy id arriving with its NaN-box tag
+    // already masked off (the `obj.prop++` / `PropertyUpdate` codegen path
+    // hands us the bare pointer band, not the full POINTER_TAG value). A Proxy
+    // is encoded as a small registered id; deref-ing one as an `ObjectHeader`
+    // reads unmapped memory and SIGSEGVs. Mirror the read-side dispatch in
+    // `js_object_get_field_by_name` so a `proxy.foo = v` write goes through the
+    // `set` trap instead of corrupting the cell. `js_proxy_is_proxy` validates
+    // the value is a *registered* proxy so a real heap object whose masked
+    // address happens to be small isn't misrouted.
+    {
+        let addr = obj as u64;
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                crate::proxy::js_proxy_set(boxed, key_f64, value);
+                return;
+            }
+        }
+    }
     // `Object.prototype["2"] = v` (stringified-index write) makes the index
     // visible through array hole/OOB reads. Cheap gate: one relaxed flag
     // load, then an address compare against the cached canonical
