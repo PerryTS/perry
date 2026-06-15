@@ -899,9 +899,18 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
     // Methods have signature `perry_method_<...>(this_box, args...)`;
     // the closure-call ABI is `(i64 closure, double a0, ...)` and
-    // doesn't carry a separate `this`. Strict JS for `const fn =
-    // super.greet; fn(x)` calls the method with `this=undefined`,
-    // which is what we forward here.
+    // doesn't carry a separate `this`. The receiver therefore comes from
+    // IMPLICIT_THIS, set by the dispatcher right before the call:
+    //   * A method-style invocation of a stored super-method value
+    //     (`this._complete = super._complete; obj._complete()` — rxjs's
+    //     `OperatorSubscriber` forwarding `complete`/`error`/`next` to the
+    //     base `Subscriber` when no override callback was supplied) sets
+    //     IMPLICIT_THIS to the receiver, so the base method runs with the
+    //     right `this`. Pre-fix this hardcoded `this=undefined`, so the
+    //     forwarded `complete` never reached `this.destination.complete()`
+    //     and the pipeline stalled (top-level await never settled, #5138).
+    //   * A bare call (`const fn = super.greet; fn(x)`) leaves
+    //     IMPLICIT_THIS undefined, matching strict-mode `this`.
     let mut emitted_wrappers: std::collections::HashSet<String> = std::collections::HashSet::new();
     for class in &hir.classes {
         for method in &class.methods {
@@ -923,11 +932,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
             let _ = wf.create_block("entry");
             let blk = wf.block_mut(0).unwrap();
-            // Forward `this=undefined` then the args.
-            let undef_lit = crate::nanbox::i64_literal(crate::nanbox::TAG_UNDEFINED);
-            let undef_double = blk.bitcast_i64_to_double(&undef_lit);
+            // Forward the call-site receiver (IMPLICIT_THIS) as `this`,
+            // then the args. See the block comment above (#5138).
+            let this_box = blk.call(DOUBLE, "js_implicit_this_get", &[]);
             let mut call_args: Vec<(LlvmType, String)> = Vec::with_capacity(arity + 1);
-            call_args.push((DOUBLE, undef_double));
+            call_args.push((DOUBLE, this_box));
             for i in 0..arity {
                 call_args.push((DOUBLE, format!("%a{}", i)));
             }
