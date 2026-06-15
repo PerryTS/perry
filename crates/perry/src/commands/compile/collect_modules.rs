@@ -177,7 +177,14 @@ fn collect_module_one(
     // and synthesize a throwing-stub module (see the wasm branch below). Real
     // `.wasm` ESM instantiation is the companion issue #5234.
     let is_wasm = is_wasm_asset(&canonical);
-    let is_in_node_modules = canonical.to_string_lossy().contains("node_modules");
+    // Match a real `node_modules/` directory COMPONENT, not a substring: a
+    // file whose NAME contains "node_modules" (e.g. turbopack's bundled chunks
+    // `.next/server/chunks/ssr/node_modules_next_dist_…._.js`) is NOT in
+    // node_modules and must compile natively, not get force-routed to the
+    // (removed) JS runtime. (Next.js wall 54.)
+    let is_in_node_modules = canonical
+        .components()
+        .any(|c| c.as_os_str() == "node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
         || ctx.compile_package_dirs.values().any(|dir| {
