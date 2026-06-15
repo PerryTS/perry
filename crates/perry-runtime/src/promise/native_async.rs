@@ -482,6 +482,38 @@ pub extern "C" fn js_native_async_process_pending() -> i32 {
     processed
 }
 
+/// Drop the native-async completion token associated with a Promise that was
+/// settled *synchronously* (via `js_promise_resolve`/`js_promise_reject`)
+/// outside the deferred completion machinery.
+///
+/// Ext crates such as `perry-ext-events` allocate their `events.once` Promise
+/// through perry-ffi's `JsPromise::new()` → `perry_ffi_promise_new()`, which
+/// registers a native-async token (and pins the Promise) so a worker can
+/// resolve it later. `events.once`, however, settles synchronously from
+/// `emit(...)` and deliberately bypasses the deferred resolve path (see the
+/// extern comment in perry-ext-events). That bypass never runs
+/// `js_native_async_process_pending`, so the token stays in the registry
+/// forever and `js_native_async_has_active()` keeps reporting work — the
+/// process hangs after the awaited event already fired (the
+/// `events.once(emitter, name)` + `emit` hang). Calling this right after the
+/// synchronous settle removes the orphaned token (mirroring the cleanup
+/// `js_native_async_process_pending` performs) so the event loop can drain.
+#[no_mangle]
+pub extern "C" fn js_native_async_drop_promise_token(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    let token_ptr = {
+        let registry = crate::gc::lock_gc_root_registry(registry());
+        registry.by_promise.get(&(promise as usize)).copied()
+    };
+    if let Some(token_ptr) = token_ptr {
+        let token = unsafe { &*(token_ptr as *const NativeAsyncCompletion) };
+        token.state.store(STATE_COMPLETED, Ordering::Release);
+        remove_token_from_registry(token_ptr, promise as usize);
+    }
+}
+
 /// Return 1 while there are live or queued native async completions.
 #[no_mangle]
 pub extern "C" fn js_native_async_has_active() -> i32 {

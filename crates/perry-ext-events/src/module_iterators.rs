@@ -15,6 +15,7 @@ pub(super) extern "C" fn events_once_event_target_listener(
             let mut args = js_array_alloc(0);
             args = js_array_push_f64(args, arg0);
             js_promise_resolve(promise, nanbox_pointer_bits(args as i64));
+            js_native_async_drop_promise_token(promise);
         }
     }
     undefined_value()

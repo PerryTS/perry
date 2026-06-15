@@ -81,6 +81,15 @@ extern "C" {
     );
     fn js_promise_resolve(promise: *mut Promise, value: f64);
     fn js_promise_reject(promise: *mut Promise, reason: f64);
+    // events.once allocates its Promise via perry-ffi's `JsPromise::new()`
+    // (→ `perry_ffi_promise_new` → a registered native-async token that pins
+    // the Promise and reports the event loop as "busy"). Because we settle
+    // synchronously through `js_promise_resolve`/`js_promise_reject` above —
+    // bypassing the deferred completion machinery that would normally retire
+    // the token — the token leaks and `js_native_async_has_active()` keeps the
+    // loop alive forever (the `events.once(em, name)` + `emit` hang). Drop the
+    // orphaned token right after each synchronous settle.
+    fn js_native_async_drop_promise_token(promise: *mut Promise);
     fn js_promise_then(
         promise: *mut Promise,
         on_fulfilled: *mut RawClosureHeader,
@@ -1092,6 +1101,7 @@ unsafe fn drain_pending_once_promises(
         // Synchronous resolve — see the comment on the extern at the
         // top of this file for why we bypass `JsPromise::resolve`.
         js_promise_resolve(pending.promise, f64::from_bits(bits));
+        js_native_async_drop_promise_token(pending.promise);
     }
 }
 
@@ -1114,6 +1124,7 @@ unsafe fn reject_pending_once_promises_for_error(
             cleanup_pending_abort_listener(&pending);
             if !pending.promise.is_null() {
                 js_promise_reject(pending.promise, error_value);
+                js_native_async_drop_promise_token(pending.promise);
                 rejected_any = true;
             }
         }
@@ -1574,6 +1585,7 @@ extern "C" fn events_once_abort_listener(closure: *const RawClosureHeader) -> f6
             cleanup_pending_abort_listener(&pending);
             if !pending.promise.is_null() {
                 js_promise_reject(pending.promise, js_abort_error_value());
+                js_native_async_drop_promise_token(pending.promise);
             }
         }
     }
@@ -1600,6 +1612,7 @@ extern "C" fn events_once_stream_resolve_listener(
                 js_node_stream_method_remove_listener(handle, error_event, error_listener_value);
         }
         js_promise_resolve(promise, rest_array_or_empty(rest));
+        js_native_async_drop_promise_token(promise);
     }
     undefined_value()
 }
@@ -1620,6 +1633,7 @@ extern "C" fn events_once_stream_reject_listener(
         }
         if !promise.is_null() {
             js_promise_reject(promise, first_rest_arg_or_undefined(rest));
+            js_native_async_drop_promise_token(promise);
         }
     }
     undefined_value()
@@ -1651,6 +1665,7 @@ pub unsafe extern "C" fn js_events_once(
                     target_value,
                 )),
             );
+            js_native_async_drop_promise_token(raw);
             return raw;
         }
     };
@@ -1661,11 +1676,13 @@ pub unsafe extern "C" fn js_events_once(
         Ok(signal) => signal,
         Err(error) => {
             js_promise_reject(raw, error);
+            js_native_async_drop_promise_token(raw);
             return raw;
         }
     };
     if signal.is_some_and(signal_is_aborted) {
         js_promise_reject(raw, js_abort_error_value());
+        js_native_async_drop_promise_token(raw);
         return raw;
     }
     if let EventHelperTarget::EventEmitter(handle) = target {
