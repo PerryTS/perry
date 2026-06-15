@@ -220,7 +220,7 @@ fn descriptor_key(name: &[u8]) -> (*const crate::StringHeader, f64) {
     (key, key_value)
 }
 
-unsafe fn descriptor_field_present(desc: f64, name: &[u8]) -> bool {
+pub(super) unsafe fn descriptor_field_present(desc: f64, name: &[u8]) -> bool {
     let (key, key_value) = descriptor_key(name);
     if lookup(desc).is_some() {
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -250,7 +250,7 @@ unsafe fn descriptor_field(desc: f64, name: &[u8]) -> f64 {
     f64::from_bits(crate::object::js_object_get_field_by_name(ptr, key).bits())
 }
 
-unsafe fn descriptor_bool_field(desc: f64, name: &[u8]) -> Option<bool> {
+pub(super) unsafe fn descriptor_bool_field(desc: f64, name: &[u8]) -> Option<bool> {
     if !descriptor_field_present(desc, name) {
         return None;
     }

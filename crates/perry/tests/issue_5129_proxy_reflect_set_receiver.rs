@@ -30,6 +30,9 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
         .arg(&entry)
         .arg("-o")
         .arg(&output)
+        // Bypass the compile cache so the test always exercises the current
+        // proxy-receiver codegen/runtime path rather than a stale artifact.
+        .arg("--no-cache")
         .output()
         .expect("run perry compile");
     assert!(
