@@ -1402,6 +1402,13 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("commander", "parse", true, None),
     method("commander", "opts", true, None),
     method("commander", "argument", true, None),
+    // `program.args` is a bare member read modeled as a property for the
+    // `.d.ts` surface (`export const args`), but the dispatch table lowers
+    // it to a 0-arg instance getter row (`commander::args`, has_receiver).
+    // The drift gate (every_dispatch_entry_has_manifest_counterpart) wants
+    // a Method counterpart for that row; keep both — the has_receiver
+    // method isn't emitted as a module export, so docs are unchanged (#5137).
+    method("commander", "args", true, None),
     property("commander", "args"),
     property("async_hooks", "default"),
     property("async_hooks", "asyncWrapProviders"),
