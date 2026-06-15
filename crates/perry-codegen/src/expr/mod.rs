@@ -1485,6 +1485,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathFloor(..)
         | Expr::MathCeil(..)
         | Expr::MathRound(..)
+        | Expr::MathTrunc(..)
+        | Expr::MathSign(..)
         | Expr::MathAbs(..)
         | Expr::MathLog(..)
         | Expr::MathLog2(..)

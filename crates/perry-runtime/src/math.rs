@@ -20,6 +20,40 @@ pub extern "C" fn js_math_to_number(value: f64) -> f64 {
     crate::builtins::js_number_coerce(value)
 }
 
+/// Math.trunc(x) -> number
+#[no_mangle]
+pub extern "C" fn js_math_trunc(value: f64) -> f64 {
+    js_math_to_number(value).trunc()
+}
+
+/// Math.sign(x) -> number
+#[no_mangle]
+pub extern "C" fn js_math_sign(value: f64) -> f64 {
+    let n = js_math_to_number(value);
+    if n == 0.0 || n.is_nan() {
+        n
+    } else if n.is_sign_negative() {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+fn js_math_to_int32(value: f64) -> i32 {
+    let n = js_math_to_number(value);
+    if !n.is_finite() || n == 0.0 {
+        return 0;
+    }
+    const TWO_32: f64 = 4_294_967_296.0;
+    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+}
+
+/// Math.imul(a, b) -> number
+#[no_mangle]
+pub extern "C" fn js_math_imul(a: f64, b: f64) -> f64 {
+    js_math_to_int32(a).wrapping_mul(js_math_to_int32(b)) as f64
+}
+
 /// Math.pow(base, exponent) -> number
 #[no_mangle]
 pub extern "C" fn js_math_pow(base: f64, exp: f64) -> f64 {
@@ -135,7 +169,7 @@ fn round_ties_to_even(value: f64) -> u64 {
 /// Math.f16round(x) -> number — nearest IEEE-754 binary16 value
 #[no_mangle]
 pub extern "C" fn js_math_f16round(value: f64) -> f64 {
-    let x = crate::builtins::js_number_coerce(value);
+    let x = js_math_to_number(value);
     if x == 0.0 || !x.is_finite() {
         return x;
     }
@@ -345,6 +379,10 @@ pub extern "C" fn js_math_max2(a: f64, b: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn is_neg_zero(value: f64) -> bool {
+        value == 0.0 && value.is_sign_negative()
+    }
+
     #[test]
     fn js_math_min2_basic_and_signed_zero() {
         assert_eq!(js_math_min2(4.0, -2.0), -2.0);
@@ -379,5 +417,33 @@ mod tests {
         assert!(js_math_min2(1.0, f64::NAN).is_nan());
         assert!(js_math_max2(f64::NAN, 1.0).is_nan());
         assert!(js_math_max2(1.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn js_math_sign_preserves_nan_and_signed_zero() {
+        assert_eq!(js_math_sign(7.0), 1.0);
+        assert_eq!(js_math_sign(-7.0), -1.0);
+        assert!(js_math_sign(f64::NAN).is_nan());
+        assert!(is_neg_zero(js_math_sign(-0.0)));
+        assert_eq!(js_math_sign(0.0).to_bits(), 0.0f64.to_bits());
+    }
+
+    #[test]
+    fn js_math_trunc_preserves_nan_infinity_and_signed_zero() {
+        assert_eq!(js_math_trunc(7.9), 7.0);
+        assert_eq!(js_math_trunc(-7.9), -7.0);
+        assert!(js_math_trunc(f64::NAN).is_nan());
+        assert_eq!(js_math_trunc(f64::INFINITY), f64::INFINITY);
+        assert_eq!(js_math_trunc(f64::NEG_INFINITY), f64::NEG_INFINITY);
+        assert!(is_neg_zero(js_math_trunc(-0.0)));
+    }
+
+    #[test]
+    fn js_math_imul_applies_to_int32_semantics() {
+        assert_eq!(js_math_imul(2.0, 4.0), 8.0);
+        assert_eq!(js_math_imul(f64::NAN, 5.0), 0.0);
+        assert_eq!(js_math_imul(f64::INFINITY, 5.0), 0.0);
+        assert_eq!(js_math_imul(4_294_967_295.0, 5.0), -5.0);
+        assert_eq!(js_math_imul(2_147_483_647.0, 2.0), -2.0);
     }
 }

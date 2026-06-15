@@ -563,6 +563,8 @@ fn collect_instantiations_in_expr(
         Expr::MathFloor(expr)
         | Expr::MathCeil(expr)
         | Expr::MathRound(expr)
+        | Expr::MathTrunc(expr)
+        | Expr::MathSign(expr)
         | Expr::MathAbs(expr)
         | Expr::MathSqrt(expr)
         | Expr::MathLog(expr)

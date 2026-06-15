@@ -1003,7 +1003,7 @@ extern "C" fn math_random_thunk(_closure: *const crate::closure::ClosureHeader) 
 }
 
 fn math_number_arg(value: f64) -> f64 {
-    crate::builtins::js_number_coerce(value)
+    crate::math::js_math_to_number(value)
 }
 
 fn math_to_int32(value: f64) -> i32 {
@@ -1068,14 +1068,7 @@ extern "C" fn math_round_thunk(_closure: *const crate::closure::ClosureHeader, v
 }
 
 extern "C" fn math_sign_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
-    let x = math_number_arg(value);
-    if x == 0.0 || x.is_nan() {
-        x
-    } else if x.is_sign_negative() {
-        -1.0
-    } else {
-        1.0
-    }
+    crate::math::js_math_sign(value)
 }
 
 extern "C" fn math_clz32_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
@@ -1095,7 +1088,7 @@ extern "C" fn math_imul_thunk(
     a: f64,
     b: f64,
 ) -> f64 {
-    math_to_int32(a).wrapping_mul(math_to_int32(b)) as f64
+    crate::math::js_math_imul(a, b)
 }
 
 extern "C" fn math_pow_thunk(
@@ -1112,16 +1105,20 @@ extern "C" fn math_min_thunk(_closure: *const crate::closure::ClosureHeader, res
         return f64::INFINITY;
     }
     let mut result = f64::INFINITY;
+    let mut saw_nan = false;
     for value in values {
         let n = math_number_arg(value);
         if n.is_nan() {
-            return f64::NAN;
-        }
-        if n < result || (n == 0.0 && result == 0.0 && n.is_sign_negative()) {
+            saw_nan = true;
+        } else if n < result || (n == 0.0 && result == 0.0 && n.is_sign_negative()) {
             result = n;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
 }
 
 extern "C" fn math_max_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
@@ -1130,16 +1127,20 @@ extern "C" fn math_max_thunk(_closure: *const crate::closure::ClosureHeader, res
         return f64::NEG_INFINITY;
     }
     let mut result = f64::NEG_INFINITY;
+    let mut saw_nan = false;
     for value in values {
         let n = math_number_arg(value);
         if n.is_nan() {
-            return f64::NAN;
-        }
-        if n > result || (n == 0.0 && result == 0.0 && n.is_sign_positive()) {
+            saw_nan = true;
+        } else if n > result || (n == 0.0 && result == 0.0 && n.is_sign_positive()) {
             result = n;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
 }
 
 extern "C" fn math_hypot_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {

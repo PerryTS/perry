@@ -859,6 +859,8 @@ pub enum Expr {
     MathFloor(Box<Expr>),            // Math.floor(x) -> number
     MathCeil(Box<Expr>),             // Math.ceil(x) -> number
     MathRound(Box<Expr>),            // Math.round(x) -> number
+    MathTrunc(Box<Expr>),            // Math.trunc(x) -> number
+    MathSign(Box<Expr>),             // Math.sign(x) -> number
     MathAbs(Box<Expr>),              // Math.abs(x) -> number
     MathSqrt(Box<Expr>),             // Math.sqrt(x) -> number
     MathLog(Box<Expr>),              // Math.log(x) -> number

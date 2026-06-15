@@ -757,6 +757,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::MathFloor(expr) => Expr::MathFloor(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathCeil(expr) => Expr::MathCeil(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathRound(expr) => Expr::MathRound(Box::new(substitute_expr(expr, substitutions))),
+        Expr::MathTrunc(expr) => Expr::MathTrunc(Box::new(substitute_expr(expr, substitutions))),
+        Expr::MathSign(expr) => Expr::MathSign(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathAbs(expr) => Expr::MathAbs(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathSqrt(expr) => Expr::MathSqrt(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathPow(base, exp) => Expr::MathPow(

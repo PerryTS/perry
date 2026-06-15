@@ -241,6 +241,8 @@ fn collect_used_new_fields_in_expr(
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)
         | Expr::MathRound(operand)
+        | Expr::MathTrunc(operand)
+        | Expr::MathSign(operand)
         | Expr::MathAbs(operand)
         | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
