@@ -1058,8 +1058,6 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== Commander CLI ==========
     module.declare_function("js_commander_action", I64, &[I64, I64]);
-    module.declare_function("js_commander_args_array", I64, &[I64]);
-    module.declare_function("js_commander_argument", I64, &[I64, I64]);
     module.declare_function("js_commander_command", I64, &[I64, I64]);
     module.declare_function("js_commander_description", I64, &[I64, I64]);
     module.declare_function("js_commander_get_option", I64, &[I64, I64]);

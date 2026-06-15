@@ -21,4 +21,10 @@ pub(crate) fn declare_stdlib_ffi_part2(module: &mut LlModule) {
     );
     module.declare_function("js_node_http_im_http_version_major", DOUBLE, &[I64]);
     module.declare_function("js_node_http_im_http_version_minor", DOUBLE, &[I64]);
+
+    // ========== Commander CLI (#5137) ==========
+    // `program.args` getter + `.argument(spec)` — kept here (not stdlib_ffi.rs)
+    // so that file stays under the 2000-line CI cap.
+    module.declare_function("js_commander_args_array", I64, &[I64]);
+    module.declare_function("js_commander_argument", I64, &[I64, I64]);
 }
