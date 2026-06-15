@@ -31,7 +31,7 @@ use anyhow::{anyhow, Result};
 use perry_hir::ModuleKind;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::CompilationContext;
 #[cfg(test)]
@@ -899,8 +899,37 @@ pub(super) fn resolve_relative_import_path(
     }
     let parent = importer_path.parent()?;
     let resolved = parent.join(import_source);
-    let path = resolve_with_extensions(&resolved)?;
+    let path = resolve_with_extensions(&resolved).or_else(|| {
+        // Source import specifiers are resolved against the path as written by
+        // the program. If that path contains a symlinked component such as
+        // /tmp, asking the filesystem about "a/../b" can follow the symlink
+        // before applying ".." and accidentally probe the canonical sibling.
+        let lexical = normalize_path_lexically(&resolved);
+        if lexical == resolved {
+            None
+        } else {
+            resolve_with_extensions(&lexical)
+        }
+    })?;
     path.canonicalize().ok()
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 /// True for ECMAScript relative-import specifiers. Besides the obvious `./x`

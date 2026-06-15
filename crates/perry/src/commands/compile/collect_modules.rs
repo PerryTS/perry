@@ -18,7 +18,7 @@ use perry_transform::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
@@ -125,11 +125,6 @@ pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &st
         specs.push(cap[1].to_string());
     }
 
-    let parent = match file_path.parent() {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
     let mut out: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     for spec in specs {
@@ -143,20 +138,38 @@ pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &st
         if !(spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/')) {
             continue;
         }
-        let candidate = if spec.starts_with('/') {
-            PathBuf::from(&spec)
+        let resolved_path = if spec.starts_with('/') {
+            let candidate = PathBuf::from(&spec);
+            super::resolve::resolve_with_extensions(&candidate)
+                .and_then(|path| path.canonicalize().ok())
         } else {
-            parent.join(&spec)
+            super::resolve::resolve_relative_import_path(&spec, file_path)
         };
-        if let Some(resolved) = super::resolve::resolve_with_extensions(&candidate) {
-            if let Ok(canon) = resolved.canonicalize() {
-                if seen.insert(canon.clone()) {
-                    out.push(canon);
-                }
+        if let Some(canon) = resolved_path {
+            if seen.insert(canon.clone()) {
+                out.push(canon);
             }
         }
     }
     out
+}
+
+fn cached_resolve_import_with_lexical_base(
+    import_source: &str,
+    lexical_importer_path: &Path,
+    canonical_importer_path: &Path,
+    ctx: &mut CompilationContext,
+) -> Option<(PathBuf, ModuleKind)> {
+    // Module collection keys and reads use canonical paths, but source text
+    // relative specifiers are written against the importer path the user
+    // compiled. On platforms where /tmp is a symlink, resolving imports from
+    // the canonical /private/tmp path can make a valid "../.." edge point at a
+    // nonexistent sibling and leave imported classes unresolved.
+    let resolved = cached_resolve_import(import_source, lexical_importer_path, ctx);
+    if resolved.is_some() || lexical_importer_path == canonical_importer_path {
+        return resolved;
+    }
+    cached_resolve_import(import_source, canonical_importer_path, ctx)
 }
 
 /// Issue #841: Node.js submodules that Perry knows about at the
@@ -428,7 +441,7 @@ fn collect_module_one(
         // also walked. Template-literal / variable specifiers can't be
         // resolved statically and are skipped (V8 will surface the
         // resolution failure at runtime, same as today).
-        let transitive_paths = collect_js_module_imports(&canonical, &source);
+        let transitive_paths = collect_js_module_imports(entry_path, &source);
         ctx.js_modules.insert(
             specifier.clone(),
             JsModule {
@@ -1118,7 +1131,8 @@ fn collect_module_one(
             continue;
         }
 
-        if let Some((resolved_path, kind)) = cached_resolve_import(&import.source, &canonical, ctx)
+        if let Some((resolved_path, kind)) =
+            cached_resolve_import_with_lexical_base(&import.source, entry_path, &canonical, ctx)
         {
             import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
             import.module_kind = kind;
@@ -1467,7 +1481,7 @@ fn collect_module_one(
                 ..Default::default()
             });
             if let Some((resolved_path, kind)) =
-                cached_resolve_import(src.as_str(), &canonical, ctx)
+                cached_resolve_import_with_lexical_base(src.as_str(), entry_path, &canonical, ctx)
             {
                 if let Some(sidecar) =
                     declaration_sidecar_for_resolved_import(src.as_str(), &resolved_path)

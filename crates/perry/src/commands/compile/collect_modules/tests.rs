@@ -137,6 +137,77 @@ console.log(got);
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_entry_resolves_relative_imports_from_lexical_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let real_parent = root.join("real-parent");
+    let alias_parent = root.join("alias-parent");
+    let real_app = real_parent.join("app");
+    let alias_app = alias_parent.join("app");
+    let alias_outside = alias_parent.join("outside");
+
+    std::fs::create_dir_all(&real_app).expect("mkdir real app");
+    std::fs::create_dir_all(&alias_outside).expect("mkdir alias outside");
+    std::os::unix::fs::symlink(&real_app, &alias_app).expect("symlink app");
+
+    let dep = alias_outside.join("dep.ts");
+    let entry = alias_app.join("entry.ts");
+
+    std::fs::write(
+        &dep,
+        r#"
+export class ExternalCtor {
+  value: string;
+  constructor(value: string) {
+    this.value = value;
+  }
+  marker(): string {
+    return this.value;
+  }
+}
+"#,
+    )
+    .expect("write dep");
+    std::fs::write(
+        &entry,
+        r#"
+import { ExternalCtor } from "../outside/dep";
+
+const value = new ExternalCtor("ready");
+console.log(value.marker());
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(alias_parent.to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect modules");
+
+    let dep_canonical = dep.canonicalize().expect("canonical dep");
+    assert!(
+        ctx.native_modules.contains_key(&dep_canonical),
+        "relative imports from a symlinked entry must resolve from the lexical path; collected modules: {:?}",
+        ctx.native_modules.keys().collect::<Vec<_>>()
+    );
+}
+
 fn write_compile_package_fixture(
     root: &std::path::Path,
     package_name: &str,
