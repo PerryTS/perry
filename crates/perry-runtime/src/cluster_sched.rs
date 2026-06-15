@@ -56,15 +56,30 @@ pub fn compute_key_id(host: &str, port: u16, address_type: i32) -> u32 {
 }
 
 /// `reqKey` echoed in the queryServer round-trip so a worker can match a reply
-/// to the exact (possibly port-0) listen it issued.
+/// to the exact (possibly port-0) listen it issued. The scheduling mode is part
+/// of the key so an RR query never reuses a non-RR primary entry (which would
+/// return a port but spawn no accept thread, hanging the RR worker).
 #[cfg(unix)]
-fn req_key(host: &str, req_port: i32, address_type: i32) -> String {
-    format!("{address_type}:{host}:{req_port}")
+fn req_key(host: &str, req_port: i32, address_type: i32, rr: bool) -> String {
+    let mode = if rr { "rr" } else { "n" };
+    format!("{address_type}:{mode}:{host}:{req_port}")
 }
 
 // ---------------------------------------------------------------------------
 // Worker side
 // ---------------------------------------------------------------------------
+
+/// Injected connection fds awaiting a worker accept loop, keyed by routing key
+/// id, plus the channel-closed flag. Both live under one mutex (paired with
+/// `fd_cv`) so `recv_fd`'s predicate check and condvar wait are atomic against
+/// the close handler — a separate `closed` lock would let a notify slip between
+/// the check and the wait and hang the waiter forever.
+#[cfg(unix)]
+#[derive(Default)]
+struct FdInbox {
+    queues: HashMap<u32, VecDeque<RawFd>>,
+    closed: bool,
+}
 
 #[cfg(unix)]
 struct WorkerState {
@@ -72,11 +87,8 @@ struct WorkerState {
     /// the primary replies).
     queries: Mutex<HashMap<String, Option<i32>>>,
     query_cv: Condvar,
-    /// Injected connection fds awaiting a worker accept loop, keyed by routing
-    /// key id. `closed` flips on channel EOF so blocked `recv_fd` calls return.
-    fd_queues: Mutex<HashMap<u32, VecDeque<RawFd>>>,
+    fd_inbox: Mutex<FdInbox>,
     fd_cv: Condvar,
-    closed: Mutex<bool>,
 }
 
 #[cfg(unix)]
@@ -85,9 +97,8 @@ impl WorkerState {
         Self {
             queries: Mutex::new(HashMap::new()),
             query_cv: Condvar::new(),
-            fd_queues: Mutex::new(HashMap::new()),
+            fd_inbox: Mutex::new(FdInbox::default()),
             fd_cv: Condvar::new(),
-            closed: Mutex::new(false),
         }
     }
 }
@@ -115,7 +126,7 @@ pub fn worker_sched_is_rr() -> bool {
 /// reuseport reservation used by SCHED_NONE and the non-injectable listeners.
 #[cfg(unix)]
 pub fn worker_query_listen(host: &str, req_port: i32, address_type: i32, rr: bool) -> Option<u16> {
-    let key = req_key(host, req_port, address_type);
+    let key = req_key(host, req_port, address_type, rr);
     {
         let mut q = worker_state().queries.lock().unwrap();
         q.insert(key.clone(), None);
@@ -133,28 +144,29 @@ pub fn worker_query_listen(host: &str, req_port: i32, address_type: i32, rr: boo
         return None;
     }
 
-    let deadline = Duration::from_secs(10);
+    // Absolute deadline: spurious/early wakeups must not extend the total wait
+    // past the 10s cap (a per-iteration `wait_timeout(10s)` would).
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut q = worker_state().queries.lock().unwrap();
     loop {
-        match q.get(&key) {
-            Some(Some(port)) => {
-                let port = *port;
-                q.remove(&key);
-                return if port >= 0 && port <= u16::MAX as i32 {
-                    Some(port as u16)
-                } else {
-                    None
-                };
-            }
-            _ => {
-                let (g, timed_out) = worker_state().query_cv.wait_timeout(q, deadline).unwrap();
-                q = g;
-                if timed_out.timed_out() {
-                    q.remove(&key);
-                    return None;
-                }
-            }
+        if let Some(Some(port)) = q.get(&key).copied() {
+            q.remove(&key);
+            return if (0..=u16::MAX as i32).contains(&port) {
+                Some(port as u16)
+            } else {
+                None
+            };
         }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            q.remove(&key);
+            return None;
+        }
+        q = worker_state()
+            .query_cv
+            .wait_timeout(q, remaining)
+            .unwrap()
+            .0;
     }
 }
 
@@ -162,15 +174,15 @@ pub fn worker_query_listen(host: &str, req_port: i32, address_type: i32, rr: boo
 /// accept loop). Returns the raw fd, or -1 once the IPC channel closes.
 #[cfg(unix)]
 pub fn worker_recv_fd(key_id: u32) -> RawFd {
-    let mut queues = worker_state().fd_queues.lock().unwrap();
+    let mut inbox = worker_state().fd_inbox.lock().unwrap();
     loop {
-        if let Some(fd) = queues.get_mut(&key_id).and_then(|q| q.pop_front()) {
+        if let Some(fd) = inbox.queues.get_mut(&key_id).and_then(|q| q.pop_front()) {
             return fd;
         }
-        if *worker_state().closed.lock().unwrap() {
+        if inbox.closed {
             return -1;
         }
-        queues = worker_state().fd_cv.wait(queues).unwrap();
+        inbox = worker_state().fd_cv.wait(inbox).unwrap();
     }
 }
 
@@ -237,10 +249,21 @@ pub fn worker_recv_loop(
         drain_frames(&mut acc, &mut fd_queue, &mut on_message);
     }
 
-    // Channel closed: wake any worker blocked in `recv_fd` and drop unrouted
-    // fds so we don't leak them.
-    *worker_state().closed.lock().unwrap() = true;
+    // Channel closed: flag it + drain any already-routed-but-unpulled fds under
+    // the inbox lock, then wake every worker blocked in `recv_fd`.
+    {
+        let mut inbox = worker_state().fd_inbox.lock().unwrap();
+        inbox.closed = true;
+        for q in inbox.queues.values_mut() {
+            for fd in q.drain(..) {
+                unsafe {
+                    libc::close(fd);
+                }
+            }
+        }
+    }
     worker_state().fd_cv.notify_all();
+    // Reader-local fds received but not yet routed to a queue.
     for fd in fd_queue.drain(..) {
         unsafe {
             libc::close(fd);
@@ -272,9 +295,9 @@ fn drain_frames(
             // The fd for this frame arrived no later than its tag byte, so it
             // is already queued (FIFO matches frame order).
             if let Some(cfd) = fd_queue.pop_front() {
-                let mut queues = worker_state().fd_queues.lock().unwrap();
-                queues.entry(key_id).or_default().push_back(cfd);
-                drop(queues);
+                let mut inbox = worker_state().fd_inbox.lock().unwrap();
+                inbox.queues.entry(key_id).or_default().push_back(cfd);
+                drop(inbox);
                 worker_state().fd_cv.notify_all();
             }
             pos += FD_FRAME_LEN;
@@ -395,7 +418,7 @@ pub fn primary_handle_query(
     address_type: i32,
     rr: bool,
 ) -> Option<u16> {
-    let key = req_key(host, req_port, address_type);
+    let key = req_key(host, req_port, address_type, rr);
     let mut map = primary_keys().lock().unwrap();
     if let Some(existing) = map.get(&key) {
         let mut inner = existing.inner.lock().unwrap();
@@ -405,7 +428,15 @@ pub fn primary_handle_query(
         return Some(existing.actual_port);
     }
 
-    let bind_host = if host.is_empty() { "0.0.0.0" } else { host };
+    // Default the wildcard bind to the requested family — `0.0.0.0` would force
+    // an IPv6 (`addressType == 6`) listen onto the wrong family.
+    let bind_host = if !host.is_empty() {
+        host
+    } else if address_type == 6 {
+        "::"
+    } else {
+        "0.0.0.0"
+    };
     let bind_port = req_port.max(0) as u16;
     let listener = bind_primary_listener(bind_host, bind_port, address_type, rr)?;
     let actual_port = listener.local_addr().ok()?.port();
@@ -572,6 +603,8 @@ pub fn send_fd_over(sock_fd: RawFd, key_id: u32, payload_fd: RawFd) -> bool {
         (*cmsg).cmsg_level = libc::SOL_SOCKET;
         (*cmsg).cmsg_type = libc::SCM_RIGHTS;
         (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+        // GC_STORE_AUDIT(POINTER_FREE): writes a raw i32 fd into a stack/heap
+        // ancillary-data buffer (never a GC heap slot, never a NaN-boxed ptr).
         std::ptr::write_unaligned(libc::CMSG_DATA(cmsg) as *mut RawFd, payload_fd);
         let sent = libc::sendmsg(sock_fd, &msg, 0);
         sent == frame.len() as isize
