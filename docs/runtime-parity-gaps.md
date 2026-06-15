@@ -1,996 +1,93 @@
 # Perry Runtime Parity Gap List
 
-This document is a structured gap analysis comparing the public Node.js + Bun runtime API surface (catalogued in `runtime-parity.md`) against the APIs Perry can dispatch at compile time. Coverage sources are: the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`, ~590 (module, method) entries), `Expr::*` HIR variants in `crates/perry-hir/src/ir.rs` that lower stdlib APIs directly to dedicated codegen arms (~301 stdlib-shaped variants), and `js_*` FFI exports across `perry-runtime` (~984), `perry-stdlib` (~633), and 35 `perry-ext-*` crates (~553). Output is intended for prioritizing which APIs to implement next.
+> **Generated** by `scripts/gen_parity_gaps.py` from `docs/runtime-parity.md`
+> (the API inventory) reconciled against Perry's coverage sources. Do not
+> edit by hand — re-run the script to refresh.
 
-> **Behavioral status (v0.5.x).** This list counts individual API *surface* gaps,
-> not behavioral pass rate. Measured against Node's own test suite
-> (`scripts/node_suite_run.py` vs `test-parity/node_suite_baseline.json`, node
-> v26.3.0, 53 `node:*` modules), Perry's runtime passes **~97%** (2792 / 2863
-> cases); overall Node.js/TypeScript compatibility is around **95%**. The heavily
-> used modules (`fs`, `http`/`https`/`http2`, `net`/`tls`, `crypto`, `stream`,
-> `events`, `child_process`, `worker_threads`, `process`, `zlib`) are real, not
-> stubs — the gaps below are concentrated in less-common modules and edge-case
-> option surfaces.
+This is a structured gap analysis comparing the public Node.js API surface
+against the APIs Perry can dispatch. Coverage is derived from four sources:
+the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`,
+`method`/`property` rows), compound `Expr::*` HIR variants
+(`crates/perry-hir/src/ir/`), `js_*` FFI exports across `perry-runtime` /
+`perry-stdlib` / `perry-ext-*`, and module-gated method-dispatch literals.
+
+> **Behavioral status.** This list counts individual API *surface* gaps, not
+> behavioral pass rate. Measured against Node's own test suite
+> (`scripts/node_suite_run.py` vs `test-parity/node_suite_baseline.json`),
+> Perry's runtime passes **~97%**; overall Node.js/TypeScript compatibility is
+> around **95%**. Heavily-used modules (`fs`, `http`/`https`/`http2`,
+> `net`/`tls`, `crypto`, `stream`, `events`, `child_process`,
+> `worker_threads`, `process`, `zlib`) are real, not stubs.
 
 ## Summary
 
-| Category | Modules | Gap APIs | Verified-covered |
-|----------|---------|----------|------------------|
-| Whole-module gaps (zero coverage) | 15 | 410 | n/a |
-| Partial-module gaps | 31 | 1230 | 630 |
-| Web-global gaps | — | 282 | 107 |
-| Bun-only gaps (out of scope) | — | 394 | n/a |
-| **Total true gaps** |  | **1922** |  |
-
-**Top modules by remaining true gaps (Node + Web):**
-
-- `Web / Global APIs` — 282
-- `node:crypto` — 128
-- `node:http2` — 97
-- `node:process (and global `process`)` — 94
-- `node:test (and node:test/reporters, node:test/mock)` — 93
-- `node:util` — 92
-- `node:http` — 89
-- `node:zlib` — 70
-- `node:stream` — 75
-- `node:worker_threads` — 60
-
-### Issue #3598 docs/API closure note
-
-Issue #3598 ("Node API compatibility epic: globalThis and Web-compatible Node globals") was closed on 2026-05-31 as superseded by granular child issues. The submitted child PRs cover runtime slices for DOM events, WebSocket, URL/encoding/microtasks, fetch/body globals and methods, MessageChannel delivery, WebAssembly shape/metadata, WebCrypto, Navigator/URLPattern/encoding streams, structuredClone transfer options, and abort/weakref-related DOM globals.
-
-This branch intentionally does **not** cherry-pick or stack those feature PRs. The generated manifest surfaces on current `origin/main` were audited with `./scripts/regen_api_docs.sh`; `docs/src/api/reference.md` and `docs/api/perry.d.ts` produced no diff, and `crates/perry-api-manifest/src/entries.rs` was not changed. That means this closure PR does not truthfully decrement the generated API/type counts for globals that only exist on the open feature branches.
-
-Residual #3598 work that should remain tracked by child issues includes true WeakRef/FinalizationRegistry weak semantics, deeper FormData/File/Blob/multipart/body parity, full WebAssembly Instance/Memory/Table/Global/streaming execution surface beyond the current host-shim shape, and full TextEncoderStream/TextDecoderStream transform behavior.
-
-## Whole-module gaps
-
-Modules with **zero** Perry coverage across the manifest, `Expr::*` variants, or FFI exports. Every parity-reference API in these modules is a gap. Listed in descending API-count order.
-
-### node:test (and node:test/reporters, node:test/mock)
-
-**Total APIs: 93** · Perry covers: 0 · Gap: 93
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `test([name][, options][, fn])`
-- `test.skip([name][, options][, fn])`
-- `test.todo([name][, options][, fn])`
-- `test.only([name][, options][, fn])`
-- `suite([name][, options][, fn])`
-- `suite.skip([name][, options][, fn])`
-- `suite.todo([name][, options][, fn])`
-- `suite.only([name][, options][, fn])`
-- `describe([name][, options][, fn])`
-- `it([name][, options][, fn])`
-- `before([fn][, options])`
-- `after([fn][, options])`
-- … and 81 more
-
-### node:v8
-
-**Total APIs: 58** · Perry covers: 3 · Gap: 55
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `v8.cachedDataVersionTag()`
-- `v8.getHeapCodeStatistics()`
-- `v8.getHeapSpaceStatistics()`
-- `v8.getHeapStatistics()`
-- `v8.getCppHeapStatistics([detailLevel])`
-- `v8.queryObjects(ctor[, options])`
-- `v8.setFlagsFromString(flags)`
-- `v8.stopCoverage()`
-- `v8.takeCoverage()`
-- `v8.setHeapSnapshotNearHeapLimit(limit)`
-- … and 45 more
-
-### node:dns
-
-**Total APIs: 53** · Perry covers: 0 · Gap: 53
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `dns.lookup(hostname[, options], callback)`
-- `dns.lookupService(address, port, callback)`
-- `dns.resolve(hostname[, rrtype], callback)`
-- `dns.resolve4(hostname[, options], callback)`
-- `dns.resolve6(hostname[, options], callback)`
-- `dns.resolveAny(hostname, callback)`
-- `dns.resolveCaa(hostname, callback)`
-- `dns.resolveCname(hostname, callback)`
-- `dns.resolveMx(hostname, callback)`
-- `dns.resolveNaptr(hostname, callback)`
-- `dns.resolveNs(hostname, callback)`
-- `dns.resolvePtr(hostname, callback)`
-- … and 41 more
-
-### node:cluster
-
-**Total APIs: 35** · Perry covers: primary lifecycle subset + default-import EventEmitter surface · Gap: worker handle distribution and remaining lifecycle events
-
-The default import (`import cluster from "node:cluster"`) is an EventEmitter:
-`on`/`addListener`/`once`/`off`/`removeListener`/`removeAllListeners`/`emit`/
-`eventNames`/`listenerCount` register and fire module-level listeners (a
-synchronous `fork` event is emitted when a worker object is created). The
-`import * as cluster` namespace keeps the shape-only surface and reads those
-EventEmitter names as `undefined`, matching Node. Real worker `online`/`exit`/
-`listening`/`disconnect` events remain deferred (#3605).
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `cluster.isPrimary`
-- `cluster.isMaster`
-- `cluster.isWorker`
-- `cluster.worker`
-- `cluster.workers`
-- `cluster.settings`
-- `cluster.schedulingPolicy`
-- `cluster.SCHED_RR`
-- `cluster.SCHED_NONE`
-- `cluster.fork([env])`
-- `cluster.disconnect([callback])`
-- `cluster.setupPrimary([settings])`
-- `cluster.setupMaster([settings])`
-- worker handle identity and disconnect lifecycle
-- … and remaining Worker/listening events
-
-### node:vm
-
-**Total APIs: 32** · Perry covers: import/require namespace shape, callable
-export metadata, `vm.constants`, `process.getBuiltinModule("vm")`,
-`vm.isContext({})`, the narrowed deterministic execution subset for
-`Script`, object-backed context mutation/isolation, `compileFunction`,
-cached-data/source-map metadata shape, `SourceTextModule.createCachedData()`,
-gated `SourceTextModule`/`SyntheticModule` lifecycle behavior, and
-`vm.measureMemory()` result shape and option validation · Gap: full VM module
-parsing/evaluation beyond deterministic lifecycle fixtures,
-`USE_MAIN_CONTEXT_DEFAULT_LOADER` dynamic-import behavior, context-loader
-constant behavior, and exact V8 heap accounting
-
-Coverage is fixture-backed in `test-parity/node-suite/vm`; the generated
-`test_parity_vm` inventory now skip-lists only the still-open behavior leaves.
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- full `SourceTextModule` / `SyntheticModule` parsing, linking, and evaluation
-  semantics beyond deterministic lifecycle fixtures
-- `vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER` dynamic-import participation
-- `vm.measureMemory([options])`
-- … and 16 more
-
-### node:dgram
-
-**Total APIs: 28** · Perry covers: 27 · Gap: 1
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- Deterministic loopback coverage: `createSocket`, `bind`, `address`, `send`, `message`, `connect`, `remoteAddress`, `disconnect`, `close`, `ref` / `unref`, buffer-size and send-queue getters, socket option validation/returns, and multicast/source-specific membership validation/returns.
-- Remaining gaps: real host UDP IO, OS-level multicast membership side effects, host socket option side effects, and `socket[Symbol.asyncDispose]()`.
-- `socket[Symbol.asyncDispose]()`
-
-### node:dns/promises
-
-**Total APIs: 21** · Perry covers: 0 · Gap: 21
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `dnsPromises.lookup(hostname[, options])`
-- `dnsPromises.lookupService(address, port)`
-- `dnsPromises.resolve(hostname[, rrtype])`
-- `dnsPromises.resolve4(hostname[, options])`
-- `dnsPromises.resolve6(hostname[, options])`
-- `dnsPromises.resolveAny(hostname)`
-- `dnsPromises.resolveCaa(hostname)`
-- `dnsPromises.resolveCname(hostname)`
-- `dnsPromises.resolveMx(hostname)`
-- `dnsPromises.resolveNaptr(hostname)`
-- `dnsPromises.resolveNs(hostname)`
-- `dnsPromises.resolvePtr(hostname)`
-- … and 9 more
-
-### node:inspector (and node:inspector/promises)
-
-**Total APIs: 19** · Perry covers: 0 · Gap: 19
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `inspector.open([port[, host[, wait]]])`
-- `inspector.close()`
-- `inspector.url()`
-- `inspector.waitForDebugger()`
-- `inspector.console`
-- `new Session()`
-- `session.connect()`
-- `session.connectToMainThread()`
-- `session.disconnect()`
-- `'inspectorNotification'`
-Deeper protocol transport/frontend fidelity remains partial.
-
-### node:readline/promises
-
-**Total APIs: 7** · Perry covers: 0 · Gap: 7
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `readlinePromises.createInterface(options)`
-- `rl.clearLine(dir)`
-- `rl.clearScreenDown()`
-- `rl.cursorTo(x[, y])`
-- `rl.moveCursor(dx, dy)`
-- `rl.commit()`
-- `rl.rollback()`
-
-### node:string_decoder
-
-**Total APIs: 6** · Perry covers: 0 · Gap: 6
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `new StringDecoder([encoding])`
-- `stringDecoder.write(buffer)`
-- `stringDecoder.end([buffer])`
-- `stringDecoder.lastChar`
-- `stringDecoder.lastNeed`
-- `stringDecoder.lastTotal`
-
-### node:timers/promises
-
-**Total APIs: 5** · Perry covers: 0 · Gap: 5
-
-Selected highlights (full list in `runtime-parity.md`):
-
-- `setTimeout([delay[, value[, options]]])`
-- `setImmediate([value[, options]])`
-- `setInterval([delay[, value[, options]]])`
-- `scheduler.wait(delay[, options])`
-- `scheduler.yield()`
-
-## Partial-module gaps
-
-Modules where Perry has at least one coverage source. Listed in descending gap-size order.
-
-### node:os
-
-**Gap APIs: 0** · Already covered: 24
-
-`node:os` has no remaining public API surface gaps in the manifest-based
-reconciliation. The current manifest includes the modern host helpers
-(`availableParallelism`, `machine`, `version`, `getPriority`, `setPriority`),
-collection helpers (`cpus`, `networkInterfaces`), `userInfo`, `devNull`,
-`EOL`, `constants`, and the ESM/CJS namespace forms. Host-dependent values are
-kept out of exact comparisons; the curated `test-parity/node-suite/os`
-fixtures assert deterministic Node semantics such as return types, object
-shape, nested constants identity, import forms, and validation/error codes.
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `os.arch()` | `manifest:os.arch` |
-| `os.availableParallelism()` | `manifest:os.availableParallelism`; `test-parity/node-suite/os/methods/available-parallelism.ts` |
-| `os.cpus()` | `manifest:os.cpus` |
-| `os.devNull` | `manifest:os.devNull`; `test-parity/node-suite/os/properties/dev-null.ts` |
-| `os.endianness()` | `manifest:os.endianness` |
-| `os.freemem()` | `manifest:os.freemem` |
-| `os.getPriority([pid])` | `manifest:os.getPriority`; `test-parity/node-suite/os/methods/priority.ts` |
-| `os.homedir()` | `manifest:os.homedir` |
-| `os.hostname()` | `manifest:os.hostname` |
-| `os.loadavg()` | `manifest:os.loadavg` |
-| `os.machine()` | `manifest:os.machine`; `test-parity/node-suite/os/methods/endianness-machine.ts` |
-| `os.networkInterfaces()` | `manifest:os.networkInterfaces` |
-| `os.platform()` | `manifest:os.platform` |
-| `os.release()` | `manifest:os.release` |
-| `os.setPriority([pid, ]priority)` | `manifest:os.setPriority`; `test-parity/node-suite/os/methods/priority.ts` |
-| `os.tmpdir()` | `manifest:os.tmpdir` |
-| `os.totalmem()` | `manifest:os.totalmem` |
-| `os.type()` | `manifest:os.type` |
-| `os.uptime()` | `manifest:os.uptime` |
-| `os.userInfo([options])` | `manifest:os.userInfo` |
-| `os.version()` | `manifest:os.version`; `test-parity/node-suite/os/methods/version.ts` |
-| `os.EOL` | `expr:OsEOL` |
-| `os.constants` | `manifest:os.constants`; `test-parity/node-suite/os/constants/` |
-
-### node:fs
-
-**Gap APIs: 0** · Already covered: 180
-
-`node:fs` has no remaining public API surface gaps in the manifest-based reconciliation. The current runtime manifest includes the callback and sync functions, constructor/export tail (`Dir`, `Dirent`, `Stats`, `ReadStream`, `WriteStream`, `FileReadStream`, `FileWriteStream`, `Utf8Stream`), `_toUnixTimestamp`, `openAsBlob`, `mkdtempDisposableSync`, `constants`, and `promises`.
-
-Runtime-created fs SystemError metadata is covered by parity fixtures: sync, callback, and promise errors expose negative numeric `err.errno` plus `err.code`, `err.syscall`, `err.path`, and `err.dest` where Node exposes them. Behavior caveats are tracked in `test-parity/node-suite/fs/STATUS.md` rather than as missing API rows. The `node:fs/promises` FileHandle stream-iter tail (`pull`, `pullSync`, and `writer`) is runtime-backed for direct no-transform source/writer paths (#3952).
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `fs.access(path[, mode], callback)` | `ffi:js_fs_access_sync` |
-| `fs.appendFile(path, data[, options], callback)` | `manifest:fs.appendFile` |
-| `fs.chmod(path, mode, callback)` | `ffi:js_fs_chmod_sync` |
-| `fs.copyFile(src, dest[, mode], callback)` | `ffi:js_fs_copy_file_sync` |
-| `fs.createReadStream(path[, options])` | `manifest:fs.createReadStream` |
-| `fs.createWriteStream(path[, options])` | `manifest:fs.createWriteStream` |
-| `fs.exists(path, callback)` | `ffi:js_fs_exists_sync` |
-| `fs.link(existingPath, newPath, callback)` | `ffi:js_fs_link_sync` |
-| `fs.linkSync(existingPath, newPath)` | `ffi:js_fs_link_sync` |
-| `fs.mkdir(path[, options], callback)` | `manifest:fs.mkdir` |
-| `fs.mkdtemp(prefix[, options], callback)` | `ffi:js_fs_mkdtemp_sync` |
-| `fs.readdir(path[, options], callback)` | `manifest:fs.readdir` |
-| `fs.readFile(path[, options], callback)` | `manifest:fs.readFile` |
-| `fs.readlink(path[, options], callback)` | `ffi:js_fs_readlink_dispatch` |
-| `fs.readlinkSync(path[, options])` | `ffi:js_fs_readlink_dispatch` |
-| `fs.realpath(path[, options], callback)` | `ffi:js_fs_realpath_sync` |
-| `fs.rename(oldPath, newPath, callback)` | `ffi:js_fs_rename_sync` |
-| `fs.rm(path[, options], callback)` | `manifest:fs.rm` |
-| `fs.rmdir(path[, options], callback)` | `ffi:js_fs_rmdir_sync` |
-| `fs.symlink(target, path[, type], callback)` | `ffi:js_fs_symlink_sync` |
-| `fs.symlinkSync(target, path[, type])` | `ffi:js_fs_symlink_sync` |
-| `fs.Utf8Stream` | `manifest:fs.Utf8Stream` |
-| `fs._toUnixTimestamp(value)` | `ffi:js_fs_to_unix_timestamp` |
-| … | remaining fs APIs covered by manifest, FFI, or lowering entries |
-
-### node:repl
-
-**Gap APIs: 0** · Already covered: 17
-
-The public `node:repl` inventory rows are covered for deterministic scripted sessions: ESM/CJS module metadata, `start(options)`, `new REPLServer(options)`, mode symbols, `Recoverable`, core server flags/context, custom dot commands, prompt display/reset events, line writes, and `setupHistory`.
-
-Behavior caveats remain around live terminal integration, readline inheritance depth, multiline JavaScript parsing, persistent history files, and advanced interactive editor behavior. Those are semantic parity gaps rather than missing public API rows in `runtime-parity.md`.
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `repl.start([options])` | `ffi:js_repl_start`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `repl.builtinModules` | `rt:crate::process::js_module_builtin_modules`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
-| `repl.REPL_MODE_SLOPPY` | `rt:crate::node_repl::repl_mode_sloppy`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
-| `repl.REPL_MODE_STRICT` | `rt:crate::node_repl::repl_mode_strict`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
-| `repl.Recoverable` | `ffi:js_repl_recoverable_new`; `test-parity/node-suite/repl/imports/module-metadata.ts` |
-| `replServer.context` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `replServer.editorMode` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `replServer.useColors` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `replServer.useGlobal` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `replServer.ignoreUndefined` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `replServer.replMode` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `replServer.defineCommand(keyword, cmd)` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
-| `replServer.displayPrompt([preserveCursor])` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
-| `replServer.clearBufferedCommand()` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
-| `replServer.setupHistory(historyConfig, callback)` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/setup-history.ts` |
-| `'exit'` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/scripted-lifecycle.ts` |
-| `'reset'` | `ffi:js_repl_repl_server_new`; `test-parity/node-suite/repl/async/commands-reset.ts` |
-
-### node:crypto
-
-**Gap APIs: 124** · Already covered: 14
-
-#### Missing from Perry
-
-- `crypto.createCipheriv(algorithm, key, iv[, options])`
-- `crypto.createDecipheriv(algorithm, key, iv[, options])`
-- `crypto.createDiffieHellman(prime[, primeEncoding][, generator][, generatorEncoding])`
-- `crypto.createDiffieHellman(primeLength[, generator])`
-- `crypto.createDiffieHellmanGroup(name)`
-- `crypto.createECDH(curveName)`
-- `crypto.createPrivateKey(key)`
-- `crypto.createPublicKey(key)`
-- `crypto.createSecretKey(key[, encoding])`
-- `crypto.createSign(algorithm[, options])`
-- `crypto.createVerify(algorithm[, options])`
-- `crypto.diffieHellman(options[, callback])`
-- `crypto.generateKey(type, options, callback)`
-- `crypto.generateKeySync(type, options)`
-- `crypto.generateKeyPair(type, options, callback)`
-- `crypto.generateKeyPairSync(type, options)`
-- `crypto.getCipherInfo(nameOrNid[, options])`
-- `crypto.getCiphers()`
-- `crypto.getCurves()`
-- `crypto.getDiffieHellman(groupName)`
-- `crypto.getFips()`
-- `crypto.getHashes()`
-- `crypto.hash(algorithm, data[, options])`
-- `crypto.hkdf(digest, ikm, salt, info, keylen, callback)`
-- `crypto.hkdfSync(digest, ikm, salt, info, keylen)`
-- `crypto.privateDecrypt(privateKey, buffer)`
-- `crypto.privateEncrypt(privateKey, buffer)`
-- `crypto.publicDecrypt(key, buffer)`
-- `crypto.publicEncrypt(key, buffer)`
-- `crypto.randomFill(buffer[, offset][, size], callback)`
-- `crypto.randomFillSync(buffer[, offset][, size])`
-- `crypto.randomInt([min, ]max[, callback])`
-- `crypto.randomUUIDv7([options])`
-- `crypto.scryptSync(password, salt, keylen[, options])`
-- `crypto.secureHeapUsed()`
-- `crypto.setEngine(engine[, flags])`
-- `crypto.setFips(bool)`
-- `crypto.sign(algorithm, data, key[, callback])`
-- `crypto.timingSafeEqual(a, b)`
-- `crypto.verify(algorithm, data, key, signature[, callback])`
-- `crypto.constants`
-- `crypto.fips`
-- … and 78 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `crypto.argon2(algorithm, parameters, callback)` | `manifest:crypto.argon2`; `ffi:js_crypto_argon2_async`; `test-parity/node-suite/crypto/argon2/kdf.ts` |
-| `crypto.argon2Sync(algorithm, parameters)` | `manifest:crypto.argon2Sync`; `ffi:js_crypto_argon2_sync`; `test-parity/node-suite/crypto/argon2/kdf.ts` |
-| `crypto.checkPrime(candidate[, options], callback)` | `manifest:crypto.checkPrime`; `ffi:js_crypto_check_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
-| `crypto.checkPrimeSync(candidate[, options])` | `manifest:crypto.checkPrimeSync`; `ffi:js_crypto_check_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
-| `crypto.createHash(algorithm[, options])` | `manifest:crypto.createHash` |
-| `crypto.createHmac(algorithm, key[, options])` | `manifest:crypto.createHmac` |
-| `crypto.decapsulate(key, ciphertext[, callback])` | `manifest:crypto.decapsulate`; `ffi:js_crypto_decapsulate`; `test-parity/node-suite/crypto/kem/x25519.ts` |
-| `crypto.encapsulate(key[, callback])` | `manifest:crypto.encapsulate`; `ffi:js_crypto_encapsulate`; `test-parity/node-suite/crypto/kem/x25519.ts` |
-| `crypto.generatePrime(size[, options], callback)` | `manifest:crypto.generatePrime`; `ffi:js_crypto_generate_prime_async`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
-| `crypto.generatePrimeSync(size[, options])` | `manifest:crypto.generatePrimeSync`; `ffi:js_crypto_generate_prime_sync`; `test-parity/node-suite/crypto/prime/generate-check.ts` |
-| `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
-| `crypto.pbkdf2(password, salt, iterations, keylen, digest, callback)` | `manifest:crypto.pbkdf2` |
-| `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)` | `manifest:crypto.pbkdf2Sync` |
-| `crypto.randomBytes(size[, callback])` | `manifest:crypto.randomBytes` |
-| `crypto.randomUUID([options])` | `manifest:crypto.randomUUID` |
-| `crypto.scrypt(password, salt, keylen[, options], callback)` | `ffi:js_crypto_scrypt` |
-| `crypto.webcrypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
-| `crypto.webcrypto.randomUUID()` | `manifest:crypto.randomUUID` |
-
-### node:process (and global `process`)
-
-**Gap APIs: 90** · Already covered: 28
-
-#### Missing from Perry
-
-- `process.abort()`
-- `process.memoryUsage.rss()`
-- `process.availableMemory()`
-- `process.constrainedMemory()`
-- `process.resourceUsage()`
-- `process.getActiveResourcesInfo()`
-- `process.getuid()`
-- `process.geteuid()`
-- `process.setuid(id)`
-- `process.seteuid(id)`
-- `process.getgid()`
-- `process.getegid()`
-- `process.setgid(id)`
-- `process.setegid(id)`
-- `process.getgroups()`
-- `process.setgroups(groups)`
-- `process.initgroups(user, extraGroup)`
-- `process.send(message[, sendHandle[, options]][, callback])`
-- `process.disconnect()`
-- `process.channel`
-- `process.channel.ref()`
-- `process.channel.unref()`
-- `process.emitWarning(warning[, options])`
-- `process.setUncaughtExceptionCaptureCallback(fn)`
-- `process.addUncaughtExceptionCaptureCallback(fn)`
-- `process.hasUncaughtExceptionCaptureCallback()`
-- `process.dlopen(module, filename[, flags])`
-- `process.loadEnvFile(path)`
-- `process.hrtime([time])`
-- `process.umask()`
-- `process.umask(mask)`
-- `process.ref(maybeRefable)`
-- `process.unref(maybeRefable)`
-- `process.binding(name)`
-- `process.platform`
-- `process.arch`
-- … and 46 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `process.exit([code])` | `expr:ProcessExit` |
-| `process.chdir(directory)` | `expr:ProcessChdir` |
-| `process.cwd()` | `expr:ProcessCwd` |
-| `process.memoryUsage()` | `expr:ProcessMemoryUsage` |
-| `process.cpuUsage([previousValue])` | `expr:ProcessCpuUsage` |
-| `process.threadCpuUsage([previousValue])` | `expr:ProcessThreadCpuUsage` |
-| `process.uptime()` | `expr:ProcessUptime` |
-| `process.kill(pid[, signal])` | `expr:ProcessKill` |
-| `process.hrtime.bigint()` | `expr:ProcessHrtimeBigint` |
-| `process.nextTick(callback[, ...args])` | `expr:ProcessNextTick` |
-| `process.execve(file[, args[, env]])` | `manifest:process.execve` |
-| `process.permission.has(scope[, reference])` | `runtime:process.permission` |
-| `process.pid` | `expr:ProcessPid` |
-| `process.ppid` | `expr:ProcessPpid` |
-| `process.version` | `expr:ProcessVersion` |
-| `process.versions` | `expr:ProcessVersions` |
-| `process.argv` | `expr:ProcessArgv` |
-| `process.env` | `expr:ProcessEnv` |
-| `process.stdin` | `expr:ProcessStdin` |
-| `process.sourceMapsEnabled` | `manifest:process.sourceMapsEnabled` |
-| `process.setSourceMapsEnabled(val)` | `manifest:process.setSourceMapsEnabled` |
-| … | 2 more covered APIs |
-
-### node:util
-
-**Gap APIs: 89** · Already covered: 13
-
-#### Missing from Perry
-
-- `util.debuglog(section[, callback])`
-- `util.debug(section)`
-- `util.formatWithOptions(inspectOptions, format[, ...args])`
-- `util.parseEnv(content)`
-- `util.stripVTControlCharacters(str)`
-- `util.toUSVString(string)`
-- `util.setTraceSigInt(enable)`
-- `MIMEType.prototype.type`
-- `MIMEType.prototype.subtype`
-- `MIMEType.prototype.essence`
-- `MIMEType.prototype.params`
-- `MIMEType.prototype.toString()`
-- `MIMEType.prototype.toJSON()`
-- `MIMEParams.prototype.delete(name)`
-- `MIMEParams.prototype.entries()`
-- `MIMEParams.prototype.get(name)`
-- `MIMEParams.prototype.has(name)`
-- `MIMEParams.prototype.keys()`
-- `MIMEParams.prototype.set(name, value)`
-- `MIMEParams.prototype.values()`
-- `util.inspect.custom`
-- `util.inspect.defaultOptions`
-- `util.inspect.styles`
-- `util.inspect.colors`
-- `util.promisify.custom`
-- `util.types.isAnyArrayBuffer(value)`
-- `util.types.isArrayBuffer(value)`
-- `util.types.isArrayBufferView(value)`
-- `util.types.isArgumentsObject(value)`
-- `util.types.isAsyncFunction(value)`
-- `util.types.isBigInt64Array(value)`
-- `util.types.isBigUint64Array(value)`
-- `util.types.isBooleanObject(value)`
-- `util.types.isBoxedPrimitive(value)`
-- `util.types.isCryptoKey(value)`
-- `util.types.isDataView(value)`
-- `util.types.isDate(value)`
-- `util.types.isExternal(value)`
-- `util.types.isFloat16Array(value)`
-- … and 48 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `util.callbackify(original)` | `manifest:util.callbackify` |
-| `util.deprecate(fn, msg[, code[, options]])` | `manifest:util.deprecate` |
-| `util.format(format[, ...args])` | `manifest:util.format` |
-| `util.getCallSites([frameCount][, options])` | `manifest:util.getCallSites` |
-| `util.getSystemErrorName(err)` | `manifest:util.getSystemErrorName` |
-| `util.getSystemErrorMap()` | `manifest:util.getSystemErrorMap` |
-| `util.getSystemErrorMessage(err)` | `manifest:util.getSystemErrorMessage` |
-| `util.inherits(constructor, superConstructor)` | `manifest:util.inherits` |
-| `util.inspect(object[, options])` | `manifest:util.inspect` |
-| `util.isDeepStrictEqual(val1, val2[, options])` | `manifest:util.isDeepStrictEqual` |
-| `util.promisify(original)` | `manifest:util.promisify` |
-
-### node:http2
-
-**Gap APIs: 93** · Already covered: 9
-
-#### Missing from Perry
-
-- `http2.createServer([options][, onRequestHandler])`
-- `http2.connect(authority[, options][, listener])`
-- `http2.performServerHandshake(socket[, options])`
-- `session.alpnProtocol`
-- `session.closed`
-- `session.connecting`
-- `session.destroy([error][, code])`
-- `session.destroyed`
-- `session.encrypted`
-- `session.goaway([code[, lastStreamID[, opaqueData]]])`
-- `session.localSettings`
-- `session.originSet`
-- `session.pendingSettingsAck`
-- `session.ping([payload, ]callback)`
-- `session.ref()`
-- `session.remoteSettings`
-- `session.setLocalWindowSize(windowSize)`
-- `session.setTimeout(msecs, callback)`
-- `session.socket`
-- `session.state`
-- `session.settings([settings][, callback])`
-- `session.type`
-- `session.unref()`
-- `serverSession.altsvc(alt, originOrStream)`
-- `serverSession.origin(...origins)`
-- `clientSession.request(headers[, options])`
-- `stream.aborted`
-- `stream.bufferSize`
-- `stream.closed`
-- `stream.destroyed`
-- `stream.endAfterHeaders`
-- `stream.id`
-- `stream.pending`
-- `stream.priority(options)`
-- `stream.rstCode`
-- `stream.sentHeaders`
-- `stream.sentInfoHeaders`
-- `stream.sentTrailers`
-- `stream.session`
-- `stream.setTimeout(msecs, callback)`
-- `stream.state`
-- `stream.sendTrailers(headers)`
-- `serverStream.additionalHeaders(headers)`
-- `serverStream.headersSent`
-- `serverStream.pushAllowed`
-- `serverStream.pushStream(headers[, options], callback)`
-- … and 47 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `http2.createSecureServer(options[, onRequestHandler])` | `manifest:http2.createSecureServer` |
-| `session.close([callback])` | `manifest:http2.close` |
-| `stream.close(code[, callback])` | `manifest:http2.close` |
-| `http2Server.close([callback])` | `manifest:http2.close` |
-| `response.getHeaders()` | `ffi:js_response_get_headers` |
-
-### node:http
-
-**Gap APIs: 88** · Already covered: 53
-
-#### Missing from Perry
-
-- `http.validateHeaderName(name[, label])`
-- `http.validateHeaderValue(name, value)`
-- `http.setMaxIdleHTTPParsers(max)`
-- `http.setGlobalProxyFromEnv([proxyEnv])`
-- `http.METHODS`
-- `http.STATUS_CODES`
-- `http.globalAgent`
-- `http.maxHeaderSize`
-- `new Agent([options])`
-- `agent.createConnection(options[, callback])`
-- `agent.keepSocketAlive(socket)`
-- `agent.reuseSocket(socket, request)`
-- `agent.getName([options])`
-- `agent.freeSockets`
-- `agent.maxFreeSockets`
-- `agent.maxSockets`
-- `agent.maxTotalSockets`
-- `agent.requests`
-- `agent.sockets`
-- `request.abort()`
-- `request.cork()`
-- `request.getHeaderNames()`
-- `request.getHeaders()`
-- `request.getRawHeaderNames()`
-- `request.setNoDelay([noDelay])`
-- `request.setSocketKeepAlive([enable][, initialDelay])`
-- `request.uncork()`
-- `request.aborted`
-- `request.connection`
-- `request.destroyed`
-- `request.finished`
-- `request.host`
-- `request.maxHeadersCount`
-- `request.protocol`
-- `request.reusedSocket`
-- `request.socket`
-- `request.writableEnded`
-- `request.writableFinished`
-- `server.headersTimeout`
-- `server.keepAliveTimeout`
-- `server.listening`
-- `server.maxHeadersCount`
-- `server.maxRequestsPerSocket`
-- `server.requestTimeout`
-- `server.timeout`
-- `response.addTrailers(headers)`
-- `response.cork()`
-- `response.getHeaderNames()`
-- … and 39 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `http.createServer([options][, requestListener])` | `manifest:http.createServer` |
-| `http.get(options[, callback])` | `manifest:http.get` |
-| `http.get(url[, options][, callback])` | `manifest:http.get` |
-| `http.request(options[, callback])` | `manifest:http.request` |
-| `http.request(url[, options][, callback])` | `manifest:http.request` |
-| `agent.destroy()` | `manifest:http.destroy` |
-| `request.end([data[, encoding]][, callback])` | `manifest:http.end` |
-| `request.destroy([error])` | `manifest:http.destroy` |
-| `request.flushHeaders()` | `manifest:http.flushHeaders` |
-| `request.getHeader(name)` | `manifest:http.getHeader` |
-| `request.hasHeader(name)` | `manifest:http.hasHeader` |
-| `request.removeHeader(name)` | `manifest:http.removeHeader` |
-| `request.setHeader(name, value)` | `manifest:http.setHeader` |
-| `request.setTimeout(timeout[, callback])` | `ffi:js_http_set_timeout` |
-| `request.write(chunk[, encoding][, callback])` | `manifest:http.write` |
-| … | 37 more covered APIs |
-
-### node:zlib
-
-**Gap APIs: 78** · Already covered: 13
-
-#### Missing from Perry
-
-- `zlib.DeflateRaw`
-- `zlib.InflateRaw`
-- `zlib.Unzip`
-- `zlib.BrotliCompress`
-- `zlib.BrotliDecompress`
-- `zlib.createDeflate([options])`
-- `zlib.createDeflateRaw([options])`
-- `zlib.createGunzip([options])`
-- `zlib.createGzip([options])`
-- `zlib.createInflate([options])`
-- `zlib.createInflateRaw([options])`
-- `zlib.createUnzip([options])`
-- `zlib.createBrotliCompress([options])`
-- `zlib.createBrotliDecompress([options])`
-- `zlib.deflateRaw(buffer[, options], callback)`
-- `zlib.deflateRawSync(buffer[, options])`
-- `zlib.inflateRaw(buffer[, options], callback)`
-- `zlib.inflateRawSync(buffer[, options])`
-- `zlib.unzip(buffer[, options], callback)`
-- `zlib.unzipSync(buffer[, options])`
-- `zlib.brotliCompress(buffer[, options], callback)`
-- `zlib.brotliCompressSync(buffer[, options])`
-- `zlib.brotliDecompress(buffer[, options], callback)`
-- `zlib.brotliDecompressSync(buffer[, options])`
-- `zlib.close([callback])`
-- `zlib.flush([kind,] callback)`
-- `zlib.params(level, strategy, callback)`
-- `zlib.reset()`
-- `zlib.bytesWritten`
-- `zlib.bytesRead`
-- `zlib.crc32(data[, value])`
-- `zlib.constants`
-- `Z_NO_FLUSH`
-- `Z_PARTIAL_FLUSH`
-- `Z_SYNC_FLUSH`
-- `Z_FULL_FLUSH`
-- `Z_FINISH`
-- `Z_BLOCK`
-- `Z_TREES`
-- `Z_OK`
-- `Z_STREAM_END`
-- `Z_NEED_DICT`
-- … and 28 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `zlib.Deflate` | `ffi:js_zlib_deflate` |
-| `zlib.Gzip` | `ffi:js_zlib_gzip` |
-| `zlib.Gunzip` | `ffi:js_zlib_gunzip` |
-| `zlib.Inflate` | `ffi:js_zlib_inflate` |
-| `zlib.codes` | `manifest:zlib.codes` |
-| `zlib.deflate(buffer[, options], callback)` | `ffi:js_zlib_deflate` |
-| `zlib.deflateSync(buffer[, options])` | `ffi:js_zlib_deflate_sync` |
-| `zlib.gzip(buffer[, options], callback)` | `manifest:zlib.gzip` |
-| `zlib.gzipSync(buffer[, options])` | `ffi:js_zlib_gzip_sync` |
-| `zlib.gunzip(buffer[, options], callback)` | `manifest:zlib.gunzip` |
-| `zlib.gunzipSync(buffer[, options])` | `ffi:js_zlib_gunzip_sync` |
-| `zlib.inflate(buffer[, options], callback)` | `ffi:js_zlib_inflate` |
-| `zlib.inflateSync(buffer[, options])` | `ffi:js_zlib_inflate_sync` |
-
-### node:stream
-
-**Gap APIs: 75** · Already covered: 6
-
-#### Missing from Perry
-
-- `stream.compose(...streams)`
-- `stream.isReadable(stream)`
-- `stream.isWritable(stream)`
-- `stream.isErrored(stream)`
-- `stream.getDefaultHighWaterMark(objectMode)`
-- `stream.setDefaultHighWaterMark(objectMode, value)`
-- `stream.addAbortSignal(signal, stream)`
-- `stream.duplexPair([options])`
-- `stream.Readable.fromWeb(readableStream[, options])`
-- `stream.Readable.toWeb(streamReadable[, options])`
-- `stream.Readable.isDisturbed(stream)`
-- `stream.Writable.fromWeb(writableStream[, options])`
-- `stream.Writable.toWeb(streamWritable)`
-- `stream.Duplex.fromWeb(pair[, options])`
-- `stream.Duplex.toWeb(streamDuplex[, options])`
-- `readable.read([size])`
-- `readable.pause()`
-- `readable.resume()`
-- `readable.pipe(destination[, options])`
-- `readable.unpipe([destination])`
-- `readable.unshift(chunk[, encoding])`
-- `readable.setEncoding(encoding)`
-- `readable.isPaused()`
-- `readable.destroy([error])`
-- `readable.compose(stream[, options])`
-- `readable.iterator([options])`
-- `readable.map(fn[, options])`
-- `readable.filter(fn[, options])`
-- `readable.forEach(fn[, options])`
-- `readable.toArray([options])`
-- `readable.some(fn[, options])`
-- `readable.find(fn[, options])`
-- `readable.every(fn[, options])`
-- `readable.flatMap(fn[, options])`
-- `readable.drop(limit[, options])`
-- `readable.take(limit[, options])`
-- `readable.reduce(fn[, initial[, options]])`
-- `readable.push(chunk[, encoding])`
-- `readable.readable`
-- `readable.readableFlowing`
-- `readable.readableLength`
-- `readable.readableHighWaterMark`
-- `readable.readableAborted`
-- `readable.readableDidRead`
-- `readable.readableEncoding`
-- `readable.readableEnded`
-- `readable.readableObjectMode`
-- `readable.errored`
-- `readable.destroyed`
-- … and 26 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `stream.pipeline(source[, ...transforms], destination, callback)` | `manifest:stream.pipeline` |
-| `stream.pipeline(streams, callback)` | `manifest:stream.pipeline` |
-| `stream.finished(stream[, options], callback)` | `manifest:stream.finished` |
-| `stream.Readable.from(iterable[, options])` | `manifest:stream.from` |
-| `stream.Duplex.from(src)` | `manifest:stream.from` |
-
-### node:worker_threads
-
-**Gap APIs: 60** · Already covered: 4
-
-#### Missing from Perry
-
-- `worker_threads.getEnvironmentData(key)`
-- `worker_threads.setEnvironmentData(key[, value])`
-- `worker_threads.markAsUntransferable(object)`
-- `worker_threads.isMarkedAsUntransferable(object)`
-- `worker_threads.markAsUncloneable(object)`
-- `worker_threads.moveMessagePortToContext(port, ctx)`
-- `worker_threads.receiveMessageOnPort(port)`
-- `worker_threads.postMessageToThread(threadId, value[, transferList][, timeout])`
-- `worker_threads.isMainThread`
-- `worker_threads.isInternalThread`
-- `worker_threads.threadId`
-- `worker_threads.threadName`
-- `worker_threads.workerData`
-- `worker_threads.resourceLimits`
-- `worker_threads.SHARE_ENV`
-- `worker_threads.locks`
-- `new Worker(filename[, options])`
-- `worker.getHeapSnapshot([options])`
-- `worker.getHeapStatistics()`
-- `worker.cpuUsage([prev])`
-- `worker.startCpuProfile([options])`
-- `worker.startHeapProfile([options])`
-- `worker.ref()`
-- `worker.unref()`
-- `worker.terminate()`
-- `worker[Symbol.asyncDispose]()`
-- `worker.performance`
-- `worker.performance.eventLoopUtilization()`
-- `worker.resourceLimits`
-- `worker.threadId`
-- `worker.threadName`
-- `worker.stdin`
-- `worker.stdout`
-- `worker.stderr`
-- `'online'`
-- `'message'`
-- `'messageerror'`
-- `'error'`
-- `'exit'`
-- `port.close()`
-- `port.start()`
-- `port.ref()`
-- `port.unref()`
-- `port.hasRef()`
-- `'message'`
-- `'messageerror'`
-- `'close'`
-- `new MessageChannel()`
-- `channel.port1`
-- `channel.port2`
-- … and 10 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `worker_threads.parentPort` | `ffi:js_worker_threads_parent_port` |
-| `worker.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
-| `port.postMessage(value[, transferList])` | `stdlib worker_threads receiver methods` |
-| `bc.postMessage(message)` | `stdlib worker_threads receiver methods` |
-
-### node:stream/web
-
-**Gap APIs: 52** · Already covered: 16
-
-#### Missing from Perry
-
-- `new ReadableStream([underlyingSource[, strategy]])`
-- `readableStream.cancel([reason])`
-- `readableStream.pipeThrough(transform[, options])`
-- `readableStream.pipeTo(destination[, options])`
-- `readableStream.tee()`
-- `readableStream.values([options])`
-- `readableStream[Symbol.asyncIterator]()`
-- `new ReadableStreamDefaultReader(stream)`
-- `new ReadableStreamBYOBReader(stream)`
-- `byobReader.read(view[, options])`
-- `byobReader.cancel([reason])`
-- `controller.desiredSize`
-- `controller.close()`
-- `controller.enqueue([chunk])`
-- `controller.error([error])`
-- `byteController.byobRequest`
-- `byteController.desiredSize`
-- `byteController.close()`
-- `byteController.enqueue(chunk)`
-- `byteController.error([error])`
-- `byobRequest.view`
-- `byobRequest.respond(bytesWritten)`
-- `byobRequest.respondWithNewView(view)`
-- `new WritableStream([underlyingSink[, strategy]])`
-- `writableStream.locked`
-- `writableStream.abort([reason])`
-- `writableStream.close()`
-- `writableStream.getWriter()`
-- `new WritableStreamDefaultWriter(stream)`
-- `writableController.signal`
-- `writableController.error([error])`
-- `new TransformStream([transformer[, writableStrategy[, readableStrategy]]])`
-- `transformStream.readable`
-- `transformStream.writable`
-- `transformController.desiredSize`
-- `transformController.enqueue([chunk])`
-- `transformController.error([reason])`
-- `transformController.terminate()`
-- `new ByteLengthQueuingStrategy(init)`
-- `strategy.highWaterMark`
-- `strategy.size`
-- `new CountQueuingStrategy(init)`
-- `new TextEncoderStream()`
-- `textEncoderStream.encoding`
-- `textEncoderStream.readable`
-- `textEncoderStream.writable`
-- … and 6 more (see `runtime-parity.md` for the full list)
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `ReadableStream.from(iterable)` | `manifest:stream.from` |
-| `readableStream.locked` | `ffi:js_readable_stream_locked`; `test-parity/node-suite/stream/web/byob-reader.ts` |
-| `readableStream.getReader([options])` | `ffi:js_readable_stream_get_reader_with_options`; `test-parity/node-suite/stream/web/byob-on-byte-stream.ts`; `test-parity/node-suite/stream/web/byob-reader-getReader.ts` |
-| `reader.closed` | `ffi:js_reader_closed` |
-| `reader.read()` | `ffi:js_reader_read` |
-| `reader.cancel([reason])` | `ffi:js_reader_cancel` |
-| `reader.releaseLock()` | `ffi:js_reader_release_lock` |
-| `byobReader.closed` | `ffi:js_reader_closed`; `test-parity/node-suite/stream/web/byob-reader.ts` |
-| `byobReader.releaseLock()` | `ffi:js_reader_release_lock`; `test-parity/node-suite/stream/web/byob-reader.ts` |
-| `writer.closed` | `ffi:js_writer_closed` |
-| `writer.desiredSize` | `ffi:js_writer_desired_size` |
-| `writer.ready` | `ffi:js_writer_ready` |
-| `writer.write([chunk])` | `ffi:js_writer_write` |
-| `writer.close()` | `ffi:js_writer_close` |
-| `writer.abort([reason])` | `ffi:js_writer_abort` |
-| `writer.releaseLock()` | `ffi:js_writer_release_lock` |
+Across 49 `node:*` modules: **2222 covered / 296 gap** of 2518 catalogued APIs.
+
+> Web / global APIs and Bun-only APIs are tracked separately in
+> `runtime-parity.md`; their coverage is curated, not recomputed here.
+
+| Module | Covered | Gap | Total |
+|--------|--------:|----:|------:|
+| `node:perf_hooks` | 17 | 39 | 56 |
+| `node:http2` | 68 | 34 | 102 |
+| `node:test` | 59 | 34 | 93 |
+| `node:util` | 84 | 21 | 105 |
+| `node:tls` | 35 | 18 | 53 |
+| `node:v8` | 41 | 17 | 58 |
+| `node:process` | 106 | 12 | 118 |
+| `node:stream/web` | 58 | 10 | 68 |
+| `node:inspector` | 10 | 9 | 19 |
+| `node:module` | 41 | 9 | 50 |
+| `node:timers` | 8 | 9 | 17 |
+| `node:url` | 40 | 9 | 49 |
+| `node:fs` | 174 | 8 | 182 |
+| `node:readline/promises` | 0 | 7 | 7 |
+| `node:assert` | 21 | 6 | 27 |
+| `node:buffer` | 102 | 6 | 108 |
+| `node:cluster` | 29 | 6 | 35 |
+| `node:events` | 35 | 6 | 41 |
+| `node:trace_events` | 0 | 6 | 6 |
+| `node:crypto` | 133 | 5 | 138 |
+| `node:tty` | 15 | 4 | 19 |
+| `node:https` | 21 | 3 | 24 |
+| `node:child_process` | 35 | 2 | 37 |
+| `node:readline` | 27 | 2 | 29 |
+| `node:sqlite` | 50 | 2 | 52 |
+| `node:timers/promises` | 3 | 2 | 5 |
+| `node:worker_threads` | 62 | 2 | 64 |
+| `node:async_hooks` | 28 | 1 | 29 |
+| `node:console` | 22 | 1 | 23 |
+| `node:dgram` | 27 | 1 | 28 |
+| `node:fs/promises` | 60 | 1 | 61 |
+| `node:http` | 140 | 1 | 141 |
+| `node:net` | 77 | 1 | 78 |
+| `node:stream` | 80 | 1 | 81 |
+| `node:zlib` | 90 | 1 | 91 |
+| `node:diagnostics_channel` | 30 | 0 | 30 |
+| `node:dns` | 53 | 0 | 53 |
+| `node:dns/promises` | 21 | 0 | 21 |
+| `node:domain` | 10 | 0 | 10 |
+| `node:os` | 209 | 0 | 209 |
+| `node:path` | 16 | 0 | 16 |
+| `node:punycode` | 8 | 0 | 8 |
+| `node:querystring` | 7 | 0 | 7 |
+| `node:repl` | 17 | 0 | 17 |
+| `node:stream/consumers` | 6 | 0 | 6 |
+| `node:stream/promises` | 3 | 0 | 3 |
+| `node:string_decoder` | 6 | 0 | 6 |
+| `node:vm` | 32 | 0 | 32 |
+| `node:wasi` | 6 | 0 | 6 |
+| **Total** | **2222** | **296** | **2518** |
+
+## Per-module gaps
+
+Only modules with at least one remaining gap are listed, in descending
+gap-size order. Modules omitted here have **zero** catalogued gaps.
 
 ### node:perf_hooks
 
-**Gap APIs: 55** · Already covered: 1
+**Covered: 17 · Gap: 39**
 
-#### Missing from Perry
-
-- `performance.mark(name[, options])`
-- `performance.measure(name[, startMarkOrOptions[, endMark]])`
 - `performance.clearMarks([name])`
 - `performance.clearMeasures([name])`
 - `performance.clearResourceTimings([name])`
@@ -999,17 +96,11 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `performance.getEntriesByType(type)`
 - `performance.eventLoopUtilization([util1[, util2]])`
 - `performance.setResourceTimingBufferSize(maxSize)`
-- `performance.timerify(fn[, options])`
 - `performance.markResourceTiming(...)`
 - `performance.toJSON()`
 - `performance.nodeTiming`
 - `performance.timeOrigin`
-- `entry.name`
 - `entry.entryType`
-- `entry.startTime`
-- `entry.duration`
-- `entry.detail`
-- `entry.detail`
 - `entry.flags`
 - `entry.kind`
 - `nodeStart`
@@ -1020,18 +111,13 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `loopExit`
 - `idleTime`
 - `uvMetricsInfo`
-- `toJSON()`
 - `new PerformanceObserver(callback)`
 - `PerformanceObserver.supportedEntryTypes`
-- `observer.observe(options)`
-- `observer.disconnect()`
-- `observer.takeRecords()`
 - `list.getEntries()`
 - `list.getEntriesByName(name[, type])`
 - `list.getEntriesByType(type)`
 - `histogram.mean`
 - `histogram.stddev`
-- `histogram.percentile(percentile)`
 - `histogram.percentileBigInt(percentile)`
 - `histogram.reset()`
 - `histogram.enable()`
@@ -1039,719 +125,225 @@ Behavior caveats remain around live terminal integration, readline inheritance d
 - `histogram[Symbol.dispose]()`
 - `histogram.record(val)`
 - `histogram.recordDelta()`
-- … and 5 more (see `runtime-parity.md` for the full list)
+- `histogram.add(other)`
+- `perf_hooks.eventLoopUtilization([util1[, util2]])`
 
-#### Covered (sampled)
+### node:http2
 
-| API | Coverage source |
-|-----|-----------------|
-| `performance.now()` | `expr:PerformanceNow` |
+**Covered: 68 · Gap: 34**
+
+- `session.originSet`
+- `serverSession.altsvc(alt, originOrStream)`
+- `stream.id`
+- `stream.sentInfoHeaders`
+- `stream.sentTrailers`
+- `serverStream.pushAllowed`
+- `http2Server[Symbol.asyncDispose]()`
+- `http2Server.timeout`
+- `http2Server.updateSettings([settings])`
+- `request.authority`
+- `request.complete`
+- `request.httpVersion`
+- `request.rawHeaders`
+- `request.rawTrailers`
+- `request.scheme`
+- `request.trailers`
+- `response.addTrailers(headers)`
+- `response.appendHeader(name, value)`
+- `response.createPushResponse(headers, callback)`
+- `response.finished`
+- `response.getHeader(name)`
+- `response.getHeaderNames()`
+- `response.hasHeader(name)`
+- `response.removeHeader(name)`
+- `response.req`
+- `response.sendDate`
+- `response.setHeader(name, value)`
+- `response.statusCode`
+- `response.statusMessage`
+- `response.writableEnded`
+- `response.write(chunk[, encoding][, callback])`
+- `response.writeContinue()`
+- `response.writeEarlyHints(hints)`
+- `response.writeHead(statusCode[, statusMessage][, headers])`
+
+### node:test
+
+**Covered: 59 · Gap: 34**
+
+- `t.runOnly(shouldRunOnlyTests)`
+- `t.waitFor(condition[, options])`
+- `t.fullName`
+- `t.filePath`
+- `t.passed`
+- `t.attempt`
+- `t.workerId`
+- `s.fullName`
+- `s.filePath`
+- `s.passed`
+- `s.attempt`
+- `mock.module(specifier[, options])`
+- `mock.accesses`
+- `mock.accessCount()`
+- `mock.resetAccesses()`
+- `tap`
+- `dot`
+- `junit`
+- `lcov`
+- `'test:start'`
+- `'test:plan'`
+- `'test:pass'`
+- `'test:fail'`
+- `'test:complete'`
+- `'test:diagnostic'`
+- `'test:coverage'`
+- `'test:enqueue'`
+- `'test:dequeue'`
+- `'test:watch:drained'`
+- `'test:watch:restarted'`
+- `'test:stderr'`
+- `'test:stdout'`
+- `'test:summary'`
+- `'test:interrupted'`
+
+### node:util
+
+**Covered: 84 · Gap: 21**
+
+- `MIMEType.prototype.params`
+- `util.inspect.custom`
+- `util.inspect.defaultOptions`
+- `util.inspect.styles`
+- `util.inspect.colors`
+- `util.promisify.custom`
+- `util.isArray(object)`
+- `util.isBoolean(object)`
+- `util.isBuffer(object)`
+- `util.isError(object)`
+- `util.isFunction(object)`
+- `util.isNull(object)`
+- `util.isNullOrUndefined(object)`
+- `util.isNumber(object)`
+- `util.isObject(object)`
+- `util.isPrimitive(object)`
+- `util.isString(object)`
+- `util.isSymbol(object)`
+- `util.isUndefined(object)`
+- `util.print(...args)`
+- `util.puts(...args)`
 
 ### node:tls
 
-**Gap APIs: 38** · Already covered: 15
-
-#### Missing from Perry
+**Covered: 35 · Gap: 18**
 
 - `tls.createSecurePair([context][, isServer][, requestCert][, rejectUnauthorized][, options])`
-- `tls.createServer([options][, secureConnectionListener])`
 - `server.addContext(hostname, context)`
-- `server.address()`
-- `server.close([callback])`
-- `server.getTicketKeys()`
-- `server.listen()`
-- `server.setSecureContext(options)`
-- `server.setTicketKeys(keys)`
-- `new tls.TLSSocket(socket[, options])`
-- `tlsSocket.authorized`
-- `tlsSocket.authorizationError`
-- `tlsSocket.encrypted`
 - `tlsSocket.localAddress`
 - `tlsSocket.localPort`
 - `tlsSocket.remoteAddress`
 - `tlsSocket.remoteFamily`
 - `tlsSocket.remotePort`
-- `tlsSocket.address()`
 - `tlsSocket.disableRenegotiation()`
 - `tlsSocket.enableTrace()`
-- `tlsSocket.exportKeyingMaterial(length, label[, context])`
-- `tlsSocket.getCertificate()`
-- `tlsSocket.getCipher()`
 - `tlsSocket.getEphemeralKeyInfo()`
 - `tlsSocket.getFinished()`
-- `tlsSocket.getPeerCertificate([detailed])`
 - `tlsSocket.getPeerFinished()`
 - `tlsSocket.getPeerX509Certificate()`
-- `tlsSocket.getProtocol()`
-- `tlsSocket.getSession()`
 - `tlsSocket.getSharedSigalgs()`
 - `tlsSocket.getTLSTicket()`
 - `tlsSocket.getX509Certificate()`
-- `tlsSocket.isSessionReused()`
 - `tlsSocket.renegotiate(options, callback)`
 - `tlsSocket.setKeyCert(context)`
-- `tlsSocket.setMaxSendFragment(size)`
 
-#### Covered (sampled)
+### node:v8
 
-| API | Coverage source |
-|-----|-----------------|
-| `tls.connect(options[, callback])` | `ffi:js_tls_connect` |
-| `tls.connect(port[, host][, options][, callback])` | `ffi:js_tls_connect` |
-| `tls.connect(path[, options][, callback])` | `ffi:js_tls_connect` |
-| `tls.checkServerIdentity(hostname, cert)` | `manifest:tls.checkServerIdentity`; `test-parity/node-suite/tls/identity/check-server-identity.ts` |
-| `tls.createSecureContext([options])` | `manifest:tls.createSecureContext`; `test-parity/node-suite/tls/context/secure-context.ts` |
-| `tls.setDefaultCACertificates(certs)` | `manifest:tls.setDefaultCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.getCACertificates([type])` | `manifest:tls.getCACertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.getCiphers()` | `manifest:tls.getCiphers`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.DEFAULT_ECDH_CURVE` | `manifest:tls.DEFAULT_ECDH_CURVE`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.DEFAULT_MAX_VERSION` | `manifest:tls.DEFAULT_MAX_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.DEFAULT_MIN_VERSION` | `manifest:tls.DEFAULT_MIN_VERSION`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.DEFAULT_CIPHERS` | `manifest:tls.DEFAULT_CIPHERS`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.rootCertificates` | `manifest:tls.rootCertificates`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.CLIENT_RENEG_LIMIT` | `manifest:tls.CLIENT_RENEG_LIMIT`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
-| `tls.CLIENT_RENEG_WINDOW` | `manifest:tls.CLIENT_RENEG_WINDOW`; `test-parity/node-suite/tls/helpers/inventory-and-ca.ts` |
+**Covered: 41 · Gap: 17**
 
-### node:fs/promises
+- `v8.startHeapProfile([options])`
+- `new Serializer()`
+- `transferArrayBuffer(id, arrayBuffer)`
+- `_writeHostObject(object)`
+- `_getDataCloneError(message)`
+- `_getSharedArrayBufferId(sab)`
+- `_setTreatArrayBufferViewsAsHostObjects(flag)`
+- `new Deserializer(buffer)`
+- `transferArrayBuffer(id, arrayBuffer)`
+- `getWireFormatVersion()`
+- `_readHostObject()`
+- `v8.DefaultSerializer`
+- `v8.DefaultDeserializer`
+- `new GCProfiler()`
+- `[Symbol.dispose]()`
+- `[Symbol.dispose]()`
+- `[Symbol.asyncDispose]()`
 
-**Gap APIs: 0** · Already covered: 61
+### node:process
 
-The FileHandle stream-iter tail is runtime-backed for the direct no-transform source/writer paths: `filehandle.pull([options])`, `filehandle.pullSync([options])`, and `filehandle.writer([options])`. Transform pipelines passed to `pull`/`pullSync` remain outside Perry's current support boundary; direct FileHandle byte iteration, writer sync/async methods, options, and auto-close lifecycle are covered by focused parity fixtures.
+**Covered: 106 · Gap: 12**
 
-#### Covered (sampled)
+- `process.mainModule`
+- `process.features.uv`
+- `process.noDeprecation`
+- `process.throwDeprecation`
+- `process.traceDeprecation`
+- `process.traceProcessWarnings`
+- `'uncaughtExceptionMonitor'`
+- `'unhandledRejection'`
+- `'rejectionHandled'`
+- `'workerMessage'`
+- `'SIGWINCH'`
+- `'SIGBREAK'`
 
-| API | Coverage source |
-|-----|-----------------|
-| `fsPromises.access(path[, mode])` | `manifest:fs/promises.access` |
-| `fsPromises.appendFile(path, data[, options])` | `manifest:fs/promises.appendFile` |
-| `fsPromises.chmod(path, mode)` | `manifest:fs/promises.chmod` |
-| `fsPromises.chown(path, uid, gid)` | `manifest:fs/promises.chown` |
-| `fsPromises.copyFile(src, dest[, mode])` | `manifest:fs/promises.copyFile` |
-| `fsPromises.cp(src, dest[, options])` | `manifest:fs/promises.cp` |
-| `fsPromises.glob(pattern[, options])` | `manifest:fs/promises.glob` |
-| `fsPromises.lchmod(path, mode)` | `manifest:fs/promises.lchmod` |
-| `fsPromises.lchown(path, uid, gid)` | `manifest:fs/promises.lchown` |
-| `fsPromises.link(existingPath, newPath)` | `manifest:fs/promises.link` |
-| `fsPromises.lstat(path[, options])` | `manifest:fs/promises.lstat` |
-| `fsPromises.lutimes(path, atime, mtime)` | `manifest:fs/promises.lutimes` |
-| `fsPromises.mkdir(path[, options])` | `manifest:fs/promises.mkdir` |
-| `fsPromises.mkdtemp(prefix[, options])` | `manifest:fs/promises.mkdtemp` |
-| `fsPromises.mkdtempDisposable(prefix[, options])` | `manifest:fs/promises.mkdtempDisposable` |
-| `fsPromises.open(path, flags[, mode])` | `manifest:fs/promises.open` |
-| `fsPromises.opendir(path[, options])` | `manifest:fs/promises.opendir` |
-| `fsPromises.readdir(path[, options])` | `manifest:fs/promises.readdir` |
-| `fsPromises.readFile(path[, options])` | `manifest:fs/promises.readFile` |
-| `fsPromises.readlink(path[, options])` | `manifest:fs/promises.readlink` |
-| `fsPromises.realpath(path[, options])` | `manifest:fs/promises.realpath` |
-| `fsPromises.rename(oldPath, newPath)` | `manifest:fs/promises.rename` |
-| `fsPromises.rm(path[, options])` | `manifest:fs/promises.rm` |
-| `fsPromises.rmdir(path[, options])` | `manifest:fs/promises.rmdir` |
-| `fsPromises.stat(path[, options])` | `manifest:fs/promises.stat` |
-| `fsPromises.statfs(path[, options])` | `manifest:fs/promises.statfs` |
-| `fsPromises.symlink(target, path[, type])` | `manifest:fs/promises.symlink` |
-| `fsPromises.truncate(path[, len])` | `manifest:fs/promises.truncate` |
-| `fsPromises.unlink(path)` | `manifest:fs/promises.unlink` |
-| `fsPromises.utimes(path, atime, mtime)` | `manifest:fs/promises.utimes` |
-| `fsPromises.watch(filename[, options])` | `manifest:fs/promises.watch` |
-| `fsPromises.writeFile(file, data[, options])` | `manifest:fs/promises.writeFile` |
-| `fsPromises.constants` | `manifest:fs/promises.constants` |
-| `filehandle.appendFile(data[, options])` | `manifest:fs.appendFile` |
-| `filehandle.fd` | `ffi:js_fs_filehandle_open` |
-| `filehandle.chmod(mode)` | `ffi:js_fs_filehandle_open` |
-| `filehandle.chown(uid, gid)` | `ffi:js_fs_filehandle_open` |
-| `filehandle.close()` | `ffi:js_fs_filehandle_open` |
-| `filehandle.createReadStream([options])` | `manifest:fs.createReadStream` |
-| `filehandle.createWriteStream([options])` | `manifest:fs.createWriteStream` |
-| `filehandle.datasync()` | `ffi:js_fs_filehandle_open` |
-| `filehandle.read(buffer, offset, length, position)` | `ffi:js_fs_filehandle_open` |
-| `filehandle.read([options])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.read(buffer[, options])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.readLines([options])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.readFile(options)` | `manifest:fs.readFile` |
-| `filehandle.readv(buffers[, position])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.stat([options])` | `manifest:fs.stat` |
-| `filehandle.sync()` | `ffi:js_fs_filehandle_open` |
-| `filehandle.truncate(len)` | `ffi:js_fs_filehandle_open` |
-| `filehandle.utimes(atime, mtime)` | `ffi:js_fs_filehandle_open` |
-| `filehandle.write(buffer, offset[, length[, position]])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.write(buffer[, options])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.write(string[, position[, encoding]])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.writeFile(data, options)` | `manifest:fs.writeFile` |
-| `filehandle.writev(buffers[, position])` | `ffi:js_fs_filehandle_open` |
-| `filehandle.pull([options])` | `manifest:fs/promises.pull` |
-| `filehandle.pullSync([options])` | `manifest:fs/promises.pullSync` |
-| `filehandle.writer([options])` | `manifest:fs/promises.writer` |
+### node:stream/web
 
-### node:sqlite
+**Covered: 58 · Gap: 10**
 
-**Gap APIs: 42** · Already covered: 10
+- `new ReadableStream([underlyingSource[, strategy]])`
+- `new ReadableStreamDefaultReader(stream)`
+- `new ReadableStreamBYOBReader(stream)`
+- `new WritableStream([underlyingSink[, strategy]])`
+- `new WritableStreamDefaultWriter(stream)`
+- `new TransformStream([transformer[, writableStrategy[, readableStrategy]]])`
+- `new ByteLengthQueuingStrategy(init)`
+- `new CountQueuingStrategy(init)`
+- `new TextEncoderStream()`
+- `new TextDecoderStream([encoding[, options]])`
 
-#### Covered by Perry
+### node:inspector
 
-- `new DatabaseSync(path)` (incl. `:memory:`) → rusqlite connection
-- `db.exec(sql)` / `db.prepare(sql)` → `StatementSync` / `db.close()`
-- `stmt.run(...params)` → `{ changes, lastInsertRowid }`
-- `stmt.get(...params)` / `stmt.all(...params)` → row object(s)
-- `stmt.iterate(...params)` (array-backed) / `stmt.columns()` metadata
-- `db.enableLoadExtension(allow)` / `db.loadExtension(path)` extension-loading controls
+**Covered: 10 · Gap: 9**
 
-#### Missing from Perry
-
-- `db.function(name[, options], fn)`
-- `db.aggregate(name, options)`
-- `db.applyChangeset(changeset[, options])`
-- `db.createSession([options])`
-- `db.createTagStore([maxSize])`
-- `db.location([dbName])`
-- `db.enableDefensive(active)`
-- `db.serialize([dbName])`
-- `db.deserialize(buffer[, options])`
-- `db.setAuthorizer(callback)`
-- `db.isOpen`
-- `db.isTransaction`
-- `db.limits`
-- `db[Symbol.dispose]()`
-- `stmt.setAllowBareNamedParameters(enabled)`
-- `stmt.setAllowUnknownNamedParameters(enabled)`
-- `stmt.setReadBigInts(enabled)`
-- `stmt.setReturnArrays(enabled)`
-- `stmt.sourceSQL`
-- `stmt.expandedSQL`
-- `session.changeset()`
-- `session.patchset()`
-- `session[Symbol.dispose]()`
-- `tagStore.get`
-- `tagStore.iterate`
-- `tagStore.run`
-- `tagStore.size`
-- `tagStore.capacity`
-- `tagStore.db`
-- `tagStore.clear()`
-- `sqlite.backup(sourceDb, path[, options])`
-- `SQLITE_CHANGESET_DATA`
-- `SQLITE_CHANGESET_NOTFOUND`
-- `SQLITE_CHANGESET_CONFLICT`
-- `SQLITE_CHANGESET_CONSTRAINT`
-- `SQLITE_CHANGESET_FOREIGN_KEY`
-- `SQLITE_CHANGESET_OMIT`
-- `SQLITE_CHANGESET_REPLACE`
-- `SQLITE_CHANGESET_ABORT`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `db.close()` | `ffi:js_sqlite_close` |
-| `db.exec(sql)` | `ffi:js_sqlite_exec` |
-| `db.prepare(sql[, options])` | `ffi:js_sqlite_prepare` |
-| `db.open()` | `ffi:js_sqlite_open` |
-| `stmt.all([namedParameters][, ...anonymousParameters])` | `ffi:js_sqlite_stmt_all` |
-| `stmt.get([namedParameters][, ...anonymousParameters])` | `ffi:js_sqlite_stmt_get` |
-| `stmt.run([namedParameters][, ...anonymousParameters])` | `ffi:js_sqlite_stmt_run` |
-| `session.close()` | `ffi:js_sqlite_close` |
-
-### node:url
-
-**Gap APIs: 42** · Already covered: 7
-
-#### Missing from Perry
-
-- `new URL(input[, base])`
-- `url.hash`
-- `url.host`
-- `url.hostname`
-- `url.href`
-- `url.origin`
-- `url.password`
-- `url.pathname`
-- `url.port`
-- `url.protocol`
-- `url.search`
-- `url.searchParams`
-- `url.username`
-- `url.toString()`
-- `url.toJSON()`
-- `URL.createObjectURL(blob)`
-- `URL.revokeObjectURL(id)`
-- `new URLSearchParams()`
-- `new URLSearchParams(string)`
-- `new URLSearchParams(obj)`
-- `new URLSearchParams(iterable)`
-- `params.append(name, value)`
-- `params.delete(name[, value])`
-- `params.entries()`
-- `params.forEach(fn[, thisArg])`
-- `params.get(name)`
-- `params.getAll(name)`
-- `params.has(name[, value])`
-- `params.keys()`
-- `params.set(name, value)`
-- `params.size`
-- `params.sort()`
-- `params.toString()`
-- `params.values()`
-- `params[Symbol.iterator]()`
-- `url.domainToASCII(domain)`
-- `url.domainToUnicode(domain)`
-- `url.urlToHttpOptions(url)`
-- `url.resolve(from, to)`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `URL.canParse(input[, base])` | `expr:UrlCanParse` |
-| `URL.parse(input[, base])` | `manifest:url.parse` |
-| `url.fileURLToPath(url[, options])` | `manifest:url.fileURLToPath` |
-| `url.pathToFileURL(path[, options])` | `manifest:url.pathToFileURL` |
-| `url.format(URL[, options])` | `manifest:url.format` |
-| `url.parse(urlString[, parseQueryString[, slashesDenoteHost]])` | `manifest:url.parse` |
-| `url.format(urlObject)` | `manifest:url.format` |
-
-### node:buffer
-
-**Gap APIs: 39** · Already covered: 69
-
-#### Missing from Perry
-
-- `Buffer.allocUnsafeSlow(size)`
-- `Buffer.isEncoding(encoding)`
-- `Buffer.poolSize`
-- `buf.readBigInt64BE([offset])`
-- `buf.readBigInt64LE([offset])`
-- `buf.readBigUInt64BE([offset])`
-- `buf.readBigUInt64LE([offset])`
-- `buf.writeBigInt64BE(value[, offset])`
-- `buf.writeBigInt64LE(value[, offset])`
-- `buf.writeBigUInt64BE(value[, offset])`
-- `buf.writeBigUInt64LE(value[, offset])`
-- `buf.entries()`
-- `buf.keys()`
-- `buf.lastIndexOf(value[, start[, end]][, encoding])`
-- `buf.subarray([start[, end]])`
-- `buf.toJSON()`
-- `buf.values()`
-- `buf[index]`
-- `buf.buffer`
-- `buf.byteOffset`
-- `buf.parent`
-- `new buffer.Blob([sources[, options]])`
-- `new buffer.File(sources, fileName[, options])`
-- `file.name`
-- `file.lastModified`
-- `buffer.atob(data)`
-- `buffer.btoa(data)`
-- `buffer.isAscii(input)`
-- `buffer.isUtf8(input)`
-- `buffer.resolveObjectURL(id)`
-- `buffer.transcode(source, fromEnc, toEnc)`
-- `buffer.kMaxLength`
-- `buffer.kStringMaxLength`
-- `buffer.constants.MAX_LENGTH`
-- `buffer.constants.MAX_STRING_LENGTH`
-- `'base64'`
-- `'base64url'`
-- `'hex'`
-- `'ascii'`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `Buffer.alloc(size[, fill[, encoding]])` | `manifest:buffer.alloc` |
-| `Buffer.allocUnsafe(size)` | `manifest:buffer.allocUnsafe` |
-| `Buffer.byteLength(string[, encoding])` | `manifest:buffer.byteLength` |
-| `Buffer.compare(buf1, buf2)` | `ffi:js_buffer_compare` |
-| `Buffer.concat(list[, totalLength])` | `manifest:buffer.concat` |
-| `Buffer.copyBytesFrom(view[, offset[, length]])` | `ffi:js_buffer_copy_bytes_from` |
-| `Buffer.from(array)` | `manifest:buffer.from` |
-| `Buffer.from(arrayBuffer[, byteOffset[, length]])` | `manifest:buffer.from` |
-| `Buffer.from(buffer)` | `manifest:buffer.from` |
-| `Buffer.from(object[, offsetOrEncoding[, length]])` | `manifest:buffer.from` |
-| `Buffer.from(string[, encoding])` | `manifest:buffer.from` |
-| `Buffer.isBuffer(obj)` | `manifest:buffer.isBuffer` |
-| `buffer.INSPECT_MAX_BYTES` | `manifest:buffer.INSPECT_MAX_BYTES` |
-| `buf.readDoubleBE([offset])` | `ffi:js_buffer_read_double_be` |
-| `buf.readDoubleLE([offset])` | `ffi:js_buffer_read_double_le` |
-| `buf.readFloatBE([offset])` | `ffi:js_buffer_read_float_be` |
-| `buf.readFloatLE([offset])` | `ffi:js_buffer_read_float_le` |
-| … | 52 more covered APIs |
-
-### node:events
-
-**Gap APIs: 36** · Already covered: 5
-
-#### Missing from Perry
-
-- `EventEmitter.prototype.addListener(eventName, listener)`
-- `EventEmitter.prototype.eventNames()`
-- `EventEmitter.prototype.getMaxListeners()`
-- `EventEmitter.prototype.listenerCount(eventName[, listener])`
-- `EventEmitter.prototype.listeners(eventName)`
-- `EventEmitter.prototype.off(eventName, listener)`
-- `EventEmitter.prototype.once(eventName, listener)`
-- `EventEmitter.prototype.prependListener(eventName, listener)`
-- `EventEmitter.prototype.prependOnceListener(eventName, listener)`
-- `EventEmitter.prototype.rawListeners(eventName)`
-- `EventEmitter.prototype.setMaxListeners(n)`
-- `EventEmitter.prototype[Symbol.for('nodejs.rejection')]()`
-- `EventEmitterAsyncResource.prototype.asyncId`
-- `EventEmitterAsyncResource.prototype.asyncResource`
-- `EventEmitterAsyncResource.prototype.triggerAsyncId`
-- `EventEmitterAsyncResource.prototype.emitDestroy()`
-- `Event.prototype.composedPath()`
-- `Event.prototype.initEvent(type, bubbles, cancelable)`
-- `Event.prototype.preventDefault()`
-- `Event.prototype.stopImmediatePropagation()`
-- `Event.prototype.stopPropagation()`
-- `EventTarget.prototype.addEventListener(type, listener[, options])`
-- `EventTarget.prototype.dispatchEvent(event)`
-- `EventTarget.prototype.removeEventListener(type, listener[, options])`
-- `events.once(emitter, name[, options])`
-- `events.getEventListeners(emitterOrTarget, eventName)`
-- `events.getMaxListeners(emitterOrTarget)`
-- `events.setMaxListeners(n[, ...eventTargets])`
-- `events.listenerCount(emitterOrTarget, eventName)`
-- `events.addAbortListener(signal, listener)`
-- `events.defaultMaxListeners`
-- `events.errorMonitor`
-- `events.captureRejections`
-- `events.captureRejectionSymbol`
-- `'newListener'`
-- `'removeListener'`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `EventEmitter.prototype.emit(eventName[, ...args])` | `manifest:events.emit` |
-| `EventEmitter.prototype.on(eventName, listener)` | `manifest:events.on` |
-| `EventEmitter.prototype.removeAllListeners([eventName])` | `manifest:events.removeAllListeners` |
-| `EventEmitter.prototype.removeListener(eventName, listener)` | `manifest:events.removeListener` |
-| `events.on(emitter, eventName[, options])` | `manifest:events.on` |
-
-### node:child_process
-
-**Gap APIs: 28** · Already covered: 9
-
-#### Missing from Perry
-
-- `subprocess.channel`
-- `subprocess.connected`
-- `subprocess.exitCode`
-- `subprocess.killed`
-- `subprocess.pid`
-- `subprocess.signalCode`
-- `subprocess.spawnargs`
-- `subprocess.spawnfile`
-- `subprocess.stdin`
-- `subprocess.stdout`
-- `subprocess.stderr`
-- `subprocess.stdio`
-- `subprocess.uid`
-- `subprocess.gid`
-- `subprocess.kill([signal])`
-- `subprocess.send(message[, sendHandle[, options]][, callback])`
-- `subprocess.disconnect()`
-- `subprocess.ref()`
-- `subprocess.unref()`
-- `subprocess[Symbol.dispose]()`
-- `'spawn'`
-- `'error'`
-- `'exit'`
-- `'close'`
-- `'disconnect'`
-- `'message'`
-- `child_process.ChildProcess`
-- `child_process.Stream`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `child_process.spawn(command[, args][, options])` | `manifest:child_process.spawn` |
-| `child_process.exec(command[, options][, callback])` | `manifest:child_process.exec` |
-| `child_process.execFile(file[, args][, options][, callback])` | `manifest:child_process.execFile` |
-| `child_process.fork(modulePath[, args][, options])` | `manifest:child_process.fork` |
-| `child_process.spawnSync(command[, args][, options])` | `manifest:child_process.spawnSync` |
-| `child_process.execSync(command[, options])` | `manifest:child_process.execSync` |
-| `child_process.execFileSync(file[, args][, options])` | `manifest:child_process.execFileSync` |
-| `util.promisify(exec)` | `manifest:util.promisify` |
-| `util.promisify(execFile)` | `manifest:util.promisify` |
-
-### node:assert (and node:assert/strict)
-
-**Gap APIs: 26** · Already covered: 1
-
-#### Missing from Perry
-
-- `assert(value[, message])`
-- `assert.fail([message])`
-- `assert.equal(actual, expected[, message])`
-- `assert.strictEqual(actual, expected[, message])`
-- `assert.notEqual(actual, expected[, message])`
-- `assert.notStrictEqual(actual, expected[, message])`
-- `assert.deepEqual(actual, expected[, message])`
-- `assert.deepStrictEqual(actual, expected[, message])`
-- `assert.notDeepEqual(actual, expected[, message])`
-- `assert.notDeepStrictEqual(actual, expected[, message])`
-- `assert.partialDeepStrictEqual(actual, expected[, message])`
-- `assert.match(string, regexp[, message])`
-- `assert.doesNotMatch(string, regexp[, message])`
-- `assert.throws(fn[, error][, message])`
-- `assert.doesNotThrow(fn[, error][, message])`
-- `assert.rejects(asyncFn[, error][, message])`
-- `assert.doesNotReject(asyncFn[, error][, message])`
-- `assert.ifError(value)`
-- `assert.AssertionError`
-- `assert.Assert`
-- `assert.CallTracker`
-- `tracker.calls(fn[, exact])`
-- `tracker.getCalls(fn)`
-- `tracker.report()`
-- `tracker.reset([fn])`
-- `tracker.verify()`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `assert.ok(value[, message])` | `rt:js_console_assert (partial)` |
-
-### node:readline
-
-**Gap APIs: 10** · Already covered: 19
-
-#### Missing from Perry
-
-- `rl[Symbol.dispose]()`
-- `rl[Symbol.asyncIterator]()`
-- `rl.cursor`
-- `'pause'`
-- `'resume'`
-- `'history'`
-- `'SIGINT'`
-- `'SIGTSTP'`
-- `'SIGCONT'`
-- `'error'`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `readline.createInterface(options)` | `ffi:js_readline_create_interface` |
-| `readline.clearLine(stream, dir[, callback])` | `rt:js_readline_clear_line_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
-| `readline.clearScreenDown(stream[, callback])` | `rt:js_readline_clear_screen_down_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
-| `readline.cursorTo(stream, x[, y][, callback])` | `rt:js_readline_cursor_to_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
-| `readline.moveCursor(stream, dx, dy[, callback])` | `rt:js_readline_move_cursor_args`; `test-parity/node-suite/readline/helpers/terminal-helpers.ts` |
-| `readline.emitKeypressEvents(stream[, interface])` | `rt:js_readline_emit_keypress_events_args`; `test-parity/node-suite/readline/helpers/emit-keypress-events.ts` |
-| `rl.close()` | `manifest:readline.close` |
-| `rl.pause()` | `ffi:js_readline_pause`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.resume()` | `ffi:js_readline_resume`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.prompt([preserveCursor])` | `ffi:js_readline_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.setPrompt(prompt)` | `ffi:js_readline_set_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.getPrompt()` | `ffi:js_readline_get_prompt`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.question(query[, options], callback)` | `manifest:readline.question` |
-| `rl.write(data[, key])` | `ffi:js_readline_write`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.getCursorPos()` | `ffi:js_readline_get_cursor_pos`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.line` | `ffi:js_readline_line`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `rl.terminal` | `ffi:js_readline_terminal`; `test-parity/node-suite/readline/interface/control-methods.ts` |
-| `'line'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
-| `'close'` | `ffi:js_readline_on`; `test-parity/node-suite/readline/interface/stream-line-close-events.ts` |
-
-### node:async_hooks
-
-**Gap APIs: 23** · Already covered: 6
-
-#### Missing from Perry
-
-- `async_hooks.createHook(options)`
-- `async_hooks.executionAsyncId()`
-- `async_hooks.executionAsyncResource()`
-- `async_hooks.triggerAsyncId()`
-- `init(asyncId, type, triggerAsyncId, resource)`
-- `before(asyncId)`
-- `after(asyncId)`
-- `destroy(asyncId)`
-- `promiseResolve(asyncId)`
-- `async_hooks.asyncWrapProviders`
-- `asyncHook.enable()`
-- `new AsyncLocalStorage()`
-- `als.bind(fn)`
-- `als.snapshot()`
-- `AsyncLocalStorage.bind(fn)`
-- `AsyncLocalStorage.snapshot()`
-- `new AsyncResource(type[, options])`
-- `ar.asyncId()`
-- `ar.triggerAsyncId()`
-- `ar.runInAsyncScope(fn, thisArg, ...args)`
-- `ar.emitDestroy()`
-- `ar.bind(fn)`
-- `AsyncResource.bind(fn)`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `asyncHook.disable()` | `manifest:async_hooks.disable` |
-| `als.getStore()` | `manifest:async_hooks.getStore` |
-| `als.run(store, callback, ...args)` | `manifest:async_hooks.run` |
-| `als.exit(callback, ...args)` | `manifest:async_hooks.exit` |
-| `als.enterWith(store)` | `manifest:async_hooks.enterWith` |
-| `als.disable()` | `manifest:async_hooks.disable` |
-
-### node:wasi
-
-**Gap APIs: 0** · Already covered: 6
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `new WASI([options])` | `manifest:wasi.WASI`; `test-parity/node-suite/wasi/classes/constructor-validation.ts` |
-| `wasi.getImportObject()` | `manifest:wasi.getImportObject`; `test-parity/node-suite/wasi/classes/import-object.ts` |
-| `wasi.wasiImport` | `manifest:wasi.wasiImport`; `test-parity/node-suite/wasi/classes/import-object.ts` |
-| `wasi.start(instance)` | `manifest:wasi.start`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
-| `wasi.initialize(instance)` | `manifest:wasi.initialize`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
-| `wasi.finalizeBindings(instance[, options])` | `manifest:wasi.finalizeBindings`; `test-parity/node-suite/wasi/lifecycle/start-initialize-finalize.ts` |
+- `inspector.Network.requestWillBeSent(params)`
+- `inspector.Network.responseReceived(params)`
+- `inspector.Network.dataReceived(params)`
+- `inspector.Network.dataSent(params)`
+- `inspector.Network.loadingFinished(params)`
+- `inspector.Network.loadingFailed(params)`
+- `inspector.Network.webSocketCreated(params)`
+- `inspector.Network.webSocketHandshakeResponseReceived(params)`
+- `inspector.Network.webSocketClosed(params)`
 
 ### node:module
 
-**Gap APIs: 21** · Already covered: 27
+**Covered: 41 · Gap: 9**
 
-#### Missing from Perry
-
-- `Module.createRequire(filename)`
-- `Module.getSourceMapsSupport()`
-- `Module.runMain()`
-- `Module.setSourceMapsSupport(enabled[, options])`
-- `Module.stripTypeScriptTypes(code[, options])`
-- `Module.syncBuiltinESMExports()`
-- `Module.wrap(code)`
-- `Module.wrapper`
+- `Module.constants.compileCacheStatus`
 - `module.children`
-- `module.exports`
-- `module.filename`
 - `module.id`
 - `module.loaded`
 - `module.parent`
-- `module.path`
-- `module.paths`
 - `module.isPreloading`
-- `module.require(id)`
-- `module.load()`
-- `require.cache` overrides
-- Customization hook callbacks
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `Module` / `new Module(id)` | `manifest:module.Module`; `runtime:js_module_module_new`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
-| `Module.builtinModules` | `manifest:module.builtinModules`; `runtime:js_module_builtin_modules` |
-| `Module.findPackageJSON(specifier[, base])` | `manifest:module.findPackageJSON`; `runtime:js_module_find_package_json` |
-| `Module.findSourceMap(path)` | `manifest:module.findSourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
-| `Module.flushCompileCache()` | `manifest:module.flushCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
-| `Module.globalPaths` | `manifest:module.globalPaths`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
-| `Module.getCompileCacheDir()` | `manifest:module.getCompileCacheDir`; `test-parity/node-suite/module/compile-cache/controls.ts` |
-| `Module.isBuiltin(moduleName)` | `manifest:module.isBuiltin`; `test-parity/node-suite/module/methods/is-builtin.ts` |
-| `Module._cache` | `manifest:module._cache`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
-| `Module._extensions` | `manifest:module._extensions`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
-| `Module._pathCache` | `manifest:module._pathCache`; `test-parity/node-suite/module/commonjs/module-constructor-cache.ts` |
-| `Module._findPath(request, paths)` | `manifest:module._findPath`; `runtime:js_module_find_path`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
-| `Module._initPaths()` | `manifest:module._initPaths`; `runtime:js_module_init_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
-| `Module._load(request, parent, isMain)` | `manifest:module._load`; `runtime:js_module_load`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
-| `Module._nodeModulePaths(from)` | `manifest:module._nodeModulePaths`; `runtime:js_module_node_module_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
-| `Module._preloadModules(requests)` | `manifest:module._preloadModules`; `runtime:js_module_preload_modules`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
-| `Module._resolveFilename(request, parent)` | `manifest:module._resolveFilename`; `runtime:js_module_resolve_filename`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
-| `Module._resolveLookupPaths(request, parent)` | `manifest:module._resolveLookupPaths`; `runtime:js_module_resolve_lookup_paths`; `test-parity/node-suite/module/commonjs/resolver-helpers.ts` |
-| `Module.register(specifier[, parentURL][, options])` | `manifest:module.register`; `test-parity/node-suite/module/loader/register.ts` |
-| `Module.registerHooks(options)` | `manifest:module.registerHooks`; `test-parity/node-suite/module/loader/register-hooks.ts` |
-| `Module.constants.compileCacheStatus` | `manifest:module.constants`; `test-parity/node-suite/module/compile-cache/controls.ts` |
-| `Module.enableCompileCache([cacheDir])` | `manifest:module.enableCompileCache`; `test-parity/node-suite/module/compile-cache/controls.ts` |
-| `new SourceMap(payload[, options])` | `manifest:module.SourceMap`; `test-parity/node-suite/module/source-map/basic.ts` |
-| `sourceMap.payload` | `test-parity/node-suite/module/source-map/basic.ts` |
-| `sourceMap.findEntry(lineOffset, columnOffset)` | `test-parity/node-suite/module/source-map/basic.ts` |
-| `sourceMap.findOrigin(lineNumber, columnNumber)` | `test-parity/node-suite/module/source-map/basic.ts` |
-| Module namespace callable helper exports | `test-parity/node-suite/module/namespace/helper-shape.ts` |
-
-### node:tty
-
-**Gap APIs: 2** · Already covered: 17
-
-#### Missing from Perry
-
-- `readStream.fd`
-- `writeStream.fd`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `tty.isatty(fd)` | `manifest:tty.isatty` |
-| `new tty.ReadStream(fd[, options])` | `manifest:tty.ReadStream`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `readStream.isRaw` | `test-parity/fixtures/tty-pty-smoke.ts` |
-| `readStream.isTTY` | `test-parity/fixtures/tty-pty-smoke.ts` |
-| `readStream.setRawMode(mode)` | `manifest:tty.setRawMode`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `new tty.WriteStream(fd)` | `manifest:tty.WriteStream`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.isTTY` | `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.columns` | `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.rows` | `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.clearLine(dir[, callback])` | `manifest:tty.clearLine`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.clearScreenDown([callback])` | `manifest:tty.clearScreenDown`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.cursorTo(x[, y][, callback])` | `manifest:tty.cursorTo`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.moveCursor(dx, dy[, callback])` | `manifest:tty.moveCursor`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.getWindowSize()` | `manifest:tty.getWindowSize`; `test-parity/fixtures/tty-pty-smoke.ts` |
-| `writeStream.getColorDepth([env])` | `manifest:tty.getColorDepth`; `test-parity/node-suite/tty/classes/color-depth-env.ts` |
-| `writeStream.hasColors([count][, env])` | `manifest:tty.hasColors`; `test-parity/node-suite/tty/classes/has-colors-with-count.ts` |
-| `'resize'` | `manifest:tty.on`; `test-parity/fixtures/tty-pty-smoke.ts` |
-
-### node:https
-
-**Gap APIs: 16** · Already covered: 7
-
-#### Missing from Perry
-
-- `https.globalAgent`
-- `new https.Agent([options])`
-- `agent.createConnection(options[, callback])`
-- `agent.keepSocketAlive(socket)`
-- `agent.reuseSocket(socket, request)`
-- `agent.destroy()`
-- `agent.getName([options])`
-- `server.closeAllConnections()`
-- `server.closeIdleConnections()`
-- `server.setTimeout([msecs][, callback])`
-- `server.headersTimeout`
-- `server.maxHeadersCount`
-- `server.requestTimeout`
-- `server.timeout`
-- `server.keepAliveTimeout`
-- `server[Symbol.asyncDispose]()`
-
-#### Covered (sampled)
-
-| API | Coverage source |
-|-----|-----------------|
-| `https.createServer([options][, requestListener])` | `manifest:https.createServer` |
-| `https.get(options[, callback])` | `manifest:https.get` |
-| `https.get(url[, options][, callback])` | `manifest:https.get` |
-| `https.request(options[, callback])` | `manifest:https.request` |
-| `https.request(url[, options][, callback])` | `manifest:https.request` |
-| `server.close([callback])` | `manifest:https.close` |
-| `server.listen()` | `manifest:https.listen` |
+- `sourceMap.payload`
+- `sourceMap.findEntry(lineOffset, columnOffset)`
+- `sourceMap.findOrigin(lineNumber, columnNumber)`
 
 ### node:timers
 
-**Gap APIs: 11** · Already covered: 7
+**Covered: 8 · Gap: 9**
 
-#### Missing from Perry
-
-- `immediate.ref()`
 - `immediate.unref()`
 - `immediate.hasRef()`
 - `immediate[Symbol.dispose]()`
-- `timeout.ref()`
 - `timeout.unref()`
 - `timeout.hasRef()`
 - `timeout.refresh()`
@@ -1759,375 +351,223 @@ The FileHandle stream-iter tail is runtime-backed for the direct no-transform so
 - `timeout[Symbol.toPrimitive]()`
 - `timeout[Symbol.dispose]()`
 
-#### Covered (sampled)
+### node:url
 
-| API | Coverage source |
-|-----|-----------------|
-| `setImmediate(callback[, ...args])` | `manifest:timers.setImmediate` |
-| `setInterval(callback[, delay[, ...args]])` | `ffi:js_interval_timer_*` |
-| `setTimeout(callback[, delay[, ...args]])` | `ffi:js_set_timeout` |
-| `clearImmediate(immediate)` | `manifest:timers.clearImmediate` |
-| `timers.promises` | `manifest:timers.promises` |
-| `clearInterval(timeout)` | `rt:js_interval_timer_*` |
-| `clearTimeout(timeout)` | `rt:js_timer_*` |
+**Covered: 40 · Gap: 9**
+
+- `url.toJSON()`
+- `new URLSearchParams()`
+- `new URLSearchParams(string)`
+- `new URLSearchParams(obj)`
+- `new URLSearchParams(iterable)`
+- `params.entries()`
+- `params.keys()`
+- `params.values()`
+- `params[Symbol.iterator]()`
+
+### node:fs
+
+**Covered: 174 · Gap: 8**
+
+- `fs.realpath.native(path[, options], callback)`
+- `fs.realpathSync.native(path[, options])`
+- `stats.dev`
+- `stats.ino`
+- `stats.nlink`
+- `stats.rdev`
+- `stats.size`
+- `stats.blksize`
+
+### node:readline/promises
+
+**Covered: 0 · Gap: 7**
+
+- `readlinePromises.createInterface(options)`
+- `rl.clearLine(dir)`
+- `rl.clearScreenDown()`
+- `rl.cursorTo(x[, y])`
+- `rl.moveCursor(dx, dy)`
+- `rl.commit()`
+- `rl.rollback()`
+
+### node:assert
+
+**Covered: 21 · Gap: 6**
+
+- `assert.CallTracker`
+- `tracker.calls(fn[, exact])`
+- `tracker.getCalls(fn)`
+- `tracker.report()`
+- `tracker.reset([fn])`
+- `tracker.verify()`
+
+### node:buffer
+
+**Covered: 102 · Gap: 6**
+
+- `Buffer.allocUnsafeSlow(size)`
+- `Buffer.poolSize`
+- `buf[index]`
+- `buf.parent`
+- `new buffer.Blob([sources[, options]])`
+- `new buffer.File(sources, fileName[, options])`
+
+### node:cluster
+
+**Covered: 29 · Gap: 6**
+
+- `'message'`
+- `'setup'`
+- `worker.id`
+- `worker.send(message[, sendHandle[, options]][, callback])`
+- `'message'`
+- `'error'`
+
+### node:events
+
+**Covered: 35 · Gap: 6**
+
+- `EventEmitter.prototype[Symbol.for('nodejs.rejection')]()`
+- `Event.prototype.composedPath()`
+- `Event.prototype.initEvent(type, bubbles, cancelable)`
+- `Event.prototype.preventDefault()`
+- `Event.prototype.stopImmediatePropagation()`
+- `Event.prototype.stopPropagation()`
+
+### node:trace_events
+
+**Covered: 0 · Gap: 6**
+
+- `trace_events.createTracing(options)`
+- `trace_events.getEnabledCategories()`
+- `tracing.categories`
+- `tracing.enabled`
+- `tracing.enable()`
+- `tracing.disable()`
+
+### node:crypto
+
+**Covered: 133 · Gap: 5**
+
+- `crypto.setEngine(engine[, flags])`
+- `crypto.fips`
+- `KeyObject.from(key)`
+- `new X509Certificate(buffer)`
+- `x509.ca`
+
+### node:tty
+
+**Covered: 15 · Gap: 4**
+
+- `readStream.isTTY`
+- `readStream.fd`
+- `writeStream.isTTY`
+- `writeStream.fd`
+
+### node:https
+
+**Covered: 21 · Gap: 3**
+
+- `agent.keepSocketAlive(socket)`
+- `agent.reuseSocket(socket, request)`
+- `server[Symbol.asyncDispose]()`
+
+### node:child_process
+
+**Covered: 35 · Gap: 2**
+
+- `child_process.ChildProcess`
+- `child_process.Stream`
+
+### node:readline
+
+**Covered: 27 · Gap: 2**
+
+- `rl[Symbol.dispose]()`
+- `rl.cursor`
+
+### node:sqlite
+
+**Covered: 50 · Gap: 2**
+
+- `db.serialize([dbName])`
+- `db.deserialize(buffer[, options])`
+
+### node:timers/promises
+
+**Covered: 3 · Gap: 2**
+
+- `scheduler.wait(delay[, options])`
+- `scheduler.yield()`
+
+### node:worker_threads
+
+**Covered: 62 · Gap: 2**
+
+- `new Worker(filename[, options])`
+- `worker[Symbol.asyncDispose]()`
+
+### node:async_hooks
+
+**Covered: 28 · Gap: 1**
+
+- `new AsyncLocalStorage()`
 
 ### node:console
 
-**Gap APIs: 6** · Already covered: 17
-
-#### Missing from Perry
+**Covered: 22 · Gap: 1**
 
 - `new Console(stdout[, stderr][, ignoreErrors])`
-- `console.dirxml(...data)`
-- `console.groupCollapsed()`
-- `console.profile([label])`
-- `console.profileEnd([label])`
-- `console.timeStamp([label])`
 
-#### Covered (sampled)
+### node:dgram
 
-| API | Coverage source |
-|-----|-----------------|
-| `console.assert(value[, ...message])` | `ffi:js_console_assert` |
-| `console.clear()` | `ffi:js_console_clear` |
-| `console.count([label])` | `ffi:js_console_count` |
-| `console.countReset([label])` | `ffi:js_console_count_reset` |
-| `console.debug(data[, ...args])` | `rt:js_console_debug` |
-| `console.dir(obj[, options])` | `rt:js_console_dir` |
-| `console.error([data][, ...args])` | `rt:js_console_error` |
-| `console.group([...label])` | `ffi:js_console_group` |
-| `console.groupEnd()` | `ffi:js_console_group_end` |
-| `console.info([data][, ...args])` | `rt:js_console_info` |
-| `console.log([data][, ...args])` | `ffi:js_console_log` |
-| `console.table(tabularData[, properties])` | `ffi:js_console_table` |
-| `console.time([label])` | `ffi:js_console_time` |
-| `console.timeEnd([label])` | `ffi:js_console_time_end` |
-| `console.timeLog([label][, ...data])` | `ffi:js_console_time_log` |
-| … | 2 more covered APIs |
+**Covered: 27 · Gap: 1**
 
-### node:path
+- `socket[Symbol.asyncDispose]()`
 
-**Gap APIs: 3** · Already covered: 13
+### node:fs/promises
 
-#### Missing from Perry
+**Covered: 60 · Gap: 1**
 
-- `path.toNamespacedPath(path)`
-- `path.posix`
-- `path.win32`
+- `filehandle.fd`
 
-#### Covered (sampled)
+### node:http
 
-| API | Coverage source |
-|-----|-----------------|
-| `path.basename(path[, suffix])` | `manifest:path.basename` |
-| `path.dirname(path)` | `manifest:path.dirname` |
-| `path.extname(path)` | `manifest:path.extname` |
-| `path.format(pathObject)` | `manifest:path.format` |
-| `path.isAbsolute(path)` | `manifest:path.isAbsolute` |
-| `path.join([...paths])` | `manifest:path.join` |
-| `path.matchesGlob(path, pattern)` | `manifest:path.matchesGlob`; `test-parity/node-suite/path/matchesGlob/extglob-globstar.ts`; `test-parity/node-suite/path/matchesGlob/win32-separators.ts` |
-| `path.normalize(path)` | `manifest:path.normalize` |
-| `path.parse(path)` | `manifest:path.parse` |
-| `path.relative(from, to)` | `manifest:path.relative` |
-| `path.resolve([...paths])` | `manifest:path.resolve` |
-| `path.delimiter` | `expr:PathDelimiter` |
-| `path.sep` | `expr:PathSep` |
+**Covered: 140 · Gap: 1**
 
-## Web globals
+- `server[Symbol.asyncDispose]()`
 
-**Total APIs: 389** · Perry covers: 107 · Gap: 282
+### node:net
 
-Web-global coverage is determined heuristically — Perry implements many of these via dedicated `Expr::*` lowering (e.g. `Expr::FetchWithOptions`, `Expr::TextEncoderEncode`, `Expr::UrlNew`) and `js_*` FFI surfaces (Headers/Request/Response/Blob via perry-ext-fetch and perry-stdlib). The covered list below is curated; the gap list is everything else in the parity reference's Web / Global APIs section.
+**Covered: 77 · Gap: 1**
 
-The counts above are the last generated parity-gap counts on this branch. They were not manually decremented for #3598 draft PRs because those runtime changes are deliberately not stacked here. Regenerate this section after the child PRs land on `main` so the Web/global counts can move with the code that actually exposes the globals.
+- `server[Symbol.asyncDispose]()`
 
-### Web globals — covered (sampled)
+### node:stream
 
-| API | Coverage source |
-|-----|-----------------|
-| `globalThis` | `builtin` |
-| `console` | `builtin` |
-| `performance` | `expr:PerformanceNow` |
-| `queueMicrotask(cb)` | `rt:promise microtask queue` |
-| `structuredClone(value, options?)` | `rt:js_structured_clone_with_options` |
-| `atob(b64)` | `expr:Atob` |
-| `btoa(str)` | `expr:Btoa` |
-| `fetch(input, init?)` | `expr:FetchWithOptions` |
-| `setTimeout(cb, ms, ...args)` | `ffi:js_set_timeout` |
-| `setInterval(cb, ms, ...args)` | `ffi:js_interval_timer_*` |
-| `clearTimeout(id)` | `rt:js_timer_*` |
-| `clearInterval(id)` | `rt:js_interval_timer_*` |
-| `__dirname` | `rt builtin` |
-| `__filename` | `rt builtin` |
-| `require(id)` | `compile-time resolution` |
-| `process` | `expr:Process*` |
-| `Buffer` | `expr:Buffer*` |
-| `new URL(input, base?)` | `expr:UrlNew` |
-| `URL.canParse(input, base?)` | `expr:UrlCanParse` |
-| `URL.parse(input, base?)` | `expr:UrlParse` |
-| `url.href` | `expr:UrlGetHref` |
-| `url.origin` | `expr:UrlGetOrigin` |
-| `url.protocol` | `expr:UrlGetProtocol` |
-| `url.host` | `expr:UrlGetHost` |
-| `url.hostname` | `expr:UrlGetHostname` |
-| `url.port` | `expr:UrlGetPort` |
-| `url.pathname` | `expr:UrlGetPathname` |
-| `url.search` | `expr:UrlGetSearch` |
-| `url.searchParams` | `expr:UrlGetSearchParams` |
-| `url.hash` | `expr:UrlGetHash` |
-| `url.toString()` | `expr:UrlInstanceToString` |
-| `url.toJSON()` | `expr:UrlInstanceToJSON` |
-| `new URLSearchParams(init?)` | `expr:UrlSearchParamsNew` |
-| `usp.append(name, value)` | `expr:UrlSearchParamsAppend` |
-| `usp.delete(name, value?)` | `expr:UrlSearchParamsDelete` |
-| `usp.entries()` | `expr:UrlSearchParamsEntries` |
-| `usp.get(name)` | `expr:UrlSearchParamsGet` |
-| `usp.getAll(name)` | `expr:UrlSearchParamsGetAll` |
-| `usp.has(name, value?)` | `expr:UrlSearchParamsHas` |
-| `usp.set(name, value)` | `expr:UrlSearchParamsSet` |
-| `usp.toString()` | `expr:UrlSearchParamsToString` |
-| `new Headers(init?)` | `ffi:js_headers_new` |
-| `headers.append(name, value)` | `ffi:js_headers_*` |
-| `headers.delete(name)` | `ffi:js_headers_*` |
-| `headers.get(name)` | `ffi:js_headers_*` |
-| `headers.has(name)` | `ffi:js_headers_*` |
-| `headers.set(name, value)` | `ffi:js_headers_*` |
-| `headers.forEach(cb)` | `ffi:js_headers_for_each` |
-| `headers.entries()` | `ffi:js_headers_entries` |
-| `headers.keys()` | `ffi:js_headers_keys` |
-| `headers.values()` | `ffi:js_headers_values` |
-| `new Request(input, init?)` | `ffi:js_request_new` |
-| `request.method` | `ffi:js_request_get_method` |
-| `request.url` | `ffi:js_request_get_url` |
-| `request.headers` | `ffi:js_request_get_headers` |
-| `request.body` | `ffi:js_request_get_body` |
-| `request.bodyUsed` | `ffi:js_request_body_used` |
-| `request.arrayBuffer()` | `ffi:js_request_array_buffer` |
-| `request.clone()` | `ffi:js_request_clone` |
-| `request.json()` | `ffi:js_request_json` |
-| `request.text()` | `ffi:js_request_text` |
-| `new Response(body?, init?)` | `ffi:js_response_new` |
-| `response.body` | `ffi:js_response_body` |
-| `response.bodyUsed` | `ffi:js_response_body_used` |
-| `response.headers` | `ffi:js_response_get_headers` |
-| `response.ok` | `ffi:js_fetch_response_ok` |
-| `response.status` | `ffi:js_fetch_response_status` |
-| `response.statusText` | `ffi:js_fetch_response_status_text` |
-| `response.arrayBuffer()` | `ffi:js_response_array_buffer` |
-| `response.blob()` | `ffi:js_response_blob` |
-| `response.clone()` | `ffi:js_response_clone` |
-| `response.json()` | `ffi:js_fetch_response_json` |
-| `response.text()` | `ffi:js_fetch_response_text` |
-| `new Blob(parts?, options?)` | `ffi:js_blob_new` |
-| `blob.size` | `ffi:js_blob_size` |
-| `blob.type` | `ffi:js_blob_type` |
-| `blob.arrayBuffer()` | `ffi:js_blob_array_buffer` |
-| `blob.bytes()` | `ffi:js_blob_bytes` |
-| `blob.slice(start?, end?, type?)` | `ffi:js_blob_slice` |
-| `blob.stream()` | `ffi:js_blob_stream` |
-| `blob.text()` | `ffi:js_blob_text` |
-| `new ReadableStream(underlyingSource?, queuingStrategy?)` | `partial #562` |
-| `new WritableStream(underlyingSink?, queuingStrategy?)` | `partial #562` |
-| `controller.signal` | `ffi:js_abort_controller_signal` |
-| `new TransformStream(transformer?, writableStrategy?, readableStrategy?)` | `partial #562` |
-| `new AbortController()` | `ffi:js_abort_controller_new` |
-| `AbortSignal.timeout(ms)` | `ffi:js_abort_signal_timeout` |
-| `new TextEncoder()` | `expr:TextEncoderNew` |
-| `new TextDecoder(label?, options?)` | `expr:TextDecoderNew` |
-| `new MessageChannel()` | `stdlib:js_worker_threads_message_channel_new` via global constructor registration |
-| `new BroadcastChannel(name)` | `stdlib:js_worker_threads_broadcast_channel_new` via global constructor registration |
-| `globalThis.WebSocket` / `new WebSocket(url, protocols?)` | `ffi:js_ws_connect` + global constructor shape |
-| `crypto.getRandomValues(typedArray)` | `manifest:crypto.getRandomValues` |
-| `crypto.randomUUID()` | `expr:CryptoRandomUUID` |
-| `performance.now()` | `expr:PerformanceNow` |
-| `console.log(...args)` | `rt:js_console_log` |
-| `console.info(...args)` | `rt:js_console_info` |
-| `console.warn(...args)` | `rt:js_console_warn` |
-| `console.error(...args)` | `rt:js_console_error` |
-| `console.debug(...args)` | `rt:js_console_debug` |
-| `console.trace(...args)` | `rt:js_console_trace` |
-| `console.assert(cond, ...args)` | `rt:js_console_assert` |
-| `console.count(label?)` | `rt:js_console_count` |
-| `console.dir(obj, options?)` | `rt:js_console_dir` |
-| `console.time(label?)` | `rt:js_console_time` |
-| `console.timeEnd(label?)` | `rt:js_console_time_end` |
-| `console[Symbol.asyncIterator]()` | `builtin` |
+**Covered: 80 · Gap: 1**
 
-### Web globals — gaps
+- `writable.writableAborted`
 
-Total gaps: 282. First 100 entries:
+### node:zlib
 
-- `reportError(err)`
-- `setImmediate(cb, ...args)`
-- `clearImmediate(id)`
-- `alert(msg)`
-- `confirm(msg)`
-- `prompt(msg, default?)`
-- `ShadowRealm`
-- `URL.createObjectURL(blob)`
-- `URL.revokeObjectURL(url)`
-- `url.username`
-- `url.password`
-- `usp.forEach(cb, thisArg?)`
-- `usp.keys()`
-- `usp.size`
-- `usp.sort()`
-- `usp.values()`
-- `usp[Symbol.iterator]()`
-- `headers.getSetCookie()`
-- `headers[Symbol.iterator]()`
-- `headers.toJSON()`
-- `headers.count`
-- `headers.getAll(name)`
-- `request.destination`
-- `request.referrer`
-- `request.referrerPolicy`
-- `request.mode`
-- `request.credentials`
-- `request.cache`
-- `request.redirect`
-- `request.integrity`
-- `request.keepalive`
-- `request.signal`
-- `request.duplex`
-- `request.blob()`
-- `request.bytes()`
-- `request.formData()`
-- `Response.error()`
-- `Response.json(data, init?)`
-- `Response.redirect(url, status?)`
-- `response.redirected`
-- `response.type`
-- `response.url`
-- `response.bytes()`
-- `response.formData()`
-- `blob.json()`
-- `blob.formData()`
-- `blob.name`
-- `blob.lastModified`
-- `new File(parts, name, options?)`
-- `file.name`
-- `file.lastModified`
-- `file.webkitRelativePath`
-- `new FormData()`
-- `fd.append(name, value, filename?)`
-- `fd.delete(name)`
-- `fd.get(name)`
-- `fd.getAll(name)`
-- `fd.has(name)`
-- `fd.set(name, value, filename?)`
-- `fd.entries()`
-- `fd.keys()`
-- `fd.values()`
-- `fd.forEach(cb)`
-- `fd[Symbol.iterator]()`
-- `ReadableStream.from(iterable)`
-- `rs.locked`
-- `rs.cancel(reason?)`
-- `rs.getReader(options?)`
-- `rs.pipeThrough(transform, options?)`
-- `rs.pipeTo(dest, options?)`
-- `rs.tee()`
-- `rs.values(options?)`
-- `rs[Symbol.asyncIterator]()`
-- `reader.read()`
-- `reader.releaseLock()`
-- `reader.cancel(reason?)`
-- `reader.closed`
-- `byob.read(view, options?)`
-- `byob.releaseLock()`
-- `byob.cancel(reason?)`
-- `controller.desiredSize`
-- `controller.close()`
-- `controller.enqueue(chunk)`
-- `controller.error(e?)`
-- `controller.byobRequest`
-- `req.view`
-- `req.respond(bytesWritten)`
-- `req.respondWithNewView(view)`
-- `ws.locked`
-- `ws.abort(reason?)`
-- `ws.close()`
-- `ws.getWriter()`
-- `writer.desiredSize`
-- `writer.ready`
-- `writer.closed`
-- `writer.abort(reason?)`
-- `writer.close()`
-- `writer.releaseLock()`
-- … and 184 more (see `runtime-parity.md` for the full list)
+**Covered: 90 · Gap: 1**
 
-## Bun-only APIs
+- `zlib.bytesRead`
 
-Bun's runtime-specific surface (e.g. `Bun.serve`, `bun:sqlite`, `bun:ffi`, `HTMLRewriter`, `Bun.$`). Perry treats these as out-of-scope: porting Bun-specific code typically means writing the equivalent against Node-style APIs or the corresponding `perry-ext-*` crate.
+## Methodology & caveats
 
-**Bun-only API count: 394**
+- **Coverage = dispatchable, not byte-for-byte.** A manifest/FFI match means
+  Perry can dispatch the call, not that every option/overload matches Node.
+- **Module-gated dispatch.** Method-name string literals only count for
+  modules that have a real implementation (a manifest entry or a
+  `js_<module>_*` FFI export), so stub files naming methods in error strings
+  don't read as covered.
+- **Manual coverage overrides.** A few APIs are implemented in generic,
+  non-module-named dispatchers (e.g. `KeyObject` property access in
+  `perry-runtime/src/object/field_get_set.rs`). These are credited via an
+  audited `MANUAL_COVERAGE` table in the script.
+- **Constants & events** are credited as a block when the module exposes
+  `constants`/`codes` or an `on`/`emit` surface, rather than per-leaf.
+- `class X` declaration rows are excluded from counts.
 
-High-visibility entries (full list in `runtime-parity.md`):
-
-- `Bun.version`
-- `server.stop(closeActive?)`
-- `ServerWebSocket.send(data, compress?)`
-- `BunFile.size`
-- `FileSink.write(chunk)`
-- `Subprocess.pid`
-- `class Bun.Terminal`
-- `Terminal.write(data)`
-- `Socket.timeout(seconds)`
-- `UDPSocket.send(data, port, address)`
-- `new Bun.CryptoHasher(algorithm, key?)`
-- `hasher.update(data, encoding?)`
-- `glob.scan(rootOrOptions)`
-- `new S3Client({accessKeyId, secretAccessKey, region?, endpoint?, bucket?, sessionToken?, virtualHostedStyle?, acl?})`
-- `client.file(path, options?)`
-- `class S3File extends Blob`
-- `s3file.text() / json() / bytes() / arrayBuffer() / stream() / slice(start, end?)`
-- `sql.savepoint(name, cb)`
-- `cookie.name / value / domain / path / expires / secure / sameSite / partitioned / maxAge / httpOnly`
-- `map.toJSON()`
-- `map[Symbol.iterator]()`
-- `$.env(envObject\|undefined)`
-- `ShellOutput.text(encoding?)`
-- `wv.navigate(url) / .setHTML(html) / .eval(js) / .bind(name, fn) / .destroy() / .show()`
-- `sink.start(options?)`
-- `describe(name, fn)`
-- `test(name, fn, timeoutOrOptions?)`
-- `it(name, fn, ...)`
-- `beforeAll(fn)`
-- `beforeEach(fn)`
-- `afterAll(fn)`
-- `afterEach(fn)`
-- `setDefaultTimeout(ms)`
-- `mock(fn)`
-- `spyOn(obj, method)`
-- `jest.fn(fn?)`
-- `expect(value)`
-- `import { Database } from "bun:sqlite"`
-- `new Database(filename?, options?)`
-- `Database.deserialize(buf)`
-
-## Methodology
-
-**Sources consulted (in priority order):**
-
-1. **Manifest entries** — `crates/perry-api-manifest/src/entries.rs` lists ~590 `(module, method)` rows. A match on `(section_module, method_name)` counts as covered. Module aliases handled: `node:fs` → `fs`, `node:fs/promises` → `fs/promises`.
-2. **`Expr::*` HIR variants** — `crates/perry-hir/src/ir.rs` defines ~301 stdlib-shaped enum variants. APIs like `os.platform` map to `Expr::OsPlatform`; `path.join` to `Expr::PathJoin`; `crypto.randomUUID` to `Expr::CryptoRandomUUID`. The matcher Pascal-cases the section module and method name and checks set membership.
-3. **`js_*` FFI exports** — extracted via grep (catching both `pub extern "C"` and `pub unsafe extern "C"` patterns) across `perry-runtime/src/*.rs` (~984 fns), `perry-stdlib/src/**/*.rs` (~633), and the 35 `perry-ext-*` crates (~553). Match heuristics: `js_<module>_<method_snake>`, `js_<module>_<method>_sync`, and a class-instance variant `js_<module>_<class>_<method>`.
-4. **Web globals + builtin-globals overlay** — handled separately via a curated mapping from symbols like `fetch`, `new URL`, `crypto.subtle.digest`, `setTimeout`/`clearTimeout`, `console.error` to their backing implementation. Anything not in the overlay is reported as a gap.
-
-**Caveats:**
-
-- **Module-level matching is lenient.** The manifest uses bare method names within a module, so `on()` matches across `EventEmitter`/`Server`/`Socket` without class disambiguation. A name match indicates Perry can *dispatch* the call, not that the receiver class is implemented or that behavior matches Node byte-for-byte.
-- **An FFI export's existence does not imply full semantic coverage.** `js_buffer_concat` being exported does not mean `Buffer.concat(list, totalLength)` with the optional totalLength arg matches Node. Several gaps in the partial-module lists are option/overload divergences.
-- **`class X` declaration rows are excluded from gap counts.** The parity reference lists each class as its own row (`class fs.Dir`) followed by its methods; we only count callable methods/properties as gap candidates.
-- **Loose name matching was dropped.** An earlier attempt let any module's `close()` count against `fs.close`; in practice it false-positived against `mongodb.close`/`http.close`/`readline.close`. The current matcher requires the module names to align.
-- **Web global coverage is curated, not derived.** The whitelist has been hand-mapped against `Expr::*` and FFI surfaces; APIs Perry implements but that aren't in the whitelist will appear in the gap list. Treat the web-global gap count as an upper bound.
-- **Bun-only APIs are reported as informational.** They're never targeted directly by Perry; users porting Bun code rewrite against Node-style equivalents or `perry-ext-*` crates.
-
-**Methodology decisions:**
-
-- Module aliasing: `node:fs` and `fs` treated as the same module. `node:fs/promises` is its own module key; older rows may still be cross-checked against `fs` when documenting FileHandle-derived coverage.
-- Sync/async variants are checked separately: `fs.readFileSync` does not credit `fs.readFile`. The FFI heuristic does try the `_sync` suffix to handle the common pattern.
-- For instance methods (`dir.read`, `socket.write`): the matcher first treats the leading segment as the class name and tries `js_<module>_<class>_<method>`; if that fails it falls through to the generic dispatch table.
-- A small builtin overlay covers symbols like `setTimeout`, `clearTimeout`, `console.error` that ship as `js_set_timeout` / `js_console_*` rather than `js_timers_*` / `js_console_*` — without it the matcher would mis-report those as gaps.
-- `class X` rows in the parity doc are explicitly excluded from the total/gap counts — they're documentation markers for the table that follows.
