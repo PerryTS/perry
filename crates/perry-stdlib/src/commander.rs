@@ -10,7 +10,7 @@
 //! invoked the `.action()` callback, never linked subcommands to their
 //! parent, and never printed help. The docs example silently no-op'd.
 
-use perry_runtime::array::{js_array_from_f64, js_array_length, ArrayHeader};
+use perry_runtime::array::{js_array_from_f64, js_array_get_f64, js_array_length, ArrayHeader};
 use perry_runtime::closure::js_closure_call1;
 use perry_runtime::value::js_jsvalue_to_string;
 use perry_runtime::{
@@ -302,12 +302,14 @@ unsafe fn resolve_parse_args(argv: f64) -> Vec<String> {
     if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
         let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize as *const ArrayHeader;
         if !ptr.is_null() {
-            let len = js_array_length(ptr) as usize;
-            let data =
-                (ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-            let mut out = Vec::with_capacity(len);
+            // Read elements through the bounds-checked, layout-abstracting
+            // runtime accessor rather than indexing the ArrayHeader data
+            // region directly — mirrors the perry-ext-commander copy and
+            // stays correct if the array layout ever changes.
+            let len = js_array_length(ptr);
+            let mut out = Vec::with_capacity(len as usize);
             for i in 0..len {
-                let elem = *data.add(i);
+                let elem = js_array_get_f64(ptr, i);
                 if let Some(s) = string_from_header(js_jsvalue_to_string(elem)) {
                     out.push(s);
                 }
