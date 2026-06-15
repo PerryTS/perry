@@ -1337,31 +1337,16 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 found_inherited_ctor = true;
             }
         }
-        // #5137: `class X extends EventEmitter {}` with no own constructor —
-        // the implicit ctor still has to install the EventEmitter
-        // listener/emit surface onto `this`. The explicit-`super()` arm in
-        // expr/this_super_call.rs only fires when the source wrote a
-        // constructor; this is the parallel no-own-ctor path (mirrors the
-        // node-stream block just above). Reached when a source-compiled
-        // EventEmitter subclass omits its constructor — e.g. a bare
-        // `class Bus extends EventEmitter {}`.
-        //
-        // Gated on `!has_imported_ctor`: an imported class whose real ctor
-        // lives in another module (e.g. commander's `Command`, whose stub in
-        // the user module carries no `constructor` but does have an entry in
-        // `imported_class_ctors`) must reach the imported-ctor fallback below
-        // — that path runs the real `super()`, which installs the emitter
-        // surface itself. Firing here would set `found_inherited_ctor` and
-        // skip the real constructor body (dropping `this.args = []` etc.).
+        // #5137: implicit-ctor `class X extends EventEmitter {}` — install the
+        // emitter surface (the explicit-`super()` arm does this when a ctor is
+        // written). Gated `!has_imported_ctor` so an imported class whose real
+        // ctor lives in another module (commander's `Command`) still reaches
+        // the imported-ctor fallback below and runs its real `super()`.
         if !found_inherited_ctor
             && !has_imported_ctor
             && class.extends_name.as_deref() == Some("EventEmitter")
         {
-            ctx.block().call(
-                DOUBLE,
-                "js_event_emitter_subclass_init",
-                &[(DOUBLE, &obj_box)],
-            );
+            crate::expr::lower_event_emitter_subclass_init(ctx, &obj_box);
             found_inherited_ctor = true;
         }
         // Issue #573: if the parent walk reached an Error-like built-in

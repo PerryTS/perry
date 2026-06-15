@@ -1253,10 +1253,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_lru_cache_size", DOUBLE, &[I64]);
 
     // ========== node:stream stubs (issue #631) ==========
-    // #5137: bare EventEmitter subclass init (super() for a source-compiled
-    // `class X extends EventEmitter`). Lives with the stream inits because it
-    // reuses the same `ns_*` emitter closures.
-    module.declare_function("js_event_emitter_subclass_init", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_event_emitter_subclass_init", DOUBLE, &[DOUBLE]); // #5137 EE subclass init
     module.declare_function("js_node_stream_readable_new", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_node_stream_readable_subclass_init",
