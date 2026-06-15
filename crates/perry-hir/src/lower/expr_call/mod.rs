@@ -228,9 +228,13 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     if let Some(expr) = super::const_fold_fn::try_eval_function_call_fold(ctx, call)? {
         return Ok(expr);
     }
-    // #1678: classify `Function(...)` / `eval(...)`. Bails on the
-    // runtime-unknown bucket; otherwise logs + falls through.
-    check_eval_function_call(ctx, call)?;
+    // #1678/#5206: classify `Function(...)` / `eval(...)`. In strict-eval
+    // mode bails on the runtime-unknown bucket; by default compiles that
+    // bucket to a throw-on-reach value (returned here); otherwise falls
+    // through.
+    if let Some(expr) = check_eval_function_call(ctx, call)? {
+        return Ok(expr);
+    }
     if let Some(expr) = try_bare_regexp_call(ctx, call, has_spread)? {
         return Ok(expr);
     }

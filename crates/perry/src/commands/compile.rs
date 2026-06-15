@@ -5761,6 +5761,14 @@ pub fn run_with_parse_cache(
 
     cleanup_intermediates(args.keep_intermediates, &obj_cleanup_paths);
 
+    // #5206: visible end-of-compile notice listing every runtime-eval site
+    // (`eval(...)` / `new Function(<dynamic body>)`) that was compiled to a
+    // deferred runtime error instead of blocking the build. Strict-eval mode
+    // (`--strict-eval` / `perry.eval = "error"`) never reaches here for such
+    // a site — it fails the build earlier. Text format only (JSON consumers
+    // get a clean machine-readable result on stdout).
+    print_deferred_eval_notice(format);
+
     let final_output_path = result_app_dir.unwrap_or(exe_path);
     let codegen_cache_stats = summarize_codegen_cache_stats(&object_cache);
 
@@ -5773,6 +5781,48 @@ pub fn run_with_parse_cache(
         link_cache_stats: Some(link_cache_status.stats()),
         build_cache_stats: Some(build_cache_stats),
     })
+}
+
+/// #5206: print the end-of-compile notice for runtime-eval sites that were
+/// compiled to deferred runtime errors. Drains the process-global sink (so
+/// re-running a compile in the same process starts fresh) and prints a single
+/// stand-out block. No-op when there are no such sites or for JSON output.
+fn print_deferred_eval_notice(format: OutputFormat) {
+    let sites = perry_hir::take_deferred_eval_sites();
+    if sites.is_empty() || !matches!(format, OutputFormat::Text) {
+        return;
+    }
+    // Sort for deterministic output (kind then location).
+    let mut sites = sites;
+    sites.sort_by(|a, b| (&a.kind, &a.location).cmp(&(&b.kind, &b.location)));
+    let n = sites.len();
+    let plural = if n == 1 { "site" } else { "sites" };
+    // ANSI yellow + bold so the notice stands out from the surrounding build
+    // log; degrade to plain text when stderr isn't a TTY.
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let (y, b, r) = if tty {
+        ("\x1b[33m", "\x1b[1m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
+    eprintln!();
+    eprintln!(
+        "{y}{b}notice:{r}{y} {n} runtime-eval {plural} compiled to a deferred runtime error (throws only if reached):{r}"
+    );
+    // Align the locations into a column for readability.
+    let kind_width = sites.iter().map(|s| s.kind.len()).max().unwrap_or(0);
+    for s in &sites {
+        eprintln!(
+            "  - {:<width$}   {}",
+            s.kind,
+            s.location,
+            width = kind_width
+        );
+    }
+    eprintln!(
+        "  Pass {b}--strict-eval{r} (or set {b}perry.eval = \"error\"{r}) to make these a compile-time error instead."
+    );
+    eprintln!();
 }
 
 #[cfg(test)]

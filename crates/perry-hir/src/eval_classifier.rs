@@ -29,9 +29,31 @@
 //!
 //! `PERRY_EVAL_DIAG=1` logs every classified site (package + `file:line` +
 //! bucket) to stderr, so a single compile reveals which dependencies hit
-//! each bucket. `PERRY_ALLOW_EVAL=1` downgrades the bucket-3 refusal back
-//! to the legacy (non-functional) fall-through for a one-off build — an
-//! escape hatch mirroring `#503`'s `PERRY_ALLOW_DYNAMIC_STDLIB`.
+//! each bucket.
+//!
+//! ## #5206 — deferred-runtime-error default vs. strict refusal
+//!
+//! As of #5206 the runtime-unknown bucket no longer blocks the build by
+//! default. Two compile modes select what happens to a bucket-3 site:
+//!
+//! - **defer** (the default, non-strict): the site is compiled to a value
+//!   that throws a descriptive [`Error`] *only when it is actually
+//!   invoked* (an `eval(...)` call throws when evaluated; a `new
+//!   Function(...)` returns a function that throws when called). Each such
+//!   site is recorded in a thread-local sink so the compile driver can
+//!   print a single visible end-of-build notice listing the degraded
+//!   sites (count + kind + `file:line`).
+//! - **error** (strict, opt-in): restores the historical hard compile-time
+//!   refusal — every bucket-3 site fails the build with [`EvalClassification::refusal_message`].
+//!
+//! The mode is a thread-local set at compile entry from the CLI flag
+//! (`--strict-eval`) and project config (`perry.eval` / `perry.strict`).
+//! `PERRY_ALLOW_EVAL=1` is kept for back-compat: it forces non-strict
+//! (defer) mode and so overrides a strict config/flag for a one-off build,
+//! mirroring `#503`'s `PERRY_ALLOW_DYNAMIC_STDLIB`.
+
+use std::cell::RefCell;
+use std::sync::Mutex;
 
 use swc_ecma_ast as ast;
 
@@ -148,11 +170,27 @@ impl EvalClassification {
              - If this comes from a code-generating library, only \
                `fast-json-stringify`, `ajv`, and `find-my-way` are recognized so far \
                (#1680/#1681/#1682) — file an issue against #1677 naming the package.\n\
-             - Set `PERRY_ALLOW_EVAL=1` to restore the legacy (non-functional) \
-               behavior for a one-off build.",
+             - This refusal is strict-eval mode. The default (`perry.eval = \"defer\"`) \
+               instead compiles the site to a runtime error that throws only if reached, \
+               and prints a compile-time notice. Drop `--strict-eval` / `perry.eval = \
+               \"error\"` (or set `PERRY_ALLOW_EVAL=1`) to use it.",
             surface = self.surface.label(),
             loc = self.location(),
             prov = self.provenance(),
+        )
+    }
+
+    /// The descriptive message a *deferred* bucket-3 site throws at runtime
+    /// when it is actually reached (#5206). Names the surface and the
+    /// `file:line` so a crash points straight back at the offending source.
+    pub fn deferred_runtime_error_message(&self) -> String {
+        let what = match self.surface {
+            EvalSurface::Eval => "eval()",
+            EvalSurface::FunctionCall | EvalSurface::NewFunction => "new Function()",
+        };
+        format!(
+            "{what} cannot run in an ahead-of-time compiled binary ({loc})",
+            loc = self.location(),
         )
     }
 
@@ -262,10 +300,85 @@ pub fn eval_diag_enabled() -> bool {
     env_flag("PERRY_EVAL_DIAG")
 }
 
-/// Whether `PERRY_ALLOW_EVAL` is set — downgrades the bucket-3 refusal to
-/// the legacy fall-through for a one-off build.
+/// Whether `PERRY_ALLOW_EVAL` is set — forces non-strict (defer) mode for a
+/// one-off build, overriding any strict flag/config (back-compat with the
+/// pre-#5206 escape hatch).
 pub fn eval_override_enabled() -> bool {
     env_flag("PERRY_ALLOW_EVAL")
+}
+
+thread_local! {
+    /// `true` when strict-eval mode is active for the current compile: a
+    /// runtime-unknown (`bucket-3`) site is a hard compile-time refusal.
+    /// `false` (the default) defers it to a throw-on-reach runtime error.
+    /// Set once at compile entry (and re-applied per rayon worker) via
+    /// [`set_eval_strict_mode`].
+    static EVAL_STRICT_MODE: RefCell<bool> = const { RefCell::new(false) };
+}
+
+/// Sites that were deferred to a runtime error during this compile (#5206).
+/// Process-global (not thread-local) because modules lower on rayon worker
+/// threads while the driver drains this at the end of the build to print the
+/// visible "degraded sites" notice. De-duplicated by `(kind, location)` so a
+/// module lowered more than once isn't counted twice.
+static EVAL_DEFERRED_SITES: Mutex<Vec<DeferredEvalSite>> = Mutex::new(Vec::new());
+
+/// A bucket-3 site that was compiled to a deferred runtime error. Reported in
+/// the end-of-compile notice (#5206).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredEvalSite {
+    /// Display label of the call shape, e.g. `new Function(...)`.
+    pub kind: String,
+    /// `file:line` of the site.
+    pub location: String,
+}
+
+/// Set strict-eval mode for the current compile thread. `true` restores the
+/// historical hard compile-time refusal of runtime-unknown sites; `false`
+/// (the default) defers them to throw-on-reach runtime errors. Called once
+/// at compile entry. `PERRY_ALLOW_EVAL` always wins (forces `false`).
+pub fn set_eval_strict_mode(strict: bool) {
+    EVAL_STRICT_MODE.with(|s| *s.borrow_mut() = strict && !eval_override_enabled());
+}
+
+/// Whether strict-eval mode is active for the current compile.
+pub fn eval_strict_mode() -> bool {
+    EVAL_STRICT_MODE.with(|s| *s.borrow())
+}
+
+/// Record a deferred bucket-3 site for the end-of-compile notice. Idempotent
+/// per `(kind, location)`.
+fn record_deferred_site(classification: &EvalClassification) {
+    let site = DeferredEvalSite {
+        kind: classification.surface.label().to_string(),
+        location: classification.location(),
+    };
+    if let Ok(mut v) = EVAL_DEFERRED_SITES.lock() {
+        if !v.contains(&site) {
+            v.push(site);
+        }
+    }
+}
+
+/// Drain and return every deferred bucket-3 site recorded so far this
+/// compile. Called by the driver to render the end-of-compile notice.
+pub fn take_deferred_eval_sites() -> Vec<DeferredEvalSite> {
+    EVAL_DEFERRED_SITES
+        .lock()
+        .map(|mut v| std::mem::take(&mut *v))
+        .unwrap_or_default()
+}
+
+/// What the lowering site should do with a classified call (#5206).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvalDecision {
+    /// Const-foldable / known-library site: proceed with the existing
+    /// (placeholder / native-fold) lowering unchanged.
+    Proceed,
+    /// Runtime-unknown site under the default (defer) mode, or a tree-shake
+    /// deferral: compile it to a value that throws this descriptive [`Error`]
+    /// message only when reached.
+    DeferToRuntimeError(String),
 }
 
 fn env_flag(name: &str) -> bool {
@@ -288,35 +401,60 @@ pub fn report(classification: &EvalClassification) {
 /// The single decision point both lowering sites (`new Function` in
 /// `expr_new`, `Function(...)`/`eval(...)` in `expr_call`) funnel through.
 ///
-/// Classifies the site, logs it under `PERRY_EVAL_DIAG`, and returns
-/// `Err` (a span-tagged [`crate::error::LowerError`]) only for the
-/// runtime-unknown bucket — unless `PERRY_ALLOW_EVAL` is set, which
-/// downgrades the refusal to the legacy fall-through. `Ok(())` means the
-/// caller should proceed with its existing lowering (const-foldable /
-/// known-library sites keep their placeholder behaviour for Phase 0).
+/// Classifies the site, logs it under `PERRY_EVAL_DIAG`, and decides what the
+/// caller does with it (#5206):
+///
+/// - const-foldable / known-library buckets → [`EvalDecision::Proceed`]
+///   (existing lowering unchanged).
+/// - runtime-unknown bucket in **strict** mode → `Err` (a span-tagged
+///   [`crate::error::LowerError`]) — the historical hard refusal.
+/// - runtime-unknown bucket in the **default** (defer) mode → records the
+///   site for the end-of-compile notice and returns
+///   [`EvalDecision::DeferToRuntimeError`] with the message the caller should
+///   compile to a throw-on-reach value.
+///
+/// The tree-shake deferral sink (#2309) still short-circuits in either mode:
+/// when armed for a `node_modules` module under tree-shaking, the refusal is
+/// recorded and deferred (the module may be pruned), and the call lowers to
+/// the throw-on-reach value so a *surviving* module still behaves correctly
+/// while the driver re-raises (strict) or notices (defer) it.
 pub fn check_site(
     surface: EvalSurface,
     body_arg: Option<&ast::Expr>,
     source_file_path: &str,
     span: swc_common::Span,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<EvalDecision> {
     let classification = classify(surface, body_arg, source_file_path, span.lo.0);
     report(&classification);
-    if classification.is_refused() && !eval_override_enabled() {
-        // #2309: when the tree-shake deferral sink is armed (a node_modules
-        // module being lowered under tree-shaking), record the refusal and
-        // fall through instead of erroring — the module may be pruned as
-        // unreachable, in which case this refusal never matters. The driver
-        // re-raises any deferred refusal that survives the prune.
-        if crate::deferral::try_defer_refusal(classification.refusal_message(), span.lo.0) {
-            return Ok(());
-        }
+    if !classification.is_refused() {
+        return Ok(EvalDecision::Proceed);
+    }
+
+    let strict = eval_strict_mode();
+
+    // #2309: tree-shake deferral. When the sink is armed (a node_modules
+    // module lowered under tree-shaking), record the refusal and compile to
+    // the throw-on-reach value instead of erroring — the module may be pruned
+    // as unreachable. The driver re-raises any deferred refusal that survives
+    // the prune (strict), or surfaces it in the notice (defer).
+    if crate::deferral::try_defer_refusal(classification.refusal_message(), span.lo.0) {
+        return Ok(EvalDecision::DeferToRuntimeError(
+            classification.deferred_runtime_error_message(),
+        ));
+    }
+
+    if strict {
         return Err(anyhow::Error::new(crate::error::LowerError::new(
             classification.refusal_message(),
             span,
         )));
     }
-    Ok(())
+
+    // Default (defer) mode: throw-on-reach + visible end-of-compile notice.
+    record_deferred_site(&classification);
+    Ok(EvalDecision::DeferToRuntimeError(
+        classification.deferred_runtime_error_message(),
+    ))
 }
 
 #[cfg(test)]
@@ -446,5 +584,93 @@ mod tests {
         let p = c.body_preview.unwrap();
         assert!(p.ends_with('…'));
         assert_eq!(p.chars().count(), 49); // 48 chars + ellipsis
+    }
+
+    #[test]
+    fn deferred_runtime_error_message_names_surface_and_location() {
+        let body = non_const();
+        let c = classify(EvalSurface::NewFunction, Some(&body), "/app/x.ts", 0);
+        let msg = c.deferred_runtime_error_message();
+        assert!(msg.contains("new Function()"));
+        assert!(msg.contains("ahead-of-time compiled binary"));
+        assert!(msg.contains("/app/x.ts"));
+
+        let body = non_const();
+        let c = classify(EvalSurface::Eval, Some(&body), "/app/x.ts", 0);
+        assert!(c.deferred_runtime_error_message().contains("eval()"));
+    }
+
+    /// Default (non-strict) mode: a runtime-unknown site defers to a
+    /// throw-on-reach value AND is recorded for the end-of-compile notice.
+    #[test]
+    fn default_mode_defers_runtime_unknown_and_records_site() {
+        set_eval_strict_mode(false);
+        // Use a unique path so this test's recorded site is identifiable even
+        // if other tests push to the process-global sink concurrently.
+        let path = "/app/default_mode_defers_fixture.ts";
+        let span = Span::new(BytePos(0), BytePos(0));
+        let body = non_const();
+        let decision = check_site(EvalSurface::Eval, Some(&body), path, span).expect("no error");
+        match decision {
+            EvalDecision::DeferToRuntimeError(msg) => {
+                assert!(msg.contains("eval()"));
+                assert!(msg.contains(path));
+            }
+            other => panic!("expected defer, got {other:?}"),
+        }
+        let sites = take_deferred_eval_sites();
+        let mine: Vec<_> = sites.iter().filter(|s| s.location.contains(path)).collect();
+        assert_eq!(mine.len(), 1, "exactly one recorded site for {path}");
+        assert_eq!(mine[0].kind, "eval(...)");
+    }
+
+    /// Strict-eval mode: a runtime-unknown site is a hard compile-time error.
+    #[test]
+    fn strict_mode_refuses_runtime_unknown() {
+        // PERRY_ALLOW_EVAL would force non-strict; only assert when unset.
+        if eval_override_enabled() {
+            return;
+        }
+        set_eval_strict_mode(true);
+        let span = Span::new(BytePos(0), BytePos(0));
+        let body = non_const();
+        let path = "/app/strict_refuses_fixture.ts";
+        let res = check_site(EvalSurface::Eval, Some(&body), path, span);
+        assert!(res.is_err(), "strict mode must refuse runtime-unknown");
+        // No notice site recorded for this path in strict mode.
+        assert!(
+            !take_deferred_eval_sites()
+                .iter()
+                .any(|s| s.location.contains(path)),
+            "strict mode must not record a notice site"
+        );
+        set_eval_strict_mode(false); // restore for sibling tests on this thread
+    }
+
+    /// Const-foldable sites always proceed regardless of mode.
+    #[test]
+    fn const_foldable_always_proceeds() {
+        set_eval_strict_mode(true);
+        let span = Span::new(BytePos(0), BytePos(0));
+        let body = str_lit("return 1");
+        let decision = check_site(EvalSurface::NewFunction, Some(&body), "/app/main.ts", span)
+            .expect("const-foldable never errors");
+        assert_eq!(decision, EvalDecision::Proceed);
+        set_eval_strict_mode(false);
+    }
+
+    /// `PERRY_ALLOW_EVAL` forces non-strict even when strict is requested.
+    #[test]
+    fn allow_eval_env_forces_non_strict() {
+        // Only meaningful when the env var is actually set; otherwise the
+        // back-compat alias has nothing to override and we skip.
+        if !eval_override_enabled() {
+            return;
+        }
+        set_eval_strict_mode(true);
+        assert!(
+            !eval_strict_mode(),
+            "PERRY_ALLOW_EVAL must force non-strict"
+        );
     }
 }

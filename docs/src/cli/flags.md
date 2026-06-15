@@ -86,6 +86,7 @@ Minification strips comments, collapses whitespace, and mangles local variable/p
 | `--enable-js-runtime` | Enable V8 JavaScript runtime for unsupported npm packages |
 | `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected when `WebAssembly.*` is referenced; needed only when loading via dlopen / FFI without a static reference) |
 | `--type-check` | Enable type checking via tsgo IPC |
+| `--strict-eval` | Fail the build if any runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site is reachable. By default such a site is compiled to a deferred runtime error (throws only if reached) and a compile-time notice is printed. Also settable via `perry.eval = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
 
 ## Environment Variables
 

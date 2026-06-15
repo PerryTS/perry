@@ -40,7 +40,8 @@ pub use dynamic_import::{
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;
 pub use eval_classifier::{
-    classify as classify_eval_surface, EvalBucket, EvalClassification, EvalSurface,
+    classify as classify_eval_surface, set_eval_strict_mode, take_deferred_eval_sites,
+    DeferredEvalSite, EvalBucket, EvalClassification, EvalDecision, EvalSurface,
 };
 pub use ir::*;
 pub use js_transform::{

@@ -115,27 +115,32 @@ pub(super) fn try_require_literal(
 /// before this (in `lower_call_inner`) and short-circuits, so its inner
 /// `Function('return this')` never reaches here.
 ///
-/// Returns `Err` (span-tagged) only for the runtime-unknown bucket —
-/// const-foldable (string-literal body) and known-codegen-library sites
-/// log under `PERRY_EVAL_DIAG` and fall through to the existing lowering
-/// (a bare `Function`/`eval` ident → `GlobalGet(0)` sentinel) unchanged,
-/// to be picked up by later phases. `Ok(())` means proceed.
-pub(super) fn check_eval_function_call(ctx: &LoweringContext, call: &ast::CallExpr) -> Result<()> {
+/// In strict-eval mode returns `Err` (span-tagged) for the runtime-unknown
+/// bucket — const-foldable (string-literal body) and known-codegen-library
+/// sites log under `PERRY_EVAL_DIAG` and fall through (`Ok(None)`) to the
+/// existing lowering, to be picked up by later phases. Under the default
+/// (defer) mode a runtime-unknown site returns `Ok(Some(throw_value))`
+/// (#5206): the caller uses that expression in place of the call so it
+/// throws a descriptive `Error` only if reached. `Ok(None)` means proceed.
+pub(super) fn check_eval_function_call(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+) -> Result<Option<Expr>> {
     let ast::Callee::Expr(callee_expr) = &call.callee else {
-        return Ok(());
+        return Ok(None);
     };
     let mut callee = callee_expr.as_ref();
     while let ast::Expr::Paren(p) = callee {
         callee = p.expr.as_ref();
     }
     let ast::Expr::Ident(ident) = callee else {
-        return Ok(());
+        return Ok(None);
     };
     let name = ident.sym.as_ref();
     let surface = match name {
         "eval" => crate::eval_classifier::EvalSurface::Eval,
         "Function" => crate::eval_classifier::EvalSurface::FunctionCall,
-        _ => return Ok(()),
+        _ => return Ok(None),
     };
     // A local/func/imported binding named `eval`/`Function` shadows the
     // builtin — leave those alone.
@@ -143,7 +148,7 @@ pub(super) fn check_eval_function_call(ctx: &LoweringContext, call: &ast::CallEx
         || ctx.lookup_func(name).is_some()
         || ctx.lookup_imported_func(name).is_some()
     {
-        return Ok(());
+        return Ok(None);
     }
     // Body argument: the only arg for `eval(code)`, the last arg for
     // `Function(p1, p2, body)`. A spread in the body position yields a
@@ -153,7 +158,14 @@ pub(super) fn check_eval_function_call(ctx: &LoweringContext, call: &ast::CallEx
         _ => call.args.last(),
     }
     .map(|a| a.expr.as_ref());
-    crate::eval_classifier::check_site(surface, body_arg, &ctx.source_file_path, call.span)
+    match crate::eval_classifier::check_site(surface, body_arg, &ctx.source_file_path, call.span)? {
+        crate::eval_classifier::EvalDecision::Proceed => Ok(None),
+        crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => Ok(Some(
+            super::super::const_fold_fn::synth_deferred_eval_value(
+                ctx, surface, &message, call.span,
+            )?,
+        )),
+    }
 }
 
 pub(super) fn try_strict_eval_arguments_assignment(

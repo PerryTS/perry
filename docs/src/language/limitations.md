@@ -20,14 +20,52 @@ explicit `typeof` checks and `instanceof`.
 
 ## No eval() or Dynamic Code
 
-Perry compiles to native code ahead of time. Dynamic code execution is not possible:
+Perry compiles to native code ahead of time. It cannot evaluate a code string
+that is only known at runtime. A *constant* code string is the exception —
+`eval("1 + 1")` and `new Function("a", "b", "return a + b")` are compiled to
+real native functions (#1679). Only a body built from runtime data hits this
+limit:
 
-<!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
-```text
-// Not supported
-eval("console.log('hi')");
-new Function("return 42");
+```ts
+// Constant body → compiled natively (works)
+const add = new Function("a", "b", "return a + b");
+
+// Runtime-built body → cannot be compiled ahead of time
+function run(src: string) { return new Function(`return (${src})`)(); }
 ```
+
+### Default: deferred runtime error + compile-time notice (#5206)
+
+By default a runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site
+does **not** block the build. Perry compiles it to a value that throws a
+descriptive `Error` *only if it is actually reached* (an `eval(...)` throws when
+evaluated; a `new Function(...)` returns a function that throws when called),
+and prints a single end-of-compile notice listing every degraded site:
+
+```text
+notice: 2 runtime-eval site(s) compiled to a deferred runtime error (throws only if reached):
+  - new Function(...)   src/cli/cmd/debug/agent.handler.ts:41
+  - eval(...)           src/foo.ts:12
+  Pass --strict-eval (or set perry.eval = "error") to make these a compile-time error instead.
+```
+
+This lets a single such call in a cold path ship without aborting the whole
+build, while still failing loudly (and catchably) if that path runs.
+
+### Strict mode: refuse at compile time
+
+To make every runtime-unknown site a hard compile-time error instead, opt into
+strict-eval mode by any of:
+
+- the `--strict-eval` flag on `perry compile`,
+- `"perry": { "eval": "error" }` (or `"perry": { "strict": true }`) in
+  `package.json`, or
+- `[perry]` `eval = "error"` (or `strict = true`) in `perry.toml`.
+
+`perry.eval` accepts `"defer"` (the default) or `"error"`. Precedence is
+package.json/perry.toml config → `--strict-eval` (opts in). The legacy
+`PERRY_ALLOW_EVAL=1` environment variable still works: it forces non-strict
+(defer) mode for a one-off build, overriding any strict flag/config.
 
 Test262 rows that only observe parsing or executing a code string remain
 intentional AOT exclusions, not runtime dynamic-code work. This includes the

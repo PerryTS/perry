@@ -346,6 +346,28 @@ pub(super) fn apply_pkg_and_toml_config(
                 {
                     ctx.lockdown = ld;
                 }
+                // #5206: `perry.eval = "defer" | "error"` and/or
+                // `perry.strict = true` select strict-eval mode. `perry.eval`
+                // wins if both are present (most specific). Unknown
+                // `perry.eval` strings are ignored (default keeps "defer").
+                if let Some(strict) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("strict"))
+                    .and_then(|v| v.as_bool())
+                {
+                    ctx.strict_eval = strict;
+                }
+                if let Some(mode) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("eval"))
+                    .and_then(|v| v.as_str())
+                {
+                    match mode {
+                        "error" | "strict" => ctx.strict_eval = true,
+                        "defer" => ctx.strict_eval = false,
+                        _ => {}
+                    }
+                }
                 // #502: perry.allowedHosts — compile-time URL/host
                 // egress allowlist. Patterns: exact host, "*.foo.com"
                 // subdomain wildcard, "https://host/prefix*" URL
@@ -476,6 +498,55 @@ pub(super) fn apply_pkg_and_toml_config(
     if args.lockdown {
         ctx.lockdown = true;
     }
+
+    // #5206 — strict-eval precedence (last wins): package.json
+    // `perry.eval`/`perry.strict` (read above) → perry.toml `[perry] eval` /
+    // `[perry] strict` → env `PERRY_ALLOW_EVAL=1` (forces OFF, back-compat) →
+    // CLI `--strict-eval`. The toml read is folded into the i18n/app-metadata
+    // perry.toml parse below; here we apply the env + CLI layers.
+    if let Some(dir) = {
+        let mut d = Some(project_root.to_path_buf());
+        let mut found = None;
+        while let Some(dir) = d {
+            if dir.join("perry.toml").exists() {
+                found = Some(dir);
+                break;
+            }
+            d = dir.parent().map(Path::to_path_buf);
+        }
+        found
+    } {
+        if let Some(table) = fs::read_to_string(dir.join("perry.toml"))
+            .ok()
+            .and_then(|s| s.parse::<toml::Table>().ok())
+        {
+            if let Some(perry_tbl) = table.get("perry").and_then(|v| v.as_table()) {
+                if let Some(strict) = perry_tbl.get("strict").and_then(|v| v.as_bool()) {
+                    ctx.strict_eval = strict;
+                }
+                if let Some(mode) = perry_tbl.get("eval").and_then(|v| v.as_str()) {
+                    match mode {
+                        "error" | "strict" => ctx.strict_eval = true,
+                        "defer" => ctx.strict_eval = false,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    // CLI flag opts in.
+    if args.strict_eval {
+        ctx.strict_eval = true;
+    }
+    // Back-compat: `PERRY_ALLOW_EVAL` forces non-strict for a one-off build,
+    // overriding any strict flag/config.
+    if perry_hir::eval_classifier::eval_override_enabled() {
+        ctx.strict_eval = false;
+    }
+    // Install into the HIR thread-local before any lowering begins (re-applied
+    // per rayon worker in collect_modules.rs, mirroring the dynamic-stdlib
+    // dispatch knob above).
+    perry_hir::set_eval_strict_mode(ctx.strict_eval);
 
     // #3527 (blocker #4): materialize `"*"` / `"@scope/*"` wildcard entries
     // in `perry.compilePackages` into concrete installed package names.

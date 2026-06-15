@@ -702,6 +702,9 @@ fn collect_module_one(
     // inherit the thread-local set on the main thread by `compile.rs`.
     perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
     perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+    // #5206: re-install strict-eval mode on this (possibly rayon-worker)
+    // thread before each lower, mirroring the dynamic-stdlib knob above.
+    perry_hir::set_eval_strict_mode(ctx.strict_eval);
     // #503: stash the module source text so the dynamic-dispatch check
     // can look up `// @perry-allow-dynamic` line annotations adjacent to
     // any violation site without re-reading the file. Cleared right

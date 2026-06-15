@@ -85,6 +85,75 @@ fn synth_throwing_iife(
     lowered
 }
 
+/// #5206: synthesize the throw-on-reach value for a runtime-unknown `eval`
+/// / `Function` / `new Function` site under the default (defer) mode. The
+/// `message` is the descriptive
+/// [`crate::eval_classifier::EvalClassification::deferred_runtime_error_message`].
+///
+/// - For `eval(...)` the value is a throwing IIFE — the throw happens when
+///   the `eval(...)` call evaluates (it is "reached" the moment control
+///   reaches the eval).
+/// - For `Function(...)` / `new Function(...)` the value is a *function* that
+///   throws when called — constructing it is fine; invoking the result is
+///   what's "reached". The site replaces the whole `new Function(...)` /
+///   `Function(...)` expression, so it must evaluate to that function value.
+pub(crate) fn synth_deferred_eval_value(
+    ctx: &mut LoweringContext,
+    surface: EvalSurface,
+    message: &str,
+    span: swc_common::Span,
+) -> Result<Expr> {
+    // JSON-encode the message so embedded quotes / newlines are safe inside
+    // the synthesized source string literal.
+    let lit = json_string_literal(message);
+    let throw_stmt = format!("throw new Error({lit});");
+    match surface {
+        EvalSurface::Eval => synth_throwing_iife(ctx, &throw_stmt, span),
+        EvalSurface::FunctionCall | EvalSurface::NewFunction => {
+            // A function value that throws on invocation.
+            let src = format!("(function () {{ {throw_stmt} }});\n");
+            let module = perry_parser::parse_typescript(&src, "<deferred eval value>.cjs")
+                .map_err(|e| anyhow::Error::new(LowerError::new(format!("internal: {e}"), span)))?;
+            let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) =
+                module.body.into_iter().next().ok_or_else(|| {
+                    anyhow::Error::new(LowerError::new("internal: empty synth".to_string(), span))
+                })?
+            else {
+                return Err(anyhow::Error::new(LowerError::new(
+                    "internal: synth shape".to_string(),
+                    span,
+                )));
+            };
+            let outer_strict = ctx.current_strict;
+            ctx.current_strict = false;
+            let lowered = lower_expr(ctx, &expr_stmt.expr);
+            ctx.current_strict = outer_strict;
+            lowered
+        }
+    }
+}
+
+/// Minimal JSON string-literal encoder for embedding a message into
+/// synthesized source. Escapes the characters that would break a double-
+/// quoted JS string literal.
+fn json_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Render an `f64` the way JavaScript's `Number::toString` (radix 10) would,
 /// for the small primitive subset Test262 hands to `new Function`. Exactness
 /// only matters when the number lands in a *parameter* slot (where it is an
