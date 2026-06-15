@@ -22,6 +22,13 @@ pub(super) fn emit_string_pool(
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
+    // Wall 51: per-class standalone-constructor arity, accounting for the
+    // synthesized `super(...args)` forwarding ctor a no-own-ctor class with
+    // heritage inherits (its arity comes from the nearest ancestor ctor, which
+    // may be cross-module). Keyed by canonical class name. Overrides the naive
+    // `class.constructor.params.len()` (which is 0 for a no-own-ctor class) so
+    // the registered `total_params` matches the emitted ctor's real signature.
+    ctor_arity_overrides: &HashMap<String, u32>,
     closure_rest_params: &HashMap<u32, usize>,
     // Declared ABI arity for non-rest closures, used for runtime padding.
     closure_arities: &HashMap<u32, u32>,
@@ -491,11 +498,21 @@ pub(super) fn emit_string_pool(
         // Class-expression templates with no own/synthesized constructor (no
         // captures) have arity 0 — the standalone ctor then just runs the
         // literal field initializers.
-        let ctor_params = class
-            .constructor
-            .as_ref()
-            .map(|c| c.params.len() as u32)
-            .unwrap_or(0);
+        // Wall 51: prefer the synthesized-ctor arity override (which walks the
+        // ancestor chain for a no-own-ctor class with heritage, incl.
+        // cross-module parents) so the registered `total_params` matches the
+        // standalone ctor function actually emitted in `artifacts.rs`. Falls
+        // back to the own-ctor param count for classes not in the map.
+        let ctor_params = ctor_arity_overrides
+            .get(class_name)
+            .copied()
+            .unwrap_or_else(|| {
+                class
+                    .constructor
+                    .as_ref()
+                    .map(|c| c.params.len() as u32)
+                    .unwrap_or(0)
+            });
         ctor_triples.push((
             cid,
             format!("{}__{}_constructor", module_prefix, class_name),

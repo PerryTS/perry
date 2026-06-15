@@ -79,6 +79,82 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub cross_module: &'a CrossModuleCtx,
 }
 
+/// The standalone-constructor arity Perry emits for `class`, accounting for the
+/// JS spec default ctor `constructor(...args) { super(...args) }` that a class
+/// with NO own constructor but WITH heritage inherits. Walks the ancestor chain
+/// (local `class_table` + cross-module `imported_classes` ctor-param counts +
+/// imported stubs) for the nearest ctor-bearing parent's user arity, mirroring
+/// the `found_params` walk in the per-class ctor emission below.
+///
+/// This MUST agree with the synthesized standalone ctor's actual LLVM signature,
+/// otherwise the runtime registers a different `total_params` than the function
+/// declares and `replay_registered_class_constructor` forwards the wrong number
+/// of args (Next.js wall 51: `class AppRouteRouteMatcher extends
+/// _mod.RouteMatcher {}` emitted a 1-param forwarding ctor but registered it as
+/// 0 params, so `new mod.AppRouteRouteMatcher(def)` dropped `def` before
+/// `RouteMatcher(definition)` ran and every matcher's `this.definition` was a
+/// garbage number).
+fn synthesized_ctor_param_count(
+    class: &perry_hir::Class,
+    class_table: &HashMap<String, &perry_hir::Class>,
+    imported_class_stubs: &[perry_hir::Class],
+    imported_classes: &[super::opts::ImportedClass],
+) -> usize {
+    if let Some(c) = class.constructor.as_ref() {
+        return c.params.len();
+    }
+    // A native parent (`extends Error` / `extends events.EventEmitter`) has its
+    // own native construction path that consumes the construction args directly;
+    // don't synthesize a forwarding ctor for it.
+    if class.native_extends.is_some() {
+        return 0;
+    }
+    // No heritage at all → nothing to forward.
+    if class.extends_name.is_none() && class.extends_expr.is_none() {
+        return 0;
+    }
+    // Walk ancestors for the nearest ctor-bearing parent's user arity.
+    let mut cur = class.extends_name.clone();
+    while let Some(pname) = cur {
+        let imported_ctor_params = imported_classes
+            .iter()
+            .find(|i| i.local_alias.as_deref().unwrap_or(&i.name) == pname.as_str())
+            .map(|ic| ic.constructor_param_count)
+            .unwrap_or(0);
+        if let Some(pclass) = class_table.get(pname.as_str()) {
+            if let Some(pctor) = &pclass.constructor {
+                return pctor.params.len();
+            }
+            if imported_ctor_params > 0 {
+                return imported_ctor_params;
+            }
+            cur = pclass.extends_name.clone();
+        } else if let Some(stub) = imported_class_stubs.iter().find(|c| c.name == pname) {
+            if imported_ctor_params > 0 {
+                return imported_ctor_params;
+            }
+            cur = stub.extends_name.clone();
+        } else {
+            break;
+        }
+    }
+    // The parent's exact ctor arity is genuinely unavailable here in some build
+    // modes: the auto-optimize / standalone path compiles each nested
+    // `node_modules` module with an EMPTY `imported_classes` list and resolves
+    // the cross-module parent purely as a runtime DYNAMIC parent
+    // (`extends_expr` + `js_register_class_parent_dynamic`), so it is absent
+    // from `class_table` and `imported_class_stubs` here. Without a forwarding
+    // signature the synthesized `super()` dropped every construction arg
+    // (Next.js wall 51: `class PagesRouteMatcher extends _mod.RouteMatcher {}`
+    // → `RouteMatcher(definition)` saw garbage → every matcher's
+    // `this.definition` was undefined). Forward a generous fixed band of
+    // positional params: the `new` site pads missing slots with `undefined`,
+    // and a parent ctor reading fewer params ignores the trailing `undefined`s,
+    // so over-declaring is correct for any (non-native) parent up to this band.
+    const UNRESOLVED_PARENT_FWD_ARITY: usize = 8;
+    UNRESOLVED_PARENT_FWD_ARITY
+}
+
 /// Emit the artifact tail: bodies, wrappers, namespace globals, entry
 /// function, string pool. Mirrors the in-prelude execution order of
 /// the original `compile_module`.
@@ -341,78 +417,31 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let ctor_body = if let Some(c) = class.constructor.as_ref() {
                 (c.params.clone(), c.body.clone(), c.captures.clone())
             } else if class.extends_name.is_some() {
-                // Walk ancestors for the first one with a ctor; adopt its
-                // params (cleared of ids — they'll be fresh).
-                let mut found_params: Vec<perry_hir::Param> = Vec::new();
-                let mut cur = class.extends_name.clone();
-                while let Some(pname) = cur {
-                    // v0.5.760: also consult `opts.imported_classes` for
-                    // cross-module parent ctors. Pre-fix the loop fell
-                    // through to the next ancestor when `class_table`'s
-                    // entry for an imported class returned a stub with
-                    // `constructor: None` (stubs always have None) — even
-                    // though the source module did have a real ctor/effect.
-                    // Result: `class Child extends Parent { x =
-                    // "y" }` (no own ctor, parent in another module) had
-                    // its synthesized ctor with ZERO params, so the user's
-                    // `new Child("arg")` lost the arg before reaching
-                    // Parent_constructor. Explicit zero-arg ctors and
-                    // field-initializer ctors still stop the walk even with
-                    // zero adopted params. Refs #420.
-                    let imported_ctor = opts
-                        .imported_classes
-                        .iter()
-                        .find(|i| i.local_alias.as_deref().unwrap_or(&i.name) == pname.as_str())
-                        .filter(|ic| {
-                            ic.constructor_param_count > 0
-                                || ic.has_own_constructor
-                                || ic.has_instance_fields
-                        });
-                    if let Some(pclass) = class_table.get(pname.as_str()) {
-                        if let Some(pctor) = &pclass.constructor {
-                            found_params = pctor.params.clone();
-                            break;
-                        }
-                        if let Some(imported_ctor) = imported_ctor {
-                            for i in 0..imported_ctor.constructor_param_count {
-                                found_params.push(perry_hir::Param {
-                                    id: 0xFFFF_0000 + i as u32,
-                                    name: format!("__forward_arg{}", i),
-                                    ty: perry_types::Type::Any,
-                                    default: None,
-                                    decorators: Vec::new(),
-                                    is_rest: false,
-                                    arguments_object: None,
-                                });
-                            }
-                            break;
-                        }
-                        cur = pclass.extends_name.clone();
-                    } else if let Some(stub) = imported_class_stubs.iter().find(|c| c.name == pname)
-                    {
-                        // Imported stub — params not in HIR; use effectful
-                        // ctor metadata as a synthetic count of unnamed args.
-                        if let Some(imported_ctor) = imported_ctor {
-                            for i in 0..imported_ctor.constructor_param_count {
-                                found_params.push(perry_hir::Param {
-                                    id: 0xFFFF_0000 + i as u32,
-                                    name: format!("__forward_arg{}", i),
-                                    ty: perry_types::Type::Any,
-                                    default: None,
-                                    decorators: Vec::new(),
-                                    is_rest: false,
-                                    arguments_object: None,
-                                });
-                            }
-                        } else {
-                            cur = stub.extends_name.clone();
-                            continue;
-                        }
-                        break;
-                    } else {
-                        break;
-                    }
-                }
+                // No own ctor + heritage → JS spec default ctor
+                // `constructor(...args) { super(...args) }`. Synthesize forwarding
+                // params matching the closest ancestor ctor's arity (incl.
+                // cross-module parents) via the shared helper — its result is
+                // ALSO what gets registered into CLASS_CONSTRUCTORS below, so the
+                // emitted signature and the runtime `total_params` always agree
+                // (Next.js wall 51). The actual `super(...)` is emitted by the
+                // compile_method post-init step from these params positionally.
+                let n = synthesized_ctor_param_count(
+                    class,
+                    class_table,
+                    imported_class_stubs,
+                    opts.imported_classes,
+                );
+                let found_params: Vec<perry_hir::Param> = (0..n)
+                    .map(|i| perry_hir::Param {
+                        id: 0xFFFF_0000 + i as u32,
+                        name: format!("__forward_arg{}", i),
+                        ty: perry_types::Type::Any,
+                        default: None,
+                        decorators: Vec::new(),
+                        is_rest: false,
+                        arguments_object: None,
+                    })
+                    .collect();
                 (found_params, Vec::new(), Vec::new())
             } else {
                 (Vec::new(), Vec::new(), Vec::new())
@@ -1616,6 +1645,26 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         user_fn_source.push((sym, src.clone()));
     }
 
+    // Wall 51: the standalone-ctor arity registered into CLASS_CONSTRUCTORS must
+    // match the arity of the ctor function actually emitted above (which, for a
+    // no-own-ctor class with heritage, is the synthesized `super(...args)`
+    // forwarding ctor whose arity comes from the nearest ancestor ctor — possibly
+    // cross-module). Compute that arity here with the same walk so the runtime
+    // forwards the right number of construction args to the parent ctor.
+    let ctor_arity_overrides: HashMap<String, u32> = class_table
+        .iter()
+        .filter(|(name, class)| **name == class.name && class.id != 0)
+        .map(|(name, class)| {
+            let n = synthesized_ctor_param_count(
+                class,
+                class_table,
+                imported_class_stubs,
+                opts.imported_classes,
+            ) as u32;
+            (name.clone(), n)
+        })
+        .collect();
+
     emit_string_pool(
         llmod,
         strings,
@@ -1623,6 +1672,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         class_keys_init_data,
         class_ids,
         class_table,
+        &ctor_arity_overrides,
         closure_rest_params,
         closure_arities,
         closure_lengths,
