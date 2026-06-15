@@ -38,6 +38,19 @@ pub(crate) enum ExoticKind {
     /// the boxed payload. Built-in getters (`duration.years`, `plainDate.month`)
     /// stay in the Temporal dispatch path; only true expando keys land here.
     Temporal,
+    /// A `Promise` is a `GC_TYPE_PROMISE` cell, NOT an `ObjectHeader`, so a
+    /// plain property write (`p.status = "pending"`, `Object.assign(p, …)`)
+    /// must land in the side table rather than being bit-cast through the
+    /// `ObjectHeader` field path (which silently dropped the write — reads came
+    /// back `undefined`). Libraries attach bookkeeping to the promise object
+    /// itself: @tanstack/query-core's `pendingThenable()` stores `status` /
+    /// `value` on the promise and gates its retryer on `thenable.status`, so a
+    /// dropped expando left `isResolved()` permanently true and the fetch never
+    /// resolved (#5142). Built-in `then`/`catch`/`finally` reads stay on the
+    /// promise dispatch path; only true expando keys land here. Unlike Date /
+    /// Temporal, a promise is movable, so its expando entry is rekeyed on GC
+    /// move via `exotic_expando_owner_moved`.
+    Promise,
 }
 
 /// Classify `addr` as a Date cell, RegExp header, or Error header. Returns
@@ -52,6 +65,7 @@ pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
         crate::gc::GC_TYPE_DATE_CELL => Some(ExoticKind::Date),
         crate::gc::GC_TYPE_ERROR => Some(ExoticKind::Error),
         crate::gc::GC_TYPE_TEMPORAL => Some(ExoticKind::Temporal),
+        crate::gc::GC_TYPE_PROMISE => Some(ExoticKind::Promise),
         crate::gc::GC_TYPE_OBJECT if crate::regex::is_regex_pointer(addr as *const u8) => {
             Some(ExoticKind::RegExp)
         }
@@ -188,6 +202,25 @@ pub(crate) fn expando_clear_on_alloc(addr: usize) {
     });
 }
 
+/// Rekey a movable exotic cell's expando entry after the GC relocates it from
+/// `old_addr` to `new_addr`. Date / RegExp / Temporal cells are non-movable so
+/// this never fires for them, but a `Promise` (`GC_TYPE_PROMISE`) is movable —
+/// without this, a `.then()`-chained thenable that survives a GC move would
+/// lose the `status`/`value` expandos it was gated on. Stored expando *values*
+/// are already rewritten by `scan_exotic_expando_roots_mut`; this migrates the
+/// owner *key*. Wired via `GcMoveHookKind::ExoticExpandoOwner`.
+pub(crate) fn exotic_expando_owner_moved(old_addr: usize, new_addr: usize) {
+    if !expando_in_use() || old_addr == new_addr {
+        return;
+    }
+    EXOTIC_EXPANDO.with(|m| {
+        let mut map = m.borrow_mut();
+        if let Some(entries) = map.remove(&old_addr) {
+            map.insert(new_addr, entries);
+        }
+    });
+}
+
 /// `[[Set]]` on a Date/RegExp/Error instance. Honors accessor descriptors
 /// and attribute writability from the generic side tables, plus the RegExp
 /// `lastIndex` header slot and non-extensibility for new keys. Returns
@@ -244,6 +277,10 @@ pub(crate) unsafe fn exotic_set_property(
             ExoticKind::RegExp => "RegExp",
             ExoticKind::Error => "Error",
             ExoticKind::Temporal => "",
+            // Promise.prototype's `then`/`catch`/`finally` are methods, not
+            // generic accessors in the side table, so there is no
+            // prototype-accessor setter to consult; store the own expando.
+            ExoticKind::Promise => "",
         };
         let proto = if proto_name.is_empty() {
             f64::from_bits(crate::value::TAG_UNDEFINED)

@@ -167,6 +167,8 @@ where
         | Expr::MathFloor(v)
         | Expr::MathCeil(v)
         | Expr::MathRound(v)
+        | Expr::MathTrunc(v)
+        | Expr::MathSign(v)
         | Expr::MathAbs(v)
         | Expr::MathSqrt(v)
         | Expr::MathLog(v)

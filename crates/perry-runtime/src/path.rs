@@ -870,6 +870,7 @@ pub extern "C" fn js_path_to_namespaced_path_value(value: f64) -> f64 {
     string_value_to_namespaced_path(value, false)
 }
 
+#[cfg(feature = "regex-engine")]
 fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'a str>)> {
     let bytes = pattern.as_bytes();
     let mut depth = 0usize;
@@ -900,6 +901,7 @@ fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'
     None
 }
 
+#[cfg(feature = "regex-engine")]
 fn extglob_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, char, Vec<&'a str>)> {
     let bytes = pattern.as_bytes();
     if open + 1 >= bytes.len() || bytes[open + 1] != b'(' {
@@ -939,6 +941,7 @@ fn extglob_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, char
     None
 }
 
+#[cfg(feature = "regex-engine")]
 fn push_regex_literal(c: char, out: &mut String) {
     match c {
         '.' | '+' | '(' | ')' | '|' | '^' | '$' | '}' | '\\' => {
@@ -949,6 +952,7 @@ fn push_regex_literal(c: char, out: &mut String) {
     }
 }
 
+#[cfg(feature = "regex-engine")]
 fn push_glob_regex(pattern: &str, out: &mut String) {
     let bytes = pattern.as_bytes();
     let mut i = 0;
@@ -1041,6 +1045,7 @@ fn push_glob_regex(pattern: &str, out: &mut String) {
 /// minimatch with `windowsPathsNoEscape`, so backslashes in the pattern are
 /// path separators, not escapes. `**` is a globstar only as a whole path
 /// segment; embedded `**` has ordinary `*` segment-wildcard behavior.
+#[cfg(feature = "regex-engine")]
 fn glob_to_regex(pattern: &str) -> String {
     let mut out = String::from("^");
     let normalized = pattern.replace('\\', "/");
@@ -1056,6 +1061,7 @@ pub extern "C" fn js_path_matches_glob(
     path_ptr: *const StringHeader,
     pattern_ptr: *const StringHeader,
 ) -> i32 {
+    #[cfg(feature = "regex-engine")]
     unsafe {
         let path_str = string_from_header(path_ptr).unwrap_or_default();
         let pattern = string_from_header(pattern_ptr).unwrap_or_default();
@@ -1070,6 +1076,13 @@ pub extern "C" fn js_path_matches_glob(
             }
             Err(_) => 0,
         }
+    }
+    // Glob matching is built on the regex engine; with it gated off, report
+    // "no match" (a program that calls `path.matchesGlob` forces the engine on).
+    #[cfg(not(feature = "regex-engine"))]
+    {
+        let _ = (path_ptr, pattern_ptr);
+        0
     }
 }
 
@@ -1428,6 +1441,7 @@ pub extern "C" fn js_path_win32_matches_glob(
     path_ptr: *const StringHeader,
     pattern_ptr: *const StringHeader,
 ) -> i32 {
+    #[cfg(feature = "regex-engine")]
     unsafe {
         let path_str = string_from_header(path_ptr)
             .unwrap_or_default()
@@ -1444,6 +1458,11 @@ pub extern "C" fn js_path_win32_matches_glob(
             }
             Err(_) => 0,
         }
+    }
+    #[cfg(not(feature = "regex-engine"))]
+    {
+        let _ = (path_ptr, pattern_ptr);
+        0
     }
 }
 
@@ -1651,7 +1670,7 @@ mod posix_parse_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "regex-engine"))]
 mod glob_tests {
     use super::glob_to_regex;
 

@@ -17,6 +17,424 @@ pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
     lower_stmts_using_aware(ctx, &block.stmts)
 }
 
+/// Collect identifier names referenced INSIDE any closure (arrow / function
+/// expression / nested function declaration / class member) within a statement
+/// (`in_cl` = whether we are already inside a closure body).
+///
+/// Used by the Phase 1.6 forward `let`/`const` pre-registration in
+/// `lower_fn_body_block_stmt` to box ONLY bindings a closure can actually
+/// capture, rather than every top-level binding in a closure-containing body
+/// (the latter regressed Next.js at scale — start-server's `initialize()`
+/// exited after "Ready"). Over-collection is harmless (a collected name that
+/// isn't a top-level `let`/`const` is simply ignored); under-collection on an
+/// exotic AST node degrades to the pre-fix behavior for that one binding.
+/// Collect every binding identifier (name + span low offset) introduced by a
+/// declarator pattern, recursing through array / object destructuring. The span
+/// keys `lexical_forward_decls` so the destructuring binding site reuses the
+/// forward-pre-registered (boxed) local. Mirrors the binding sites in
+/// `destructuring/pattern_binding.rs` (`Pat::Ident` leaf and the `{ key }`
+/// shorthand `ObjectPatProp::Assign`).
+/// Pre-register the top-level `let`/`const` bindings of a function body that
+/// are FORWARD-captured — referenced by a closure (arrow / function expression
+/// / nested function declaration) appearing EARLIER in the body than the
+/// binding's declaration. Each such binding is defined as a boxed function-
+/// scope local now (so the earlier closure resolves it to the local and
+/// captures the live box) and span-keyed in `lexical_forward_decls` so the
+/// declaration — including a destructuring leaf — reuses the same id. Returns
+/// the pre-registered ids so the caller can prealloc their boxes at entry.
+///
+/// `body_entry_locals_len` is `ctx.locals.len()` captured before any of this
+/// body's own locals were defined — anything at or above it is in THIS scope,
+/// so a binding that shadows an outer name still gets a fresh local. Shared by
+/// `lower_fn_body_block_stmt` (function declarations + arrows) and
+/// `lower_fn_expr` (the cjs `const _cjs = (function(){…})()` wrapper, where the
+/// `_export(exports, { X: () => X })` getter forward-captures a later `const {
+/// X } = …`).
+pub(crate) fn pre_register_forward_captured_lets(
+    ctx: &mut LoweringContext,
+    block: &ast::BlockStmt,
+    body_entry_locals_len: usize,
+) -> Vec<LocalId> {
+    let mut forward_boxed_ids: Vec<LocalId> = Vec::new();
+    let mut seen_closure_refs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for stmt in &block.stmts {
+        if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
+            if matches!(
+                var_decl.kind,
+                ast::VarDeclKind::Let | ast::VarDeclKind::Const
+            ) {
+                for decl in &var_decl.decls {
+                    let mut binding_idents: Vec<(String, u32)> = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut binding_idents);
+                    for (name, span_lo) in binding_idents {
+                        if !seen_closure_refs.contains(&name) {
+                            continue;
+                        }
+                        let already_in_scope = ctx
+                            .locals
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .any(|(idx, (n, _, _))| n == &name && idx >= body_entry_locals_len);
+                        if !already_in_scope {
+                            let id = ctx.define_local(name, Type::Any);
+                            ctx.var_hoisted_ids.insert(id);
+                            forward_boxed_ids.push(id);
+                            ctx.lexical_forward_decls.insert(span_lo, id);
+                        }
+                    }
+                }
+            }
+        }
+        // Record closures introduced by THIS statement for subsequent decls.
+        cic_stmt(stmt, false, &mut seen_closure_refs);
+    }
+    forward_boxed_ids
+}
+
+fn collect_pat_forward_idents(pat: &ast::Pat, out: &mut Vec<(String, u32)>) {
+    match pat {
+        ast::Pat::Ident(i) => out.push((i.id.sym.to_string(), i.id.span.lo.0)),
+        ast::Pat::Array(arr) => arr
+            .elems
+            .iter()
+            .flatten()
+            .for_each(|el| collect_pat_forward_idents(el, out)),
+        ast::Pat::Object(o) => {
+            for p in &o.props {
+                match p {
+                    ast::ObjectPatProp::KeyValue(kv) => collect_pat_forward_idents(&kv.value, out),
+                    ast::ObjectPatProp::Assign(a) => {
+                        out.push((a.key.sym.to_string(), a.key.span.lo.0))
+                    }
+                    ast::ObjectPatProp::Rest(r) => collect_pat_forward_idents(&r.arg, out),
+                }
+            }
+        }
+        ast::Pat::Assign(a) => collect_pat_forward_idents(&a.left, out),
+        ast::Pat::Rest(r) => collect_pat_forward_idents(&r.arg, out),
+        _ => {}
+    }
+}
+
+fn cic_stmt(s: &ast::Stmt, in_cl: bool, out: &mut std::collections::HashSet<String>) {
+    use ast::Stmt::*;
+    match s {
+        Block(b) => b.stmts.iter().for_each(|st| cic_stmt(st, in_cl, out)),
+        Return(r) => {
+            if let Some(a) = &r.arg {
+                cic_expr(a, in_cl, out);
+            }
+        }
+        Expr(e) => cic_expr(&e.expr, in_cl, out),
+        If(i) => {
+            cic_expr(&i.test, in_cl, out);
+            cic_stmt(&i.cons, in_cl, out);
+            if let Some(a) = &i.alt {
+                cic_stmt(a, in_cl, out);
+            }
+        }
+        Throw(t) => cic_expr(&t.arg, in_cl, out),
+        While(w) => {
+            cic_expr(&w.test, in_cl, out);
+            cic_stmt(&w.body, in_cl, out);
+        }
+        DoWhile(w) => {
+            cic_expr(&w.test, in_cl, out);
+            cic_stmt(&w.body, in_cl, out);
+        }
+        For(f) => {
+            if let Some(init) = &f.init {
+                match init {
+                    ast::VarDeclOrExpr::Expr(e) => cic_expr(e, in_cl, out),
+                    ast::VarDeclOrExpr::VarDecl(vd) => vd.decls.iter().for_each(|d| {
+                        if let Some(i) = &d.init {
+                            cic_expr(i, in_cl, out);
+                        }
+                    }),
+                }
+            }
+            if let Some(t) = &f.test {
+                cic_expr(t, in_cl, out);
+            }
+            if let Some(u) = &f.update {
+                cic_expr(u, in_cl, out);
+            }
+            cic_stmt(&f.body, in_cl, out);
+        }
+        ForIn(f) => {
+            cic_expr(&f.right, in_cl, out);
+            cic_stmt(&f.body, in_cl, out);
+        }
+        ForOf(f) => {
+            cic_expr(&f.right, in_cl, out);
+            cic_stmt(&f.body, in_cl, out);
+        }
+        Try(t) => {
+            t.block.stmts.iter().for_each(|st| cic_stmt(st, in_cl, out));
+            if let Some(h) = &t.handler {
+                h.body.stmts.iter().for_each(|st| cic_stmt(st, in_cl, out));
+            }
+            if let Some(f) = &t.finalizer {
+                f.stmts.iter().for_each(|st| cic_stmt(st, in_cl, out));
+            }
+        }
+        Switch(sw) => {
+            cic_expr(&sw.discriminant, in_cl, out);
+            for c in &sw.cases {
+                if let Some(t) = &c.test {
+                    cic_expr(t, in_cl, out);
+                }
+                c.cons.iter().for_each(|st| cic_stmt(st, in_cl, out));
+            }
+        }
+        Labeled(l) => cic_stmt(&l.body, in_cl, out),
+        With(w) => {
+            cic_expr(&w.obj, in_cl, out);
+            cic_stmt(&w.body, in_cl, out);
+        }
+        Decl(d) => cic_decl(d, in_cl, out),
+        _ => {}
+    }
+}
+
+fn cic_decl(d: &ast::Decl, in_cl: bool, out: &mut std::collections::HashSet<String>) {
+    match d {
+        ast::Decl::Var(vd) => vd.decls.iter().for_each(|de| {
+            if let Some(i) = &de.init {
+                cic_expr(i, in_cl, out);
+            }
+        }),
+        // A nested function declaration's body is a closure scope.
+        ast::Decl::Fn(f) => {
+            if let Some(b) = &f.function.body {
+                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+            }
+        }
+        ast::Decl::Class(c) => cic_class(&c.class, in_cl, out),
+        _ => {}
+    }
+}
+
+fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<String>) {
+    if let Some(sc) = &c.super_class {
+        cic_expr(sc, in_cl, out);
+    }
+    for m in &c.body {
+        match m {
+            ast::ClassMember::Method(mm) => {
+                if let Some(b) = &mm.function.body {
+                    b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+                }
+            }
+            ast::ClassMember::PrivateMethod(mm) => {
+                if let Some(b) = &mm.function.body {
+                    b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+                }
+            }
+            ast::ClassMember::ClassProp(p) => {
+                if let Some(v) = &p.value {
+                    cic_expr(v, true, out);
+                }
+            }
+            ast::ClassMember::PrivateProp(p) => {
+                if let Some(v) = &p.value {
+                    cic_expr(v, true, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn cic_expr(e: &ast::Expr, in_cl: bool, out: &mut std::collections::HashSet<String>) {
+    use ast::Expr::*;
+    match e {
+        Ident(i) => {
+            if in_cl {
+                out.insert(i.sym.to_string());
+            }
+        }
+        Arrow(a) => {
+            for p in &a.params {
+                cic_pat(p, true, out);
+            }
+            match &*a.body {
+                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                    b.stmts.iter().for_each(|st| cic_stmt(st, true, out))
+                }
+                ast::BlockStmtOrExpr::Expr(ex) => cic_expr(ex, true, out),
+            }
+        }
+        Fn(f) => {
+            for p in &f.function.params {
+                cic_pat(&p.pat, true, out);
+            }
+            if let Some(b) = &f.function.body {
+                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+            }
+        }
+        Class(c) => cic_class(&c.class, in_cl, out),
+        Array(a) => a
+            .elems
+            .iter()
+            .flatten()
+            .for_each(|el| cic_expr(&el.expr, in_cl, out)),
+        Object(o) => {
+            for p in &o.props {
+                match p {
+                    ast::PropOrSpread::Spread(s) => cic_expr(&s.expr, in_cl, out),
+                    ast::PropOrSpread::Prop(pr) => cic_prop(pr, in_cl, out),
+                }
+            }
+        }
+        Unary(u) => cic_expr(&u.arg, in_cl, out),
+        Update(u) => cic_expr(&u.arg, in_cl, out),
+        Bin(b) => {
+            cic_expr(&b.left, in_cl, out);
+            cic_expr(&b.right, in_cl, out);
+        }
+        Assign(a) => {
+            cic_assign_target(&a.left, in_cl, out);
+            cic_expr(&a.right, in_cl, out);
+        }
+        Member(m) => {
+            cic_expr(&m.obj, in_cl, out);
+            if let ast::MemberProp::Computed(c) = &m.prop {
+                cic_expr(&c.expr, in_cl, out);
+            }
+        }
+        Cond(c) => {
+            cic_expr(&c.test, in_cl, out);
+            cic_expr(&c.cons, in_cl, out);
+            cic_expr(&c.alt, in_cl, out);
+        }
+        Call(c) => {
+            if let ast::Callee::Expr(e) = &c.callee {
+                cic_expr(e, in_cl, out);
+            }
+            c.args.iter().for_each(|a| cic_expr(&a.expr, in_cl, out));
+        }
+        New(n) => {
+            cic_expr(&n.callee, in_cl, out);
+            if let Some(args) = &n.args {
+                args.iter().for_each(|a| cic_expr(&a.expr, in_cl, out));
+            }
+        }
+        Seq(s) => s.exprs.iter().for_each(|e| cic_expr(e, in_cl, out)),
+        Tpl(t) => t.exprs.iter().for_each(|e| cic_expr(e, in_cl, out)),
+        TaggedTpl(t) => {
+            cic_expr(&t.tag, in_cl, out);
+            t.tpl.exprs.iter().for_each(|e| cic_expr(e, in_cl, out));
+        }
+        Paren(p) => cic_expr(&p.expr, in_cl, out),
+        Await(a) => cic_expr(&a.arg, in_cl, out),
+        Yield(y) => {
+            if let Some(a) = &y.arg {
+                cic_expr(a, in_cl, out);
+            }
+        }
+        OptChain(o) => match &*o.base {
+            ast::OptChainBase::Member(m) => {
+                cic_expr(&m.obj, in_cl, out);
+                if let ast::MemberProp::Computed(c) = &m.prop {
+                    cic_expr(&c.expr, in_cl, out);
+                }
+            }
+            ast::OptChainBase::Call(c) => {
+                cic_expr(&c.callee, in_cl, out);
+                c.args.iter().for_each(|a| cic_expr(&a.expr, in_cl, out));
+            }
+        },
+        _ => {}
+    }
+}
+
+fn cic_pat(p: &ast::Pat, in_cl: bool, out: &mut std::collections::HashSet<String>) {
+    match p {
+        ast::Pat::Assign(a) => {
+            cic_pat(&a.left, in_cl, out);
+            cic_expr(&a.right, in_cl, out);
+        }
+        ast::Pat::Array(arr) => arr
+            .elems
+            .iter()
+            .flatten()
+            .for_each(|el| cic_pat(el, in_cl, out)),
+        ast::Pat::Object(o) => {
+            for pp in &o.props {
+                match pp {
+                    ast::ObjectPatProp::KeyValue(kv) => cic_pat(&kv.value, in_cl, out),
+                    ast::ObjectPatProp::Assign(a) => {
+                        if let Some(v) = &a.value {
+                            cic_expr(v, in_cl, out);
+                        }
+                    }
+                    ast::ObjectPatProp::Rest(r) => cic_pat(&r.arg, in_cl, out),
+                }
+            }
+        }
+        ast::Pat::Rest(r) => cic_pat(&r.arg, in_cl, out),
+        _ => {}
+    }
+}
+
+fn cic_prop(p: &ast::Prop, in_cl: bool, out: &mut std::collections::HashSet<String>) {
+    match p {
+        ast::Prop::Shorthand(i) => {
+            if in_cl {
+                out.insert(i.sym.to_string());
+            }
+        }
+        ast::Prop::KeyValue(kv) => {
+            if let ast::PropName::Computed(c) = &kv.key {
+                cic_expr(&c.expr, in_cl, out);
+            }
+            cic_expr(&kv.value, in_cl, out);
+        }
+        ast::Prop::Getter(g) => {
+            if let Some(b) = &g.body {
+                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+            }
+        }
+        ast::Prop::Setter(s) => {
+            if let Some(b) = &s.body {
+                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+            }
+        }
+        ast::Prop::Method(m) => {
+            if let Some(b) = &m.function.body {
+                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+            }
+        }
+        ast::Prop::Assign(a) => cic_expr(&a.value, in_cl, out),
+    }
+}
+
+fn cic_assign_target(
+    t: &ast::AssignTarget,
+    in_cl: bool,
+    out: &mut std::collections::HashSet<String>,
+) {
+    if let ast::AssignTarget::Simple(s) = t {
+        match s {
+            ast::SimpleAssignTarget::Ident(i) => {
+                if in_cl {
+                    out.insert(i.id.sym.to_string());
+                }
+            }
+            ast::SimpleAssignTarget::Member(m) => {
+                cic_expr(&m.obj, in_cl, out);
+                if let ast::MemberProp::Computed(c) = &m.prop {
+                    cic_expr(&c.expr, in_cl, out);
+                }
+            }
+            ast::SimpleAssignTarget::Paren(p) => cic_expr(&p.expr, in_cl, out),
+            _ => {}
+        }
+    }
+}
+
 fn collect_var_binding_names_from_pat(pat: &ast::Pat, out: &mut Vec<String>) {
     match pat {
         ast::Pat::Ident(ident) => out.push(ident.id.sym.to_string()),
@@ -180,6 +598,11 @@ pub fn lower_fn_body_block_stmt(
     let parent_strict = ctx.current_strict;
     ctx.current_strict =
         parent_strict || crate::lower::stmt_list_starts_with_use_strict_directive(&block.stmts);
+    // Boundary between outer-scope locals (+ this function's params, defined by
+    // the caller before entry) and locals defined while lowering THIS body.
+    // Used by the Phase 1.6 forward `let`/`const` pre-registration so a const
+    // that shadows an outer binding still gets a fresh this-body local.
+    let body_entry_locals_len = ctx.locals.len();
     let hoisted_var_slots = predefine_var_bindings_in_function_body(ctx, block);
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
@@ -224,6 +647,36 @@ pub fn lower_fn_body_block_stmt(
                 .insert(class_decl.ident.sym.to_string());
         }
     }
+
+    // Phase 1.6: pre-register top-level `let`/`const` Ident bindings of this
+    // function body so a closure created EARLIER in the body — a hoisted
+    // FnDecl, or an arrow / function expression assigned to a `const`/`let`
+    // (`const handler = async (req, res) => { … later … }`) — that references
+    // a binding declared LATER (`const later = …`) resolves it to the (boxed)
+    // function-scope local instead of falling through to a `globalThis` read.
+    // Next.js `router-server.js` `initialize()` does exactly this: the request
+    // handler closure reads `relativeProjectDir`, a `const` declared ~400
+    // lines later in the same function — without this it lowered to a global
+    // read and threw `ReferenceError: relativeProjectDir is not defined` at
+    // request time. Each pre-registered binding is boxed (`var_hoisted_ids`),
+    // its declaration reuses the same id via `lexical_forward_decls`, and its
+    // box is preallocated at function entry (`forward_boxed_ids`, merged into
+    // the Phase-5 prealloc set below) so the earlier closure literal captures
+    // the live box. Scoped to bindings a closure ACTUALLY references
+    // (`collect_closure_referenced_idents`) — boxing every top-level binding
+    // regressed Next.js at scale.
+    //
+    // CRUCIAL: these ids are NOT added to `hoisted_id_set`. Phase 3 hoists
+    // every `Let { init: Closure }` in that set to the function top, which is
+    // correct ONLY for `function` declarations (they hoist per spec). A
+    // `const handler = async () => {}` does NOT hoist — reordering it ahead of
+    // the bindings it depends on corrupted `initialize()` (the server exited
+    // after "Ready"). We therefore prealloc the captured boxes directly
+    // instead of routing through the FnDecl-hoisting machinery. Shared with the
+    // function-expression body path (`lower_fn_expr`) via
+    // `pre_register_forward_captured_lets`; also handles destructuring leaves
+    // (`const { SpanKind } = api`).
+    let forward_boxed_ids = pre_register_forward_captured_lets(ctx, block, body_entry_locals_len);
 
     // Phase 2: lower the body. The inner FnDecl arm in `lower_body_stmt`
     // calls `lookup_local(name)` and reuses our pre-defined id.
@@ -306,7 +759,7 @@ pub fn lower_fn_body_block_stmt(
         })
         .collect();
 
-    if hoisted_id_set.is_empty() {
+    if hoisted_id_set.is_empty() && forward_boxed_ids.is_empty() {
         ctx.current_strict = parent_strict;
         let mut result = var_slot_lets;
         result.extend(body);
@@ -338,9 +791,20 @@ pub fn lower_fn_body_block_stmt(
         }
     }
 
-    // Phase 4: compute the prealloc-box set via shared helper.
+    // Phase 4: compute the prealloc-box set via shared helper, then add the
+    // forward-captured `let`/`const` boxes pre-registered in Phase 1.6. Those
+    // are deliberately kept out of `hoisted_id_set` (so Phase 3 doesn't hoist
+    // their non-hoistable `const = closure` declarations), so their boxes must
+    // be preallocated here explicitly — the earlier closure literal captures
+    // the box before the declaration assigns through it.
     let combined: Vec<Stmt> = hoisted_lets.iter().chain(other.iter()).cloned().collect();
-    let prealloc = compute_prealloc_for_hoisted_closures(&combined, &hoisted_id_set);
+    let mut prealloc = compute_prealloc_for_hoisted_closures(&combined, &hoisted_id_set);
+    for id in forward_boxed_ids {
+        if !prealloc.contains(&id) {
+            prealloc.push(id);
+        }
+    }
+    prealloc.sort();
 
     // Phase 5: assemble the final body — PreallocateBoxes (if any),
     // then the hoisted FnDecl Lets, then everything else.

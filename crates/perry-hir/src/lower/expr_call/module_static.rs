@@ -675,41 +675,17 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "trunc" => {
-                            // Math.trunc(x) = x >= 0 ? floor(x) : ceil(x)
                             if !args.is_empty() {
-                                let arg = args.into_iter().next().unwrap();
-                                return Ok(Ok(Expr::Conditional {
-                                    condition: Box::new(Expr::Compare {
-                                        op: crate::CompareOp::Ge,
-                                        left: Box::new(arg.clone()),
-                                        right: Box::new(Expr::Number(0.0)),
-                                    }),
-                                    then_expr: Box::new(Expr::MathFloor(Box::new(arg.clone()))),
-                                    else_expr: Box::new(Expr::MathCeil(Box::new(arg))),
-                                }));
+                                return Ok(Ok(Expr::MathTrunc(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
                             }
                         }
                         "sign" => {
-                            // Math.sign(x) = x > 0 ? 1 : x < 0 ? -1 : 0 (or x for NaN)
                             if !args.is_empty() {
-                                let arg = args.into_iter().next().unwrap();
-                                return Ok(Ok(Expr::Conditional {
-                                    condition: Box::new(Expr::Compare {
-                                        op: crate::CompareOp::Gt,
-                                        left: Box::new(arg.clone()),
-                                        right: Box::new(Expr::Number(0.0)),
-                                    }),
-                                    then_expr: Box::new(Expr::Number(1.0)),
-                                    else_expr: Box::new(Expr::Conditional {
-                                        condition: Box::new(Expr::Compare {
-                                            op: crate::CompareOp::Lt,
-                                            left: Box::new(arg.clone()),
-                                            right: Box::new(Expr::Number(0.0)),
-                                        }),
-                                        then_expr: Box::new(Expr::Number(-1.0)),
-                                        else_expr: Box::new(arg),
-                                    }),
-                                }));
+                                return Ok(Ok(Expr::MathSign(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
                             }
                         }
                         "abs" => {

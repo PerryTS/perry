@@ -86,6 +86,13 @@ const mod = await import("./module");
 Perry has internal CommonJS compatibility paths for some npm package wrappers,
 but user-written modules should use static `import` declarations.
 
+> **JavaScript source compiles too.** Perry accepts `.js`, `.cjs`, `.mjs`, and
+> `.jsx` files as compiler input — they are parsed as JavaScript and lowered
+> through the same native pipeline as TypeScript, so no type annotations are
+> required. The limitations on this page still apply (no `eval`, no general
+> dynamic `require()`, etc.), but plain JavaScript projects compile and run in
+> most cases.
+
 ## Limited Prototype Manipulation
 
 Perry compiles classes to fixed structures. Dynamic prototype modification is not supported:
@@ -137,7 +144,16 @@ needs Perry's supported Proxy surface.
 
 Perry supports real multi-threading via `parallelMap` and `spawn` from `perry/thread`. See [Multi-Threading](../threading/overview.md).
 
-Threads do not share mutable state — closures passed to thread primitives cannot capture mutable variables (enforced at compile time). Values are deep-copied across thread boundaries. There is no `SharedArrayBuffer` or `Atomics`.
+Threads do not share mutable state by default — closures passed to thread
+primitives cannot capture mutable variables (enforced at compile time), and
+values are deep-copied across thread boundaries. The exception is
+`SharedArrayBuffer`: a SAB captured into a `spawn` / `parallelMap` closure now
+**aliases the same physical bytes** across agents, and `Atomics`
+(`add`/`load`/`store`/`compareExchange`/… plus a real blocking
+`wait`/`notify`/`waitAsync`) operate on it for genuine cross-thread coordination.
+Caveat: only the `SharedArrayBuffer` itself shares — a typed-array *view*
+captured directly still deep-copies, so build the view per-agent from the shared
+SAB.
 
 ## npm Package Compatibility
 

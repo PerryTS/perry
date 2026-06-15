@@ -15,6 +15,7 @@ thread_local! {
 }
 
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct RememberedSetTraceStats {
     pub(super) entries_scanned: usize,
     pub(super) valid_roots: usize,
@@ -98,6 +99,7 @@ pub(super) enum CopiedMinorFallbackReason {
 }
 
 impl CopiedMinorFallbackReason {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -218,6 +220,7 @@ impl RootSourceSlotTraceStats {
 }
 
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct NativeStackFallbackTraceStats {
     pub(super) decision: ConservativeStackScanDecision,
     pub(super) scanned: bool,
@@ -524,6 +527,7 @@ pub(super) enum AllocatorMaintenanceStatus {
 }
 
 impl AllocatorMaintenanceStatus {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -543,6 +547,7 @@ pub(super) enum AllocatorMaintenanceReason {
 }
 
 impl AllocatorMaintenanceReason {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -554,6 +559,7 @@ impl AllocatorMaintenanceReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct AllocatorMaintenanceEvent {
     pub(super) status: AllocatorMaintenanceStatus,
     pub(super) reason: AllocatorMaintenanceReason,
@@ -561,10 +567,12 @@ pub(super) struct AllocatorMaintenanceEvent {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct AllocatorMaintenanceTrace {
     pub(super) malloc_trim: Option<AllocatorMaintenanceEvent>,
 }
 
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct GcCycleTrace {
     pub(super) collection_kind: GcCollectionKind,
     pub(super) trigger_kind: GcTriggerKind,
@@ -719,6 +727,7 @@ impl GcCycleTrace {
         }
     }
 
+    #[cfg(feature = "diagnostics")]
     pub(super) fn into_json(mut self, steps_after: GcStepSnapshot) -> serde_json::Value {
         self.capture_layout_scans();
         self.debt.record(GcDebtSnapshot::current());
@@ -964,6 +973,7 @@ impl GcCycleTrace {
         })
     }
 
+    #[cfg(feature = "diagnostics")]
     pub(super) fn emit(self, steps_after: GcStepSnapshot) {
         let event = self.into_json(steps_after);
         #[cfg(test)]
@@ -972,8 +982,16 @@ impl GcCycleTrace {
             eprintln!("{line}");
         }
     }
+
+    #[cfg(not(feature = "diagnostics"))]
+    pub(super) fn emit(self, _steps_after: GcStepSnapshot) {
+        eprintln!(
+            "[gc] cycle (diagnostics feature disabled — rebuild without --no-default-features for JSON trace)"
+        );
+    }
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn debt_snapshot_json(snapshot: GcDebtSnapshot) -> serde_json::Value {
     serde_json::json!({
         "arena_debt_bytes": snapshot.arena_debt_bytes,
@@ -982,6 +1000,7 @@ pub(super) fn debt_snapshot_json(snapshot: GcDebtSnapshot) -> serde_json::Value 
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn pause_budget_json(
     progress_kind: GcProgressKind,
     progress_budget: GcPauseBudget,
@@ -999,6 +1018,7 @@ pub(super) fn pause_budget_json(
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn pause_step_json(step: GcPauseStepTrace) -> serde_json::Value {
     let progress_budget = gc_progress_contract().budget_for(step.progress_kind);
     let within_soft_pause_target = progress_budget
@@ -1026,6 +1046,7 @@ pub(super) fn pause_step_json(step: GcPauseStepTrace) -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn allocator_maintenance_json(
     trace: AllocatorMaintenanceTrace,
     progress_kind: GcProgressKind,
@@ -1045,6 +1066,7 @@ pub(super) fn allocator_maintenance_json(
     })
 }
 
+#[cfg(feature = "diagnostics")]
 fn default_malloc_trim_maintenance(progress_kind: GcProgressKind) -> AllocatorMaintenanceEvent {
     if progress_kind.is_budgeted() {
         return AllocatorMaintenanceEvent {
@@ -1134,6 +1156,7 @@ pub(super) fn malloc_object_count() -> usize {
     MALLOC_STATE.with(|s| s.borrow().objects.len())
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn malloc_kind_telemetry_row(
     obj_type: u8,
     counters: MallocKindTelemetry,
@@ -1154,6 +1177,7 @@ pub(super) fn malloc_kind_telemetry_row(
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn root_source_slot_json(stats: RootSourceSlotTraceStats) -> serde_json::Value {
     serde_json::json!({
         "registered_scanners": stats.registered_scanners,
@@ -1164,6 +1188,7 @@ pub(super) fn root_source_slot_json(stats: RootSourceSlotTraceStats) -> serde_js
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn root_sources_json(stats: RootSourcesTraceStats) -> serde_json::Value {
     serde_json::json!({
         "compiled_shadow": root_source_slot_json(stats.compiled_shadow),
@@ -1183,6 +1208,7 @@ pub(super) fn root_sources_json(stats: RootSourcesTraceStats) -> serde_json::Val
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn malloc_kind_telemetry_json_from_snapshot(
     snapshot: [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT],
 ) -> serde_json::Value {
@@ -1201,11 +1227,13 @@ pub(super) fn malloc_kind_telemetry_json_from_snapshot(
     serde_json::Value::Array(rows)
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn take_malloc_kind_telemetry_json() -> serde_json::Value {
     let snapshot = MALLOC_STATE.with(|s| s.borrow_mut().take_kind_telemetry());
     malloc_kind_telemetry_json_from_snapshot(snapshot)
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn arena_region_json(region: crate::arena::ArenaRegionTelemetry) -> serde_json::Value {
     serde_json::json!({
         "in_use_bytes": region.in_use_bytes,
@@ -1214,6 +1242,7 @@ pub(super) fn arena_region_json(region: crate::arena::ArenaRegionTelemetry) -> s
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn arena_snapshot_json(
     snapshot: crate::arena::ArenaTelemetrySnapshot,
 ) -> serde_json::Value {
@@ -1229,6 +1258,7 @@ pub(super) fn arena_snapshot_json(
     })
 }
 
+#[cfg(feature = "diagnostics")]
 pub(super) fn steps_json(before: GcStepSnapshot, after: GcStepSnapshot) -> serde_json::Value {
     serde_json::json!({
         "arena_step_bytes": {

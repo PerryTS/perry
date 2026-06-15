@@ -351,25 +351,30 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     // through to the next ancestor when `class_table`'s
                     // entry for an imported class returned a stub with
                     // `constructor: None` (stubs always have None) — even
-                    // though the source module did have a real ctor with
-                    // params. Result: `class Child extends Parent { x =
+                    // though the source module did have a real ctor/effect.
+                    // Result: `class Child extends Parent { x =
                     // "y" }` (no own ctor, parent in another module) had
                     // its synthesized ctor with ZERO params, so the user's
                     // `new Child("arg")` lost the arg before reaching
-                    // Parent_constructor. Refs #420.
-                    let imported_ctor_params = opts
+                    // Parent_constructor. Explicit zero-arg ctors and
+                    // field-initializer ctors still stop the walk even with
+                    // zero adopted params. Refs #420.
+                    let imported_ctor = opts
                         .imported_classes
                         .iter()
                         .find(|i| i.local_alias.as_deref().unwrap_or(&i.name) == pname.as_str())
-                        .map(|ic| ic.constructor_param_count)
-                        .unwrap_or(0);
+                        .filter(|ic| {
+                            ic.constructor_param_count > 0
+                                || ic.has_own_constructor
+                                || ic.has_instance_fields
+                        });
                     if let Some(pclass) = class_table.get(pname.as_str()) {
                         if let Some(pctor) = &pclass.constructor {
                             found_params = pctor.params.clone();
                             break;
                         }
-                        if imported_ctor_params > 0 {
-                            for i in 0..imported_ctor_params {
+                        if let Some(imported_ctor) = imported_ctor {
+                            for i in 0..imported_ctor.constructor_param_count {
                                 found_params.push(perry_hir::Param {
                                     id: 0xFFFF_0000 + i as u32,
                                     name: format!("__forward_arg{}", i),
@@ -385,10 +390,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         cur = pclass.extends_name.clone();
                     } else if let Some(stub) = imported_class_stubs.iter().find(|c| c.name == pname)
                     {
-                        // Imported stub — params not in HIR; use its ctor
-                        // param count as a synthetic count of unnamed args.
-                        if imported_ctor_params > 0 {
-                            for i in 0..imported_ctor_params {
+                        // Imported stub — params not in HIR; use effectful
+                        // ctor metadata as a synthetic count of unnamed args.
+                        if let Some(imported_ctor) = imported_ctor {
+                            for i in 0..imported_ctor.constructor_param_count {
                                 found_params.push(perry_hir::Param {
                                     id: 0xFFFF_0000 + i as u32,
                                     name: format!("__forward_arg{}", i),
@@ -894,9 +899,18 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
     // Methods have signature `perry_method_<...>(this_box, args...)`;
     // the closure-call ABI is `(i64 closure, double a0, ...)` and
-    // doesn't carry a separate `this`. Strict JS for `const fn =
-    // super.greet; fn(x)` calls the method with `this=undefined`,
-    // which is what we forward here.
+    // doesn't carry a separate `this`. The receiver therefore comes from
+    // IMPLICIT_THIS, set by the dispatcher right before the call:
+    //   * A method-style invocation of a stored super-method value
+    //     (`this._complete = super._complete; obj._complete()` — rxjs's
+    //     `OperatorSubscriber` forwarding `complete`/`error`/`next` to the
+    //     base `Subscriber` when no override callback was supplied) sets
+    //     IMPLICIT_THIS to the receiver, so the base method runs with the
+    //     right `this`. Pre-fix this hardcoded `this=undefined`, so the
+    //     forwarded `complete` never reached `this.destination.complete()`
+    //     and the pipeline stalled (top-level await never settled, #5138).
+    //   * A bare call (`const fn = super.greet; fn(x)`) leaves
+    //     IMPLICIT_THIS undefined, matching strict-mode `this`.
     let mut emitted_wrappers: std::collections::HashSet<String> = std::collections::HashSet::new();
     for class in &hir.classes {
         for method in &class.methods {
@@ -918,11 +932,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
             let _ = wf.create_block("entry");
             let blk = wf.block_mut(0).unwrap();
-            // Forward `this=undefined` then the args.
-            let undef_lit = crate::nanbox::i64_literal(crate::nanbox::TAG_UNDEFINED);
-            let undef_double = blk.bitcast_i64_to_double(&undef_lit);
+            // Forward the call-site receiver (IMPLICIT_THIS) as `this`,
+            // then the args. See the block comment above (#5138).
+            let this_box = blk.call(DOUBLE, "js_implicit_this_get", &[]);
             let mut call_args: Vec<(LlvmType, String)> = Vec::with_capacity(arity + 1);
-            call_args.push((DOUBLE, undef_double));
+            call_args.push((DOUBLE, this_box));
             for i in 0..arity {
                 call_args.push((DOUBLE, format!("%a{}", i)));
             }
@@ -1308,7 +1322,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         })
         .collect();
-    let user_fn_wrapper_rest_and_arguments: std::collections::HashSet<String> = hir
+    let mut user_fn_wrapper_rest_and_arguments: std::collections::HashSet<String> = hir
         .functions
         .iter()
         .filter_map(|f| {
@@ -1326,6 +1340,65 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             }
         })
         .collect();
+    let mut user_fn_wrapper_rest = user_fn_wrapper_rest;
+    let mut user_fn_wrapper_synthetic_arguments = user_fn_wrapper_synthetic_arguments;
+
+    // #5134-followup: a renamed export (`export { local as exported }`, which
+    // includes `export default function local`) gets a forwarding value wrapper
+    // `__perry_wrap_perry_fn_<src>__<exported>` (emitted above), but the
+    // rest/synthetic-`arguments` *metadata* loops below key only on the local
+    // function name (`__perry_wrap_..._<local>`). So a consumer that referenced
+    // the renamed export as a VALUE and called it via `.apply`/`.call`
+    // (`compose`'s `pipe.apply(this, reverse(arguments))` in ramda — `pipe` is
+    // `export default function pipe()` with a synthetic `arguments`) reached
+    // `js_native_call_value` with an unregistered wrapper func_ptr, so
+    // `lookup_closure_rest_full` missed and the args were dispatched positionally
+    // instead of bundled — the variadic function saw `arguments.length === 0`.
+    // Register the exported-alias wrapper symbol with the same metadata as the
+    // local one so the runtime bundles correctly through the rename.
+    {
+        let func_by_local_name: HashMap<&str, &perry_hir::Function> =
+            hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
+        for export in &hir.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            if local == exported {
+                continue;
+            }
+            let Some(f) = func_by_local_name.get(local.as_str()) else {
+                continue;
+            };
+            let alias_wrap = format!(
+                "__perry_wrap_perry_fn_{}__{}",
+                module_prefix,
+                sanitize(exported)
+            );
+            // The registration loop (`string_pool.rs`) iterates
+            // `user_fn_wrapper_rest`; the synthetic/rest_and_arguments sets only
+            // *refine* which runtime fn each entry uses. So the alias must be
+            // added to `user_fn_wrapper_rest` (keyed on the rest param index) in
+            // EVERY case, plus the matching refinement set.
+            let Some(rest_idx) = f.params.iter().position(|p| p.is_rest) else {
+                continue;
+            };
+            let last_is_synth_args = f
+                .params
+                .last()
+                .map(|p| p.arguments_object.is_some())
+                .unwrap_or(false);
+            let has_user_rest = f
+                .params
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
+            user_fn_wrapper_rest.push((alias_wrap.clone(), rest_idx));
+            if last_is_synth_args && has_user_rest {
+                user_fn_wrapper_rest_and_arguments.insert(alias_wrap);
+            } else if last_is_synth_args {
+                user_fn_wrapper_synthetic_arguments.insert(alias_wrap);
+            }
+        }
+    }
 
     // Wrapper arities — ABI param count per top-level user-function wrapper.
     // Used by dynamic closure dispatch to pad omitted trailing parameters

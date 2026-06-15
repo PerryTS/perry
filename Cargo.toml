@@ -200,8 +200,22 @@ codegen-units = 16
 [profile.release.package.perry-stdlib]
 opt-level = "s"       # Optimize for size in stdlib
 
+# perry-ext-events exports #[no_mangle] EventEmitter FFI symbols
+# (js_event_emitter_*) that generated native code calls directly when a program
+# constructs a native EventEmitter by name (e.g. eventemitter3's default
+# export). It is a non-tokio wrapper, so the auto-optimize linker uses its
+# prebuilt standalone staticlib rather than rebuilding it alongside a crate that
+# references those symbols. Thin-LTO then internalizes and drops the whole C API
+# from that staticlib, so the program fails to link with undefined
+# _js_event_emitter_* symbols (#5140). Mirror the UI crates' settings (which
+# export #[no_mangle] extern "C" symbols for the same reason): more codegen
+# units + no strip keeps the exported C API in the staticlib.
+[profile.release.package.perry-ext-events]
+strip = false
+codegen-units = 16
+
 [workspace.package]
-version = "0.5.1167"
+version = "0.5.1174"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -262,6 +276,9 @@ flate2 = "1"
 tar = "0.4"
 base64 = "0.22"
 zip = "2"
+# zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
+# Statically vendored (no system libzstd dependency on the user's machine).
+zstd = "0.13"
 
 # Internal crates
 perry-parser = { path = "crates/perry-parser" }
@@ -280,7 +297,17 @@ perry-dispatch = { path = "crates/perry-dispatch" }
 # Cargo.toml, and external users never need perry-runtime in their
 # Cargo graph (Perry's compiler driver links `libperry_runtime.a`
 # into the final binary directly).
-perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011" }
+# `default-features = false` so dependency EDGES (perry-stdlib, ext crates, the
+# perry binary) don't force perry-runtime's heavy default features (`full`,
+# `regex-engine`, `temporal`, `url-engine`, `string-normalize`, `intl-segmenter`)
+# back on. The auto-optimize build selects perry-runtime with
+# `--no-default-features` and re-adds only what a given program needs (see
+# optimized_libs.rs), so an edge requesting defaults would defeat that (cargo
+# unifies features additively). A plain `cargo build`/`cargo test --workspace`
+# still builds perry-runtime as a *selected* package, so its own `default`
+# applies — tests and the shipped prebuilt keep every engine. This mirrors why
+# `wasm-host` must stay out of `default`, generalized to all heavy features.
+perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
 perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }

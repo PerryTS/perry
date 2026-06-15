@@ -89,6 +89,26 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return crate::value::js_nanbox_string(s as i64);
     }
 
+    // Buffers / TypedArrays carry NO `ObjectHeader` (a `BufferHeader` /
+    // `TypedArrayHeader` has a different, smaller layout). The
+    // `js_url_href_if_url` / `try_read_as_search_params` /
+    // `ordinary_to_primitive_number_for_add` probes below all bit-cast `ptr`
+    // to an `ObjectHeader` and read its fields, so a Buffer/TypedArray operand
+    // would deref a fake header one word before the data and segfault
+    // (issue #5131 — `req.on('data', c => body += c)` on a `node:http` server,
+    // where the chunk is an un-typed Buffer and `body += c` lowers to the
+    // fully-dynamic add path). Detect via the registries (by-value lookups, no
+    // deref) and route to `js_jsvalue_to_string`, which yields the same string
+    // form as an explicit `.toString()` (Buffer→utf8, TypedArray→`join(",")`).
+    // This matches the guards `js_jsvalue_to_string` itself runs before its
+    // ordinary-object dispatch.
+    if crate::buffer::is_registered_buffer(ptr)
+        || crate::typedarray::lookup_typed_array_kind(ptr).is_some()
+    {
+        let s = crate::value::js_jsvalue_to_string(value);
+        return crate::value::js_nanbox_string(s as i64);
+    }
+
     let primitive = crate::symbol::js_to_primitive(value, 0);
     if primitive.to_bits() != value.to_bits() {
         if is_nonprimitive_object_value(primitive) {

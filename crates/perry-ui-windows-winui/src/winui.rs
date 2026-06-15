@@ -94,8 +94,63 @@ pub mod bootstrap {
     }
 
     #[cfg(target_os = "windows")]
+    pub(super) fn last_init_detail() -> i32 {
+        windows_impl::last_detail()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(super) fn last_init_detail() -> i32 {
+        windows_impl_detail_off_windows()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn windows_impl_detail_off_windows() -> i32 {
+        DETAIL_NOT_WINDOWS
+    }
+
+    /// Human-readable form of a [`last_init_detail`] code, for `PERRY_WINUI_DIAG`.
+    pub(super) fn describe_init_detail(detail: i32) -> String {
+        match detail {
+            DETAIL_NOT_ATTEMPTED => "not attempted".to_string(),
+            DETAIL_DLL_MISSING => {
+                "bootstrap DLL not found (ship Microsoft.WindowsAppRuntime.Bootstrap.dll next to the exe)".to_string()
+            }
+            DETAIL_NO_ENTRYPOINT => "bootstrap DLL has no MddBootstrapInitialize entry point".to_string(),
+            DETAIL_SUCCESS => "ready".to_string(),
+            #[cfg(not(target_os = "windows"))]
+            DETAIL_NOT_WINDOWS => "not windows".to_string(),
+            // Anything else is the raw HRESULT from MddBootstrapInitialize*.
+            hr => format!("MddBootstrapInitialize failed, HRESULT 0x{:08X}", hr as u32),
+        }
+    }
+
+    /// Sentinel "detail" codes returned by [`last_init_detail`] that are not real
+    /// HRESULTs (which are never these tiny positive values for our paths). Any
+    /// other value is the raw HRESULT from the bootstrapper call.
+    pub(super) const DETAIL_NOT_ATTEMPTED: i32 = 0;
+    pub(super) const DETAIL_DLL_MISSING: i32 = 1;
+    pub(super) const DETAIL_NO_ENTRYPOINT: i32 = 2;
+    pub(super) const DETAIL_SUCCESS: i32 = 3;
+    #[cfg(not(target_os = "windows"))]
+    pub(super) const DETAIL_NOT_WINDOWS: i32 = 4;
+
+    #[cfg(target_os = "windows")]
     mod windows_impl {
-        use super::InitStatus;
+        use super::{
+            InitStatus, DETAIL_DLL_MISSING, DETAIL_NOT_ATTEMPTED, DETAIL_NO_ENTRYPOINT,
+            DETAIL_SUCCESS,
+        };
+        use std::sync::atomic::{AtomicI32, Ordering};
+
+        // Last bootstrap outcome detail: a sentinel (see DETAIL_*) or, for a
+        // failed init call, the raw HRESULT. Surfaced via PERRY_WINUI_DIAG so a
+        // RuntimeMissing verdict can be diagnosed (e.g. "runtime not installed"
+        // vs "wrong version requested").
+        static LAST_DETAIL: AtomicI32 = AtomicI32::new(DETAIL_NOT_ATTEMPTED);
+
+        pub(super) fn last_detail() -> i32 {
+            LAST_DETAIL.load(Ordering::Relaxed)
+        }
 
         type HModule = *mut core::ffi::c_void;
         type FarProc = *const core::ffi::c_void;
@@ -148,6 +203,7 @@ pub mod bootstrap {
             // dereference the handle in that case.
             let module = unsafe { LoadLibraryW(dll.as_ptr()) };
             if module.is_null() {
+                LAST_DETAIL.store(DETAIL_DLL_MISSING, Ordering::Relaxed);
                 return InitStatus::RuntimeMissing;
             }
 
@@ -176,6 +232,7 @@ pub mod bootstrap {
                     let init1 = GetProcAddress(module, b"MddBootstrapInitialize\0".as_ptr());
                     if init1.is_null() {
                         FreeLibrary(module);
+                        LAST_DETAIL.store(DETAIL_NO_ENTRYPOINT, Ordering::Relaxed);
                         return InitStatus::RuntimeMissing;
                     }
                     let f: PfnInitialize = core::mem::transmute(init1);
@@ -186,6 +243,7 @@ pub mod bootstrap {
             if hr == 0 {
                 // Success: the runtime must stay mapped for the process
                 // lifetime, so we deliberately do NOT FreeLibrary here.
+                LAST_DETAIL.store(DETAIL_SUCCESS, Ordering::Relaxed);
                 InitStatus::Ready
             } else {
                 // S_OK is the only success; any failure HRESULT (e.g. the
@@ -193,14 +251,94 @@ pub mod bootstrap {
                 // we fall back to Win32. Release the handle we won't use.
                 // SAFETY: `module` is the handle we just loaded.
                 unsafe { FreeLibrary(module) };
+                LAST_DETAIL.store(hr, Ordering::Relaxed);
                 InitStatus::RuntimeMissing
             }
         }
     }
 }
 
+/// Which rendering backend a `windows-winui` process resolves to (#4680 step 3
+/// seam).
+///
+/// The Fluent (WinUI 3 / `Microsoft.UI.Xaml`) path is only usable when the
+/// Windows App SDK runtime initialized — otherwise the backend falls back to
+/// the re-exported Win32 path so the app still renders. This module is the
+/// single decision point the per-widget XAML dispatch reads: each XAML widget
+/// (landing incrementally) checks [`backend::active`] and constructs an
+/// `Microsoft.UI.Xaml` control on [`RenderBackend::Fluent`], else delegates to
+/// the existing `perry-ui-windows` Win32 constructor.
+pub mod backend {
+    use super::bootstrap::{self, InitStatus};
+
+    /// The effective render backend for this process.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum RenderBackend {
+        /// WinUI 3 / Fluent (`Microsoft.UI.Xaml`) — chosen when the Windows
+        /// App SDK runtime is `Ready`.
+        Fluent,
+        /// Win32 / GDI (the re-exported `perry-ui-windows` backend) — chosen
+        /// whenever the Windows App SDK runtime is unavailable.
+        Win32,
+    }
+
+    impl RenderBackend {
+        /// Stable lowercase identifier, used in diagnostics.
+        pub fn as_str(self) -> &'static str {
+            match self {
+                RenderBackend::Fluent => "fluent",
+                RenderBackend::Win32 => "win32",
+            }
+        }
+    }
+
+    /// The render backend this process will use, derived from the Windows App
+    /// SDK bootstrap probe ([`bootstrap::initialize`]) and memoized by it:
+    /// [`RenderBackend::Fluent`] iff the runtime is `Ready`, otherwise
+    /// [`RenderBackend::Win32`]. Cheap and stable across calls.
+    pub fn active() -> RenderBackend {
+        match bootstrap::initialize() {
+            InitStatus::Ready => RenderBackend::Fluent,
+            InitStatus::RuntimeMissing => RenderBackend::Win32,
+        }
+    }
+}
+
+/// Process-startup probe (#4680 step 3 seam).
+///
+/// Registered as a CRT static initializer (`.CRT$XCU`) so it runs at process
+/// start for *any* binary that links this staticlib — i.e. exactly the
+/// `--target windows-winui` builds, and never the default `--target windows`
+/// builds (which don't link this crate). It resolves the render backend up
+/// front (probing the Windows App SDK once) so the first widget construction
+/// reads an already-decided answer, and emits a one-line backend diagnostic
+/// when `PERRY_WINUI_DIAG` is set. It must never panic — it runs before `main`.
+#[cfg(target_os = "windows")]
+#[used]
+#[link_section = ".CRT$XCU"]
+static PERRY_WINUI_STARTUP: extern "C" fn() = perry_winui_startup;
+
+#[cfg(target_os = "windows")]
+extern "C" fn perry_winui_startup() {
+    let backend = backend::active();
+    if std::env::var_os("PERRY_WINUI_DIAG").is_some() {
+        use std::io::Write;
+        let detail = bootstrap::last_init_detail();
+        // Best-effort: a failed write in a static initializer is ignored.
+        let _ = std::io::stderr().write_all(
+            format!(
+                "[perry-winui] render backend: {} (bootstrap detail: {})\n",
+                backend.as_str(),
+                bootstrap::describe_init_detail(detail),
+            )
+            .as_bytes(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::backend::{active, RenderBackend};
     use super::bootstrap::{initialize, InitStatus};
 
     #[test]
@@ -226,5 +364,39 @@ mod tests {
         // There is no Windows App SDK off Windows, so the verdict is always
         // RuntimeMissing — the caller falls back to Win32.
         assert_eq!(initialize(), InitStatus::RuntimeMissing);
+    }
+
+    #[test]
+    fn active_backend_matches_bootstrap_verdict() {
+        // The backend seam must mirror the bootstrap probe exactly and be
+        // stable across calls.
+        let expected = match initialize() {
+            InitStatus::Ready => RenderBackend::Fluent,
+            InitStatus::RuntimeMissing => RenderBackend::Win32,
+        };
+        assert_eq!(active(), expected);
+        assert_eq!(active(), active(), "backend choice must be stable");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn backend_is_win32_off_windows() {
+        // No Windows App SDK off Windows → always the Win32 fallback.
+        assert_eq!(active(), RenderBackend::Win32);
+    }
+
+    #[test]
+    fn describe_detail_formats_known_codes_and_raw_hresult() {
+        use super::bootstrap::{
+            describe_init_detail, DETAIL_DLL_MISSING, DETAIL_NOT_ATTEMPTED, DETAIL_SUCCESS,
+        };
+        assert_eq!(describe_init_detail(DETAIL_NOT_ATTEMPTED), "not attempted");
+        assert_eq!(describe_init_detail(DETAIL_SUCCESS), "ready");
+        assert!(describe_init_detail(DETAIL_DLL_MISSING).contains("Bootstrap.dll"));
+        // A raw bootstrapper HRESULT renders as 0x-prefixed hex — e.g. the
+        // 0x80670016 "no matching runtime/DDLM" failure seen when only the
+        // framework package (not the DDLM) is registered.
+        let s = describe_init_detail(0x8067_0016u32 as i32);
+        assert!(s.contains("0x80670016"), "got: {s}");
     }
 }

@@ -1652,6 +1652,7 @@ const __memDispatch = {
   math_hypot: (a, b) => Math.hypot(a, b),
   math_fround: (x) => Math.fround(x),
   math_clz32: (x) => Math.clz32(x),
+  math_imul: (a, b) => Math.imul(a, b),
   date_now: () => Date.now(),
   js_typeof: (val) => typeof val,
   parse_int: (val) => parseInt(String(val), 10),

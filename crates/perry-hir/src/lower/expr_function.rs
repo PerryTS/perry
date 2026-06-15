@@ -449,7 +449,115 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     })
 }
 
+/// #5126: a named function expression binds its own name as a read-only
+/// local *inside its own body* (the FunctionExpression name scope per
+/// spec) — `const fact = function f(n){ return n<=1?1:n*f(n-1); }` must
+/// see `f` from within the body even though the outer binding is `fact`.
+///
+/// We model this without a new HIR node by wrapping the (otherwise
+/// anonymous) function in an immediately-invoked arrow that binds the
+/// name to the function value:
+///   (() => { let f = <function expr>; return f; })()
+/// The `let f = <closure that references f>` shape is exactly the
+/// self-recursive-`const` pattern that `collect_boxed_vars` already
+/// boxes (step 5: a `Stmt::Let` whose `Closure` init references the
+/// Let's own id). So `f` resolves to the function through its heap box,
+/// reusing the proven recursion machinery.
 pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
+    // A named function expression with a non-empty ident may reference its
+    // own name from within its body. Lower it through the self-binding path,
+    // which keeps the IIFE wrapper only when the body actually captures the
+    // name (so plain `function f(){...}` and the synthetic `Function(...)`
+    // body stay a bare `Closure`).
+    if let Some(ident) = &fn_expr.ident {
+        let own_name = ident.sym.to_string();
+        if !own_name.is_empty() {
+            return lower_named_fn_expr(ctx, fn_expr, own_name);
+        }
+    }
+    lower_fn_expr_anon(ctx, fn_expr)
+}
+
+/// Lower a *named* function expression, binding its own name inside the
+/// body. We put the name in scope, lower the function anonymously, and
+/// inspect whether the lowered closure actually captured the name. If it
+/// didn't (the common case — no recursive self-reference), we discard the
+/// scaffolding and return the bare closure unchanged. If it did, we wrap
+/// it in an immediately-invoked arrow that binds the name to the function
+/// value:
+///   (() => { let f = <function expr>; return f; })()
+/// The `let f = <closure that references f>` shape is exactly the
+/// self-recursive-`const` pattern that `collect_boxed_vars` already boxes
+/// (a `Stmt::Let` whose `Closure` init references the Let's own id), so the
+/// name resolves to the function through its heap box — reusing the proven
+/// recursion machinery without a dedicated HIR node.
+fn lower_named_fn_expr(
+    ctx: &mut LoweringContext,
+    fn_expr: &ast::FnExpr,
+    own_name: String,
+) -> Result<Expr> {
+    // Wrapper scope: holds just the self-binding local. Collect the
+    // enclosing scope's locals first so they (not the self-binding) are
+    // what the wrapper itself captures and threads through to the inner
+    // function.
+    let wrapper_scope = ctx.enter_scope();
+    let outer_locals: Vec<(String, LocalId)> = ctx
+        .locals
+        .iter()
+        .map(|(name, id, _)| (name.clone(), *id))
+        .collect();
+    let self_id = ctx.define_local(own_name.clone(), Type::Any);
+
+    // Lower the function itself as an anonymous closure. With `self_id`
+    // already in scope, any reference to the name inside the body resolves
+    // to it (correctly shadowing any outer binding of the same name) and is
+    // captured.
+    let inner = lower_fn_expr_anon(ctx, fn_expr)?;
+
+    let self_referenced =
+        matches!(&inner, Expr::Closure { captures, .. } if captures.contains(&self_id));
+    if !self_referenced {
+        // No recursive self-reference — drop the scaffolding.
+        ctx.exit_scope(wrapper_scope);
+        return Ok(inner);
+    }
+
+    let wrapper_func_id = ctx.fresh_func();
+    let body = vec![
+        Stmt::Let {
+            id: self_id,
+            name: own_name,
+            ty: Type::Any,
+            mutable: false,
+            init: Some(inner),
+        },
+        Stmt::Return(Some(Expr::LocalGet(self_id))),
+    ];
+    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &[]);
+    ctx.exit_scope(wrapper_scope);
+
+    Ok(Expr::Call {
+        callee: Box::new(Expr::Closure {
+            func_id: wrapper_func_id,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body,
+            captures,
+            mutable_captures,
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: ctx.current_strict,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+    })
+}
+
+fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
     // Lower function expression to a closure (similar to arrow but
     // without `this` capture — function expressions have their own
     // `this` binding determined by how they're called).
@@ -600,6 +708,11 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // with that index or higher was defined in the current scope.
     let outer_locals_len = scope_mark.0;
     let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
+    // Forward-captured `let`/`const` boxes pre-registered for THIS fn-expr body
+    // (the cjs `const _cjs = (function(){…})()` wrapper) — see
+    // `pre_register_forward_captured_lets`. Kept out of `hoisted_id_set` and
+    // preallocated directly at the assembly below.
+    let mut forward_boxed_ids: Vec<LocalId> = Vec::new();
     // #4950: undefined-initialised `Stmt::Let`s for `var`s found nested in
     // compound statements — prepended to the lowered body below.
     let mut nested_var_prologue: Vec<Stmt> = Vec::new();
@@ -788,6 +901,16 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                 }
             }
         }
+        // Forward-captured `let`/`const` (incl. destructuring) referenced by an
+        // EARLIER closure than their declaration. The `#4973` pass above only
+        // covers `Pat::Ident` and only when the body has a `function`
+        // declaration; the cjs IIFE's `_export(exports, { SpanKind: () =>
+        // SpanKind })` getter forward-captures the later `const { SpanKind } =
+        // api` (Next.js tracer), which it misses. Shared with arrow / fn-decl
+        // bodies (`lower_fn_body_block_stmt`). Bindings already pre-registered
+        // above are skipped (the `already_in_scope` guard inside).
+        forward_boxed_ids =
+            crate::lower_decl::pre_register_forward_captured_lets(ctx, block, outer_locals_len);
     }
 
     // Lower body with JS hoisting: only function declarations are fully
@@ -809,6 +932,26 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // threw `TypeError: value is not a function`. Function declarations
     // must run before any var-init in the body, then var-inits and other
     // executable statements run in source order.
+    // Pre-register sibling class DECLARATION names so forward references in
+    // earlier statements (and nested closures lowered before the class) resolve
+    // to `ClassRef` rather than the unknown-global sentinel — the same Phase 1.5
+    // that `lower_fn_body_block_stmt` (arrow / fn-decl bodies) performs. Plain
+    // function expressions previously skipped it: the cjs_wrap IIFE is exactly
+    // such an expression, and a class it can't hoist out (one whose body
+    // references an IIFE-local, e.g. `class X extends imp.Base { constructor(){
+    // super(imp2.CONST) } }`) stays inside the IIFE with its export getter
+    // `() => X` lowered ABOVE it — that forward read fell through to
+    // `js_global_get_or_throw_unresolved("X")` → `ReferenceError: X is not
+    // defined` (Next.js RSCPathnameNormalizer). Scoped: restored after the body.
+    let saved_forward_class_names = ctx.forward_class_names.clone();
+    if let Some(ref block) = fn_expr.function.body {
+        for stmt in &block.stmts {
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                ctx.forward_class_names
+                    .insert(class_decl.ident.sym.to_string());
+            }
+        }
+    }
     let mut body = if let Some(ref block) = fn_expr.function.body {
         // #4795: a `using` / `await using` declaration in a function-expression
         // body must be desugared (scope-exit disposal + declaration-time
@@ -842,12 +985,21 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             combined.extend(std::mem::take(&mut nested_var_prologue));
             combined.extend(func_decls);
             combined.extend(exec_stmts);
-            // Issue #633: prealloc-box for sibling/forward captures.
-            if !hoisted_id_set.is_empty() {
-                let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
+            // Issue #633: prealloc-box for sibling/forward captures. Merge the
+            // forward-captured `let`/`const` boxes (kept out of `hoisted_id_set`
+            // to avoid hoist-reordering their non-hoistable declarations) so
+            // their boxes exist before the earlier capturing closure literal.
+            if !hoisted_id_set.is_empty() || !forward_boxed_ids.is_empty() {
+                let mut prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
                     &combined,
                     &hoisted_id_set,
                 );
+                for id in &forward_boxed_ids {
+                    if !prealloc.contains(id) {
+                        prealloc.push(*id);
+                    }
+                }
+                prealloc.sort();
                 if !prealloc.is_empty() {
                     let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
                     with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
@@ -861,6 +1013,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         Vec::new()
     };
     ctx.current_strict = outer_strict;
+    ctx.forward_class_names = saved_forward_class_names;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {

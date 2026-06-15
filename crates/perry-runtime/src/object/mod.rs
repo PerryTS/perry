@@ -68,6 +68,7 @@ mod prototype_helpers;
 mod reflect_support;
 mod regex_proto_thunks;
 mod string_proto_thunks;
+#[cfg(feature = "temporal")]
 mod temporal_proto;
 mod typed_array_define;
 mod typed_array_proto_thunks;

@@ -477,6 +477,32 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
             const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+            const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+            // A dynamic parent that resolved to a ClassRef (INT32-tagged) is a
+            // real registered Perry class — `class X extends _mod.default`
+            // where the default export is a user class (Next.js
+            // `NextNodeServer extends base-server`'s default `Server`). A
+            // ClassRef is NaN-tagged, so `js_native_call_value` below would
+            // early-return `undefined` (it treats NaN as not callable) and the
+            // base constructor would never run — parent `this.<field> = …`
+            // writes (e.g. `this.nextConfig = opts`) would be lost. Invoke the
+            // class constructor directly on `this` instead.
+            if bits & TAG_MASK == INT32_TAG {
+                let parent_cid = bits as u32;
+                if let Some(obj) = subclass_this_object_ptr(this_box) {
+                    super::class_constructors::run_class_constructor_on_this_flat(
+                        parent_cid, obj as i64, args_ptr, args_len,
+                    );
+                }
+                // A ClassRef is NaN-tagged and is NEVER callable via
+                // `js_native_call_value` (it early-returns `undefined`). Return
+                // here unconditionally — whether or not a constructor was found
+                // and run — instead of falling through to the closure-dispatch
+                // path below, which would (a) silently produce `undefined` and
+                // (b) skip the `parent_closure_in_chain` recovery that only
+                // applies to closure/object parents, not a ClassRef.
+                return undef;
+            }
             let usable = if bits & TAG_MASK == POINTER_TAG {
                 let p = (bits & PTR_MASK) as usize;
                 // A real callability test: a closure, or a per-evaluation class
@@ -977,7 +1003,7 @@ extern "C" fn math_random_thunk(_closure: *const crate::closure::ClosureHeader) 
 }
 
 fn math_number_arg(value: f64) -> f64 {
-    crate::builtins::js_number_coerce(value)
+    crate::math::js_math_to_number(value)
 }
 
 fn math_to_int32(value: f64) -> i32 {
@@ -1042,14 +1068,7 @@ extern "C" fn math_round_thunk(_closure: *const crate::closure::ClosureHeader, v
 }
 
 extern "C" fn math_sign_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
-    let x = math_number_arg(value);
-    if x == 0.0 || x.is_nan() {
-        x
-    } else if x.is_sign_negative() {
-        -1.0
-    } else {
-        1.0
-    }
+    crate::math::js_math_sign(value)
 }
 
 extern "C" fn math_clz32_thunk(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
@@ -1069,7 +1088,7 @@ extern "C" fn math_imul_thunk(
     a: f64,
     b: f64,
 ) -> f64 {
-    math_to_int32(a).wrapping_mul(math_to_int32(b)) as f64
+    crate::math::js_math_imul(a, b)
 }
 
 extern "C" fn math_pow_thunk(
@@ -1086,16 +1105,20 @@ extern "C" fn math_min_thunk(_closure: *const crate::closure::ClosureHeader, res
         return f64::INFINITY;
     }
     let mut result = f64::INFINITY;
+    let mut saw_nan = false;
     for value in values {
         let n = math_number_arg(value);
         if n.is_nan() {
-            return f64::NAN;
-        }
-        if n < result || (n == 0.0 && result == 0.0 && n.is_sign_negative()) {
+            saw_nan = true;
+        } else if n < result || (n == 0.0 && result == 0.0 && n.is_sign_negative()) {
             result = n;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
 }
 
 extern "C" fn math_max_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
@@ -1104,16 +1127,20 @@ extern "C" fn math_max_thunk(_closure: *const crate::closure::ClosureHeader, res
         return f64::NEG_INFINITY;
     }
     let mut result = f64::NEG_INFINITY;
+    let mut saw_nan = false;
     for value in values {
         let n = math_number_arg(value);
         if n.is_nan() {
-            return f64::NAN;
-        }
-        if n > result || (n == 0.0 && result == 0.0 && n.is_sign_positive()) {
+            saw_nan = true;
+        } else if n > result || (n == 0.0 && result == 0.0 && n.is_sign_positive()) {
             result = n;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
 }
 
 extern "C" fn math_hypot_thunk(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
@@ -3103,6 +3130,7 @@ fn install_math_namespace(ns_obj: *mut ObjectHeader) {
 // (`from`, `compare`) are installed on the constructor closure with call-arity
 // 0 so every argument lands in the rest array the thunk reads.
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_duration_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3110,6 +3138,7 @@ extern "C" fn temporal_duration_ctor_thunk(
     crate::temporal::duration::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_duration_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3117,6 +3146,7 @@ extern "C" fn temporal_duration_from_thunk(
     crate::temporal::duration::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_duration_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3124,6 +3154,7 @@ extern "C" fn temporal_duration_compare_thunk(
     crate::temporal::duration::compare_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3131,6 +3162,7 @@ extern "C" fn temporal_instant_ctor_thunk(
     crate::temporal::instant::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3138,6 +3170,7 @@ extern "C" fn temporal_instant_from_thunk(
     crate::temporal::instant::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_from_epoch_ms_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3145,6 +3178,7 @@ extern "C" fn temporal_instant_from_epoch_ms_thunk(
     crate::temporal::instant::from_epoch_milliseconds_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_from_epoch_ns_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3152,6 +3186,7 @@ extern "C" fn temporal_instant_from_epoch_ns_thunk(
     crate::temporal::instant::from_epoch_nanoseconds_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3159,6 +3194,7 @@ extern "C" fn temporal_instant_compare_thunk(
     crate::temporal::instant::compare_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3166,6 +3202,7 @@ extern "C" fn temporal_plain_date_ctor_thunk(
     crate::temporal::plain_date::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3173,6 +3210,7 @@ extern "C" fn temporal_plain_date_from_thunk(
     crate::temporal::plain_date::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3180,6 +3218,7 @@ extern "C" fn temporal_plain_date_compare_thunk(
     crate::temporal::plain_date::compare_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_time_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3187,6 +3226,7 @@ extern "C" fn temporal_plain_time_ctor_thunk(
     crate::temporal::plain_time::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_time_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3194,6 +3234,7 @@ extern "C" fn temporal_plain_time_from_thunk(
     crate::temporal::plain_time::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_time_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3201,6 +3242,7 @@ extern "C" fn temporal_plain_time_compare_thunk(
     crate::temporal::plain_time::compare_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_time_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3208,6 +3250,7 @@ extern "C" fn temporal_plain_date_time_ctor_thunk(
     crate::temporal::plain_date_time::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_time_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3215,6 +3258,7 @@ extern "C" fn temporal_plain_date_time_from_thunk(
     crate::temporal::plain_date_time::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_time_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3222,6 +3266,7 @@ extern "C" fn temporal_plain_date_time_compare_thunk(
     crate::temporal::plain_date_time::compare_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_year_month_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3229,6 +3274,7 @@ extern "C" fn temporal_plain_year_month_ctor_thunk(
     crate::temporal::plain_year_month::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_year_month_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3236,6 +3282,7 @@ extern "C" fn temporal_plain_year_month_from_thunk(
     crate::temporal::plain_year_month::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_year_month_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3243,6 +3290,7 @@ extern "C" fn temporal_plain_year_month_compare_thunk(
     crate::temporal::plain_year_month::compare_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_month_day_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3250,6 +3298,7 @@ extern "C" fn temporal_plain_month_day_ctor_thunk(
     crate::temporal::plain_month_day::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_month_day_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3257,6 +3306,7 @@ extern "C" fn temporal_plain_month_day_from_thunk(
     crate::temporal::plain_month_day::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_zoned_date_time_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3264,6 +3314,7 @@ extern "C" fn temporal_zoned_date_time_ctor_thunk(
     crate::temporal::zoned_date_time::construct(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_zoned_date_time_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3271,6 +3322,7 @@ extern "C" fn temporal_zoned_date_time_from_thunk(
     crate::temporal::zoned_date_time::from_static(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_zoned_date_time_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3280,6 +3332,7 @@ extern "C" fn temporal_zoned_date_time_compare_thunk(
 
 // Temporal.Now is a namespace (not a constructor) — method thunks on a plain
 // object, installed like Math. Each reads the host clock fresh.
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_now_instant_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3287,6 +3340,7 @@ extern "C" fn temporal_now_instant_thunk(
     crate::temporal::now::instant(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_now_timezone_id_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3294,6 +3348,7 @@ extern "C" fn temporal_now_timezone_id_thunk(
     crate::temporal::now::time_zone_id(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_now_plain_date_time_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3301,6 +3356,7 @@ extern "C" fn temporal_now_plain_date_time_iso_thunk(
     crate::temporal::now::plain_date_time_iso(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_now_plain_date_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3308,6 +3364,7 @@ extern "C" fn temporal_now_plain_date_iso_thunk(
     crate::temporal::now::plain_date_iso(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_now_plain_time_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3315,6 +3372,7 @@ extern "C" fn temporal_now_plain_time_iso_thunk(
     crate::temporal::now::plain_time_iso(&global_this_rest_array_values(rest))
 }
 
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_now_zoned_date_time_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3323,6 +3381,7 @@ extern "C" fn temporal_now_zoned_date_time_iso_thunk(
 }
 
 /// Build the `Temporal.Now` namespace object (a plain object of method thunks).
+#[cfg(feature = "temporal")]
 fn build_temporal_now_namespace() -> f64 {
     let now_obj = js_object_alloc(0, 0);
     if now_obj.is_null() {
@@ -3369,6 +3428,7 @@ fn build_temporal_now_namespace() -> f64 {
 /// instance (`__tname` / `__tkind`); the receiver comes from `IMPLICIT_THIS`.
 /// Throws `TypeError` on a non-Temporal or wrong-brand receiver (the getter
 /// `branding.js` tests: `blank.call(undefined)`, `years.call({})`, …).
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_proto_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
     let recv = super::js_implicit_this_get();
     let cl = closure as usize;
@@ -3392,6 +3452,7 @@ extern "C" fn temporal_proto_getter_thunk(closure: *const crate::closure::Closur
 /// used when a prototype method is invoked through indirection
 /// (`Temporal.Duration.prototype.add.call(d, x)`); the normal `d.add(x)` path
 /// is the brand arm in `js_native_call_method`.
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_proto_method_thunk(
     closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3416,6 +3477,7 @@ extern "C" fn temporal_proto_method_thunk(
 
 /// Install a brand-checked accessor getter (`{ get, set: undefined,
 /// enumerable: false, configurable: true }`) on a Temporal prototype.
+#[cfg(feature = "temporal")]
 fn install_temporal_proto_getter(proto: *mut ObjectHeader, kind: u8, name: &str) {
     let c = crate::closure::js_closure_alloc(temporal_proto_getter_thunk as *const u8, 0);
     if c.is_null() {
@@ -3444,6 +3506,7 @@ fn install_temporal_proto_getter(proto: *mut ObjectHeader, kind: u8, name: &str)
 /// Install a brand-checked method (`{ writable: true, enumerable: false,
 /// configurable: true }`, non-constructable, with spec `.name`/`.length`) on a
 /// Temporal prototype.
+#[cfg(feature = "temporal")]
 fn install_temporal_proto_method(proto: *mut ObjectHeader, kind: u8, name: &str, spec_length: u32) {
     let c = crate::closure::js_closure_alloc(temporal_proto_method_thunk as *const u8, 0);
     if c.is_null() {
@@ -3484,6 +3547,7 @@ fn install_temporal_proto_method(proto: *mut ObjectHeader, kind: u8, name: &str,
 /// Build and wire a `Temporal.<Type>.prototype` object: a real object carrying
 /// the type's accessor getters and methods (for reflection + indirect `.call`),
 /// linked to its constructor via `ctor.prototype` / `proto.constructor`.
+#[cfg(feature = "temporal")]
 fn install_temporal_prototype(
     ctor: *mut crate::closure::ClosureHeader,
     kind: u8,
@@ -3523,6 +3587,7 @@ fn install_temporal_prototype(
     );
 }
 
+#[cfg(feature = "temporal")]
 fn install_temporal_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
@@ -3550,6 +3615,7 @@ fn install_temporal_constructor(
 /// Read a built-in closure's installed `name` dynamic prop as a Rust `String`
 /// (used by the shared Temporal prototype thunks to recover which getter /
 /// method they back). Empty string if absent.
+#[cfg(feature = "temporal")]
 fn temporal_closure_name(closure: *const crate::closure::ClosureHeader) -> String {
     let v = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
     if !JSValue::from_bits(v.to_bits()).is_string() {
@@ -3570,6 +3636,7 @@ fn temporal_closure_name(closure: *const crate::closure::ClosureHeader) -> Strin
 /// for a Temporal prototype getter / method invoked on a non-branded `this`
 /// (the spec brand check). Used by the reflective `.call`/`.apply` paths;
 /// normal `zdt.foo()` dispatches via the brand arm and never reaches here.
+#[cfg(feature = "temporal")]
 fn temporal_brand_type_error(type_name: &str, member: &str) -> ! {
     crate::object::throw_object_type_error(
         format!("{type_name}.prototype.{member} called on incompatible receiver").as_bytes(),
@@ -3579,6 +3646,7 @@ fn temporal_brand_type_error(type_name: &str, member: &str) -> ! {
 /// Shared body for a `Temporal.ZonedDateTime.prototype` accessor getter invoked
 /// reflectively. Resolves `this` from `IMPLICIT_THIS`, brand-checks it is a
 /// `ZonedDateTime`, and returns the getter's value.
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_zdt_proto_getter_thunk(
     closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
@@ -3596,6 +3664,7 @@ extern "C" fn temporal_zdt_proto_getter_thunk(
 /// Shared body for a `Temporal.ZonedDateTime.prototype` method invoked
 /// reflectively (`.prototype.equals.call(zdt, …)`). Brand-checks `this` then
 /// dispatches to the per-type method router.
+#[cfg(feature = "temporal")]
 extern "C" fn temporal_zdt_proto_method_thunk(
     closure: *const crate::closure::ClosureHeader,
     rest: f64,
@@ -3612,6 +3681,7 @@ extern "C" fn temporal_zdt_proto_method_thunk(
 /// descriptor (`enumerable:false, configurable:true`, `set:undefined`) and the
 /// proper getter `name` (`"get <prop>"`) / `length` (0). Mirrors the RegExp
 /// prototype getter install.
+#[cfg(feature = "temporal")]
 fn install_temporal_getter(proto: *mut ObjectHeader, prop: &str, func_ptr: *const u8) {
     unsafe {
         crate::closure::js_register_closure_arity(func_ptr, 0);
@@ -3657,6 +3727,7 @@ fn install_temporal_getter(proto: *mut ObjectHeader, prop: &str, func_ptr: *cons
 /// These satisfy the reflective test262 cases (branding / prop-desc / length /
 /// name / not-a-constructor / builtin); ordinary `zdt.foo()` calls still
 /// dispatch via the Temporal brand arm and never touch this object.
+#[cfg(feature = "temporal")]
 fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
     let proto = js_object_alloc(0, 0);
     if proto.is_null() {
@@ -3736,6 +3807,7 @@ fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
 /// same-named user closure never matches). Used by `instanceof` to make
 /// `zdt instanceof Temporal.ZonedDateTime` resolve to `true` even though
 /// Temporal values dispatch via brand arms, not a real prototype chain.
+#[cfg(feature = "temporal")]
 pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::TemporalKind> {
     use crate::temporal::TemporalKind;
     let jv = JSValue::from_bits(type_ref.to_bits());
@@ -3791,7 +3863,16 @@ pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::Tempo
         .map(|(_, k)| *k)
 }
 
+/// Temporal gated off: no Temporal constructor exists, so nothing is ever a
+/// Temporal constructor. Kept compiled because `instanceof` / class-registry
+/// dispatch (always linked) call it.
+#[cfg(not(feature = "temporal"))]
+pub(crate) fn temporal_ctor_kind(_type_ref: f64) -> Option<crate::temporal::TemporalKind> {
+    None
+}
+
 /// `Temporal.PlainDate.prototype` accessor getters and method shapes (#4691).
+#[cfg(feature = "temporal")]
 const PLAIN_DATE_GETTERS: &[&str] = &[
     "calendarId",
     "era",
@@ -3810,6 +3891,7 @@ const PLAIN_DATE_GETTERS: &[&str] = &[
     "monthsInYear",
     "inLeapYear",
 ];
+#[cfg(feature = "temporal")]
 const PLAIN_DATE_METHODS: &[(&str, u32)] = &[
     ("toPlainYearMonth", 0),
     ("toPlainMonthDay", 0),
@@ -3829,6 +3911,7 @@ const PLAIN_DATE_METHODS: &[(&str, u32)] = &[
 ];
 
 /// `Temporal.PlainDateTime.prototype` accessor getters and method shapes (#4693).
+#[cfg(feature = "temporal")]
 const PLAIN_DATE_TIME_GETTERS: &[&str] = &[
     "calendarId",
     "era",
@@ -3853,6 +3936,7 @@ const PLAIN_DATE_TIME_GETTERS: &[&str] = &[
     "microsecond",
     "nanosecond",
 ];
+#[cfg(feature = "temporal")]
 const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     ("with", 1),
     ("withPlainTime", 0),
@@ -3872,6 +3956,7 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     ("toPlainTime", 0),
 ];
 
+#[cfg(feature = "temporal")]
 fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
@@ -4389,6 +4474,7 @@ fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
 
 /// Install the standard `from` (spec length 1) and `compare` (spec length 2)
 /// statics — both variadic with call-arity 0 — on a Temporal constructor.
+#[cfg(feature = "temporal")]
 fn install_temporal_from_compare(
     ctor: *mut crate::closure::ClosureHeader,
     from_thunk: *const u8,
@@ -4917,6 +5003,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                     set_intrinsic_to_string_tag(ns_obj, "Atomics");
                 }
                 "Intl" => crate::intl::install_intl_namespace(ns_obj),
+                #[cfg(feature = "temporal")]
                 "Temporal" => {
                     install_temporal_namespace(ns_obj);
                     set_intrinsic_to_string_tag(ns_obj, "Temporal");

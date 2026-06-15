@@ -63,29 +63,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Math.imul — 32-bit wrapping integer multiply --------
-        // ECMAScript: `Math.imul(a, b) = (ToInt32(a) * ToInt32(b)) | 0`.
-        // ToInt32 on a finite double is "truncate to i64 (wrapping), then
-        // take the low 32 bits", which is exactly what `fptosi f64 → i64`
-        // followed by `trunc i64 → i32` produces. LLVM `mul i32` wraps
-        // without `nsw`/`nuw`, giving the required 32-bit overflow. Result
-        // re-boxes via `sitofp` so the JS-visible value is a signed i32 in
-        // a double (e.g. -2110866647 for the FNV-1a constants in the #40
-        // repro). This unblocks every hash (FNV-1a-32, MurmurHash3, xxhash,
-        // CRC32) and PRNG (PCG, xorshift*) that uses the canonical
-        // 32-bit-wrap spelling instead of the 16-bit hi/lo workaround.
-        // NaN/Inf inputs coerce to 0 in spec JS; `fptosi` saturates instead,
-        // but no real hash/PRNG feeds those to imul, so we accept that minor
-        // divergence rather than adding a compare-and-select gate per call.
+        // Route through the runtime helper so non-finite inputs use JS
+        // ToInt32 semantics (`NaN`/±Infinity -> 0) instead of LLVM fptosi.
         Expr::MathImul(a, b) => {
-            let av = lower_math_operand(ctx, a)?;
-            let bv = lower_math_operand(ctx, b)?;
-            let blk = ctx.block();
-            let a_i64 = blk.fptosi(DOUBLE, &av, I64);
-            let b_i64 = blk.fptosi(DOUBLE, &bv, I64);
-            let a_i32 = blk.trunc(I64, &a_i64, I32);
-            let b_i32 = blk.trunc(I64, &b_i64, I32);
-            let prod = blk.mul(I32, &a_i32, &b_i32);
-            Ok(blk.sitofp(I32, &prod, DOUBLE))
+            let av = lower_expr(ctx, a)?;
+            let bv = lower_expr(ctx, b)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_math_imul", &[(DOUBLE, &av), (DOUBLE, &bv)]))
         }
 
         // -------- new Error() / new Error(message) --------
@@ -217,6 +202,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "llvm.copysign.f64",
                 &[(DOUBLE, &floored), (DOUBLE, &v)],
             ))
+        }
+        Expr::MathTrunc(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_trunc", &[(DOUBLE, &v)]))
+        }
+        Expr::MathSign(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_sign", &[(DOUBLE, &v)]))
         }
         Expr::MathAbs(operand) => {
             let v = lower_math_operand(ctx, operand)?;

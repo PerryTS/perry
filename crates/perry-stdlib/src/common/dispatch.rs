@@ -1126,7 +1126,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // `js_native_call_method` → small-handle range check → here. Each helper
     // does its own registry-membership + property-name gate; `None` means
     // "not us, try the next dispatcher or return undefined".
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     {
         // #1698: Request body methods (`req.json()`/`.text()`/`.arrayBuffer()`)
         // on an any-typed / computed-key receiver. Hono's `HonoRequest.#cachedBody`
@@ -2282,6 +2282,75 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         };
     }
 
+    // #5037 — external-fastify variant of the request/reply property
+    // dispatch above. When the well-known flip routes `fastify` to
+    // perry-ext-fastify (auto-optimize / `--no-default-features`),
+    // `bundled-fastify`/`http-server` are stripped and the bundled
+    // arm above is compiled out. A `request`/`reply` handle that
+    // escaped into a user helper — its static type erased, so codegen
+    // emitted a generic dynamic property read here rather than a
+    // `NativeMethodCall` — then had no dispatch path and read
+    // `undefined` (inline reads in the handler still worked because
+    // codegen recognised the receiver and called `js_fastify_req_*`
+    // directly). The handle lives in perry-ext-fastify's perry-ffi
+    // registry, not perry-stdlib's, so probe membership via the
+    // external `js_ext_fastify_is_context_handle` symbol (resolved at
+    // link time) and forward to the same `js_fastify_req_*` exports
+    // the bundled arm uses. Mirrors the `external-fastify-pump` pump
+    // wiring in `async_bridge.rs`.
+    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    {
+        extern "C" {
+            fn js_ext_fastify_is_context_handle(handle: i64) -> i32;
+            fn js_fastify_req_query_object(handle: i64) -> f64;
+            fn js_fastify_req_params_object(handle: i64) -> f64;
+            fn js_fastify_req_json(handle: i64) -> f64;
+            fn js_fastify_req_body(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_headers(handle: i64) -> i64;
+            fn js_fastify_req_method(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_url(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_get_user_data(handle: i64) -> f64;
+        }
+        if js_ext_fastify_is_context_handle(handle) != 0 {
+            return match property_name {
+                "query" => js_fastify_req_query_object(handle),
+                "params" => js_fastify_req_params_object(handle),
+                "body" => js_fastify_req_json(handle),
+                "rawBody" | "text" => {
+                    let ptr = js_fastify_req_body(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "headers" => {
+                    // Returns NaN-boxed JS object bits — use directly.
+                    let bits = js_fastify_req_headers(handle);
+                    f64::from_bits(bits as u64)
+                }
+                "method" => {
+                    let ptr = js_fastify_req_method(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "url" => {
+                    let ptr = js_fastify_req_url(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "user" => js_fastify_req_get_user_data(handle),
+                _ => f64::from_bits(0x7FFC_0000_0000_0001), // undefined
+            };
+        }
+    }
+
     // Issue #340: axios response — dispatch `r.status` / `r.data` /
     // `r.statusText` / `r.headers` to the AxiosResponseHandle accessor
     // shims. The handle id is registered in the common HANDLES
@@ -2344,8 +2413,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // Each helper does its own registry-membership check; the order matches the
     // observed property-name disjointness (`url` / `method` only on Request,
     // `status` / `ok` only on Response, etc.). First match wins.
-    // Gated on `http-client` because fetch.rs itself is gated on that feature.
-    #[cfg(feature = "http-client")]
+    // Gated on `web-fetch` because fetch.rs itself is gated on that feature (#5174).
+    #[cfg(feature = "web-fetch")]
     {
         if let Some(v) = crate::fetch::dispatch_request_property(handle as usize, property_name) {
             return v;
@@ -3044,7 +3113,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             f: unsafe extern "C" fn(i64) -> bool,
         );
         fn js_register_event_emitter_on(f: EventEmitterOn);
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_with_options(
             f: unsafe extern "C" fn(
                 *const perry_runtime::StringHeader,
@@ -3053,7 +3122,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 *const perry_runtime::StringHeader,
             ) -> *mut perry_runtime::Promise,
         );
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_constructors(
             blob_new: unsafe extern "C" fn(f64, f64) -> f64,
             file_new: unsafe extern "C" fn(f64, f64, f64, f64) -> f64,
@@ -3093,8 +3162,13 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             ) -> f64,
             response_static_error: extern "C" fn() -> f64,
         );
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
+        // #4965: Headers → `res.setHeaders` entries-JSON producer.
+        #[cfg(feature = "http-client")]
+        fn js_register_global_headers_entries_json(
+            f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
+        );
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
@@ -3113,9 +3187,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
     js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
     crate::string_decoder::string_decoder_prototype_value();
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_fetch_constructors(
         crate::fetch_blob::js_blob_new,
         crate::fetch_blob::js_file_new,
@@ -3127,8 +3201,10 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::fetch::js_response_static_redirect,
         crate::fetch::js_response_static_error,
     );
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
+    #[cfg(feature = "http-client")]
+    js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
     // Probe / `on` hook / constructor all route through the shared
     // `extern "C"` events surface declared above dispatch_event_emitter_method
     // (#4995): the linker resolves them to whichever EventEmitter impl is in

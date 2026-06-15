@@ -163,6 +163,19 @@ fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
 
 #[cfg(unix)]
 fn spawn_ipc_reader(sock: UnixStream) {
+    // Cluster workers (#4962) need a recvmsg-based reader to receive SCM_RIGHTS
+    // connection fds for SCHED_RR; it still surfaces ordinary JSON frames
+    // identically. Plain forks keep the lighter BufReader path.
+    if crate::cluster::is_cluster_worker() {
+        std::thread::spawn(move || {
+            crate::cluster_sched::worker_recv_loop(
+                sock,
+                |line| push_ipc_event(IpcEvent::Message(line)),
+                || push_ipc_event(IpcEvent::Closed),
+            );
+        });
+        return;
+    }
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(sock);
         for line in reader.lines() {

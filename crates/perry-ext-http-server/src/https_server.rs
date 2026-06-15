@@ -348,6 +348,12 @@ async fn handle_https_request(
     // #2132 — capture before `req` / `headers_lower` are consumed below.
     let http_version = req.version();
     let req_connection = headers_lower.get("connection").cloned();
+    // #5080 — `Expect: 100-continue` routes to `'checkContinue'` (hyper
+    // auto-sends the interim `100 Continue` once the body is polled below).
+    let expects_continue = headers_lower
+        .get("expect")
+        .map(|v| v.to_ascii_lowercase().contains("100-continue"))
+        .unwrap_or(false);
     let body = match req.collect().await {
         Ok(c) => c.to_bytes().to_vec(),
         Err(_) => Vec::new(),
@@ -363,15 +369,21 @@ async fn handle_https_request(
     ));
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
     let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
-    let (request_listeners, handler, keep_alive_timeout) =
+    let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
         match get_handle::<HttpsServer>(server_handle) {
             Some(s) => (
                 s.base.listeners.get("request").cloned().unwrap_or_default(),
                 s.handler,
                 s.base.keep_alive_timeout,
+                s.base
+                    .listeners
+                    .get("checkContinue")
+                    .cloned()
+                    .unwrap_or_default(),
             ),
-            None => (Vec::new(), 0, 5_000.0),
+            None => (Vec::new(), 0, 5_000.0, Vec::new()),
         };
+    let is_check_continue = expects_continue && !check_continue_listeners.is_empty();
     let pending = HttpPendingRequest {
         server_handle,
         request_handle: im_handle,
@@ -381,6 +393,8 @@ async fn handle_https_request(
         h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
+        check_continue_listeners,
+        is_check_continue,
     };
     if request_tx.send(pending).await.is_err() {
         return Ok(Response::builder()
@@ -427,6 +441,27 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);
+    // #5080 — an `Expect: 100-continue` request with a `'checkContinue'`
+    // listener fires that listener instead of the `'request'` path.
+    if pending.is_check_continue {
+        for cb in &pending.check_continue_listeners {
+            if *cb == 0 {
+                continue;
+            }
+            unsafe {
+                let raw = *cb as *const RawClosureHeader;
+                let closure = JsClosure::from_raw(raw);
+                if !closure.is_null() {
+                    with_implicit_this(server_this, || {
+                        let _ = closure.call2(req_f64, res_f64);
+                    });
+                }
+                js_promise_run_microtasks();
+            }
+        }
+        crate::server::finalize_or_park_request(&pending);
+        return;
+    }
     for cb in &pending.request_listeners {
         if *cb == 0 {
             continue;

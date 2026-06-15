@@ -4,6 +4,7 @@ use super::*;
 use crate::array::ArrayHeader;
 
 /// Advance to the next UTF-8 character boundary strictly after `i`.
+#[cfg(feature = "regex-engine")]
 fn next_char_boundary(s: &str, i: usize) -> usize {
     let mut j = i + 1;
     while j < s.len() && !s.is_char_boundary(j) {
@@ -19,6 +20,7 @@ fn next_char_boundary(s: &str, i: usize) -> usize {
 /// (unmatched groups → `undefined`/`None`) after each segment. Honors `limit`
 /// (`< 0` ⇒ unbounded) by stopping once `limit` elements have been produced.
 /// Each element is `Some(substring)` or `None` for a spliced unmatched group.
+#[cfg(feature = "regex-engine")]
 pub(crate) fn spec_regex_split(regex: &regex::Regex, s: &str, limit: i32) -> Vec<Option<String>> {
     let mut out: Vec<Option<String>> = Vec::new();
     let unbounded = limit < 0;
@@ -104,6 +106,7 @@ pub extern "C" fn js_string_split_n(
     // recorded by `js_regexp_new` and delegate to `js_string_split_regex`
     // on a match. Otherwise the regex header would be read as a
     // StringHeader and segfault on the first byte of its `regex_ptr`.
+    #[cfg(feature = "regex-engine")]
     if crate::regex::is_regex_pointer(delimiter as *const u8) {
         return crate::regex::js_string_split_regex_n(
             s,
@@ -238,6 +241,7 @@ pub extern "C" fn js_string_split_value(
     let lim_jv = JSValue::from_bits(limit.to_bits());
 
     // Step 2: a separator with a `[Symbol.split]` method (a RegExp) takes over.
+    #[cfg(feature = "regex-engine")]
     if sep_jv.is_pointer() {
         let ptr = crate::value::js_nanbox_get_pointer(separator) as *const u8;
         if crate::regex::is_regex_pointer(ptr) {

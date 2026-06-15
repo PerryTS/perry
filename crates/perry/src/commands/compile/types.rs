@@ -540,6 +540,60 @@ pub struct CompilationContext {
     /// `CryptoSha256`/`CryptoMd5` which dispatch to runtime symbols that
     /// live behind the perry-stdlib `crypto` feature.
     pub uses_crypto_builtins: bool,
+    /// Whether any TS module needs the regular-expression engine — a regex
+    /// literal / `RegExp`, a regex-coercing string method (`.match` /
+    /// `.matchAll` / `.search`), or a glob API (`path.matchesGlob` /
+    /// `fs.glob*`, which compile a glob to a regex internally). When false,
+    /// the auto-optimize build leaves `perry-runtime/regex-engine` off and the
+    /// ~1.2 MB `regex`/`fancy-regex` machinery never links. The RegExp object's
+    /// identity/display layer stays compiled, so non-regex programs still
+    /// format/compare values correctly.
+    pub uses_regex: bool,
+    /// Whether any TS module uses the TC39 `Temporal.*` API. Gates
+    /// `perry-runtime/temporal` (the `temporal_rs` engine + its transitive
+    /// tz/calendar deps, ~580 KB). Independent of JS `Date`, which has its own
+    /// implementation — so a program using `Date` but never `Temporal.*` links
+    /// none of this.
+    pub uses_temporal: bool,
+    /// Whether codegen routes any construction to the native `EventEmitter`
+    /// (a `new EventEmitter()` / `EventEmitterAsyncResource`, regardless of
+    /// where the binding was imported from — e.g. `eventemitter3`'s default
+    /// export, whose local name is `EventEmitter`). The `js_event_emitter_*`
+    /// helpers live in perry-stdlib's `events` module behind `bundled-events`;
+    /// without this flag a program that uses native EventEmitter but never
+    /// imports `node:events` fails to link (#5140).
+    pub uses_event_emitter: bool,
+    /// Whether any TS module uses a WHATWG URL API (`new URL`, the hostname
+    /// setter, `url.domainToASCII/Unicode`, legacy `url.resolve`,
+    /// `URLSearchParams`, `URLPattern`). Gates `perry-runtime/url-engine` (the
+    /// `url` + `idna` crates + transitive `percent_encoding`, ~195 KB). Perry's
+    /// URL parsing is otherwise hand-rolled, so a program with no URL API links
+    /// none of the host-canonicalization/IDNA machinery.
+    pub uses_url: bool,
+    /// Whether any TS module calls `String.prototype.normalize`. Gates
+    /// `perry-runtime/string-normalize` (`unicode-normalization`, ~113 KB of
+    /// NFC/NFD/NFKC/NFKD tables).
+    pub uses_string_normalize: bool,
+    /// Whether any TS module constructs an `Intl.Segmenter`. Gates
+    /// `perry-runtime/intl-segmenter` (`unicode-segmentation`, ~73 KB of UAX #29
+    /// grapheme/word/sentence tables). Other `Intl.*` APIs don't need it.
+    pub uses_intl_segmenter: bool,
+    /// Whether any TS module uses a heap-snapshot API (`v8.getHeapSnapshot` /
+    /// `v8.writeHeapSnapshot`) or `process.report`. Gates
+    /// `perry-runtime/diagnostics` (the cold-path JSON serializers + the
+    /// `serde_json` pulled only by them, ~95 KB). The env-driven dev
+    /// diagnostics (`PERRY_GC_DIAG` JSON trace, typed-feedback trace dump) ride
+    /// the same feature and degrade gracefully when it's off, so they're absent
+    /// from size-optimized binaries unless one of these APIs is also used.
+    pub uses_diagnostics: bool,
+    /// Whether any TS module imports `node:dgram` (UDP sockets). Gates
+    /// `perry-runtime/mod-dgram` (`crate::dgram` + `crate::dgram_reactor`,
+    /// ~43 KB, incl. the `js_dgram_*` externs codegen emits direct calls to).
+    /// Detected from `module: "dgram"` in the HIR (a `dgram` namespace can only
+    /// arise from importing it), so a program that never imports `dgram` links
+    /// none of it. NB: not via `native_module_imports`, which only tracks
+    /// `requires_stdlib` modules — dgram is runtime-only.
+    pub uses_dgram: bool,
     /// Whether `perry/thread` is imported. When true, the runtime must
     /// keep `panic = "unwind"` so that worker-thread panics translate to
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
@@ -783,6 +837,14 @@ impl CompilationContext {
             native_module_imports: BTreeSet::new(),
             uses_fetch: false,
             uses_crypto_builtins: false,
+            uses_regex: false,
+            uses_temporal: false,
+            uses_event_emitter: false,
+            uses_url: false,
+            uses_string_normalize: false,
+            uses_intl_segmenter: false,
+            uses_diagnostics: false,
+            uses_dgram: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             min_windows_version: "10".to_string(),

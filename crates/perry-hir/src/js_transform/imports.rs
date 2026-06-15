@@ -1017,7 +1017,7 @@ pub fn transform_expr(
         Expr::JsonParse(e) | Expr::JsonStringify(e) | Expr::JsonRawJson(e) | Expr::JsonIsRawJson(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::MathFloor(e) | Expr::MathCeil(e) | Expr::MathRound(e) | Expr::MathAbs(e) | Expr::MathSqrt(e) => {
+        Expr::MathFloor(e) | Expr::MathCeil(e) | Expr::MathRound(e) | Expr::MathTrunc(e) | Expr::MathSign(e) | Expr::MathAbs(e) | Expr::MathSqrt(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::MathMin(args) | Expr::MathMax(args) => {

@@ -243,9 +243,16 @@ pub fn compute_required_features(
             features.insert(*feat);
         }
     }
-    // Built-in `fetch()` and `node-fetch` both bottom out in reqwest.
+    // Built-in `fetch()` / `node-fetch` and the WHATWG data types
+    // (`Headers` / `Request` / `Response` / `Blob`) bottom out in reqwest
+    // but do NOT need perry-stdlib's bundled node:http client. #5174: ask
+    // for `web-fetch` (just `src/fetch/` + `src/fetch_blob.rs`), not the
+    // `http-client` umbrella that also pulls in `src/http.rs` / `src/axios.rs`.
+    // When the program ALSO imports `node:http`, that import adds
+    // `http-client` separately and the well-known flip strips it down to
+    // `web-fetch` — so the bundled client never collides with perry-ext-http.
     if uses_fetch {
-        features.insert("http-client");
+        features.insert("web-fetch");
     }
     // Perry's bare `crypto.randomBytes` / `sha256` / etc. builtins bottom
     // out in the perry-stdlib `crypto` feature.

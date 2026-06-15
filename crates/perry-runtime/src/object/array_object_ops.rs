@@ -328,6 +328,29 @@ pub(crate) unsafe fn define_array_property(
         Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
     };
 
+    // A NEW own property on a non-extensible array is forbidden (ECMA-262
+    // OrdinaryDefineOwnProperty: `extensible` false + no current property ⇒
+    // reject). `Object.preventExtensions`/`seal`/`freeze` set the flag; an
+    // existing index/named property can still be redefined within the spec
+    // bounds. (test262 defineProperty/15.2.3.6-4-198 and friends.)
+    {
+        let named_exists = super::canonical_array_index(key_name).is_none()
+            && (super::get_accessor_descriptor(obj as usize, key_name).is_some()
+                || crate::array::array_named_property_get_by_name(arr, key_name).is_some());
+        let index_exists = super::canonical_array_index(key_name)
+            .map(|_| super::has_own_helpers::array_own_key_present(arr, key_str))
+            .unwrap_or(false);
+        if !named_exists && !index_exists {
+            let gc = gc_header_for(obj);
+            if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
+                super::throw_object_type_error_with_suffix(
+                    "Cannot define property ",
+                    &format!("{key_name}, object is not extensible"),
+                );
+            }
+        }
+    }
+
     if let Some(index) = super::canonical_array_index(key_name) {
         let exists = super::has_own_helpers::array_own_key_present(arr, key_str);
 
@@ -622,6 +645,22 @@ pub(crate) unsafe fn define_array_property(
             } else {
                 prior.map(|a| a.set).unwrap_or(0)
             };
+            // Retain attrs the descriptor omits when redefining; a new accessor
+            // (or one replacing a data property) defaults to
+            // non-enumerable/non-configurable. An existing data property with no
+            // side-table entry has default all-true attributes, so a
+            // data→accessor conversion keeps `enumerable`/`configurable`.
+            let existed = prior.is_some()
+                || super::get_property_attrs(obj as usize, key_name).is_some()
+                || crate::array::array_named_property_get_by_name(arr, key_name).is_some();
+            let cur = if existed {
+                Some(
+                    super::get_property_attrs(obj as usize, key_name)
+                        .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
+                )
+            } else {
+                None
+            };
             set_accessor_descriptor(
                 obj as usize,
                 key_name.to_string(),
@@ -630,8 +669,10 @@ pub(crate) unsafe fn define_array_property(
                     set: set_bits,
                 },
             );
-            let enumerable = read_bool(b"enumerable").unwrap_or(false);
-            let configurable = read_bool(b"configurable").unwrap_or(false);
+            let enumerable = read_bool(b"enumerable")
+                .unwrap_or_else(|| cur.map(|a| a.enumerable()).unwrap_or(false));
+            let configurable = read_bool(b"configurable")
+                .unwrap_or_else(|| cur.map(|a| a.configurable()).unwrap_or(false));
             set_property_attrs(
                 obj as usize,
                 key_name.to_string(),
@@ -642,11 +683,70 @@ pub(crate) unsafe fn define_array_property(
         }
     }
 
-    crate::array::array_named_property_set(arr, key_str, value);
+    // ValidateAndApplyPropertyDescriptor merge for a named (non-index) data
+    // property: a redefine keeps the attributes (and the value) the descriptor
+    // omits, while a brand-new property defaults omitted fields to false. The
+    // index path above already does this; the named path historically reset
+    // every omitted field to false and overwrote the value with `undefined`
+    // (dropping `arr.prop = 12` then `defineProperty(arr,"prop",{writable:false})`
+    // back to `{value: undefined}`). Mirror the index-path merge here.
+    let cur_accessor = super::get_accessor_descriptor(obj as usize, key_name);
+    let exists = cur_accessor.is_some()
+        || crate::array::array_named_property_get_by_name(arr, key_name).is_some();
+    let cur_attrs: Option<PropertyAttrs> = if exists {
+        Some(
+            super::get_property_attrs(obj as usize, key_name)
+                .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
+        )
+    } else {
+        None
+    };
 
-    let writable = read_bool(b"writable").unwrap_or(false);
-    let enumerable = read_bool(b"enumerable").unwrap_or(false);
-    let configurable = read_bool(b"configurable").unwrap_or(false);
+    // A GENERIC descriptor (only enumerable/configurable — no value/writable,
+    // and no get/set, since accessor descriptors returned above) on an existing
+    // ACCESSOR property must only update the attributes; it must NOT convert the
+    // accessor back to a data property (spec ValidateAndApplyPropertyDescriptor:
+    // IsGenericDescriptor leaves [[Get]]/[[Set]] intact). Mirrors the index path.
+    if cur_accessor.is_some() && !has_value && !super::desc_has_field(descriptor_value, b"writable")
+    {
+        let cur = cur_attrs.unwrap_or_else(|| PropertyAttrs::new(false, false, false));
+        let enumerable = read_bool(b"enumerable").unwrap_or_else(|| cur.enumerable());
+        let configurable = read_bool(b"configurable").unwrap_or_else(|| cur.configurable());
+        set_property_attrs(
+            obj as usize,
+            key_name.to_string(),
+            PropertyAttrs::new(false, enumerable, configurable),
+        );
+        let _ = obj_value;
+        return Some(true);
+    }
+
+    // Redefining a former accessor back to a data property drops the stale
+    // accessor entry (the non-configurable case already threw above).
+    if cur_accessor.is_some() {
+        ACCESSOR_DESCRIPTORS.with(|m| {
+            m.borrow_mut().remove(&(obj as usize, key_name.to_string()));
+        });
+    }
+
+    // Write the value: an explicit `value` wins; a NEW property with no value
+    // defaults to `undefined`; a redefine that omits `value` keeps the current.
+    if has_value {
+        crate::array::array_named_property_set(arr, key_str, value);
+    } else if !exists {
+        crate::array::array_named_property_set(
+            arr,
+            key_str,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+
+    let writable =
+        read_bool(b"writable").unwrap_or_else(|| cur_attrs.map(|a| a.writable()).unwrap_or(false));
+    let enumerable = read_bool(b"enumerable")
+        .unwrap_or_else(|| cur_attrs.map(|a| a.enumerable()).unwrap_or(false));
+    let configurable = read_bool(b"configurable")
+        .unwrap_or_else(|| cur_attrs.map(|a| a.configurable()).unwrap_or(false));
     set_property_attrs(
         obj as usize,
         key_name.to_string(),

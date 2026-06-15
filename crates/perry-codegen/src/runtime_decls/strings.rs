@@ -68,6 +68,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Boxed separator + boxed limit; full ToUint32(limit)/ToString(separator)
     // coercion + undefined/RegExp handling (ECMA-262 §22.1.3.21).
     module.declare_function("js_string_split_value", I64, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_math_trunc", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_sign", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_imul", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_pow", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // Math.* unary functions: use LLVM intrinsics directly so we
@@ -326,6 +329,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);
     module.declare_function("js_math_max_array", DOUBLE, &[I64]);
+    module.declare_function("js_math_min2", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_math_max2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
     module.declare_function("js_array_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_array_slice_values", I64, &[I64, DOUBLE, DOUBLE]);
@@ -870,6 +875,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I32, I32, I32, PTR, I32],
     );
+    // Wall 45: merged-layout allocator for dynamic-parent subclasses
+    // (`class X extends _mod.default`). Args: (class_id, own_field_count,
+    // own_packed_keys, own_packed_keys_len). Resolves the runtime-registered
+    // parent layout and allocates `[parent keys..] ++ [own keys..]` so
+    // inherited fields land at the parent's slot indices.
+    module.declare_function(
+        "js_object_alloc_class_dynamic_parent",
+        I64,
+        &[I32, I32, PTR, I32],
+    );
     // Fast class allocator that takes a pre-built keys_array pointer
     // directly, bypassing the per-call SHAPE_CACHE lookup. The codegen
     // emits one `js_build_class_keys_array` call at module init per
@@ -1123,6 +1138,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // class_id from the value (ClassRef payload or ObjectHeader.class_id)
     // and wires the (child, parent) edge into CLASS_REGISTRY.
     module.declare_function("js_register_class_parent_dynamic", VOID, &[I32, DOUBLE]);
+    // Read back the parent VALUE stashed by `js_register_class_parent_dynamic`
+    // at decl time, so `super()` resolves the parent from the module-init scope
+    // instead of re-evaluating its extends expression in the constructor scope.
+    module.declare_function("js_get_dynamic_parent_value", DOUBLE, &[I32]);
     // Decl-site snapshot of a function-nested class's captured locals —
     // consumed by the dynamic-construction replay (`new mod.C()`).
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);
@@ -1130,6 +1149,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
     // `super(...spread)` — dynamic-arity ancestor ctor invocation on `this`.
     module.declare_function("js_super_construct_apply", VOID, &[I32, DOUBLE, DOUBLE]);
+    // `super.method(...)` on a class with a runtime-registered (dynamic) parent
+    // — resolve the method from the registered parent chain and call on `this`.
+    module.declare_function(
+        "js_super_method_call_dynamic",
+        DOUBLE,
+        &[I32, PTR, I64, DOUBLE, PTR, I64],
+    );
     module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
     // Issue #711 part 2: prototype-based class declaration via
     // `<func>.prototype = <obj>`. Binds an object as the function's

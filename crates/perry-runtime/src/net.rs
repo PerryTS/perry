@@ -66,11 +66,13 @@ pub extern "C" fn js_net_server_listen(
     };
 
     let addr = format!("{}:{}", host, port);
-    // #4914 — cluster workers bind with SO_REUSEPORT so N workers share the
-    // port, then report the bound address to the primary for 'listening'.
+    // #4914/#4962 — cluster workers coordinate the port with the primary
+    // (so `listen(0)` shares one ephemeral port) and bind with SO_REUSEPORT so
+    // N workers share it, then report the bound address for 'listening'.
     #[cfg(unix)]
     let bind_result = if crate::cluster::is_cluster_worker() {
-        crate::cluster::worker_reuseport_bind(&addr)
+        let address_type = if host.contains(':') { 6 } else { 4 };
+        crate::cluster::worker_shared_reuseport_bind(&host, port, address_type)
     } else {
         TcpListener::bind(&addr)
     };

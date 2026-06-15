@@ -801,7 +801,12 @@ extern "C" fn process_report_function_write_report(
     let filename = module_value_to_string(file_arg)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(process_report_default_filename);
+    // OFF stub: unreachable in practice (the compiler enables `diagnostics`
+    // whenever a program references `process.report`).
+    #[cfg(feature = "diagnostics")]
     let report_json = process_report_json_string("API", Some(&filename));
+    #[cfg(not(feature = "diagnostics"))]
+    let report_json = String::from("{}");
     if let Err(err) = std::fs::write(&filename, report_json) {
         crate::fs::validate::throw_type_error_with_code(
             &format!("Failed to write diagnostic report to {filename}: {err}"),
@@ -1282,6 +1287,7 @@ fn node_platform_name() -> &'static str {
     }
 }
 
+#[cfg(feature = "diagnostics")]
 fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
     let args: Vec<String> = std::env::args().collect();
     let command_line = if args.is_empty() {

@@ -448,6 +448,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // call js_math_min_array. The variadic form materializes a
         // temporary fixed-size array via js_array_alloc + push.
         Expr::MathMin(values) => {
+            if values.len() == 2 {
+                let left = lower_expr(ctx, &values[0])?;
+                let right = lower_expr(ctx, &values[1])?;
+                let blk = ctx.block();
+                return Ok(blk.call(DOUBLE, "js_math_min2", &[(DOUBLE, &left), (DOUBLE, &right)]));
+            }
             let cap = (values.len() as u32).to_string();
             let arr_handle_v = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
             // Push each value. push_f64 may realloc, so we thread the
@@ -474,6 +480,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.max(...args) — same shape as Math.min --------
         Expr::MathMax(values) => {
+            if values.len() == 2 {
+                let left = lower_expr(ctx, &values[0])?;
+                let right = lower_expr(ctx, &values[1])?;
+                let blk = ctx.block();
+                return Ok(blk.call(DOUBLE, "js_math_max2", &[(DOUBLE, &left), (DOUBLE, &right)]));
+            }
             let cap = (values.len() as u32).to_string();
             let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
             for v_expr in values {

@@ -159,7 +159,8 @@ fn derive_target_key(target: Option<&str>) -> String {
         Some("watchos-simulator") => "watchos-simulator".to_string(),
         Some("visionos") => "visionos".to_string(),
         Some("visionos-simulator") => "visionos-simulator".to_string(),
-        Some("android") => "android".to_string(),
+        // Wear OS reuses Android's resolved native-dependency set.
+        Some("android") | Some("wearos") => "android".to_string(),
         Some("harmonyos") => "harmonyos".to_string(),
         Some("harmonyos-simulator") => "harmonyos-simulator".to_string(),
         Some("web") => "web".to_string(),

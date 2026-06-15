@@ -690,7 +690,30 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             if fn_ptr.is_null() {
                 throw_iterator_method_not_callable();
             }
-            let iter = crate::closure::js_closure_call0(fn_ptr);
+            // Spec `GetIterator(obj)` → `Call(method, obj)`: the
+            // `[Symbol.iterator]()` factory runs with `this === obj`. A canonical
+            // bound class method (#5128's `@@iterator` wrapper) reads its receiver
+            // from IMPLICIT_THIS, so set it here too — mirroring `js_get_iterator`.
+            // Without this the wrapper saw a stale `this` and the generator
+            // yielded nothing (empty spread).
+            let prev_this = crate::object::js_implicit_this_set(value);
+            let trap_buf = crate::exception::js_try_push();
+            let jumped =
+                unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
+            let iter = if jumped == 0 {
+                crate::closure::js_closure_call0(fn_ptr)
+            } else {
+                // Factory threw: restore the receiver and unwind the trap frame
+                // before re-propagating, so IMPLICIT_THIS can't leak into later
+                // calls (mirrors `async_from_sync_call_cached_raw` above).
+                let exc = crate::exception::js_get_exception();
+                crate::exception::js_clear_exception();
+                crate::object::js_implicit_this_set(prev_this);
+                crate::exception::js_try_end();
+                crate::exception::js_throw(exc)
+            };
+            crate::object::js_implicit_this_set(prev_this);
+            crate::exception::js_try_end();
             if crate::array::js_array_is_array(iter).to_bits() == crate::value::TAG_TRUE {
                 return js_iterator_to_array(crate::array::array_values_iter(iter));
             }

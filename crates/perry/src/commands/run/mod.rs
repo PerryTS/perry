@@ -18,14 +18,15 @@ mod remote;
 mod resign;
 
 pub use android::{
-    build_and_run_android, debug_sign_apk, find_apksigner, find_latest_build_tool, get_android_pid,
-    inject_android_deeplinks, inject_google_auth_android_resources, inject_gradle_dependencies,
-    install_and_launch_android, wire_native_lib_kotlin_sources,
+    build_and_run_android, build_and_run_wearos, debug_sign_apk, find_apksigner,
+    find_latest_build_tool, get_android_pid, inject_android_deeplinks,
+    inject_google_auth_android_resources, inject_gradle_dependencies, install_and_launch_android,
+    wire_native_lib_kotlin_sources,
 };
 pub use devices::{
     detect_android_devices, detect_booted_simulators, detect_booted_tv_simulators,
     detect_booted_visionos_simulators, detect_booted_watch_simulators, detect_ios_devices,
-    pick_device, pick_from_list, DeviceInfo,
+    is_wear_os_device, pick_device, pick_from_list, DeviceInfo,
 };
 pub use entry::{
     can_compile_locally, read_perry_toml_entry, resolve_entry_file, resolve_target,
@@ -51,7 +52,7 @@ pub use resign::{
 #[derive(Args, Debug)]
 pub struct RunArgs {
     /// Positional args: [platform] [input]. Platform is one of: macos, ios,
-    /// visionos, watchos, tvos, android, linux, windows, web. If the first arg is not a
+    /// visionos, watchos, tvos, android, wearos, linux, windows, web. If the first arg is not a
     /// known platform it is treated as the input file/directory.
     pub positional: Vec<String>,
 
@@ -129,6 +130,7 @@ pub fn parse_platform(s: &str) -> Option<Platform> {
         "watchos" => Some(Platform::Watchos),
         "tvos" => Some(Platform::Tvos),
         "android" => Some(Platform::Android),
+        "wearos" | "wear" | "wear-os" => Some(Platform::Wearos),
         "linux" => Some(Platform::Linux),
         "windows" => Some(Platform::Windows),
         "web" => Some(Platform::Web),
@@ -154,6 +156,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
             | Some("visionos-simulator")
             | Some("visionos")
             | Some("android")
+            | Some("wearos")
             | Some("watchos-simulator")
             | Some("watchos")
             | Some("tvos-simulator")

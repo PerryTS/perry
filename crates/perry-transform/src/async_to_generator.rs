@@ -225,21 +225,49 @@ fn compute_max_func_id_module(module: &Module) -> perry_types::FuncId {
     for stmt in &module.init {
         scan_stmt_for_max_closure_id(stmt, &mut max_closure_id);
     }
+    for global in &module.globals {
+        if let Some(init) = &global.init {
+            scan_expr_for_max_closure_id(init, &mut max_closure_id);
+        }
+    }
     for class in &module.classes {
         for mb in &class.methods {
+            m = m.max(mb.id);
             scan_stmts_for_max_closure_id(&mb.body, &mut max_closure_id);
         }
         for mb in &class.static_methods {
+            m = m.max(mb.id);
             scan_stmts_for_max_closure_id(&mb.body, &mut max_closure_id);
         }
         if let Some(ctor) = &class.constructor {
+            m = m.max(ctor.id);
             scan_stmts_for_max_closure_id(&ctor.body, &mut max_closure_id);
         }
         for g in &class.getters {
+            m = m.max(g.1.id);
             scan_stmts_for_max_closure_id(&g.1.body, &mut max_closure_id);
         }
         for s in &class.setters {
+            m = m.max(s.1.id);
             scan_stmts_for_max_closure_id(&s.1.body, &mut max_closure_id);
+        }
+        for member in &class.computed_members {
+            m = m.max(member.function.id);
+            scan_stmts_for_max_closure_id(&member.function.body, &mut max_closure_id);
+            scan_expr_for_max_closure_id(&member.key_expr, &mut max_closure_id);
+        }
+        // Issue #5143: scan class field initializers — they hold closures
+        // whose func_ids must not be reused by the async/for-of desugar.
+        for field in class.fields.iter().chain(class.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                scan_expr_for_max_closure_id(init, &mut max_closure_id);
+            }
+            if let Some(key_expr) = &field.key_expr {
+                scan_expr_for_max_closure_id(key_expr, &mut max_closure_id);
+            }
+        }
+        if let Some(extends_expr) = &class.extends_expr {
+            scan_expr_for_max_closure_id(extends_expr, &mut max_closure_id);
         }
     }
     m.max(max_closure_id)

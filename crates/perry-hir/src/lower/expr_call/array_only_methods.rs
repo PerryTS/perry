@@ -564,6 +564,42 @@ pub(super) fn try_array_only_methods(
                         args,
                     }));
                 }
+                // #5139: an Array-mutator name that a plain object can also own
+                // as a closure-valued property (`{ push(c) {…} }` passed as
+                // `any` — react-dom/server's SSR `destination`). When the bare-
+                // ident receiver's static type is unknown we cannot tell a real
+                // array from such an object, so committing to `Expr::ArraySort` /
+                // the `array.push_single` native arm here reads the object's
+                // header as an `ArrayHeader` and corrupts it. Defer to the
+                // runtime `js_native_call_method` dispatch, which selects by the
+                // receiver's runtime shape (real array → dense helper; plain
+                // object with an own callable of this name → that method). The
+                // GC_TYPE_ARRAY arms in `js_native_call_method` keep real arrays
+                // correct, so any-typed arrays still work (growth resolves via
+                // the #233 forwarding pointer). Mirrors the same deferral in
+                // `local_array_methods.rs` and the method set in
+                // `array::try_object_arraylike_mutator`.
+                if let ast::Expr::Ident(ident) = unwrap_transparent_expr(member.obj.as_ref()) {
+                    let unknown_recv = matches!(
+                        ctx.lookup_local_type(ident.sym.as_ref()),
+                        None | Some(Type::Any) | Some(Type::Unknown)
+                    );
+                    if unknown_recv
+                        && matches!(
+                            method_name,
+                            "push"
+                                | "pop"
+                                | "shift"
+                                | "unshift"
+                                | "reverse"
+                                | "splice"
+                                | "sort"
+                                | "concat"
+                        )
+                    {
+                        return Ok(Err(args));
+                    }
+                }
                 match method_name {
                     "reduce" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;

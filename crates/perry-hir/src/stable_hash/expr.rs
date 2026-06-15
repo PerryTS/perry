@@ -225,6 +225,8 @@ impl SH for Expr {
             Expr::MathFloor(e) => { tag(h, 141); e.as_ref().hash(h); }
             Expr::MathCeil(e) => { tag(h, 142); e.as_ref().hash(h); }
             Expr::MathRound(e) => { tag(h, 143); e.as_ref().hash(h); }
+            Expr::MathTrunc(e) => { tag(h, 12062); e.as_ref().hash(h); }
+            Expr::MathSign(e) => { tag(h, 12063); e.as_ref().hash(h); }
             Expr::MathAbs(e) => { tag(h, 144); e.as_ref().hash(h); }
             Expr::MathSqrt(e) => { tag(h, 145); e.as_ref().hash(h); }
             Expr::MathLog(e) => { tag(h, 146); e.as_ref().hash(h); }

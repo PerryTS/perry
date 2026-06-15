@@ -339,7 +339,24 @@ pub(crate) fn lower_pattern_binding_into(
                 .as_ref()
                 .map(|ann| extract_ts_type(&ann.type_ann))
                 .unwrap_or(Type::Any);
-            let id = ctx.define_local(name.clone(), ty.clone());
+            // Reuse a forward-pre-registered (boxed) local when an earlier
+            // closure captured this destructured binding before its declaration
+            // (the function-body Phase 1.6 pass, span-keyed). Without this the
+            // closure's box and this binding's slot diverge.
+            let id = match ctx.lexical_forward_decls.remove(&ident.id.span.lo.0) {
+                Some(pre_id) => {
+                    if let Some((_, _, ety)) = ctx
+                        .locals
+                        .iter_mut()
+                        .rev()
+                        .find(|(_, lid, _)| *lid == pre_id)
+                    {
+                        *ety = ty.clone();
+                    }
+                    pre_id
+                }
+                None => ctx.define_local(name.clone(), ty.clone()),
+            };
             if !mutable {
                 ctx.mark_local_immutable(id);
             }
@@ -504,7 +521,26 @@ pub(crate) fn lower_pattern_binding_into(
                             .as_ref()
                             .map(|ann| extract_ts_type(&ann.type_ann))
                             .unwrap_or(Type::Any);
-                        let id = ctx.define_local(name.clone(), ty.clone());
+                        // Reuse a forward-pre-registered (boxed) local when an
+                        // earlier closure forward-captured this `{ key }`
+                        // shorthand binding (Phase 1.6, span-keyed) — e.g. the
+                        // Next.js tracer's `_export(exports, { SpanKind: () =>
+                        // SpanKind })` getter referencing the later `const {
+                        // SpanKind } = api`.
+                        let id = match ctx.lexical_forward_decls.remove(&assign.key.span.lo.0) {
+                            Some(pre_id) => {
+                                if let Some((_, _, ety)) = ctx
+                                    .locals
+                                    .iter_mut()
+                                    .rev()
+                                    .find(|(_, lid, _)| *lid == pre_id)
+                                {
+                                    *ety = ty.clone();
+                                }
+                                pre_id
+                            }
+                            None => ctx.define_local(name.clone(), ty.clone()),
+                        };
 
                         let init_value = if let Some(default_expr) = &assign.value {
                             // Materialize the property read into a temp so we

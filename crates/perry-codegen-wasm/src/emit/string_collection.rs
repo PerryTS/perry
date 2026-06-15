@@ -115,6 +115,7 @@ impl WasmModuleEmitter {
             "math_hypot",
             "math_fround",
             "math_clz32",
+            "math_imul",
             "closure_new",
             "closure_set_capture",
             "closure_call_0",

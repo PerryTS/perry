@@ -1361,6 +1361,8 @@ pub(crate) fn expr_preserves_array_length(
         | Expr::MathFloor(a)
         | Expr::MathCeil(a)
         | Expr::MathRound(a)
+        | Expr::MathTrunc(a)
+        | Expr::MathSign(a)
         | Expr::MathF16round(a) => walk(a),
         Expr::Array(elements) => elements.iter().all(&walk),
         Expr::ArraySpread(elements) => elements.iter().all(|el| match el {

@@ -1,4 +1,8 @@
 use super::*;
+// `js_nanbox_string` is re-exported from the parent only when the regex engine
+// is on (it's part of the gated engine `use` cluster). The string-replacement
+// helpers below are always compiled, so import it directly here.
+use crate::value::js_nanbox_string;
 
 pub(super) unsafe fn call_replace_callback(callback: f64, args: &[f64]) -> String {
     let prev = crate::object::js_implicit_this_set(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -301,6 +305,7 @@ pub extern "C" fn js_string_replace_all_string_dyn(
 /// Resolve a runtime-dynamic `searchValue` (an object-property read, call
 /// result, destructured loop binding, …) to a registered RegExp pointer, or
 /// `None` when the value isn't a RegExp.
+#[cfg(feature = "regex-engine")]
 fn needle_regex_ptr(needle: f64) -> Option<*const crate::regex::RegExpHeader> {
     let bits = needle.to_bits();
     let top16 = bits >> 48;
@@ -332,6 +337,7 @@ pub extern "C" fn js_string_replace_search_dyn(
     needle: f64,
     replacement: f64,
 ) -> *mut StringHeader {
+    #[cfg(feature = "regex-engine")]
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_regex_dyn(s, re, replacement);
     }
@@ -345,12 +351,14 @@ pub extern "C" fn js_string_replace_all_search_dyn(
     needle: f64,
     replacement: f64,
 ) -> *mut StringHeader {
+    #[cfg(feature = "regex-engine")]
     if let Some(re) = needle_regex_ptr(needle) {
         return js_string_replace_all_regex_dyn(s, re, replacement);
     }
     js_string_replace_all_string_dyn(s, crate::builtins::js_string_coerce(needle), replacement)
 }
 
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_replace_regex_dyn(
     s: *const StringHeader,
@@ -368,6 +376,7 @@ pub extern "C" fn js_string_replace_regex_dyn(
     )
 }
 
+#[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_string_replace_all_regex_dyn(
     s: *const StringHeader,
@@ -384,7 +393,7 @@ pub extern "C" fn js_string_replace_all_regex_dyn(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "regex-engine"))]
 mod tests {
     use super::*;
 

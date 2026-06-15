@@ -269,6 +269,20 @@ pub static CLASS_DECL_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = R
 /// Stored as `usize` (raw address) for Send + Sync; converted back at use.
 pub static CLASS_PARENT_CLOSURES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 
+/// Maps a child class_id to the raw NaN-boxed bits of the parent constructor
+/// VALUE that `js_register_class_parent_dynamic` evaluated at class-definition
+/// time. For `class X extends _mod.default {}` (the interop ESM
+/// default-export-class pattern), the extends expression references a require
+/// alias (`_mod`) that is an IIFE-local — bound only in the module-init scope.
+/// The decl-time registration evaluates it there correctly, so we stash the
+/// resulting value here keyed by the child's class id. `super()` then reads it
+/// back via `js_get_dynamic_parent_value` instead of re-evaluating the extends
+/// expression inside the constructor (where the IIFE-local alias is NOT
+/// captured and the member read would throw "Cannot read properties of
+/// undefined"). Stored as raw `u64` bits (Send + Sync), covering both ClassRef
+/// (INT32-tagged) and object/closure (POINTER-tagged) parents.
+pub static CLASS_DYNAMIC_PARENT_VALUE: RwLock<Option<HashMap<u32, u64>>> = RwLock::new(None);
+
 pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
     if class_id == 0 || proto_ptr.is_null() {
         return;
@@ -2142,6 +2156,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return crate::value::js_nanbox_pointer(error as i64);
             }
             // #2889: `new (rebound RegExp)(pattern, flags)`.
+            #[cfg(feature = "regex-engine")]
             "RegExp" => {
                 let pattern = if args.is_empty() {
                     std::ptr::null_mut()
@@ -2725,7 +2740,19 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         );
     }
 
-    let obj_ptr = js_object_alloc(0, 0);
+    // Stamp the instance with the class id of `newTarget` (not the invoked
+    // `target`). Per `OrdinaryCreateFromConstructor`, the instance's
+    // `[[Prototype]]` is `newTarget.prototype`, so `obj instanceof newTarget`
+    // must be true and `obj instanceof target` false. Perry models the
+    // prototype chain via class ids, so allocating with `0` left
+    // `Reflect.construct(Target, …, NewTarget)` instances matching neither.
+    // A `newTarget` may be a *declared class* (an `Expr::ClassRef`, e.g.
+    // `Reflect.construct(plainFn, [], class C {})`) — resolve its registered
+    // class id first so `instanceof C` holds — or a *plain function*, for which
+    // the synthetic per-function id applies. (The real `[[Prototype]]` link is
+    // still set below from `newTarget.prototype`.)
+    let cid = new_target_class_id(nt).unwrap_or_else(|| synthetic_class_id_for_function(nt));
+    let obj_ptr = js_object_alloc(cid, 0);
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
     if let Some(proto_bits) = constructor_prototype_bits(nt) {
         super::prototype_chain::object_set_static_prototype(obj_ptr as usize, proto_bits);
@@ -2895,14 +2922,18 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     // `'prototype' in C.prototype.m === false`). (Test262 definition method/accessor
     // prop-desc.)
     //
-    // #4973 exception: bound NATIVE-MODULE *class* exports (`http.Server`,
-    // `https.Server`) are constructors in Node, and the util.inherits-era
-    // subclass pattern reads their `.prototype` as a setPrototypeOf operand
-    // (`Object.setPrototypeOf(testServer.prototype, http.Server.prototype)`).
-    // Returning None here made that read `undefined` and the setPrototypeOf
-    // threw "Object prototype may only be an Object or null". These exports
-    // are cached singleton closures (NATIVE_CALLABLE_EXPORTS), so the
-    // synthetic-class path below gives them a stable prototype object.
+    // #4973 / #3527 exception: bound NATIVE-MODULE *class* exports
+    // (`http.Server`, `http.IncomingMessage`, `http.ServerResponse`, …) are
+    // constructors in Node, and the util.inherits / `Object.create(Ctor.
+    // prototype)` subclass pattern reads their `.prototype` as a
+    // setPrototypeOf / Object.create operand. Returning None here made that
+    // read `undefined`, and `Object.create(undefined)` /
+    // `Object.setPrototypeOf(x, undefined)` then threw "Object prototype may
+    // only be an Object or null" — the exact blocker hit at Express init
+    // (`express/lib/request.js`: `Object.create(http.IncomingMessage.
+    // prototype)`). These exports are cached singleton closures
+    // (NATIVE_CALLABLE_EXPORTS), so the synthetic-class path below gives them
+    // a stable prototype object.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
         if jv.is_pointer() {
@@ -2915,7 +2946,20 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
                     super::native_module::bound_native_callable_module_and_method(func_value)
                 }
                 .map(|(module, method)| {
-                    matches!(module.as_str(), "http" | "https") && method == "Server"
+                    matches!(
+                        (module.as_str(), method.as_str()),
+                        // Shared http/https constructor classes.
+                        ("http" | "https", "Server" | "Agent")
+                            // http-only request/response constructor classes
+                            // that userland subclasses (Express, util.inherits).
+                            | (
+                                "http",
+                                "IncomingMessage"
+                                    | "ServerResponse"
+                                    | "OutgoingMessage"
+                                    | "ClientRequest"
+                            )
+                    )
                 })
                 .unwrap_or(false);
                 if !is_native_class_export {
@@ -3107,6 +3151,20 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         if let Some(map) = guard.as_mut() {
             for closure_addr in map.values_mut() {
                 visitor.visit_usize_slot(closure_addr);
+            }
+        }
+    }
+
+    // The dynamic-parent value stash (`class X extends _mod.default`) holds
+    // raw NaN-boxed parent-constructor bits. For a ClassRef (INT32-tagged)
+    // parent this is inert, but a function/object parent (Effect's
+    // `extends <runtime value>`) is a live heap pointer that a moving GC must
+    // visit + forward — otherwise `js_get_dynamic_parent_value` later hands
+    // `super()` a stale pointer.
+    if let Ok(mut guard) = CLASS_DYNAMIC_PARENT_VALUE.write() {
+        if let Some(map) = guard.as_mut() {
+            for value_bits in map.values_mut() {
+                visitor.visit_nanbox_u64_slot(value_bits);
             }
         }
     }
@@ -4251,9 +4309,94 @@ pub(crate) unsafe fn call_vtable_method(
                 arg_or_undefined(call_args_ptr, call_args_len, 8),
             )
         }
+        // Arities above the explicit arms: the generated method/ctor signature is
+        // `double(double this, double×param_count)`. Rust can't form a
+        // param_count-arity fn pointer dynamically, so transmute to a generous
+        // fixed arity (64) and pass `param_count` real args plus `undefined`
+        // padding (`arg_or_undefined` yields undefined past `call_args_len`).
+        // Passing MORE args than the callee declares is safe on every target —
+        // the arg area is caller-allocated and caller-cleaned, and the callee
+        // reads only its declared params. This is the runtime-dispatch counterpart
+        // to the codegen direct call, and matters for ctors/methods that take many
+        // params — notably a class capturing dozens of module-level `require`s
+        // (`__perry_cap_*` params), the wall-45 `Derived extends _mod.default`
+        // shape, where the pre-fix 10-arg cap silently dropped captures 10+.
+        // (The prior `_` arm called every >9-arity function as if it had 10
+        // params.) `debug_assert` flags the rare class that would still exceed
+        // the bound so it surfaces in tests rather than as silent corruption.
         _ => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
+            debug_assert!(
+                param_count as usize <= 64,
+                "call_vtable_method: param_count {} exceeds fixed dispatch arity 64",
+                param_count
+            );
+            let f: extern "C" fn(
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+            ) -> f64 = std::mem::transmute(func_ptr);
             f(
                 this_f64,
                 arg_or_undefined(call_args_ptr, call_args_len, 0),
@@ -4266,6 +4409,60 @@ pub(crate) unsafe fn call_vtable_method(
                 arg_or_undefined(call_args_ptr, call_args_len, 7),
                 arg_or_undefined(call_args_ptr, call_args_len, 8),
                 arg_or_undefined(call_args_ptr, call_args_len, 9),
+                arg_or_undefined(call_args_ptr, call_args_len, 10),
+                arg_or_undefined(call_args_ptr, call_args_len, 11),
+                arg_or_undefined(call_args_ptr, call_args_len, 12),
+                arg_or_undefined(call_args_ptr, call_args_len, 13),
+                arg_or_undefined(call_args_ptr, call_args_len, 14),
+                arg_or_undefined(call_args_ptr, call_args_len, 15),
+                arg_or_undefined(call_args_ptr, call_args_len, 16),
+                arg_or_undefined(call_args_ptr, call_args_len, 17),
+                arg_or_undefined(call_args_ptr, call_args_len, 18),
+                arg_or_undefined(call_args_ptr, call_args_len, 19),
+                arg_or_undefined(call_args_ptr, call_args_len, 20),
+                arg_or_undefined(call_args_ptr, call_args_len, 21),
+                arg_or_undefined(call_args_ptr, call_args_len, 22),
+                arg_or_undefined(call_args_ptr, call_args_len, 23),
+                arg_or_undefined(call_args_ptr, call_args_len, 24),
+                arg_or_undefined(call_args_ptr, call_args_len, 25),
+                arg_or_undefined(call_args_ptr, call_args_len, 26),
+                arg_or_undefined(call_args_ptr, call_args_len, 27),
+                arg_or_undefined(call_args_ptr, call_args_len, 28),
+                arg_or_undefined(call_args_ptr, call_args_len, 29),
+                arg_or_undefined(call_args_ptr, call_args_len, 30),
+                arg_or_undefined(call_args_ptr, call_args_len, 31),
+                arg_or_undefined(call_args_ptr, call_args_len, 32),
+                arg_or_undefined(call_args_ptr, call_args_len, 33),
+                arg_or_undefined(call_args_ptr, call_args_len, 34),
+                arg_or_undefined(call_args_ptr, call_args_len, 35),
+                arg_or_undefined(call_args_ptr, call_args_len, 36),
+                arg_or_undefined(call_args_ptr, call_args_len, 37),
+                arg_or_undefined(call_args_ptr, call_args_len, 38),
+                arg_or_undefined(call_args_ptr, call_args_len, 39),
+                arg_or_undefined(call_args_ptr, call_args_len, 40),
+                arg_or_undefined(call_args_ptr, call_args_len, 41),
+                arg_or_undefined(call_args_ptr, call_args_len, 42),
+                arg_or_undefined(call_args_ptr, call_args_len, 43),
+                arg_or_undefined(call_args_ptr, call_args_len, 44),
+                arg_or_undefined(call_args_ptr, call_args_len, 45),
+                arg_or_undefined(call_args_ptr, call_args_len, 46),
+                arg_or_undefined(call_args_ptr, call_args_len, 47),
+                arg_or_undefined(call_args_ptr, call_args_len, 48),
+                arg_or_undefined(call_args_ptr, call_args_len, 49),
+                arg_or_undefined(call_args_ptr, call_args_len, 50),
+                arg_or_undefined(call_args_ptr, call_args_len, 51),
+                arg_or_undefined(call_args_ptr, call_args_len, 52),
+                arg_or_undefined(call_args_ptr, call_args_len, 53),
+                arg_or_undefined(call_args_ptr, call_args_len, 54),
+                arg_or_undefined(call_args_ptr, call_args_len, 55),
+                arg_or_undefined(call_args_ptr, call_args_len, 56),
+                arg_or_undefined(call_args_ptr, call_args_len, 57),
+                arg_or_undefined(call_args_ptr, call_args_len, 58),
+                arg_or_undefined(call_args_ptr, call_args_len, 59),
+                arg_or_undefined(call_args_ptr, call_args_len, 60),
+                arg_or_undefined(call_args_ptr, call_args_len, 61),
+                arg_or_undefined(call_args_ptr, call_args_len, 62),
+                arg_or_undefined(call_args_ptr, call_args_len, 63),
             )
         }
     }
@@ -4345,6 +4542,24 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// recursive helper that returns its receiver can't create a cycle.
 #[no_mangle]
 pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: f64) {
+    // Stash the parent VALUE keyed by child class id so `super()` can read it
+    // back (`js_get_dynamic_parent_value`) instead of re-evaluating the extends
+    // expression inside the constructor scope. The decl-time call here runs in
+    // the module-init scope where the extends expression's free variables
+    // (require aliases such as `_suffix` in `class X extends _suffix.default`)
+    // are bound. Skip undefined (the bare placeholder) — a genuinely undefined
+    // superclass throws below anyway.
+    {
+        const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+        let bits = parent_value.to_bits();
+        if bits != TAG_UNDEFINED && class_id != 0 {
+            let mut guard = CLASS_DYNAMIC_PARENT_VALUE.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(HashMap::new());
+            }
+            guard.as_mut().unwrap().insert(class_id, bits);
+        }
+    }
     // A globalThis builtin constructor closure is a valid superclass
     // (`class CloseEvent extends Event` — the `ws` package's WebSocket
     // events). Resolve it through the same name table the dynamic
@@ -4462,6 +4677,27 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
             // only inheritance link for a function-valued superclass.
             class_parent_closure_root_store(class_id, ptr as usize);
         }
+    }
+}
+
+/// Read back the parent constructor value stashed at class-definition time by
+/// `js_register_class_parent_dynamic` (see `CLASS_DYNAMIC_PARENT_VALUE`).
+/// `super()` in a `class X extends <runtime-value>` body uses this so the
+/// parent is resolved from the value captured in the module-init scope, not
+/// re-evaluated in the constructor scope (where an IIFE-local require alias
+/// like `_suffix` in `extends _suffix.default` is not in scope). Returns
+/// `undefined` when nothing was stashed for this class id — the caller then
+/// falls back to re-evaluating its extends expression.
+#[no_mangle]
+pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if class_id == 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let guard = CLASS_DYNAMIC_PARENT_VALUE.read().unwrap();
+    match guard.as_ref().and_then(|m| m.get(&class_id)) {
+        Some(&bits) => f64::from_bits(bits),
+        None => f64::from_bits(TAG_UNDEFINED),
     }
 }
 

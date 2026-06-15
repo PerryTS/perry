@@ -646,6 +646,25 @@ pub(super) fn find_library_with_candidates(
         if path.exists() {
             return Ok(path.clone());
         }
+        // npm per-platform packages ship `*.a.zst` (the raw archives exceed
+        // npm's tarball upload limit). When only the compressed sibling is
+        // present, decompress it once into a per-user cache and link that.
+        let compressed = super::compressed_libs::compressed_sibling(path);
+        if compressed.exists() {
+            let lib_name = path.file_name().and_then(|s| s.to_str()).unwrap_or(name);
+            match super::compressed_libs::decompressed_archive(&compressed, lib_name) {
+                Ok(decompressed) => return Ok(decompressed),
+                // A compressed archive is present but couldn't be expanded
+                // (corrupt download, out of disk, …). Surface the real cause
+                // loudly here — otherwise it's masked by the generic "library
+                // not found" error the caller raises after exhausting candidates.
+                Err(e) => eprintln!(
+                    "  error: failed to decompress {}: {:#}",
+                    compressed.display(),
+                    e
+                ),
+            }
+        }
     }
     Err(candidates)
 }
@@ -951,7 +970,8 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = match target {
         Some("ios-simulator") | Some("ios") => "libperry_ui_ios.a",
         Some("visionos-simulator") | Some("visionos") => "libperry_ui_visionos.a",
-        Some("android") => "libperry_ui_android.a",
+        // Wear OS reuses the Android View backend.
+        Some("android") | Some("wearos") => "libperry_ui_android.a",
         Some("watchos-simulator") | Some("watchos") => "libperry_ui_watchos.a",
         Some("tvos-simulator") | Some("tvos") => "libperry_ui_tvos.a",
         Some("linux") => "libperry_ui_gtk4.a",
@@ -1090,6 +1110,18 @@ pub(super) fn android_cross_env(ndk_home: &Path, target: Option<&str>) -> Vec<(S
     };
     let clang = bin.join(format!("{}-clang{}", clang_target, ext));
     let clangpp = bin.join(format!("{}-clang++{}", clang_target, ext));
+    // NDK r27+ removed the per-target `aarch64-linux-android-ar` wrapper that
+    // cc-rs probes for by default; the archiver is now the unprefixed
+    // `llvm-ar`. Without an explicit `AR_<triple>` the runtime/stdlib C
+    // dependencies (e.g. mimalloc) fail to build with
+    // `failed to find tool "aarch64-linux-android-ar"`. `llvm-ar` has no `.cmd`
+    // wrapper on Windows — it's the bare executable (+`.exe`).
+    let ar_ext = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    let llvm_ar = bin.join(format!("llvm-ar{}", ar_ext));
 
     let triple_upper = triple.to_uppercase().replace('-', "_");
     let triple_under = triple.replace('-', "_");
@@ -1101,6 +1133,11 @@ pub(super) fn android_cross_env(ndk_home: &Path, target: Option<&str>) -> Vec<(S
         (
             format!("CXX_{}", triple_under),
             clangpp.display().to_string(),
+        ),
+        (format!("AR_{}", triple), llvm_ar.display().to_string()),
+        (
+            format!("AR_{}", triple_under),
+            llvm_ar.display().to_string(),
         ),
         (
             format!("CARGO_TARGET_{}_LINKER", triple_upper),
@@ -1268,7 +1305,7 @@ pub(super) fn find_geisterhand_ui(target: Option<&str>) -> Option<PathBuf> {
         "libperry_ui_ios.a"
     } else if matches!(target, Some("visionos-simulator") | Some("visionos")) {
         return None;
-    } else if matches!(target, Some("android")) {
+    } else if matches!(target, Some("android") | Some("wearos")) {
         "libperry_ui_android.a"
     } else if matches!(target, Some("linux")) || cfg!(target_os = "linux") {
         "libperry_ui_gtk4.a"
@@ -1291,7 +1328,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
     // Determine which UI crate to build based on target platform
     let ui_crate = match target {
         Some("ios-simulator") | Some("ios") => "perry-ui-ios",
-        Some("android") => "perry-ui-android",
+        Some("android") | Some("wearos") => "perry-ui-android",
         Some("linux") => "perry-ui-gtk4",
         Some("windows-winui") => "perry-ui-windows-winui",
         Some("windows") => "perry-ui-windows",
@@ -1362,7 +1399,10 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
     // `libperry_app.so` on Android; force global-dynamic TLS so the IE
     // model doesn't crash at load. (RUSTFLAGS scopes to the cross target,
     // so host build-scripts/proc-macros are unaffected.)
-    if matches!(target, Some("android") | Some("android-x86_64")) {
+    if matches!(
+        target,
+        Some("android") | Some("android-x86_64") | Some("wearos")
+    ) {
         let tls_flag = super::optimized_libs::android_global_dynamic_tls_rustflag(&mut cargo_cmd);
         cargo_cmd.env("RUSTFLAGS", tls_flag);
     }

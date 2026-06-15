@@ -230,6 +230,7 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8)
 /// (a registered RegExp; `RegExp.prototype` itself throws), `ToString`s the
 /// argument, and runs the match. Reflective: `RegExp.prototype.exec.call(re, s)`
 /// and `re.exec(s)` extracted off the prototype both route here.
+#[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_exec_thunk(
     _c: *const crate::closure::ClosureHeader,
     arg: f64,
@@ -246,6 +247,7 @@ pub(super) extern "C" fn regex_proto_exec_thunk(
 
 /// `RegExp.prototype.test(string)` — brand-checks `this`, `ToString`s the arg,
 /// returns a boolean.
+#[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_test_thunk(
     _c: *const crate::closure::ClosureHeader,
     arg: f64,
@@ -293,6 +295,7 @@ pub(super) extern "C" fn regex_proto_to_string_thunk(
 /// Resolve `IMPLICIT_THIS` to a live RegExp instance (with `[[RegExpMatcher]]`),
 /// throwing `TypeError` otherwise. Unlike the flag/`source` getters, this does
 /// NOT treat `RegExp.prototype` specially — `exec`/`test` require a real matcher.
+#[cfg(feature = "regex-engine")]
 fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
     let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     if receiver.is_pointer() {
@@ -313,7 +316,9 @@ fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
 /// `compile` stays a no-op (Annex B, rarely exercised).
 pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method as ipm;
+    #[cfg(feature = "regex-engine")]
     ipm(proto_obj, "exec", regex_proto_exec_thunk as *const u8, 1);
+    #[cfg(feature = "regex-engine")]
     ipm(proto_obj, "test", regex_proto_test_thunk as *const u8, 1);
     ipm(
         proto_obj,

@@ -16,6 +16,8 @@ pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str
         Some("watchos") | Some("watchos-simulator") => Some("watchos"),
         Some("tvos") | Some("tvos-simulator") => Some("tvos"),
         Some("android") => Some("android"),
+        // Wear OS reuses the [android] perry.toml section (bundle_id, etc.).
+        Some("wearos") => Some("android"),
         Some("macos") => Some("macos"),
         // WinUI shares the [windows] perry.toml section (#4680).
         Some("windows") | Some("windows-winui") => Some("windows"),
@@ -171,6 +173,8 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("harmonyos") => Some("aarch64-unknown-linux-ohos"),
         Some("harmonyos-simulator") => Some("x86_64-unknown-linux-ohos"),
         Some("android") => Some("aarch64-linux-android"),
+        // Wear OS is Android-on-a-watch: same arm64 Android .so + toolchain.
+        Some("wearos") => Some("aarch64-linux-android"),
         Some("linux") | Some("linux-x86_64") => Some("x86_64-unknown-linux-gnu"),
         Some("linux-arm64") | Some("linux-aarch64") => Some("aarch64-unknown-linux-gnu"),
         // Fully-static musl targets (#4826). The perry-runtime / perry-stdlib

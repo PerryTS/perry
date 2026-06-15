@@ -26,6 +26,7 @@ mod bundle_ios;
 mod cjs_wrap;
 mod codegen_steps;
 mod collect_modules;
+mod compressed_libs;
 mod env_fold;
 mod harmonyos_shim;
 mod host_config;
@@ -1703,6 +1704,7 @@ pub fn run_with_parse_cache(
                 | Some("visionos")
                 | Some("visionos-simulator")
                 | Some("android")
+                | Some("wearos")
                 | Some("watchos")
                 | Some("watchos-simulator")
                 | Some("tvos")
@@ -2563,6 +2565,8 @@ pub fn run_with_parse_cache(
                                             .as_ref()
                                             .map(|c| c.params.len())
                                             .unwrap_or(0),
+                                        has_own_constructor: class.constructor.is_some(),
+                                        has_instance_fields: !class.fields.is_empty(),
                                         method_names: class
                                             .methods
                                             .iter()
@@ -2757,6 +2761,8 @@ pub fn run_with_parse_cache(
                                                 .as_ref()
                                                 .map(|c| c.params.len())
                                                 .unwrap_or(0),
+                                            has_own_constructor: class.constructor.is_some(),
+                                            has_instance_fields: !class.fields.is_empty(),
                                             method_names: class
                                                 .methods
                                                 .iter()
@@ -3003,6 +3009,8 @@ pub fn run_with_parse_cache(
                                     .as_ref()
                                     .map(|c| c.params.len())
                                     .unwrap_or(0),
+                                has_own_constructor: class.constructor.is_some(),
+                                has_instance_fields: !class.fields.is_empty(),
                                 method_names: class
                                     .methods
                                     .iter()
@@ -3067,6 +3075,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3218,6 +3228,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3676,6 +3688,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3868,6 +3882,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -4499,7 +4515,7 @@ pub fn run_with_parse_cache(
         }
         // Platform detection for nm tool and symbol prefix
         let _is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
-        let is_android = matches!(target.as_deref(), Some("android"));
+        let is_android = matches!(target.as_deref(), Some("android") | Some("wearos"));
         let is_harmonyos = matches!(
             target.as_deref(),
             Some("harmonyos") | Some("harmonyos-simulator")
@@ -5051,7 +5067,7 @@ pub fn run_with_parse_cache(
         target.as_deref(),
         Some("visionos-simulator") | Some("visionos")
     );
-    let is_android = matches!(target.as_deref(), Some("android"));
+    let is_android = matches!(target.as_deref(), Some("android") | Some("wearos"));
     let is_harmonyos = matches!(
         target.as_deref(),
         Some("harmonyos") | Some("harmonyos-simulator")

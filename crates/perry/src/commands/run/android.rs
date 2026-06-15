@@ -16,6 +16,31 @@ pub fn build_and_run_android(
     serial: &str,
     format: OutputFormat,
 ) -> Result<()> {
+    build_and_run_android_impl(so_path, bundle_id, serial, format, false)
+}
+
+/// Build + install a Wear OS APK. Wear OS is Android-on-a-watch, so this reuses
+/// the exact same Gradle project, Kotlin bridge, and compiled `.so` as the phone
+/// path (`build_and_run_android`) — the only differences are the watch
+/// form-factor declarations applied by `apply_wear_overlay`: the
+/// `android.hardware.type.watch` feature + the standalone meta-data + the
+/// `androidx.wear` dependency.
+pub fn build_and_run_wearos(
+    so_path: &Path,
+    bundle_id: &str,
+    serial: &str,
+    format: OutputFormat,
+) -> Result<()> {
+    build_and_run_android_impl(so_path, bundle_id, serial, format, true)
+}
+
+fn build_and_run_android_impl(
+    so_path: &Path,
+    bundle_id: &str,
+    serial: &str,
+    format: OutputFormat,
+    wear: bool,
+) -> Result<()> {
     // Find the perry workspace root to locate the Android template
     let workspace_root = super::super::compile::find_perry_workspace_root()
         .ok_or_else(|| anyhow!("Cannot find Perry workspace root — needed for Android template"))?;
@@ -41,6 +66,14 @@ pub fn build_and_run_android(
     // Copy template to build directory
     copy_dir_recursive(&template_dir, &build_dir)
         .map_err(|e| anyhow!("Failed to copy Android template: {}", e))?;
+
+    // Wear OS: overlay the watch form-factor onto the copied phone template
+    // (manifest feature + standalone meta-data, Wear minSdk, androidx.wear dep).
+    if wear {
+        if let Err(e) = apply_wear_overlay(&build_dir, format) {
+            bail!("Failed to apply Wear OS template overlay: {}", e);
+        }
+    }
 
     // Create jniLibs directory and copy .so
     let jni_dir = build_dir.join("app/src/main/jniLibs/arm64-v8a");
@@ -235,8 +268,15 @@ pub fn build_and_run_android(
         println!("Running Gradle assembleDebug...");
     }
 
-    // Run gradle build
-    let gradle_status = Command::new(&gradlew)
+    // Run gradle build. `gradlew` is `build_dir.join("gradlew")`, which is a
+    // RELATIVE path when the compile output (and thus build_dir) is relative —
+    // e.g. `android-build/gradlew`. Spawning a relative program path that
+    // contains a `/` while also setting `.current_dir(&build_dir)` resolves the
+    // program against the *new* cwd, i.e. `android-build/android-build/gradlew`,
+    // which fails with ENOENT. Canonicalize to an absolute path so the spawn is
+    // independent of the child's working directory.
+    let gradlew_abs = std::fs::canonicalize(&gradlew).unwrap_or_else(|_| gradlew.clone());
+    let gradle_status = Command::new(&gradlew_abs)
         .arg("assembleDebug")
         .current_dir(&build_dir)
         .status()
@@ -263,6 +303,65 @@ pub fn build_and_run_android(
 
     // Install and launch
     install_and_launch_android(&apk_path, bundle_id, serial, format)
+}
+
+/// Turn the copied phone Gradle project into a Wear OS app in place.
+///
+/// Wear OS apps are ordinary Android apps with three extra declarations:
+///   1. `<uses-feature android:name="android.hardware.type.watch">` — marks
+///      the APK as a watch app (Play Store filtering + launcher placement).
+///   2. `<meta-data com.google.android.wearable.standalone = true>` — the app
+///      runs without a companion phone app.
+///   3. `androidx.wear:wear` — pulls in `BoxInsetLayout` / swipe-to-dismiss so
+///      round screens and the back gesture behave like a native Wear app.
+/// minSdk is also raised to 30 (Wear OS 3), the floor Google Play requires for
+/// watch APKs.
+fn apply_wear_overlay(build_dir: &Path, format: OutputFormat) -> Result<()> {
+    // --- AndroidManifest.xml ---
+    let manifest_path = build_dir.join("app/src/main/AndroidManifest.xml");
+    if manifest_path.exists() {
+        let mut manifest = std::fs::read_to_string(&manifest_path)?;
+
+        // 1. Watch hardware feature — required, right after the <manifest> tag.
+        let manifest_open =
+            "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">";
+        if manifest.contains(manifest_open) && !manifest.contains("android.hardware.type.watch") {
+            manifest = manifest.replacen(
+                manifest_open,
+                &format!(
+                    "{manifest_open}\n\n    <uses-feature android:name=\"android.hardware.type.watch\" android:required=\"true\" />"
+                ),
+                1,
+            );
+        }
+
+        // 2. Standalone meta-data + the wearable shared library, inserted just
+        //    before the existing Maps API key meta-data inside <application>.
+        let maps_anchor =
+            "        <meta-data\n            android:name=\"com.google.android.geo.API_KEY\"";
+        if manifest.contains(maps_anchor) && !manifest.contains("wearable.standalone") {
+            let wear_meta = "        <meta-data\n            android:name=\"com.google.android.wearable.standalone\"\n            android:value=\"true\" />\n        <uses-library\n            android:name=\"com.google.android.wearable\"\n            android:required=\"false\" />\n";
+            manifest = manifest.replacen(maps_anchor, &format!("{wear_meta}{maps_anchor}"), 1);
+        }
+
+        std::fs::write(&manifest_path, &manifest)?;
+    }
+
+    // --- app/build.gradle.kts ---
+    let gradle_path = build_dir.join("app/build.gradle.kts");
+    if gradle_path.exists() {
+        let mut gradle = std::fs::read_to_string(&gradle_path)?;
+        // Wear OS 3 is the minSdk floor for watch APKs on Google Play.
+        gradle = gradle.replace("minSdk = 24", "minSdk = 30");
+        // Add the Wear support library (BoxInsetLayout, swipe-to-dismiss).
+        gradle = inject_gradle_dependencies(&gradle, &["androidx.wear:wear:1.3.0".to_string()]);
+        std::fs::write(&gradle_path, gradle)?;
+    }
+
+    if let OutputFormat::Text = format {
+        println!("  Wear OS overlay: watch feature + standalone + androidx.wear (minSdk 30)");
+    }
+    Ok(())
 }
 
 /// Issue #583 — read `package.json` `perry.deepLinks` and rewrite the
@@ -885,4 +984,100 @@ pub fn get_android_pid(serial: &str, bundle_id: &str) -> String {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `apply_wear_overlay` must transform a copy of the *real* Android template
+    /// into a Wear OS project: watch feature + standalone meta-data in the
+    /// manifest, and `androidx.wear` + `minSdk = 30` in the Gradle build. This
+    /// runs against the checked-in template so anchor drift (a renamed tag or a
+    /// changed minSdk) fails here instead of silently producing a phone APK.
+    #[test]
+    fn wear_overlay_applies_to_real_template() {
+        let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-ui-android/template");
+        let manifest_src = template.join("app/src/main/AndroidManifest.xml");
+        let gradle_src = template.join("app/build.gradle.kts");
+        assert!(
+            manifest_src.exists() && gradle_src.exists(),
+            "android template not found at {}",
+            template.display()
+        );
+
+        // Materialize a throwaway build dir with just the two files the overlay
+        // touches, mirroring the layout build_and_run_android_impl produces.
+        let build_dir =
+            std::env::temp_dir().join(format!("perry_wear_overlay_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&build_dir);
+        let app_main = build_dir.join("app/src/main");
+        std::fs::create_dir_all(&app_main).unwrap();
+        std::fs::copy(&manifest_src, app_main.join("AndroidManifest.xml")).unwrap();
+        std::fs::copy(&gradle_src, build_dir.join("app/build.gradle.kts")).unwrap();
+
+        apply_wear_overlay(&build_dir, OutputFormat::Json).unwrap();
+
+        let manifest = std::fs::read_to_string(app_main.join("AndroidManifest.xml")).unwrap();
+        let gradle = std::fs::read_to_string(build_dir.join("app/build.gradle.kts")).unwrap();
+
+        assert!(
+            manifest.contains("android.hardware.type.watch"),
+            "watch uses-feature not injected"
+        );
+        assert!(
+            manifest.contains("com.google.android.wearable.standalone"),
+            "standalone meta-data not injected"
+        );
+        assert!(
+            gradle.contains("androidx.wear:wear"),
+            "androidx.wear dependency not injected"
+        );
+        assert!(
+            gradle.contains("minSdk = 30") && !gradle.contains("minSdk = 24"),
+            "minSdk not raised to 30 for Wear OS"
+        );
+
+        let _ = std::fs::remove_dir_all(&build_dir);
+    }
+
+    /// The overlay must be idempotent — running it twice (e.g. a rebuild into a
+    /// reused dir) must not double-inject the watch feature or wear deps.
+    #[test]
+    fn wear_overlay_is_idempotent() {
+        let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-ui-android/template");
+        let build_dir =
+            std::env::temp_dir().join(format!("perry_wear_overlay_idem_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&build_dir);
+        let app_main = build_dir.join("app/src/main");
+        std::fs::create_dir_all(&app_main).unwrap();
+        std::fs::copy(
+            template.join("app/src/main/AndroidManifest.xml"),
+            app_main.join("AndroidManifest.xml"),
+        )
+        .unwrap();
+        std::fs::copy(
+            template.join("app/build.gradle.kts"),
+            build_dir.join("app/build.gradle.kts"),
+        )
+        .unwrap();
+
+        apply_wear_overlay(&build_dir, OutputFormat::Json).unwrap();
+        apply_wear_overlay(&build_dir, OutputFormat::Json).unwrap();
+
+        let manifest = std::fs::read_to_string(app_main.join("AndroidManifest.xml")).unwrap();
+        let gradle = std::fs::read_to_string(build_dir.join("app/build.gradle.kts")).unwrap();
+        assert_eq!(
+            manifest.matches("android.hardware.type.watch").count(),
+            1,
+            "watch feature injected more than once"
+        );
+        assert_eq!(
+            gradle.matches("androidx.wear:wear").count(),
+            1,
+            "androidx.wear dependency injected more than once"
+        );
+
+        let _ = std::fs::remove_dir_all(&build_dir);
+    }
 }

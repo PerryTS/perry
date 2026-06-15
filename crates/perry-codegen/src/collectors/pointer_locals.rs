@@ -135,6 +135,8 @@ pub fn collect_pointer_typed_locals(
             | Expr::MathFloor(_)
             | Expr::MathCeil(_)
             | Expr::MathRound(_)
+            | Expr::MathTrunc(_)
+            | Expr::MathSign(_)
             | Expr::MathAbs(_)
             | Expr::MathSqrt(_)
             | Expr::MathLog(_)

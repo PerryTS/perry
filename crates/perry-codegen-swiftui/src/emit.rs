@@ -96,6 +96,103 @@ fn swift_type_for_field(
     }
 }
 
+/// Emit the `, <field>: <decode-expr>` fragment that pulls one entry field out of
+/// the provider's JSON `entryDict` and coerces it to the Swift type used by the
+/// generated `<Name>Entry` struct.
+///
+/// Scalars use a direct `as?` cast. Arrays of objects (and any other JSON-backed
+/// nested shape) are round-tripped through `JSONSerialization`/`JSONDecoder` into
+/// the nested `Codable` struct(s) emitted by `emit_nested_structs`, so that
+/// `[<Name><Field>Item]` actually decodes instead of being cast to `String`
+/// (see issue #5070).
+fn entry_field_decode(parent_name: &str, field_name: &str, field_type: &WidgetFieldType) -> String {
+    match field_type {
+        WidgetFieldType::String => {
+            format!(
+                ", {f}: entryDict[\"{f}\"] as? String ?? \"\"",
+                f = field_name
+            )
+        }
+        WidgetFieldType::Number => {
+            format!(", {f}: entryDict[\"{f}\"] as? Double ?? 0", f = field_name)
+        }
+        WidgetFieldType::Boolean => {
+            format!(
+                ", {f}: entryDict[\"{f}\"] as? Bool ?? false",
+                f = field_name
+            )
+        }
+        WidgetFieldType::Array(inner) => match inner.as_ref() {
+            // Arrays of scalars can be cast directly.
+            WidgetFieldType::String => {
+                format!(
+                    ", {f}: entryDict[\"{f}\"] as? [String] ?? []",
+                    f = field_name
+                )
+            }
+            WidgetFieldType::Number => {
+                format!(
+                    ", {f}: entryDict[\"{f}\"] as? [Double] ?? []",
+                    f = field_name
+                )
+            }
+            WidgetFieldType::Boolean => {
+                format!(", {f}: entryDict[\"{f}\"] as? [Bool] ?? []", f = field_name)
+            }
+            // Arrays of objects (and nested arrays) decode through Codable.
+            _ => {
+                let swift_type = swift_type_for_field(parent_name, field_name, field_type);
+                format!(
+                    ", {f}: {decode} ?? []",
+                    f = field_name,
+                    decode = json_decode_expr(field_name, &swift_type)
+                )
+            }
+        },
+        WidgetFieldType::Object(_) => {
+            // A bare (non-array) object entry field maps to a non-optional struct
+            // that has no zero-value, so we decode and force-unwrap. This mirrors
+            // the placeholder path, which likewise cannot synthesize a default.
+            let swift_type = swift_type_for_field(parent_name, field_name, field_type);
+            format!(
+                ", {f}: {decode}!",
+                f = field_name,
+                decode = json_decode_expr(field_name, &swift_type)
+            )
+        }
+        WidgetFieldType::Optional(inner) => match inner.as_ref() {
+            WidgetFieldType::String => {
+                format!(", {f}: entryDict[\"{f}\"] as? String", f = field_name)
+            }
+            WidgetFieldType::Number => {
+                format!(", {f}: entryDict[\"{f}\"] as? Double", f = field_name)
+            }
+            WidgetFieldType::Boolean => {
+                format!(", {f}: entryDict[\"{f}\"] as? Bool", f = field_name)
+            }
+            _ => {
+                let swift_type = swift_type_for_field(parent_name, field_name, inner);
+                format!(
+                    ", {f}: {decode}",
+                    f = field_name,
+                    decode = json_decode_expr(field_name, &swift_type)
+                )
+            }
+        },
+    }
+}
+
+/// Build a Swift expression that decodes `entryDict["<key>"]` into `swift_type`
+/// via `JSONSerialization` + `JSONDecoder`. The result is an optional (`nil` on
+/// any failure); callers append `?? <default>` for non-optional targets.
+fn json_decode_expr(key: &str, swift_type: &str) -> String {
+    format!(
+        "(entryDict[\"{key}\"]).flatMap {{ try? JSONSerialization.data(withJSONObject: $0) }}.flatMap {{ try? JSONDecoder().decode({ty}.self, from: $0) }}",
+        key = key,
+        ty = swift_type
+    )
+}
+
 /// Capitalize the first letter of a string
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
@@ -256,32 +353,7 @@ fn emit_native_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
     )
     .unwrap();
     for (field_name, field_type) in &widget.entry_fields {
-        match field_type {
-            WidgetFieldType::String => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                field_name, field_name
-            )
-            .unwrap(),
-            WidgetFieldType::Number => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? Double ?? 0",
-                field_name, field_name
-            )
-            .unwrap(),
-            WidgetFieldType::Boolean => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? Bool ?? false",
-                field_name, field_name
-            )
-            .unwrap(),
-            _ => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                field_name, field_name
-            )
-            .unwrap(),
-        }
+        write!(out, "{}", entry_field_decode(name, field_name, field_type)).unwrap();
     }
     writeln!(out, ")").unwrap();
     writeln!(out, "                timelineEntries.append(entry)").unwrap();
@@ -387,32 +459,7 @@ fn emit_app_intent_timeline_provider(
         )
         .unwrap();
         for (field_name, field_type) in &widget.entry_fields {
-            match field_type {
-                WidgetFieldType::String => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                    field_name, field_name
-                )
-                .unwrap(),
-                WidgetFieldType::Number => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? Double ?? 0",
-                    field_name, field_name
-                )
-                .unwrap(),
-                WidgetFieldType::Boolean => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? Bool ?? false",
-                    field_name, field_name
-                )
-                .unwrap(),
-                _ => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                    field_name, field_name
-                )
-                .unwrap(),
-            }
+            write!(out, "{}", entry_field_decode(name, field_name, field_type)).unwrap();
         }
         writeln!(out, ")").unwrap();
         writeln!(out, "                timelineEntries.append(entry)").unwrap();
@@ -1318,6 +1365,52 @@ mod tests {
         assert!(s.contains("let sites: [EntrySitesItem]"));
         assert!(s.contains("let totalClicks: Double"));
         assert!(s.contains("let error: String?"));
+    }
+
+    #[test]
+    fn test_timeline_decode_array_of_objects() {
+        // Regression test for #5070: an array-of-objects entry field must decode
+        // the JSON array into the nested Codable struct, not cast it to String.
+        let mut widget = make_widget(
+            "com.test.TopSites",
+            vec![
+                (
+                    "sites".to_string(),
+                    WidgetFieldType::Array(Box::new(WidgetFieldType::Object(vec![
+                        ("siteUrl".to_string(), WidgetFieldType::String),
+                        ("clicks".to_string(), WidgetFieldType::String),
+                    ]))),
+                ),
+                ("totalClicks".to_string(), WidgetFieldType::Number),
+                (
+                    "tags".to_string(),
+                    WidgetFieldType::Array(Box::new(WidgetFieldType::String)),
+                ),
+            ],
+            vec![],
+        );
+        widget.provider_func_name = Some("topSitesProvider".to_string());
+
+        let provider = emit_timeline_provider(&widget, "TopSites");
+
+        // The decode site must NOT cast the object array to String.
+        assert!(
+            !provider.contains("sites: entryDict[\"sites\"] as? String"),
+            "array-of-objects field must not be decoded as String:\n{provider}"
+        );
+        // It must decode into the nested Codable struct type.
+        assert!(
+            provider.contains("JSONDecoder().decode([TopSitesSitesItem].self"),
+            "expected JSONDecoder decode into [TopSitesSitesItem]:\n{provider}"
+        );
+        assert!(
+            provider.contains("sites: (entryDict[\"sites\"])"),
+            "expected sites to be assigned from entryDict[\"sites\"]:\n{provider}"
+        );
+        // Arrays of scalars cast directly.
+        assert!(provider.contains("tags: entryDict[\"tags\"] as? [String] ?? []"));
+        // Scalars are unchanged.
+        assert!(provider.contains("totalClicks: entryDict[\"totalClicks\"] as? Double ?? 0"));
     }
 
     #[test]

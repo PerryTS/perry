@@ -697,6 +697,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         // Temporal (#4686): `JSON.stringify(temporal)` calls `toJSON`, which
         // returns the canonical ISO string — emitted quoted. Detect before the
         // generic object path (the cell is not an enumerable ObjectHeader).
+        #[cfg(feature = "temporal")]
         if crate::temporal::is_temporal_cell_addr(ptr as usize) {
             if let Some(s) = crate::temporal::temporal_iso_string(value) {
                 write_escaped_string(buf, &s);
@@ -926,6 +927,7 @@ pub(crate) unsafe fn stringify_value_depth(
         }
         // Temporal (#4686): `toJSON` → quoted ISO string. See the matching
         // branch in `stringify_value`.
+        #[cfg(feature = "temporal")]
         if crate::temporal::is_temporal_cell_addr(ptr as usize) {
             if let Some(s) = crate::temporal::temporal_iso_string(value) {
                 write_escaped_string(buf, &s);

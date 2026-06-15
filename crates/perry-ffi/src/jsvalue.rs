@@ -262,6 +262,9 @@ extern "C" {
     /// for out-of-bounds.
     pub fn js_array_get(arr: *const ArrayHeader, index: u32) -> JsValue;
 
+    /// Number of elements in the array.
+    pub fn js_array_length(arr: *const ArrayHeader) -> u32;
+
     /// Write to `index` in-place. No bounds check — caller's
     /// responsibility.
     pub fn js_array_set(arr: *mut ArrayHeader, index: u32, value: JsValue);

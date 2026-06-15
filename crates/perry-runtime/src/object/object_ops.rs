@@ -841,7 +841,9 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                                     ptr as *mut crate::error::ErrorHeader,
                                     key,
                                 ),
-                                ExoticKind::Date | ExoticKind::Temporal => false,
+                                ExoticKind::Date | ExoticKind::Temporal | ExoticKind::Promise => {
+                                    false
+                                }
                             }
                     })
                     .unwrap_or(false);
@@ -1278,7 +1280,9 @@ pub extern "C" fn js_object_define_property(
         // `[[DefineOwnProperty]]` trap, and throw a TypeError if it reports
         // failure. (Proxy crash cluster.)
         if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-            if !value_is_object_like(descriptor_value) {
+            if !value_is_object_like(descriptor_value)
+                || crate::symbol::js_is_symbol(descriptor_value) != 0
+            {
                 let desc = describe_value_for_type_error(descriptor_value);
                 throw_object_type_error_with_suffix(
                     "Property description must be an object: ",
@@ -1328,7 +1332,12 @@ pub extern "C" fn js_object_define_property(
         if !target_is_class_ref && !value_is_object_like(obj_value) {
             throw_object_type_error(b"Object.defineProperty called on non-object");
         }
-        if !value_is_object_like(descriptor_value) {
+        // A descriptor must be an Object; a Symbol is pointer-tagged but not an
+        // object, so `ToPropertyDescriptor(Symbol())` throws (test262
+        // property-description-must-be-an-object-not-symbol).
+        if !value_is_object_like(descriptor_value)
+            || crate::symbol::js_is_symbol(descriptor_value) != 0
+        {
             let desc = describe_value_for_type_error(descriptor_value);
             throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
         }
@@ -2452,6 +2461,7 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     // and crash. The reflective prototype is reachable directly as
     // `Temporal.<Type>.prototype`, so for a cell receiver return `null` rather
     // than faulting on the cell.
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(obj_value) {
         return f64::from_bits(TAG_NULL);
     }
@@ -2704,6 +2714,27 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     {
                         return proto;
                     }
+                    // #3986: `Object.create(proto)` and `new F()` (a plain
+                    // function ctor, whose instances carry a synthetic
+                    // function-prototype class id) record the actual
+                    // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
+                    // keyed by that synthetic class id. Return the exact stored
+                    // pointer so `Object.getPrototypeOf(o) === proto` holds by
+                    // identity (test262 built-ins/Object/create/15.2.3.5-*,
+                    // S9.9 ToObject identity). Declared ES classes use the
+                    // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
+                    // above, so this does not perturb the
+                    // `getPrototypeOf(instance) === instance` model their
+                    // `.constructor` resolution relies on. Without this the
+                    // synthetic-class instance fell through to the
+                    // `return obj_value` self-prototype fallback below.
+                    let synth_proto =
+                        super::class_registry::class_prototype_object((*obj).class_id);
+                    if !synth_proto.is_null() {
+                        return f64::from_bits(
+                            crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
+                        );
+                    }
                 }
             }
             return obj_value;
@@ -2790,6 +2821,27 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         )
                     {
                         return proto;
+                    }
+                    // #3986: `Object.create(proto)` and `new F()` (a plain
+                    // function ctor, whose instances carry a synthetic
+                    // function-prototype class id) record the actual
+                    // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
+                    // keyed by that synthetic class id. Return the exact stored
+                    // pointer so `Object.getPrototypeOf(o) === proto` holds by
+                    // identity (test262 built-ins/Object/create/15.2.3.5-*,
+                    // S9.9 ToObject identity). Declared ES classes use the
+                    // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
+                    // above, so this does not perturb the
+                    // `getPrototypeOf(instance) === instance` model their
+                    // `.constructor` resolution relies on. Without this the
+                    // synthetic-class instance fell through to the
+                    // `return obj_value` self-prototype fallback below.
+                    let synth_proto =
+                        super::class_registry::class_prototype_object((*obj).class_id);
+                    if !synth_proto.is_null() {
+                        return f64::from_bits(
+                            crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
+                        );
                     }
                 }
             }

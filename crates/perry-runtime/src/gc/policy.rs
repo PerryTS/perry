@@ -365,6 +365,7 @@ pub(super) enum GcCollectionKind {
 }
 
 impl GcCollectionKind {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) fn as_str(self) -> &'static str {
         match self {
@@ -394,6 +395,7 @@ pub(super) enum GcTriggerKind {
 }
 
 impl GcTriggerKind {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) fn as_str(self) -> &'static str {
         match self {
@@ -466,6 +468,7 @@ impl DeferredGcRequest {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct GcStepSnapshot {
     pub(super) arena_step_bytes: usize,
     pub(super) next_arena_trigger_bytes: usize,

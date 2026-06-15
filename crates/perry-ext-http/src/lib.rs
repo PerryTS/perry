@@ -65,6 +65,12 @@ mod tls_client;
 mod plain_client;
 use plain_client::{dispatch_plain_http_request, parse_http_response};
 
+// Raw-socket `Expect: 100-continue` client path (#5080) — flushes the head,
+// observes the interim `100 Continue`, emits `'continue'`, then sends the
+// withheld body. reqwest swallows the interim response, so this bypass is
+// needed to surface it.
+mod continue_client;
+
 // Async reqwest dispatch (`dispatch_request` + TLS-client selection),
 // extracted to keep `lib.rs` under the 2000-line lint cap.
 mod client_dispatch;
@@ -167,6 +173,14 @@ pub(crate) enum PendingHttpEvent {
     /// Drains the queued `write(chunk, cb)` callbacks, then `'finish'`,
     /// then the `end(..., cb)` callback — Node's flush ordering.
     Flushed { request_handle: Handle },
+    /// #5080 — the server answered an `Expect: 100-continue` request with
+    /// an interim `100 Continue`. Drains to the request's `'continue'`
+    /// listeners; the canonical handler then sends the withheld body.
+    Continue { request_handle: Handle },
+    /// #5080 — arm the `Expect: 100-continue` head flush on the next event-loop
+    /// tick (Node's nextTick), so post-construction `setHeader(...)` — including
+    /// a late `Expect` — reaches the wire. No-op for non-continue/sent requests.
+    DeferredArmContinue { request_handle: Handle },
 }
 
 lazy_static! {
@@ -320,6 +334,15 @@ pub struct ClientRequestHandle {
     /// `0` until the head is delivered (and always for the full-buffer
     /// delivery paths).
     incoming_handle: Handle,
+    /// #5080 — the request carries `Expect: 100-continue`, so its head was
+    /// flushed up front by the raw-socket continue path and the body is
+    /// withheld until the server's interim `100 Continue` arrives. `end()`
+    /// hands the (now-known) body over the `continue_body_tx` channel
+    /// instead of dispatching a fresh exchange.
+    expects_continue: bool,
+    /// #5080 — set while the continue exchange task is waiting for the
+    /// deferred body; `end()` sends the buffered body here (once).
+    continue_body_tx: Option<tokio::sync::oneshot::Sender<Vec<u8>>>,
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -493,6 +516,8 @@ fn make_request_handle(
         agent_handle,
         tls: tls_client::TlsOptions::default(),
         incoming_handle: 0,
+        expects_continue: false,
+        continue_body_tx: None,
     });
     // #4909 — `options.timeout` arms the inactivity timer as soon as the
     // socket exists in Node, not at `end()`; a request that is never
@@ -840,6 +865,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     };
     let handle = make_request_handle(method, url, headers, timeout, callback, agent_handle);
     attach_tls_options(handle, arg_f64); // #4906
+    continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     handle
 }
 
@@ -945,6 +971,8 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
     if force_get {
         // `get()` auto-`end()`s, kicking off the request.
         js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
+    } else {
+        continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     }
     handle
 }
@@ -1013,6 +1041,37 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
         });
     }
 
+    // #5080 — `end()` is a send boundary: arm the continue path now if it
+    // carries `Expect: 100-continue` and the next-tick arm hasn't run yet.
+    continue_client::arm_expect_continue(handle);
+
+    // #5080 — an `Expect: 100-continue` request flushed its head up front;
+    // this `end()` just hands the (now-known) body to the in-flight continue
+    // exchange over the oneshot. The first call fires the flush ordering
+    // (write/finish/end callbacks); a later one is an idempotent no-op.
+    let (is_continue, first_end) = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if !req.expects_continue {
+            return (false, false);
+        }
+        if let Some(tx) = req.continue_body_tx.take() {
+            let body = std::mem::take(&mut req.body);
+            let _ = tx.send(body);
+            req.ended = true;
+            (true, true)
+        } else {
+            (true, false)
+        }
+    })
+    .unwrap_or((false, false));
+    if is_continue {
+        if first_end {
+            push_event(PendingHttpEvent::Flushed {
+                request_handle: handle,
+            });
+        }
+        return handle;
+    }
+
     let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         if req.ended {
             // Already dispatched by `flushHeaders()` — the exchange is in
@@ -1068,6 +1127,13 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
 /// dispatch-at-`end()` behavior, since the head can't go out alone.
 pub(crate) unsafe fn client_request_flush_headers(handle: Handle) {
     if client_request_surface::request_destroyed(handle) {
+        return;
+    }
+    // #5080 — `flushHeaders()` is a send boundary; when it arms the continue
+    // path, that exchange owns the head, so don't also dispatch via reqwest.
+    continue_client::arm_expect_continue(handle);
+    if with_handle_mut::<ClientRequestHandle, _, _>(handle, |r| r.expects_continue).unwrap_or(false)
+    {
         return;
     }
     let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
@@ -1622,6 +1688,16 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
             PendingHttpEvent::Flushed { request_handle } => {
                 client_events::handle_flushed_event(request_handle);
             }
+            PendingHttpEvent::Continue { request_handle } => {
+                // #5080 — the server sent an interim `100 Continue`; fire the
+                // request's `'continue'` listeners (the canonical handler then
+                // sends the withheld body via `req.end(...)`).
+                client_events::fire_request_event_listeners(request_handle, "continue");
+            }
+            PendingHttpEvent::DeferredArmContinue { request_handle } => {
+                // #5080 — next-tick arming (see the enum variant docs).
+                continue_client::arm_expect_continue(request_handle);
+            }
         }
     }
 
@@ -1634,6 +1710,10 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
 
 #[cfg(test)]
 mod tests;
+// Test-only `perry_ffi_*` async-bridge shims so the lib test links without the
+// host stdlib archive (mirrors perry-ext-net / perry-ext-http-server).
+#[cfg(test)]
+mod test_async_shims;
 
 // Suppress unused-import warnings for FFI-only types.
 #[allow(dead_code)]

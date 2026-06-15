@@ -410,6 +410,8 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
         "harmonyos-simulator" => Some("x86_64-unknown-linux-ohos".to_string()),
         "android" => Some("aarch64-unknown-linux-android".to_string()),
+        // Wear OS is Android-on-a-watch: same arm64 Android object format.
+        "wearos" => Some("aarch64-unknown-linux-android".to_string()),
         "linux" => Some("x86_64-unknown-linux-gnu".to_string()),
         "linux-aarch64" => Some("aarch64-unknown-linux-gnu".to_string()),
         // musl targets — fully static binaries that run on Lambda

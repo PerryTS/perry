@@ -243,6 +243,7 @@ unsafe fn rel_to_primitive(value: f64) -> f64 {
     // `TypeError` for every `Temporal.*` value (the spec bans relational ordering
     // of Temporal values: `plainDate < plainDate` throws). Without this the cell
     // fell through to the `DefaultString` arm and compared ISO strings silently.
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(value) {
         return crate::temporal::dispatch::call_method(value, "valueOf", &[]);
     }

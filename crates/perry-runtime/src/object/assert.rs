@@ -84,6 +84,7 @@ fn regexp_ptr(pattern: f64) -> Option<*const crate::regex::RegExpHeader> {
     Some(ptr as *const crate::regex::RegExpHeader)
 }
 
+#[cfg(feature = "regex-engine")]
 fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     let re = regexp_ptr(pattern)?;
     let input_string = value_to_string(input);
@@ -92,10 +93,24 @@ fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     Some(crate::regex::js_regexp_test(re, input_ptr) != 0)
 }
 
+/// Regex engine gated off: no RegExp value can exist, so `expected` is never a
+/// RegExp — report "not a RegExp matcher" so callers fall to their non-regex
+/// comparison path.
+#[cfg(not(feature = "regex-engine"))]
+fn regex_test_value(_pattern: f64, _input: f64) -> Option<bool> {
+    None
+}
+
+#[cfg(feature = "regex-engine")]
 fn regex_test_string(re: *const crate::regex::RegExpHeader, input: f64) -> bool {
     let input_ptr =
         crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
     !input_ptr.is_null() && crate::regex::js_regexp_test(re, input_ptr) != 0
+}
+
+#[cfg(not(feature = "regex-engine"))]
+fn regex_test_string(_re: *const crate::regex::RegExpHeader, _input: f64) -> bool {
+    false
 }
 
 fn validate_regexp_argument(regexp: f64) -> *const crate::regex::RegExpHeader {

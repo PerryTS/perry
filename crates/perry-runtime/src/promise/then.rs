@@ -437,7 +437,11 @@ pub(crate) fn js_promise_new_with_parent(parent: *mut Promise) -> *mut Promise {
         promise_handle.get_raw_mut_ptr::<Promise>(),
         parent_handle.get_raw_mut_ptr::<Promise>(),
     );
-    promise_handle.get_raw_mut_ptr::<Promise>()
+    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    // #5142: a recycled address may carry expando properties (`p.status = …`)
+    // left by a previously-collected promise; a fresh promise must start clean.
+    crate::object::exotic_expando::expando_clear_on_alloc(promise as usize);
+    promise
 }
 
 /// Free a Promise (no-op — GC handles deallocation)

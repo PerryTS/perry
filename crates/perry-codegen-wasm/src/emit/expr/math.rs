@@ -38,6 +38,16 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::F64Nearest);
                 func.instruction(&Instruction::I64ReinterpretF64);
             }
+            Expr::MathTrunc(x) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, x);
+                self.emit_memcall(func, "math_trunc", 1);
+            }
+            Expr::MathSign(x) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, x);
+                self.emit_memcall(func, "math_sign", 1);
+            }
             Expr::MathPow(base, exp) => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, base);
@@ -196,15 +206,10 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
             Expr::MathImul(a, b) => {
-                self.emit_expr(func, a);
-                func.instruction(&Instruction::F64ReinterpretI64);
-                func.instruction(&Instruction::I32TruncF64S);
-                self.emit_expr(func, b);
-                func.instruction(&Instruction::F64ReinterpretI64);
-                func.instruction(&Instruction::I32TruncF64S);
-                func.instruction(&Instruction::I32Mul);
-                func.instruction(&Instruction::F64ConvertI32S);
-                func.instruction(&Instruction::I64ReinterpretF64);
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, a);
+                self.emit_store_arg(func, 1, b);
+                self.emit_memcall(func, "math_imul", 2);
             }
             Expr::MathMin(args) if args.len() != 2 => {
                 // Variadic min — use bridge

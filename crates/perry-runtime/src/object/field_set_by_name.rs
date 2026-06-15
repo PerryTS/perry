@@ -180,6 +180,27 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // #5135: the receiver may be a Proxy id arriving with its NaN-box tag
+    // already masked off (the `obj.prop++` / `PropertyUpdate` codegen path
+    // hands us the bare pointer band, not the full POINTER_TAG value). A Proxy
+    // is encoded as a small registered id; deref-ing one as an `ObjectHeader`
+    // reads unmapped memory and SIGSEGVs. Mirror the read-side dispatch in
+    // `js_object_get_field_by_name` so a `proxy.foo = v` write goes through the
+    // `set` trap instead of corrupting the cell. `js_proxy_is_proxy` validates
+    // the value is a *registered* proxy so a real heap object whose masked
+    // address happens to be small isn't misrouted.
+    {
+        let addr = obj as u64;
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                crate::proxy::js_proxy_set(boxed, key_f64, value);
+                return;
+            }
+        }
+    }
     // `Object.prototype["2"] = v` (stringified-index write) makes the index
     // visible through array hole/OOB reads. Cheap gate: one relaxed flag
     // load, then an address compare against the cached canonical
@@ -887,6 +908,35 @@ pub extern "C" fn js_object_set_field_by_name(
             None
         };
 
+        // Accessor short-circuit — must precede the frozen/sealed and
+        // writable checks below: a property defined with a setter is invoked
+        // via [[Set]] regardless of the object's frozen/sealed state (freezing
+        // an accessor only clears [[Configurable]]; the setter still runs). A
+        // getter-only accessor is read-only. Hoisted above the sidecar + the
+        // linear-scan blocks so BOTH key-lookup paths honor it — previously the
+        // frozen check at the top of each block threw before the accessor was
+        // consulted (test262
+        // assign/target-is-frozen-accessor-property-set-succeeds).
+        if ACCESSORS_IN_USE.with(|c| c.get()) {
+            if let Some(ref k) = incoming_key_str {
+                if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
+                    if acc.set != 0 {
+                        let closure = (acc.set & crate::value::POINTER_MASK)
+                            as *const crate::closure::ClosureHeader;
+                        if !closure.is_null() {
+                            let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                            let previous_this = super::js_implicit_this_set(receiver);
+                            crate::closure::js_closure_call1(closure, value);
+                            super::js_implicit_this_set(previous_this);
+                        }
+                    } else {
+                        crate::error::throw_immutable_write(0, k);
+                    }
+                    return;
+                }
+            }
+        }
+
         // Search through the keys array for a match
         let key_count = crate::array::js_array_length(keys) as usize;
         let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
@@ -1038,31 +1088,12 @@ pub extern "C" fn js_object_set_field_by_name(
                 // Found it - update the field. Frozen objects must
                 // throw a TypeError on writes to existing keys
                 // (issue #615 — strict-mode behavior, default for TS).
+                // Accessors were already handled by the hoisted short-circuit
+                // above; a key found here is a data property, so a frozen object
+                // throws on the write (issue #615 — strict-mode default for TS).
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
                     crate::error::throw_immutable_write(0, &key_str);
-                }
-                // Accessor short-circuit: if a setter is registered, invoke
-                // it instead of writing the slot. A getter-only accessor is
-                // read-only under Perry's strict-by-default TS semantics.
-                if ACCESSORS_IN_USE.with(|c| c.get()) {
-                    if let Some(ref k) = incoming_key_str {
-                        if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
-                            if acc.set != 0 {
-                                let closure = (acc.set & crate::value::POINTER_MASK)
-                                    as *const crate::closure::ClosureHeader;
-                                if !closure.is_null() {
-                                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                                    let previous_this = super::js_implicit_this_set(receiver);
-                                    crate::closure::js_closure_call1(closure, value);
-                                    super::js_implicit_this_set(previous_this);
-                                }
-                            } else {
-                                crate::error::throw_immutable_write(0, k);
-                            }
-                            return;
-                        }
-                    }
                 }
                 // Per-property writable check (set by Object.defineProperty / freeze).
                 // Issue #615 — strict-mode throw on read-only assign.

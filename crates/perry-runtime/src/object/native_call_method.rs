@@ -1698,6 +1698,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // `Temporal.*` value is a NaN-boxed pointer to a custom cell with no
     // codegen fast-path, so every method call funnels through here. The router
     // throws `TypeError` for an unknown method name on a real Temporal receiver.
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(object) {
         let args = refreshed_args();
         return crate::temporal::dispatch::call_method(object, method_name, &args);
@@ -1893,6 +1894,37 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // #5142: a promise can carry user-attached own expando methods.
+    // @tanstack/query-core's `pendingThenable()` stores `resolve`/`reject`
+    // closures on the thenable and invokes them as `thenable.resolve(value)`;
+    // an own expando function shadows the inherited prototype method, so
+    // resolve and call it here before the intrinsic then/catch/finally and the
+    // generic "<m> is not a function" fall-through. Only dispatch when the
+    // stored value is actually callable — a non-callable expando
+    // (`thenable.status()`) falls through to the normal not-a-function path.
+    if !matches!(method_name, "then" | "catch" | "finally")
+        && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
+    {
+        let recv = object_handle.get_nanbox_f64();
+        let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if let Some(v) = super::exotic_expando::exotic_get_own_property(
+            raw,
+            super::exotic_expando::ExoticKind::Promise,
+            method_name,
+            recv,
+        ) {
+            let cand = (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            if (v.to_bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                && crate::closure::is_closure_ptr(cand)
+            {
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv.to_bits()));
+                let result = crate::closure::js_native_call_value(v, args_ptr, args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
+            }
+        }
+    }
+
     // Issue #489 followup: Promise's `then` / `catch` / `finally` are
     // intrinsic — when the dynamic dispatch path lands a `.then(cb)` on
     // a Promise (drizzle's `mysql-proxy/session.js`:
@@ -1968,6 +2000,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // function result the codegen `Expr::RegExpTest` fast path can't see; without
     // this it throws `test is not a function`, breaking Hono `app.use('*', …)`
     // (#1731). The helper returns None for non-regex so generic dispatch resumes.
+    #[cfg(feature = "regex-engine")]
     if matches!(method_name, "test" | "exec" | "toString") && jsval.is_pointer() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let arg0 = refreshed_args().first().copied().unwrap_or(undef);
@@ -1980,6 +2013,7 @@ pub unsafe extern "C" fn js_native_call_method(
     // `RegExp.prototype.compile(pattern, flags)` (Annex B) re-initializes the
     // receiver in place. Needs both args, so it is dispatched here rather than
     // through the single-arg `dispatch_regex_receiver_method`.
+    #[cfg(feature = "regex-engine")]
     if method_name == "compile" && jsval.is_pointer() {
         let p = jsval.as_pointer::<u8>();
         if crate::regex::is_regex_pointer(p) {
@@ -2061,7 +2095,17 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
-    if crate::date::is_date_value(object) && method_name == "toString" {
+    // A `DateCell` is a NaN-boxed pointer but NOT an `ObjectHeader`, so a date
+    // receiver must never reach the generic object dispatch below — that path
+    // reinterprets the cell's bytes as an object and returns garbage. Every
+    // `Date.prototype` method (getters, setters, `toISOString`, `toJSON`,
+    // `toString`, …) is installed on `Date.prototype` and reads the
+    // `IMPLICIT_THIS` receiver, so resolve the method there and dispatch with
+    // `this` bound to the cell. Previously only `toString` was routed this way;
+    // every other dynamic/computed call (`date[m](...)`, `Reflect.apply`) fell
+    // through and silently dropped setter mutations — e.g. dayjs's
+    // `this.$d[l]($)` made `.add()`/`.date(n)` no-ops (#5133).
+    if crate::date::is_date_value(object) {
         let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
         let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
         if ctor_ptr != 0 {
@@ -2082,8 +2126,10 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
             }
         }
-        let string = crate::date::js_date_to_string(object);
-        return f64::from_bits(JSValue::string_ptr(string).bits());
+        if method_name == "toString" {
+            let string = crate::date::js_date_to_string(object);
+            return f64::from_bits(JSValue::string_ptr(string).bits());
+        }
     }
 
     // Symbols: Symbol.for() pointers are Box-leaked (no GcHeader), so the
@@ -2363,34 +2409,49 @@ pub unsafe extern "C" fn js_native_call_method(
                 // function`) because no runtime arm handled `match`.
                 "match" | "matchAll" => {
                     // Missing arg ⇒ `undefined` (→ empty `/(?:)/` regex).
-                    let pattern_val =
+                    let _pattern_val =
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
-                    if method_name == "matchAll" {
-                        let result_ptr =
-                            crate::regex::js_string_match_all_value(s_ptr, pattern_val);
+                    #[cfg(feature = "regex-engine")]
+                    {
+                        let pattern_val = _pattern_val;
+                        if method_name == "matchAll" {
+                            let result_ptr =
+                                crate::regex::js_string_match_all_value(s_ptr, pattern_val);
+                            if result_ptr.is_null() {
+                                return f64::from_bits(JSValue::null().bits());
+                            }
+                            return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
+                        }
+                        // Coerce a non-RegExp arg via `RegExpCreate(ToString(arg))`
+                        // (a string pattern / `undefined` / `{ toString }` object),
+                        // matching the codegen path.
+                        let result_ptr = crate::regex::js_string_match_value(s_ptr, pattern_val);
                         if result_ptr.is_null() {
                             return f64::from_bits(JSValue::null().bits());
                         }
                         return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
                     }
-                    // Coerce a non-RegExp arg via `RegExpCreate(ToString(arg))`
-                    // (a string pattern / `undefined` / `{ toString }` object),
-                    // matching the codegen path.
-                    let result_ptr = crate::regex::js_string_match_value(s_ptr, pattern_val);
-                    if result_ptr.is_null() {
-                        return f64::from_bits(JSValue::null().bits());
-                    }
-                    return f64::from_bits(JSValue::pointer(result_ptr as *mut u8).bits());
+                    // Engine gated off: a string `.match`/`.matchAll` can only
+                    // be reached by a program that uses regex (which forces the
+                    // engine on), so this is dead — `null` (no match) is benign.
+                    #[cfg(not(feature = "regex-engine"))]
+                    return f64::from_bits(JSValue::null().bits());
                 }
                 "search" => {
-                    let regex_val =
+                    let _regex_val =
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
-                    let i32_v = crate::regex::js_string_search_value(s_ptr, regex_val);
-                    // Return a RAW `f64` (not NaN-boxed INT32_TAG): a boxed-int
-                    // result fails `aString.search(x) === 5` strict-equality
-                    // against a plain number literal. Mirrors the `indexOf`
-                    // arm's `as f64` convention.
-                    return i32_v as f64;
+                    #[cfg(feature = "regex-engine")]
+                    {
+                        let i32_v = crate::regex::js_string_search_value(s_ptr, _regex_val);
+                        // Return a RAW `f64` (not NaN-boxed INT32_TAG): a boxed-int
+                        // result fails `aString.search(x) === 5` strict-equality
+                        // against a plain number literal. Mirrors the `indexOf`
+                        // arm's `as f64` convention.
+                        return i32_v as f64;
+                    }
+                    // Engine gated off: dead (see `match` arm) — `-1` (not found).
+                    #[cfg(not(feature = "regex-engine"))]
+                    return -1.0_f64;
                 }
                 // Refs #421 — common string methods on any-typed receivers.
                 // Hono's compiled JS (and most npm packages with stripped TS
@@ -2656,11 +2717,15 @@ pub unsafe extern "C" fn js_native_call_method(
                             .unwrap_or(std::ptr::null())
                     };
                     if let (Some(pat_val), Some(repl_val)) = (arg_at(0), arg_at(1)) {
+                        // `pat_jsv` is only consulted by the regex-engine-gated
+                        // branch below (RegExp pattern + callback replacer).
+                        #[cfg_attr(not(feature = "regex-engine"), allow(unused_variables))]
                         let pat_jsv = JSValue::from_bits(pat_val.to_bits());
                         let repl_jsv = JSValue::from_bits(repl_val.to_bits());
                         if repl_jsv.is_pointer() {
                             let repl_raw = (repl_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
                             if crate::closure::is_closure_ptr(repl_raw) {
+                                #[cfg(feature = "regex-engine")]
                                 if pat_jsv.is_pointer() {
                                     let regex_ptr =
                                         pat_jsv.as_pointer::<crate::regex::RegExpHeader>();
@@ -2701,6 +2766,7 @@ pub unsafe extern "C" fn js_native_call_method(
                         }
                     }
                     // Detect RegExp pattern: NaN-boxed pointer to a RegExpHeader.
+                    #[cfg(feature = "regex-engine")]
                     if let Some(v) = arg_at(0) {
                         let jsv = JSValue::from_bits(v.to_bits());
                         if jsv.is_pointer() {
@@ -3516,6 +3582,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            #[cfg(feature = "regex-engine")]
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
                 return crate::regex::dispatch_regexp_string_iterator_method(
                     obj as *mut ObjectHeader,
@@ -3635,19 +3702,42 @@ pub unsafe extern "C" fn js_native_call_method(
                         has_rest,
                     );
                 }
+                // Refs #420: walk the parent chain via the class registry. Per
+                // JS spec, `subInstance.method()` for a method defined on a
+                // parent dispatches to the parent's implementation — drizzle's
+                // `serial("id").primaryKey()` where primaryKey is on
+                // ColumnBuilder (grandparent) but the receiver is a
+                // PgSerialBuilder (grandchild). The codegen-side dispatch tower
+                // in `lower_call.rs` only registers classes the importing module
+                // knows about; for not-by-name-imported subclasses (return
+                // values of imported functions) we depend on this runtime walk.
+                //
+                // DEADLOCK SAFETY: resolve the target under the registry READ
+                // lock, then DROP the lock before invoking the method body.
+                // A user method body can lazily init a module (function-local
+                // `require()` — Next.js `getServerImpl()` → `require('./next-
+                // server')`) whose top-level `class` declarations call
+                // `js_register_class_method` → a registry WRITE lock. std
+                // `RwLock` is not re-entrant, so holding the read guard across
+                // the call deadlocked the (single) main thread.
+                enum ResolvedMethod {
+                    Vtable {
+                        func_ptr: usize,
+                        param_count: u32,
+                        has_synthetic_arguments: bool,
+                        has_rest: bool,
+                        this_i64: i64,
+                    },
+                    // #711 part 2 / #321: a method that is an own-property of a
+                    // registered prototype object (`Function.prototype = X`,
+                    // effect's `EffectPrototype.pipe`).
+                    ProtoClosure {
+                        field_bits: u64,
+                    },
+                }
+                let mut resolved_method: Option<ResolvedMethod> = None;
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                     if let Some(ref reg) = *registry {
-                        // Refs #420: walk the parent chain via the class
-                        // registry. Per JS spec, `subInstance.method()` for
-                        // a method defined on a parent dispatches to the
-                        // parent's implementation — drizzle's
-                        // `serial("id").primaryKey()` where primaryKey is on
-                        // ColumnBuilder (grandparent) but the receiver is a
-                        // PgSerialBuilder (grandchild). The codegen-side
-                        // dispatch tower in `lower_call.rs` only registers
-                        // classes the importing module knows about; for
-                        // not-by-name-imported subclasses (return values of
-                        // imported functions) we depend on this runtime walk.
                         let mut cur_cid = class_id;
                         let mut depth = 0u32;
                         while depth < 32 {
@@ -3661,26 +3751,16 @@ pub unsafe extern "C" fn js_native_call_method(
                                         entry.has_synthetic_arguments,
                                         entry.has_rest,
                                     );
-                                    let this_i64 = jsval.as_pointer::<u8>() as i64;
-                                    return call_vtable_method(
-                                        entry.func_ptr,
-                                        this_i64,
-                                        args_ptr,
-                                        args_len,
-                                        entry.param_count,
-                                        entry.has_synthetic_arguments,
-                                        entry.has_rest,
-                                    );
+                                    resolved_method = Some(ResolvedMethod::Vtable {
+                                        func_ptr: entry.func_ptr,
+                                        param_count: entry.param_count,
+                                        has_synthetic_arguments: entry.has_synthetic_arguments,
+                                        has_rest: entry.has_rest,
+                                        this_i64: jsval.as_pointer::<u8>() as i64,
+                                    });
+                                    break;
                                 }
                             }
-                            // Issue #711 part 2: if this class id has a
-                            // registered prototype object (from
-                            // `Function.prototype = X`), look up the
-                            // method as a regular property of that
-                            // object. Effect's `EffectPrototype.pipe()`
-                            // and friends are own-properties of the
-                            // proto object; the value is a closure that
-                            // expects `this = receiver`.
                             let proto_obj = class_prototype_object(cur_cid);
                             if !proto_obj.is_null() {
                                 let method_key = crate::string::js_string_from_bytes(
@@ -3692,37 +3772,10 @@ pub unsafe extern "C" fn js_native_call_method(
                                     method_key as *const crate::StringHeader,
                                 );
                                 if !field_val.is_undefined() && !field_val.is_null() {
-                                    // #321 (effect Context/Layer/Scope): the
-                                    // method we just read is an *inherited*
-                                    // own-property of the prototype object
-                                    // `proto_obj`, not of the receiver. When
-                                    // it is an object-literal method
-                                    // (`captures_this:true`), its reserved
-                                    // capture slot was baked to the PROTOTYPE
-                                    // at construction time, so invoking it
-                                    // with `IMPLICIT_THIS = receiver` still
-                                    // reads `this === proto`. Rebind the
-                                    // closure's `this` slot to the receiver
-                                    // first (same treatment as the symbol path
-                                    // #1969 and the `#809` arm below).
-                                    // `clone_closure_rebind_this` is a no-op
-                                    // for closures that don't capture `this`
-                                    // (e.g. effect's `EffectPrototype.pipe`,
-                                    // which reads `this` from `IMPLICIT_THIS`)
-                                    // and for non-closure values, so those
-                                    // paths are unaffected.
-                                    let bound = crate::closure::clone_closure_rebind_this(
-                                        field_val.bits(),
-                                        f64::from_bits(jsval.bits()),
-                                    );
-                                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
-                                    let result = crate::closure::js_native_call_value(
-                                        f64::from_bits(bound),
-                                        args_ptr,
-                                        args_len,
-                                    );
-                                    IMPLICIT_THIS.with(|c| c.set(prev_this));
-                                    return result;
+                                    resolved_method = Some(ResolvedMethod::ProtoClosure {
+                                        field_bits: field_val.bits(),
+                                    });
+                                    break;
                                 }
                             }
                             match get_parent_class_id(cur_cid) {
@@ -3734,6 +3787,46 @@ pub unsafe extern "C" fn js_native_call_method(
                             }
                         }
                     }
+                }
+                // Registry guard released — safe to run the method body (which
+                // may register classes via lazy module init).
+                match resolved_method {
+                    Some(ResolvedMethod::Vtable {
+                        func_ptr,
+                        param_count,
+                        has_synthetic_arguments,
+                        has_rest,
+                        this_i64,
+                    }) => {
+                        return call_vtable_method(
+                            func_ptr,
+                            this_i64,
+                            args_ptr,
+                            args_len,
+                            param_count,
+                            has_synthetic_arguments,
+                            has_rest,
+                        );
+                    }
+                    Some(ResolvedMethod::ProtoClosure { field_bits }) => {
+                        // #321 (effect Context/Layer/Scope): rebind the closure's
+                        // `this` slot to the receiver — `clone_closure_rebind_this`
+                        // is a no-op for closures that don't capture `this` and for
+                        // non-closure values, so those paths are unaffected.
+                        let bound = crate::closure::clone_closure_rebind_this(
+                            field_bits,
+                            f64::from_bits(jsval.bits()),
+                        );
+                        let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                        let result = crate::closure::js_native_call_value(
+                            f64::from_bits(bound),
+                            args_ptr,
+                            args_len,
+                        );
+                        IMPLICIT_THIS.with(|c| c.set(prev_this));
+                        return result;
+                    }
+                    None => {}
                 }
                 // #809: independent prototype-object resolution. The walk
                 // above only runs when `CLASS_VTABLE_REGISTRY` is `Some` —
@@ -4033,6 +4126,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     method_name,
                 );
             }
+            #[cfg(feature = "regex-engine")]
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
                 return crate::regex::dispatch_regexp_string_iterator_method(
                     obj as *mut ObjectHeader,
@@ -4260,7 +4354,9 @@ pub unsafe extern "C" fn js_native_call_method(
                                         raw as *mut crate::error::ErrorHeader,
                                         key,
                                     ),
-                                    ExoticKind::Date | ExoticKind::Temporal => false,
+                                    ExoticKind::Date
+                                    | ExoticKind::Temporal
+                                    | ExoticKind::Promise => false,
                                 }
                         })
                         .unwrap_or(false);

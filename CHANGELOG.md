@@ -1,3 +1,140 @@
+## v0.5.1174 — fix(runtime): Object.getPrototypeOf returns the installed [[Prototype]] by identity (#3986)
+
+`Object.getPrototypeOf` now returns the exact prototype object that was
+installed, by identity, for two synthetic-class receiver shapes that
+previously fell through to a self-prototype fallback:
+
+- `Object.create(proto)` results — `Object.getPrototypeOf(Object.create(p)) === p`.
+- Plain function-constructor instances — `Object.getPrototypeOf(new F()) === F.prototype`.
+
+Both of these record the real `[[Prototype]]` object pointer in the runtime's
+`CLASS_PROTOTYPE_OBJECTS` side-table keyed by the instance's synthetic class id
+(Object.create allocates a synthetic id and maps it to `proto`; `new F()`
+instances carry the function-prototype synthetic id). `js_object_get_prototype_of`
+walked the iterator-prototype and declared-class-prototype tables but never
+consulted `CLASS_PROTOTYPE_OBJECTS`, so these instances hit the trailing
+`return obj_value` fallback and reported *themselves* as their prototype — the
+`=== proto` identity checks were false even though the chain walk
+(`isPrototypeOf`, inherited property/method dispatch) still worked.
+
+The fix adds a `class_prototype_object(class_id)` lookup in both pointer-shape
+branches of `js_object_get_prototype_of`, just after the existing iterator /
+declared-class checks and before the self-prototype fallback. Declared ES
+classes use the separate `CLASS_DECL_PROTOTYPE_OBJECTS` table (handled just
+above) and object literals resolve through `default_object_prototype_for_owner`,
+so neither is perturbed — the load-bearing
+`getPrototypeOf(classInstance) === classInstance` model that `.constructor`
+resolution relies on is preserved.
+
+Test262 `built-ins/Object --max 180` differential: 168 → 170 pass (93.3% →
+94.4%), 0 regressions; the newly-passing cases are
+`built-ins/Object/create/15.2.3.5-3-1.js` and
+`built-ins/Object/create/15.2.3.5-4-1.js`. Added node-suite parity fixture
+`test-parity/node-suite/object/create/getprototypeof-identity.ts` covering
+Object.create (literal / function-object / with-props prototypes), `new F()`
+prototype identity, and the unaffected declared-class / object-literal /
+`Object.create(null)` controls.
+
+Part of the #3986 object-model epic (ToObject / wrapper / prototype identity);
+follows the earlier #4161 / #4239 / #4269 cuts.
+
+## v0.5.1173 — fix(hir): mirror @@iterator lowering in class-expression path (#5128 review)
+
+Follow-up to #5161 (CodeRabbit review). The #5128 fix that makes a user class
+with a generator `*[Symbol.iterator]()` iterable for runtime-dispatched consumers
+(spread, `Math.max(...)`, `Array.from`, destructuring, manual
+`obj[Symbol.iterator]()`) was only wired into the class-*declaration* lowering
+(`lower_class_decl`). The parallel class-*expression* path (`lower_class_from_ast`)
+dropped computed `[Symbol.iterator]` members unless they were `util.inspect.custom`,
+so `new (class { *[Symbol.iterator]() {…} })()` and named class-expression bindings
+stayed non-iterable.
+
+- **HIR** (`lower_decl/class_decl.rs`): extracted the generator-lift + synthetic
+  non-generator `@@iterator` wrapper into a shared `synthesize_symbol_iterator_wrapper`
+  helper and called it from both `lower_class_decl` and `lower_class_from_ast`. The
+  class-expression `PropName::Computed` arm now recognizes `[Symbol.iterator]` (mapping
+  to `@@iterator`) instead of silently dropping it, which also fixes the plain
+  non-generator case.
+- **Runtime** (`array/iterator.rs`): `array_from_spread_value` now restores
+  `IMPLICIT_THIS` on the exception path too — the iterator-factory call is wrapped in
+  the same setjmp/trap/restore pattern as `async_from_sync_call_cached_raw`, so a
+  throwing factory can no longer leak the thread-local receiver into later calls.
+- **Tests**: added `class_expression_generator_symbol_iterator_is_iterable` mirroring
+  the declaration-form regression suite (spread incl. via variable, `Math.max`,
+  `for…of`, destructuring, `Array.from`, manual iterator, anonymous-class-expression
+  spread).
+
+## v0.5.1172 — feat(ui-windows-winui): render-backend dispatch seam + startup probe (#4680 step 3)
+
+Builds on the Windows App SDK bootstrap probe. Adds `winui::backend` — the single
+decision point the per-widget WinUI 3 mapping reads: `backend::active()` returns
+`RenderBackend::Fluent` when the bootstrap probe is `Ready`, else `RenderBackend::Win32`.
+
+A CRT static initializer (`.CRT$XCU`, anchored with `#[used]`) registered in the
+crate runs the probe at process start for *any* binary that links this staticlib —
+i.e. exactly the `--target windows-winui` builds, never the default `--target windows`
+builds (which don't link the crate). So the first widget construction reads an
+already-resolved backend rather than probing lazily. Setting `PERRY_WINUI_DIAG` prints
+the chosen backend at launch (`[perry-winui] render backend: win32|fluent`) and, on
+bootstrap failure, surfaces the raw HRESULT for diagnosis. The initializer never panics
+(it runs before `main`).
+
+Verified on a Windows host without the SDK: the initializer fires in a linked binary,
+the `.CRT$XCU` section is present in the WHOLEARCHIVE'd `perry_ui_windows_winui.lib`, and
+`active()` mirrors the bootstrap verdict and is stable across calls. Win32
+(`--target windows`) remains the default and is unaffected.
+
+## v0.5.1171 — fix(dayjs): `arguments` in sequence exprs + computed Date-method dispatch (#5133)
+
+`compilePackages: dayjs` threw `ReferenceError: arguments is not defined`, and once that was resolved `.add()`/`.date(n)` silently no-op'd. Two distinct, general root causes:
+
+1. **`arguments` hidden inside a sequence expression.** Minified dayjs builds the wrapper as `O=function(t,e){...return n.date=t,n.args=arguments,new _(n)}` — the `arguments` reference lives inside a comma/sequence expression in the `return`. The synthetic-arguments pre-scan `expr_uses_arguments` (`crates/perry-hir/src/lower_decl/helpers.rs`) had no `Expr::Seq` arm, fell through its `_ => false` catch-all, so the enclosing function never synthesized its hidden raw-`arguments` param. Fix: descend into `Expr::Seq`, plus the other operand-bearing forms the catch-all skipped — `Await`, `Yield`, `OptChain`, computed `SuperProp`, `TaggedTpl`.
+
+2. **Computed/dynamic Date-method calls dropped to generic dispatch.** dayjs mutates dates via `this.$d[l]($)` (e.g. `date["setDate"](44)`). A `DateCell` is a NaN-boxed pointer but not an `ObjectHeader`; `js_native_call_method` special-cased only `toString` for date receivers, so every other computed/dynamic call fell through to generic object dispatch, returned `[object Object]` and dropped the mutation. Fix: route any method on a date receiver through `Date.prototype` (where all getter/setter/`toISOString`/`toJSON` thunks are installed and read `IMPLICIT_THIS`), with `this` bound to the cell.
+
+Known residual: a SIGSEGV in dayjs's month arithmetic (`.endOf('month')` / `.set('month', …)` — a number-as-pointer deref in `js_object_get_field_by_name`, unrelated to either fix here) is left for a follow-up.
+
+## v0.5.1170 — fix(codegen): register rest/`arguments` metadata for renamed-export value wrappers (#5134)
+
+`.apply()`/`.call()` on a cross-module **default**-exported (or otherwise
+renamed) *variadic* function forwarded **zero** arguments. ramda's `compose`
+is `export default function compose() { … return pipe.apply(this,
+reverse(arguments)); }`, and `pipe` is `export default function pipe()` with a
+synthesized `arguments` param — so `union.js`'s init (`_curry2(compose(uniq,
+_concat))`) threw `Error: pipe requires at least one argument`.
+
+Root cause: a renamed export gets a forwarding value wrapper
+`__perry_wrap_perry_fn_<src>__<exported>`, but the rest/synthetic-`arguments`
+registration loops (`string_pool.rs`, consumed by `lookup_closure_rest_full` in
+`js_native_call_value`) keyed only on the function's **local** name
+(`__perry_wrap_..._<local>`). When a consumer referenced the renamed export as a
+value and invoked it via `.apply`, the runtime found no rest entry for the
+wrapper's `func_ptr` and dispatched positionally instead of bundling all args
+into the rest/`arguments` slot — so the variadic callee saw
+`arguments.length === 0`. Named exports (local == exported) were unaffected.
+
+Fix (`artifacts.rs`): for each `Export::Named { local, exported }` rename whose
+local function has a rest / synthetic-`arguments` param, also register the
+`__perry_wrap_perry_fn_<src>__<exported>` alias wrapper with the matching
+metadata. Together with #5134's `export default function` hoisting (PR #5149),
+the full ramda repro (`R.pipe(R.filter(...), R.map(...), R.sum)([...])`) now
+returns `120`, matching Node byte-for-byte. Validated no regression on named /
+non-variadic-default `.apply`.
+
+## v0.5.1168 — Next.js standalone bring-up: walls 36–44 (rebased on main)
+
+Dynamic-parent classes, forward-capture, super.method, cjs export-hint, self-new in capturing closure. (Same content as PR #5125, re-applied cleanly onto current main.)
+
+- **36** pre-register sibling class names in function-expression bodies (cjs IIFE forward refs).
+- **37** don't hold the class-vtable read lock across a method body (lazy `require()` write-lock deadlock).
+- **38** `class X extends _mod.default` runs the base constructor + inherits: cjs hoist guard scans the `extends` head; `.default` member-extends routes through `extends_expr`; super/`new` use the decl-time-stashed parent (`CLASS_DYNAMIC_PARENT_VALUE`) and invoke a ClassRef parent via `run_class_constructor_on_this_flat`.
+- **39** ignore the dead `0 && (module.exports = {…})` Babel export hint (statement-boundary guard) so it doesn't override real `_export` getters.
+- **40** dynamic `require()` of an unresolvable specifier throws `MODULE_NOT_FOUND` (Node parity).
+- **41** closures forward-capture later-declared function-scope `let`/`const` (shared `pre_register_forward_captured_lets`).
+- **42** `super.method()` on a dynamic-parent class dispatches at runtime (`js_super_method_call_dynamic`).
+- **43** forward-capture of destructured `let`/`const` + cjs-IIFE bodies.
+- **44** `new SelfClass(...)` inside a `this`-alias-capturing closure (redirect to the standalone ctor symbol).
+
 ## v0.5.1167 — fix(runtime): relink node:http/net — restore `js_node_system_error_value` (#5124)
 
 Release-blocking regression fix folded in via #5124. PR #5112 (Next.js

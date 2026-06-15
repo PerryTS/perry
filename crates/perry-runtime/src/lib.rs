@@ -37,11 +37,14 @@ pub mod builtins;
 pub mod child_process;
 pub mod closure;
 pub mod cluster;
+pub mod cluster_sched;
 pub mod collection_iter;
 pub mod collection_iter_object;
 pub mod color_parse;
 pub mod date;
+#[cfg(feature = "mod-dgram")]
 pub mod dgram;
+#[cfg(feature = "mod-dgram")]
 pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
@@ -393,6 +396,7 @@ mod stdlib_pump {
         // #4911: deliver queued UDP datagrams as `'message'` events. Lives in
         // perry-runtime so node:dgram works without perry-stdlib linked.
         // Zero-cost (one relaxed load) when no sockets are bound.
+        #[cfg(feature = "mod-dgram")]
         crate::dgram_reactor::pump();
         crate::process::js_process_ipc_drain();
         let f = STDLIB_PUMP_FN.load(Ordering::Acquire);
@@ -431,6 +435,7 @@ mod stdlib_pump {
             return 1;
         }
         // #4911: a bound + `ref`'d node:dgram socket keeps the loop alive.
+        #[cfg(feature = "mod-dgram")]
         if crate::dgram_reactor::has_active() {
             return 1;
         }

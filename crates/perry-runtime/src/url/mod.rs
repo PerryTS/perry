@@ -181,9 +181,16 @@ pub(crate) fn string_header_to_string(value: *mut crate::StringHeader) -> String
 /// means for them (the hostname setter leaves the host unchanged; the
 /// `domainTo*` helpers return `""`), matching Node.
 pub(crate) fn whatwg_canonicalize_host(host: &str) -> Option<String> {
-    url::Url::parse(&format!("http://{host}/"))
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
+    #[cfg(feature = "url-engine")]
+    {
+        url::Url::parse(&format!("http://{host}/"))
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+    }
+    // URL engine gated off: no WHATWG host parser, so pass the host through
+    // unchanged (the hand-rolled URL paths handle the common cases).
+    #[cfg(not(feature = "url-engine"))]
+    Some(host.to_string())
 }
 
 /// True when `host` is a canonical dotted-quad IPv4 literal. Used by

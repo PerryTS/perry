@@ -634,6 +634,27 @@ pub(crate) unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
     ptr as usize
 }
 
+/// #5128: map a well-known-symbol key to the synthetic class-method name used
+/// for a symbol-keyed instance *method* (`*[Symbol.iterator]()` →
+/// `@@iterator`, `[Symbol.asyncIterator]()` → `@@asyncIterator`). Returns
+/// `None` for any other symbol. Used by `js_object_get_symbol_property` to
+/// resolve a user class's iterator method off its prototype.
+fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
+    for (wk, method) in [
+        ("iterator", "@@iterator"),
+        ("asyncIterator", "@@asyncIterator"),
+    ] {
+        let s = well_known_symbol(wk);
+        if !s.is_null() {
+            let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
+            if sym_key == unsafe { sym_key_from_f64(f) } {
+                return Some(method);
+            }
+        }
+    }
+    None
+}
+
 /// Define (or merge) a symbol-keyed accessor on an object literal, delegating
 /// to the shared symbol-accessor side table. Separate `get`/`set` definitions
 /// for the same key accumulate, matching `Object.defineProperty` semantics.
@@ -1772,6 +1793,23 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                     {
                         return v;
                     }
+                    // #5128: a symbol-keyed instance METHOD — `*[Symbol.iterator]()`
+                    // (and `[Symbol.asyncIterator]()`) are registered on the class
+                    // under the synthetic names `@@iterator` / `@@asyncIterator`.
+                    // Read the method off the class and return a bound method so
+                    // iteration-protocol consumers (`[...x]`, `for…of`,
+                    // `Math.max(...x)`, destructuring) can drive `.next()`. Guard
+                    // on `method_owner_class_id` first: `js_class_method_bind`
+                    // otherwise mints a bound closure for a non-existent method.
+                    if let Some(method_name) = well_known_symbol_method_name(sym_key) {
+                        if crate::object::method_owner_class_id(class_id, method_name).is_some() {
+                            return crate::object::js_class_method_bind(
+                                obj_f64,
+                                method_name.as_ptr(),
+                                method_name.len(),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -2313,6 +2351,10 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         .cloned()
         .unwrap_or_default();
     drop(guard);
+    // `entries[..data_len]` are the data-valued symbol properties from
+    // `SYMBOL_PROPERTIES`, already in their true insertion order. Everything
+    // appended after `data_len` is an accessor-only symbol.
+    let data_len = entries.len();
     for sym_key in accessors::owner_symbol_accessor_keys(obj_key) {
         if !entries.iter().any(|(existing, _)| *existing == sym_key) {
             entries.push((sym_key, 0));
@@ -2321,6 +2363,25 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if entries.is_empty() {
         return crate::array::js_array_alloc(0) as i64;
     }
+    // `[[OwnPropertyKeys]]` reports symbol keys in property-creation order.
+    // Data-valued symbols already arrive in insertion order, so we must NOT
+    // reorder them (an unconditional sort by creation id would reorder e.g.
+    // `obj[b]=…; obj[a]=…` when `a` was created before `b`). Accessor-only
+    // symbols, however, are appended from a HashMap (`owner_symbol_accessor_keys`)
+    // in nondeterministic order, so a `defineProperty(o, sym, {get})` pair came
+    // out unstable (test262 assign/strings-and-symbol-order,
+    // getOwnPropertyDescriptors/order-after-define-property). Sort ONLY that
+    // appended accessor-only tail by the symbol's monotonic creation id (the
+    // convention the class-ref symbol path already uses), leaving the data-symbol
+    // insertion order intact.
+    entries[data_len..].sort_by_key(|(sym_ptr_usize, _)| {
+        let ptr = *sym_ptr_usize as *const SymbolHeader;
+        if ptr.is_null() {
+            u64::MAX
+        } else {
+            (*ptr).id
+        }
+    });
     let mut arr = crate::array::js_array_alloc(entries.len() as u32);
     for (sym_ptr_usize, _val_bits) in entries.iter() {
         // Re-NaN-box each symbol pointer with POINTER_TAG so the array
@@ -2461,6 +2522,7 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // `"string"`/`"default"` — which is exactly what `"x" + plainDateTime` and
     // template interpolation need. (Direct `String(x)` already brand-checks; the
     // `+`/template coercion routed here did not.)
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(value) {
         if hint == 1 {
             crate::object::throw_object_type_error(b"Cannot convert a Temporal value to a number");

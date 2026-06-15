@@ -2043,6 +2043,13 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // bare `GlobalGet(0)` — otherwise the predicate/dispatch runs
                     // against globalThis. The reroute above already resolved the
                     // receiver to `globalThis.<ctor>`; don't undo it here.
+                    // #5135: `toString` is a universal inherited method too —
+                    // `Function.toString` / `Array.toString` resolve to a real
+                    // function in Node. Without keeping the reified constructor
+                    // receiver the read collapses to `globalThis.toString`,
+                    // which codegen folds to a number, so
+                    // `Function.toString.call(Ctor)` (immer's `isPlainObject`)
+                    // threw "call on a non-function".
                     let outer_is_inherited_object_proto_method = matches!(
                         outer_static_member,
                         Some(
@@ -2050,6 +2057,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 | "isPrototypeOf"
                                 | "propertyIsEnumerable"
                                 | "toLocaleString"
+                                | "toString"
                                 | "valueOf"
                         )
                     );

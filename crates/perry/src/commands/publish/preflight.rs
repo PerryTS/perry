@@ -48,6 +48,7 @@ pub(super) async fn run_security_audit_step(
             Some(Platform::Ios)
             | Some(Platform::Visionos)
             | Some(Platform::Android)
+            | Some(Platform::Wearos)
             | Some(Platform::Macos)
             | Some(Platform::Tvos)
             | Some(Platform::Watchos)

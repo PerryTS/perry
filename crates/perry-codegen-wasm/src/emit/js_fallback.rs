@@ -640,6 +640,14 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(x, locals);
                 format!("Math.round({})", v)
             }
+            Expr::MathTrunc(x) => {
+                let v = self.emit_js_expr(x, locals);
+                format!("Math.trunc({})", v)
+            }
+            Expr::MathSign(x) => {
+                let v = self.emit_js_expr(x, locals);
+                format!("Math.sign({})", v)
+            }
             Expr::MathAbs(x) => {
                 let v = self.emit_js_expr(x, locals);
                 format!("Math.abs({})", v)

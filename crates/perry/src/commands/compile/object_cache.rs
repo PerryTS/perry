@@ -437,10 +437,12 @@ fn compute_object_cache_key_with_env(
         let mut buf = String::new();
         for c in v {
             buf.push_str(&format!(
-                "{}@{}:ctor={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
+                "{}@{}:ctor={}:own_ctor={}:instance_fields={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
                 c.name,
                 c.source_prefix,
                 c.constructor_param_count,
+                if c.has_own_constructor { "1" } else { "0" },
+                if c.has_instance_fields { "1" } else { "0" },
                 c.parent_name.as_deref().unwrap_or(""),
                 c.local_alias.as_deref().unwrap_or(""),
                 c.source_class_id.map(|i| i.to_string()).unwrap_or_default(),
@@ -1219,6 +1221,8 @@ mod object_cache_tests {
             local_alias: None,
             source_prefix: "feature_ts".into(),
             constructor_param_count: 0,
+            has_own_constructor: false,
+            has_instance_fields: true,
             method_names: vec![],
             method_param_counts: vec![],
             method_has_rest: vec![],
@@ -1251,6 +1255,8 @@ mod object_cache_tests {
             local_alias: None,
             source_prefix: "src".into(),
             constructor_param_count: 1,
+            has_own_constructor: true,
+            has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
             method_has_rest: vec![false],
@@ -1268,6 +1274,8 @@ mod object_cache_tests {
             local_alias: None,
             source_prefix: "src".into(),
             constructor_param_count: 2, // different arity
+            has_own_constructor: true,
+            has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
             method_has_rest: vec![false],
@@ -1293,6 +1301,8 @@ mod object_cache_tests {
             local_alias: None,
             source_prefix: "src".into(),
             constructor_param_count: 1,
+            has_own_constructor: true,
+            has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![1],
             method_has_rest: vec![false],
@@ -1311,6 +1321,14 @@ mod object_cache_tests {
             compute_object_cache_key(&opts, 1, "0.5.156")
         };
         let base_key = key_for(base.clone());
+
+        let mut changed = base.clone();
+        changed.has_own_constructor = false;
+        assert_ne!(base_key, key_for(changed));
+
+        let mut changed = base.clone();
+        changed.has_instance_fields = false;
+        assert_ne!(base_key, key_for(changed));
 
         let mut changed = base.clone();
         changed.method_has_rest = vec![true];

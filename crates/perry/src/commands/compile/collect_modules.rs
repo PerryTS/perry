@@ -33,13 +33,13 @@ use super::{
 mod create_require_transform;
 mod crypto_ns;
 mod dynamic_glob;
+mod feature_detect;
 mod native_addon;
 mod parse_error;
 #[cfg(test)]
 mod tests;
 
 use create_require_transform::transform_create_require_literal_requires;
-use crypto_ns::module_uses_global_crypto_namespace;
 use dynamic_glob::expand_dynamic_import_glob;
 use native_addon::refuse_compile_package_native_addon;
 use parse_error::annotate_parse_error;
@@ -1785,95 +1785,9 @@ fn collect_module_finish(
         transform_generators(&mut hir_module);
     }
 
-    // Detect fetch() usage — js_fetch_with_options lives in perry-stdlib
-    if hir_module.uses_fetch {
-        ctx.needs_stdlib = true;
-        ctx.uses_fetch = true;
-    }
-
-    // Issue #76 — auto-link the wasmi host runtime when any module
-    // references `WebAssembly.*`. Without this the user has to remember
-    // `--enable-wasm-runtime`; with it the flag is only needed when they
-    // want to override the auto-detection (e.g. force-link for plugins
-    // they'll dlopen later).
-    if hir_module.uses_webassembly {
-        ctx.needs_wasm_runtime = true;
-    }
-
-    // Detect crypto.* builtin usage (randomBytes/randomUUID/sha256/md5 used
-    // without `import crypto`). The runtime symbols live behind the
-    // perry-stdlib `crypto` Cargo feature, so we need to flip that on for
-    // auto-optimize. Text-grep the serialized Debug form for the established
-    // dedicated HIR variants. The global WebCrypto namespace path below uses
-    // a structured walk because it is an ordinary `PropertyGet`.
-    {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        let uses_global_crypto_namespace = module_uses_global_crypto_namespace(&hir_module);
-        if hir_debug.contains("CryptoRandomBytes")
-            || hir_debug.contains("CryptoRandomUUID")
-            || hir_debug.contains("CryptoSha256")
-            || hir_debug.contains("CryptoMd5")
-            // Web Crypto API (issue #561). The four WebCrypto* HIR
-            // variants lower to extern calls into perry-stdlib's
-            // webcrypto module, gated behind the `crypto` feature.
-            // Without flipping the gate, auto-optimize would build
-            // perry-stdlib without `crypto` and link would fail with
-            // "_js_webcrypto_digest" undefined.
-            || hir_debug.contains("WebCryptoDigest")
-            || hir_debug.contains("WebCryptoImportKey")
-            || hir_debug.contains("WebCryptoSign")
-            || hir_debug.contains("WebCryptoVerify")
-            || hir_debug.contains("WebCryptoEncrypt")
-            || hir_debug.contains("WebCryptoDecrypt")
-            || hir_debug.contains("WebCryptoGenerateKey")
-            || hir_debug.contains("WebCryptoWrapKey")
-            || hir_debug.contains("WebCryptoUnwrapKey")
-            // `globalThis.crypto` / bare `crypto` now materializes the
-            // WebCrypto singleton. Its `randomUUID` property dispatches
-            // through perry-stdlib's crypto bridge when called via a
-            // runtime property read rather than the direct HIR variant.
-            || uses_global_crypto_namespace
-        {
-            ctx.needs_stdlib = true;
-            ctx.uses_crypto_builtins = true;
-        }
-    }
-
-    // Detect readline usage via process.stdin raw/lifecycle methods. These
-    // don't go through an `import 'readline'` statement, so the import-based
-    // needs_stdlib detection above misses them.
-    {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        if hir_debug.contains("ProcessStdinSetRawMode")
-            || hir_debug.contains("ProcessStdinOn")
-            || hir_debug.contains("ProcessStdinRemoveListener")
-            || hir_debug.contains("ProcessStdinLifecycle")
-        {
-            ctx.needs_stdlib = true;
-            ctx.native_module_imports.insert("readline".to_string());
-        }
-    }
-
-    // Detect ioredis usage (detected by class name, not import path)
-    let mut found_ioredis = false;
-    for (_, module_name, _) in &hir_module.exported_native_instances {
-        if module_name == "ioredis" {
-            found_ioredis = true;
-            break;
-        }
-    }
-    if !found_ioredis {
-        for (_, module_name, _) in &hir_module.exported_func_return_native_instances {
-            if module_name == "ioredis" {
-                found_ioredis = true;
-                break;
-            }
-        }
-    }
-    if found_ioredis {
-        ctx.needs_stdlib = true;
-        ctx.native_module_imports.insert("ioredis".to_string());
-    }
+    // Set optional-feature gates (regex/temporal/url/crypto/events/etc.) so
+    // auto-optimize links only the runtime subsystems this module can reach.
+    feature_detect::detect_optional_feature_usage(ctx, &hir_module);
 
     let collected_after_insert = ctx.native_modules.len() + ctx.js_modules.len() + 1;
     progress.record(ProgressSnapshot {

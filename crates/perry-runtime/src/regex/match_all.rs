@@ -13,7 +13,9 @@ use crate::value::{
 };
 
 /// Class id for `String.prototype.matchAll`'s RegExp String Iterator object.
-pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
+/// Re-exported from the parent (kept ungated there so always-linked iterator
+/// dispatch can reference it even when this engine module is gated out).
+use super::REGEXP_STRING_ITERATOR_CLASS_ID;
 
 fn build_match_all_groups(
     regex: &Regex,

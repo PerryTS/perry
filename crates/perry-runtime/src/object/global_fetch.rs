@@ -55,6 +55,15 @@ static GLOBAL_FETCH_RESPONSE_STATIC_JSON: AtomicPtr<()> = AtomicPtr::new(null_mu
 static GLOBAL_FETCH_RESPONSE_STATIC_REDIRECT: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_RESPONSE_STATIC_ERROR: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static GLOBAL_FETCH_BODY_INIT_PTR: AtomicPtr<()> = AtomicPtr::new(null_mut());
+/// #4965: perry-stdlib's `Headers` → `[name, value]` entries-JSON producer,
+/// used by `res.setHeaders(headers)`. Registered separately from the fetch
+/// constructors because the http-server crate (not the fetch crate) is the
+/// consumer; routing through the always-linked runtime keeps http-server free
+/// of a direct perry-stdlib symbol dependency (which would link-break a
+/// stdlib-less build — the #5112 regression class).
+static GLOBAL_HEADERS_ENTRIES_JSON: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+type HeadersEntriesJsonFn = extern "C" fn(f64) -> *mut crate::StringHeader;
 
 /// Register the stdlib body-init coercion (`js_response_body_init_ptr`), which
 /// drains a `ReadableStream` body to a `*const StringHeader` (and falls back to
@@ -225,6 +234,57 @@ pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64
         return unsafe { func(handle, init) };
     }
     warn_unregistered_fetch_symbol("js_headers_init_from_value")
+}
+
+/// Register perry-stdlib's `Headers` → entries-JSON producer (#4965). The
+/// producer takes a NaN-boxed `Headers` handle and returns a fresh
+/// `StringHeader` holding a JSON array of `[name, value]` pairs (value is a
+/// string, or an array of strings for multi-valued headers like `Set-Cookie`),
+/// or null for an unknown handle.
+#[no_mangle]
+pub extern "C" fn js_register_global_headers_entries_json(f: HeadersEntriesJsonFn) {
+    GLOBAL_HEADERS_ENTRIES_JSON.store(f as *mut (), Ordering::Release);
+}
+
+fn call_global_headers_entries_json(value: f64) -> *mut crate::StringHeader {
+    let f = GLOBAL_HEADERS_ENTRIES_JSON.load(Ordering::Acquire);
+    if f.is_null() {
+        return null_mut();
+    }
+    let func: HeadersEntriesJsonFn = unsafe { std::mem::transmute(f) };
+    func(value)
+}
+
+/// Normalize a `res.setHeaders(x)` argument into a JSON array of
+/// `[name, value]` entries. Node accepts only `Headers` and `Map`; this
+/// returns null for anything else so the http layer can raise
+/// `ERR_INVALID_ARG_TYPE`.
+///
+/// #4965: the previous http-server path JSON-stringified `x` directly. A
+/// `Headers` value is a fetch-band registry *handle* (its first id is
+/// `0x40000`), not a heap pointer, so the generic stringify walker
+/// dereferenced `id - 8` as a `GcHeader` and segfaulted nondeterministically.
+/// Classify by address band BEFORE any dereference: a `Map` is a real heap
+/// `MapHeader` (its entries are pair-arrays of real heap values — safe to
+/// stringify), and a `Headers` handle is delegated to the registered
+/// perry-stdlib producer which reads its own registry. No path ever
+/// dereferences a handle id.
+#[no_mangle]
+pub extern "C" fn js_node_setheaders_entries_json(value: f64) -> *mut crate::StringHeader {
+    let bits = value.to_bits();
+    if let Some(map) = crate::map::map_ptr_from_receiver_bits(bits) {
+        let entries = crate::map::js_map_entries(map);
+        let boxed = crate::value::js_nanbox_pointer(entries as i64);
+        return unsafe { crate::json::js_json_stringify(f64::from_bits(boxed.to_bits()), 0) };
+    }
+    let jsv = crate::value::JSValue::from_bits(bits);
+    if jsv.is_pointer() {
+        let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::value::addr_class::is_handle_band(addr) {
+            return call_global_headers_entries_json(value);
+        }
+    }
+    null_mut()
 }
 
 pub(super) fn call_global_request_new(

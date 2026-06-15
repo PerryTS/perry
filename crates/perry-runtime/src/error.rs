@@ -506,6 +506,31 @@ unsafe fn apply_cause_from_options(error: *mut ErrorHeader, options: f64) {
     }
 }
 
+/// #5127: apply the ES2022 `cause` option to a user `Error` *subclass*
+/// instance when its constructor forwards `super(message, options)`. Such an
+/// instance is a generic heap object (not an `ErrorHeader`) — the super-call
+/// codegen sets `message`/`name` as object properties — so the cause must be
+/// installed as a (non-enumerable) own `cause` property on the object too,
+/// matching Node's `InstallErrorCause`. Mirrors `apply_cause_from_options`:
+/// reads `options.cause` via the generic getter (works for object literals
+/// and runtime-held options alike) and is a no-op for non-object options.
+#[no_mangle]
+pub extern "C" fn js_error_apply_cause_to_object(
+    obj: *mut crate::object::ObjectHeader,
+    options: f64,
+) {
+    let opts = crate::value::JSValue::from_bits(options.to_bits());
+    if !opts.is_pointer() {
+        return;
+    }
+    let key = js_string_from_bytes(b"cause".as_ptr(), 5);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    let cause = crate::value::js_dyn_index_get(options, key_f64);
+    if cause.to_bits() != TAG_UNDEFINED_BITS {
+        crate::object::js_object_set_field_by_name_nonenum(obj, key as *const StringHeader, cause);
+    }
+}
+
 /// #2836: allocate an Error (or native subclass) carrying a `{ cause }`
 /// option read from an arbitrary runtime options value. `kind` selects the
 /// ERROR_KIND_* discriminant so `instanceof TypeError`/etc. keep working.

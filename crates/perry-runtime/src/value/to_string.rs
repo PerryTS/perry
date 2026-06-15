@@ -662,6 +662,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // `temporal.toString()` produce the value's canonical ISO-8601 /
             // IXDTF string, not "[object Object]". Detected here for the same
             // reason as Date — the cell is smaller than an ObjectHeader.
+            #[cfg(feature = "temporal")]
             if crate::temporal::is_temporal_cell_addr(ptr as usize) {
                 if let Some(s) = crate::temporal::temporal_iso_string(value) {
                     return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -1051,6 +1052,7 @@ pub extern "C" fn js_jsvalue_to_string_radix(
     // the codegen routes any single-arg `.toString(x)` here. Dispatch back to
     // the Temporal method router so the options bag flows through, instead of
     // ToNumber-coercing it as a radix (which throws a spurious RangeError).
+    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(value) {
         let result = crate::temporal::dispatch::call_method(value, "toString", &[radix_value]);
         let rv = JSValue::from_bits(result.to_bits());

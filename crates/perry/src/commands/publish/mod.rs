@@ -59,7 +59,7 @@ pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u
     let target_hint = match args.platform {
         Some(Platform::Ios) => Some("ios"),
         Some(Platform::Visionos) => Some("visionos"),
-        Some(Platform::Android) => Some("android"),
+        Some(Platform::Android) | Some(Platform::Wearos) => Some("android"),
         Some(Platform::Linux) => Some("linux"),
         Some(Platform::Windows) => Some("windows"),
         Some(Platform::Web) => Some("web"),
@@ -150,6 +150,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             Platform::Watchos => "watchos".to_string(),
             Platform::Tvos => "tvos".to_string(),
             Platform::Android => "android".to_string(),
+            // Wear OS ships through Google Play exactly like an Android app.
+            Platform::Wearos => "android".to_string(),
             Platform::Linux => "linux".to_string(),
             Platform::Windows => "windows".to_string(),
             Platform::Web => "web".to_string(),

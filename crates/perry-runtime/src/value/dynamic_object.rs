@@ -343,15 +343,38 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // `undefined`.
     {
         let gc_header = (ptr as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        // Typed arrays are `std::alloc`-backed with no GcHeader, so the byte at
+        // `ptr - 8` can read as `GC_TYPE_PROMISE` (5) by coincidence; exclude
+        // them before acting. (Buffers/maps/sets were already handled above.)
         if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE
-            && matches!(property_name, "then" | "catch" | "finally")
+            && crate::typedarray::lookup_typed_array_kind(ptr as usize).is_none()
         {
-            if let Some(v) = crate::promise::js_promise_bound_method(
-                ptr as *mut crate::promise::Promise,
+            // A user-attached own expando (`p.status = "pending"`,
+            // `Object.assign(p, …)`) wins over the inherited prototype method.
+            // #5142: @tanstack/query-core's `pendingThenable()` stores `status`
+            // / `value` on the promise and gates its retryer on
+            // `thenable.status`; without this the read came back `undefined`,
+            // `isResolved()` was permanently true, and the fetch never resolved.
+            if let Some(v) = crate::object::exotic_expando::exotic_get_own_property(
+                ptr as usize,
+                crate::object::exotic_expando::ExoticKind::Promise,
                 property_name,
+                obj_value,
             ) {
                 return v;
             }
+            if matches!(property_name, "then" | "catch" | "finally") {
+                if let Some(v) = crate::promise::js_promise_bound_method(
+                    ptr as *mut crate::promise::Promise,
+                    property_name,
+                ) {
+                    return v;
+                }
+            }
+            // A Promise is a `GC_TYPE_PROMISE` cell, not an `ObjectHeader`;
+            // never fall through to the field/vtable path below (it would
+            // reinterpret the promise's bytes as object fields).
+            return f64::from_bits(TAG_UNDEFINED);
         }
     }
 

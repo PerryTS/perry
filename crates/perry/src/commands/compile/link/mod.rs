@@ -271,7 +271,8 @@ pub(super) fn build_and_run_link(
 
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
-    let is_android = matches!(target, Some("android"));
+    // Wear OS links exactly like Android (same triple, NDK, cdylib + TLS model).
+    let is_android = matches!(target, Some("android") | Some("wearos"));
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
     let is_linux = matches!(target, Some(t) if t.starts_with("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
@@ -879,8 +880,14 @@ pub(super) fn build_and_run_link(
             "linux-x86_64"
         };
         let ndk_clang = format!(
-            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang",
-            ndk_home, host_tag
+            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang{}",
+            ndk_home,
+            host_tag,
+            if cfg!(target_os = "windows") {
+                ".cmd"
+            } else {
+                ""
+            }
         );
         let stub_ok = Command::new(&ndk_clang)
             .args(["-c", "-fPIC", "-target", "aarch64-linux-android24"])

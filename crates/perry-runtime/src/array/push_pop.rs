@@ -137,9 +137,47 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
 }
 
 /// Push an element to the end of an array, growing if needed
+/// #5135: read `Get(proxy, "length")` and ToLength-coerce it. Used by the
+/// proxy-array push path so immer drafts (Proxies typed as arrays) mutate
+/// through their traps instead of a native ArrayHeader deref.
+unsafe fn proxy_array_length(proxy: f64) -> u64 {
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    let n = crate::builtins::js_number_coerce(crate::proxy::js_proxy_get(proxy, key_f64));
+    if n.is_finite() && n >= 0.0 {
+        n as u64
+    } else {
+        0
+    }
+}
+
+/// #5135: `Set(proxy, <string key>, value)` through the proxy's `set` trap. The
+/// key string is allocated fresh per call so an intervening GC can't leave a
+/// stale interior pointer.
+unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    crate::proxy::js_proxy_set(proxy, key_f64, value);
+}
+
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    // #5135: a Proxy whose static type is an array (immer drafts) reaches here
+    // with the masked proxy id. Perform the spec `Array.prototype.push` for a
+    // single element directly through the proxy's `get`/`set` traps:
+    //   len = ToLength(Get(P, "length")); Set(P, len, value); Set(P, "length", len+1)
+    // Routing through the native push (`js_native_call_method`) would recurse
+    // back here with the same proxy. Return `arr` unchanged so the codegen's
+    // realloc write-back is a no-op (the proxy mutates its target in place).
+    if let Some(proxy) = array_ptr_as_proxy(arr) {
+        let len = unsafe { proxy_array_length(proxy) };
+        unsafe {
+            proxy_set_str_key(proxy, len.to_string().as_bytes(), value);
+            proxy_set_str_key(proxy, b"length", (len as f64) + 1.0);
+        }
+        return arr;
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(0);

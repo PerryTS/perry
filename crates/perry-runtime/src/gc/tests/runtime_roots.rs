@@ -2,6 +2,7 @@ use super::super::*;
 use super::support::*;
 use std::cell::Cell;
 mod callback_scanners;
+mod string_slice;
 
 fn assert_panics_with(expected: &str, f: impl FnOnce()) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));

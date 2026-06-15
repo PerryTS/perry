@@ -125,6 +125,13 @@ This eliminates data races by design. If you need to aggregate results, use the 
 {{#include ../../examples/runtime/thread_snippets.ts:overview-reduce-instead}}
 ```
 
+The one explicit shared-state escape hatch is `SharedArrayBuffer`: a SAB captured
+into a `spawn` / `parallelMap` closure aliases the same physical bytes across
+agents, and the `Atomics` API (including a real blocking `Atomics.wait` /
+`Atomics.notify` / `Atomics.waitAsync`) operates on it for cross-thread
+coordination. Only the `SharedArrayBuffer` itself is shared — build any typed-array
+view over it per-agent rather than capturing the view directly.
+
 ### Independent Thread Arenas
 
 Each worker thread has its own memory arena. Objects created on one thread can never be accessed from another thread. Values cross thread boundaries only through deep-copy serialization, which Perry handles automatically and invisibly.

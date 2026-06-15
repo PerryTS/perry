@@ -342,8 +342,10 @@ fn effective_constructor_param_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) 
     }
     let mut parent = class.extends_name.as_deref();
     while let Some(pname) = parent {
-        if let Some((_sym, n)) = ctx.imported_class_ctors.get(pname) {
-            return *n;
+        if let Some(ctor) = ctx.imported_class_ctors.get(pname) {
+            if ctor.stops_constructor_walk() {
+                return ctor.param_count;
+            }
         }
         match ctx.classes.get(pname).copied() {
             Some(pc) => {
@@ -356,6 +358,73 @@ fn effective_constructor_param_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) 
         }
     }
     0
+}
+
+/// True when the standalone `<class>_constructor` symbol exists (so the
+/// recursion-guard / capture-collision redirect can call it instead of
+/// inlining). Mirrors the lookup in `call_local_constructor_symbol`.
+fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
+    let ctor_method_name = format!("{}_constructor", class.name);
+    ctx.methods
+        .contains_key(&(class.name.clone(), ctor_method_name))
+}
+
+/// Collect every LocalId DECLARED (via `Stmt::Let`, incl. nested in compound
+/// statements) within a constructor body. Used to detect the wall-44 inline
+/// collision: a ctor local whose id is also a capture of the enclosing closure.
+/// Mirrors `collect_let_ids` in `class_members.rs`.
+fn collect_decl_local_ids(stmts: &[perry_hir::Stmt], out: &mut std::collections::HashSet<u32>) {
+    use perry_hir::Stmt;
+    for s in stmts {
+        match s {
+            Stmt::Let { id, .. } => {
+                out.insert(*id);
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_decl_local_ids(then_branch, out);
+                if let Some(e) = else_branch {
+                    collect_decl_local_ids(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_decl_local_ids(body, out)
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init_stmt) = init {
+                    if let Stmt::Let { id, .. } = init_stmt.as_ref() {
+                        out.insert(*id);
+                    }
+                }
+                collect_decl_local_ids(body, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_decl_local_ids(body, out);
+                if let Some(c) = catch {
+                    collect_decl_local_ids(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_decl_local_ids(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_decl_local_ids(&case.body, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_decl_local_ids(std::slice::from_ref(body.as_ref()), out)
+            }
+            _ => {}
+        }
+    }
 }
 
 fn call_local_constructor_symbol(
@@ -714,8 +783,45 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // Layout constants are duplicated here from the runtime; if
     // `GcHeader` or `ObjectHeader` ever change in
     // `crates/perry-runtime/src/{gc,object}.rs`, update both sides.
-    let obj_handle = if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned()
-    {
+    let obj_handle = if class.extends_expr.is_some() {
+        // Wall 45: dynamic-parent subclass (`class X extends _mod.default`).
+        // The parent's field layout is unknown at this compile time (the
+        // `extends` target is an unresolvable cross-module value, so the
+        // parent-chain walk above contributed 0 fields and `field_count` /
+        // `packed_keys` cover only X's OWN fields). Allocating with that
+        // own-only layout under-sizes and mis-lays-out the instance: the
+        // parent's constructor and inherited methods address the inherited
+        // fields at the PARENT's slot indices (parent fields first), which fall
+        // past X's own slots → OOB heap reads (captures read as garbage).
+        // Route to `js_object_alloc_class_dynamic_parent`, which resolves the
+        // runtime-registered parent edge + keys-array (both established at
+        // module init by `js_register_class_parent_dynamic` /
+        // `js_build_class_keys_array`, before any `new X()`) and allocates with
+        // the merged `[parent keys..] ++ [own keys..]` layout. Bypasses the
+        // inline bump-alloc fast path (which would bake the wrong layout).
+        let mut packed_keys = String::new();
+        for f in &class.fields {
+            if f.key_expr.is_some() {
+                continue;
+            }
+            packed_keys.push_str(&f.name);
+            packed_keys.push('\0');
+        }
+        let keys_idx = ctx.strings.intern(&packed_keys);
+        let keys_entry = ctx.strings.entry(keys_idx);
+        let keys_global = format!("@{}", keys_entry.bytes_global);
+        let keys_len_str = keys_entry.byte_len.to_string();
+        ctx.block().call(
+            I64,
+            "js_object_alloc_class_dynamic_parent",
+            &[
+                (I32, &cid_str),
+                (I32, &n_str),
+                (PTR, &keys_global),
+                (I32, &keys_len_str),
+            ],
+        )
+    } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
         // Compile-time layout constants.
         const GC_HEADER_SIZE: u64 = 8;
         const OBJECT_HEADER_SIZE: u64 = 24;
@@ -945,7 +1051,26 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // same constructor body forever at compile time. Use the standalone
     // constructor symbol for the nested construction instead; it preserves
     // the ordinary initializer path without recursively cloning HIR.
-    if ctx.class_stack.iter().any(|active| active == class_name) {
+    //
+    // Same redirect when inlining would alias the constructor's own locals
+    // with the ENCLOSING closure's captures. `class F { constructor(){ const
+    // t = this; t.mk = () => new F(t._cc); } }` lifts the arrow to a separate
+    // function that captures `t` (the `const t = this` alias). When `new F`
+    // inside that arrow is inlined, the inlined ctor's `const t = this` reuses
+    // the same LocalId — which is a capture in this closure — so reads/writes
+    // of `t` resolve through `js_closure_get_capture_f64` and land on the
+    // CAPTURED outer instance instead of the freshly-allocated one (the new
+    // instance gets no fields → wall 44 `BaseContext.setValue` → "Cannot read
+    // properties of undefined"). The standalone symbol takes `this` as an
+    // explicit parameter, so it is immune to the collision.
+    let ctor_alias_collision = !ctx.closure_captures.is_empty()
+        && local_constructor_symbol_exists(ctx, class)
+        && class.constructor.as_ref().is_some_and(|c| {
+            let mut ids: std::collections::HashSet<u32> = c.params.iter().map(|p| p.id).collect();
+            collect_decl_local_ids(&c.body, &mut ids);
+            ids.iter().any(|id| ctx.closure_captures.contains_key(id))
+        });
+    if ctx.class_stack.iter().any(|active| active == class_name) || ctor_alias_collision {
         call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
         return Ok(obj_box);
     }
@@ -1229,21 +1354,20 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // SuperCall Error-like arm in expr.rs.
         //
         // BUT: if `class_name` is an imported stub with a cross-module
-        // ctor that has REAL params, defer to that path — the source
+        // ctor with a real body/effect, defer to that path — the source
         // module's ctor body knows the real param order
         // (e.g. `constructor(public statusCode, msg)` where args[0] is
         // statusCode, not message). Running Error-init here would
         // assign the wrong arg to `message` and corrupt the instance.
-        // When the imported ctor's param_count is 0, the source had no
-        // own ctor (codegen synthesized an empty 0-param ctor for the
-        // bare-extends-Error case), so calling it is a no-op and we
-        // still need Error-init to populate `this.message` / `this.name`.
-        let imported_ctor_has_real_params = ctx
+        // When the imported ctor is a synthesized empty 0-param ctor for the
+        // bare-extends-Error case, calling it is a no-op and we still need
+        // Error-init to populate `this.message` / `this.name`.
+        let imported_ctor_has_body_or_fields = ctx
             .imported_class_ctors
             .get(class_name)
-            .map(|(_, n)| *n > 0)
+            .map(|ctor| ctor.stops_constructor_walk())
             .unwrap_or(false);
-        if !found_inherited_ctor && !imported_ctor_has_real_params {
+        if !found_inherited_ctor && !imported_ctor_has_body_or_fields {
             // Trace the chain to find the first Error-like ancestor name.
             let mut error_kind: Option<String> = None;
             let mut cur = class.extends_name.clone();
@@ -1365,12 +1489,12 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             let mut effective_class_name = lookup_class.clone();
             let mut effective_extends = class.extends_name.clone();
             loop {
-                let has_real_ctor = ctx
+                let has_effectful_ctor = ctx
                     .imported_class_ctors
                     .get(&effective_class_name)
-                    .map(|(_, n)| *n > 0)
+                    .map(|ctor| ctor.stops_constructor_walk())
                     .unwrap_or(false);
-                if has_real_ctor {
+                if has_effectful_ctor {
                     break;
                 }
                 // v0.5.759: stop walking ONLY for the leaf class (the user's
@@ -1404,16 +1528,16 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 effective_class_name = parent;
                 effective_extends = parent_class.extends_name.clone();
             }
-            if let Some((ctor_name, param_count)) = ctx
+            if let Some(ctor) = ctx
                 .imported_class_ctors
                 .get(&effective_class_name)
                 .cloned()
-                .filter(|(_, _)| effective_class_name != lookup_class)
+                .filter(|_| effective_class_name != lookup_class)
             {
                 // Walked to an ancestor — call its ctor with this and forwarded args.
                 let undef_lit =
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered_args.len() < param_count {
+                while lowered_args.len() < ctor.param_count {
                     lowered_args.push(undef_lit.clone());
                 }
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
@@ -1426,19 +1550,17 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
                 ctx.pending_declares.push((
-                    ctor_name.clone(),
+                    ctor.symbol.clone(),
                     crate::types::VOID,
                     ctor_param_types,
                 ));
-                ctx.block().call_void(&ctor_name, &ctor_args);
-            } else if let Some((ctor_name, param_count)) =
-                ctx.imported_class_ctors.get(class_name).cloned()
-            {
+                ctx.block().call_void(&ctor.symbol, &ctor_args);
+            } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers.
                 let undef_lit =
                     crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered_args.len() < param_count {
+                while lowered_args.len() < ctor.param_count {
                     lowered_args.push(undef_lit.clone());
                 }
                 // Pass `this` as NaN-boxed double (same as compile_method's this_arg).
@@ -1452,11 +1574,11 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
                 ctx.pending_declares.push((
-                    ctor_name.clone(),
+                    ctor.symbol.clone(),
                     crate::types::VOID,
                     ctor_param_types,
                 ));
-                ctx.block().call_void(&ctor_name, &ctor_args);
+                ctx.block().call_void(&ctor.symbol, &ctor_args);
             }
         } // end !found_inherited_ctor
     }
@@ -1738,6 +1860,22 @@ pub(crate) fn apply_field_initializers_recursive(
         let mut init_pairs: Vec<(String, Expr)> = Vec::new();
         let mut init_pairs_computed: Vec<(Expr, Expr)> = Vec::new();
         for field in &class_fields {
+            // Wall 46: synthesized capture fields (`__perry_cap_*`) are populated
+            // EXCLUSIVELY by the constructor's capture-param assignments — for a
+            // class constructed directly, by its own ctor; for a subclass of an
+            // (inherited) dynamic parent, by super()'s parent-ctor run. They carry
+            // `init: None`, so the default `Expr::Undefined` write below would
+            // re-initialize them to `undefined` during the derived field-init
+            // phase (which runs AFTER super()), CLOBBERING the real captured value
+            // super already stored. That is the Next.js `NextNodeServer extends
+            // _baseserver.default` failure: base-server's `_iserror`/`_utils`/
+            // `_log` read `undefined` in inherited methods. Field-init must never
+            // touch these — skip them so the ctor param assignment is the sole
+            // writer (verified: captures are correct at the parent ctor end and
+            // only vanish during the derived ctor's post-super field-init).
+            if field.key_expr.is_none() && field.name.starts_with("__perry_cap_") {
+                continue;
+            }
             let init = match &field.init {
                 Some(e) => e.clone(),
                 None => Expr::Undefined,

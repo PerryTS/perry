@@ -364,21 +364,29 @@ pub(super) fn build_optimized_libs(
             // `compute_required_features` consulted above, so we
             // know exactly what to remove.
             for feat in crate::commands::stdlib_features::module_to_features(module_normalized) {
-                // Fix #589: `node:http` / `node:https` / `node:http2`
-                // map to `http-client`, but that feature also covers
-                // the Web Fetch FFIs (`js_headers_new`,
-                // `js_response_new`, `js_request_new`). When a
-                // compilePackages package — typically hono — uses
-                // `new Headers()` / `new Response()` while the user
-                // also imports `node:http`, stripping `http-client`
-                // breaks the link with undefined `js_headers_new` /
-                // `js_response_new` symbols. perry-ext-http only
-                // bundles the server side (perry-ext-http-server). So
-                // keep `http-client` if `uses_fetch` is set —
-                // perry-stdlib's fetch.rs stays in the build to
-                // satisfy the Web Fetch references; the well-known
-                // staticlib is still added for the server side.
+                // Fix #589 / #5174: `node:http` / `node:https` /
+                // `node:http2` map to `http-client`, but that umbrella
+                // covers BOTH the bundled node:http client
+                // (`src/http.rs` + `src/axios.rs`) AND the Web Fetch
+                // FFIs (`js_headers_new`, `js_response_new`,
+                // `js_request_new`, …). When a program uses
+                // `new Headers()` / `new Response()` (directly or via a
+                // compilePackages package like hono) while also
+                // importing `node:http`, we must keep the Web Fetch
+                // half but drop the bundled client — otherwise its
+                // `js_http_process_pending` (and the rest of the
+                // `js_http_*` surface) duplicate perry-ext-http's
+                // symbols, and perry-ext-http's aux-pump call binds to
+                // perry-stdlib's empty-queue copy, wedging the
+                // in-process response pump (#5174). Since `http-client
+                // = ["web-fetch"]`, strip the umbrella and re-assert
+                // `web-fetch`: fetch.rs/fetch_blob.rs stay,
+                // http.rs/axios.rs go. The well-known staticlib
+                // (perry-ext-http / perry-ext-http-server) is still
+                // added for the actual node:http surface.
                 if *feat == "http-client" && ctx.uses_fetch {
+                    features.remove("http-client");
+                    features.insert("web-fetch");
                     continue;
                 }
                 // Refs #643: keep `database-sqlite` enabled even when
@@ -670,11 +678,19 @@ pub(super) fn build_optimized_libs(
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
     let key_input = format!(
-        "{}|{}|{}|wasm={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|diag={}|dgram={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
         ctx.needs_wasm_runtime,
+        ctx.uses_regex,
+        ctx.uses_temporal,
+        ctx.uses_event_emitter,
+        ctx.uses_url,
+        ctx.uses_string_normalize,
+        ctx.uses_intl_segmenter,
+        ctx.uses_diagnostics,
+        ctx.uses_dgram,
         env!("CARGO_PKG_VERSION"),
     );
     let mut hash: u64 = 5381;
@@ -763,6 +779,48 @@ pub(super) fn build_optimized_libs(
     if ctx.needs_wasm_runtime {
         cross_features.push("perry-runtime/wasm-host".to_string());
     }
+    // Enable the regex engine (`regex` + `fancy-regex`, ~1.2 MB) only when the
+    // program can actually produce or use a RegExp — detected in
+    // collect_modules. A program that never evaluates a regex literal/`RegExp`,
+    // a regex-coercing string method, or a glob API links none of it. The
+    // RegExp identity/display layer is always compiled, so non-regex programs
+    // still format/compare values correctly with the engine absent.
+    if ctx.uses_regex {
+        cross_features.push("perry-runtime/regex-engine".to_string());
+    }
+    // Enable the TC39 Temporal engine (`temporal_rs` + tz/calendar deps,
+    // ~580 KB) only when the program references `Temporal.*`. JS `Date` is a
+    // separate implementation and does not require this.
+    if ctx.uses_temporal {
+        cross_features.push("perry-runtime/temporal".to_string());
+    }
+    // Enable the WHATWG URL host/IDNA engine (`url`+`idna`+transitive
+    // `percent_encoding`, ~195 KB) only when the program uses a URL API.
+    if ctx.uses_url {
+        cross_features.push("perry-runtime/url-engine".to_string());
+    }
+    // `String.prototype.normalize` tables (~113 KB) and `Intl.Segmenter`
+    // UAX #29 tables (~73 KB) — each enabled only on its specific usage.
+    if ctx.uses_string_normalize {
+        cross_features.push("perry-runtime/string-normalize".to_string());
+    }
+    if ctx.uses_intl_segmenter {
+        cross_features.push("perry-runtime/intl-segmenter".to_string());
+    }
+    // Cold-path diagnostic JSON serializers (~95 KB incl. the `serde_json`
+    // pulled only by them) — enabled only when the program uses a heap-snapshot
+    // API or `process.report`. The env-driven GC/typed-feedback dev trace JSON
+    // ride this feature and stay off in size-optimized binaries.
+    if ctx.uses_diagnostics {
+        cross_features.push("perry-runtime/diagnostics".to_string());
+    }
+    // Per-Node-module gating: `node:dgram`'s implementation + dispatch arm are
+    // behind `mod-dgram`, enabled only when the program uses dgram (detected via
+    // `module: "dgram"` in the HIR). codegen only emits the `js_dgram_*` externs
+    // for dgram programs, so detection is complete (no dangling symbols).
+    if ctx.uses_dgram {
+        cross_features.push("perry-runtime/mod-dgram".to_string());
+    }
     if !cross_features.is_empty() {
         cargo_cmd.arg("--features").arg(cross_features.join(","));
     }
@@ -793,7 +851,10 @@ pub(super) fn build_optimized_libs(
     // #1508: same shape for Android — cc-rs can't find the NDK clang
     // otherwise (silent on Unix where `clang` happens to exist, hard fail
     // on Windows with `clang.exe not found`).
-    if matches!(target, Some("android") | Some("android-x86_64")) {
+    if matches!(
+        target,
+        Some("android") | Some("android-x86_64") | Some("wearos")
+    ) {
         if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
             for (k, v) in
                 super::library_search::android_cross_env(std::path::Path::new(&ndk), target)
@@ -821,7 +882,10 @@ pub(super) fn build_optimized_libs(
     // shadow stack), so those IE TLS relocations get baked into the final
     // cdylib. Force global-dynamic so the dynamic linker can resolve TLS
     // slots after the process has started.
-    if matches!(target, Some("android") | Some("android-x86_64")) {
+    if matches!(
+        target,
+        Some("android") | Some("android-x86_64") | Some("wearos")
+    ) {
         rustflags.push(android_global_dynamic_tls_rustflag(&mut cargo_cmd));
     }
     if !rustflags.is_empty() {
@@ -1108,7 +1172,7 @@ pub(super) fn build_optimized_libs(
                 | Some("ios-widget")
                 | Some("ios-widget-simulator") => "perry-ui-ios",
                 Some("visionos-simulator") | Some("visionos") => "perry-ui-visionos",
-                Some("android") => "perry-ui-android",
+                Some("android") | Some("wearos") => "perry-ui-android",
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
                 Some("linux") => "perry-ui-gtk4",

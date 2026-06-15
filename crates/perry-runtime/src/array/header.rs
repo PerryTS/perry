@@ -600,6 +600,31 @@ pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader
 }
 
+/// #5135: detect a Proxy id arriving where an `ArrayHeader` pointer is
+/// expected. immer's array drafts are Proxies typed (statically) as plain
+/// arrays, so `draft.push(x)` / `draft.length` reach the native array helpers
+/// with the masked proxy id instead of a real heap pointer. Deref-ing one as an
+/// `ArrayHeader` reads unmapped memory and SIGSEGVs. Callers use this to detect
+/// the case and route the operation through the proxy's traps. Returns the
+/// re-boxed (`POINTER_TAG`) proxy value when `arr` is a *registered* proxy.
+#[inline]
+pub(crate) fn array_ptr_as_proxy(arr: *const ArrayHeader) -> Option<f64> {
+    let bits = arr as u64;
+    let raw = if (bits >> 48) >= 0x7FF8 {
+        bits & 0x0000_FFFF_FFFF_FFFF
+    } else {
+        bits
+    };
+    if crate::value::addr_class::is_proxy_id_band(raw as usize) {
+        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+        let boxed = f64::from_bits(POINTER_TAG | raw);
+        if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            return Some(boxed);
+        }
+    }
+    None
+}
+
 /// Normalize an Array.prototype method receiver into a real ArrayHeader.
 ///
 /// `Array.prototype.<method>.call(arrayLike, ...)` lets a *generic array-like
