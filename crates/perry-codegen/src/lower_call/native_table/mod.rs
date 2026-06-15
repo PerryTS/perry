@@ -94,6 +94,11 @@ pub(super) enum NativeRetKind {
     BigInt,
     /// Returns f64 → pass through (NaN-boxed JSValue).
     F64,
+    /// Returns f64 `1.0`/`0.0` → box as a real JS boolean
+    /// (`TAG_TRUE`/`TAG_FALSE`) so `console.log` prints `true`/`false`
+    /// rather than `1`/`0`. Use for predicates whose runtime signature
+    /// returns the FFI bool-as-f64 convention (e.g. `uuid.validate`).
+    Bool,
     /// Returns i32 → ignored, return TAG_UNDEFINED.
     I32Void,
     /// Returns void → return TAG_UNDEFINED.
@@ -129,6 +134,7 @@ pub(super) const NR_STR: NativeRetKind = NativeRetKind::Str;
 pub(super) const NR_OBJ_FROM_JSON_STR: NativeRetKind = NativeRetKind::ObjFromJsonStr;
 pub(super) const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
 pub(super) const NR_F64: NativeRetKind = NativeRetKind::F64;
+pub(super) const NR_BOOL: NativeRetKind = NativeRetKind::Bool;
 pub(super) const NR_I32: NativeRetKind = NativeRetKind::I32Void;
 pub(super) const NR_VOID: NativeRetKind = NativeRetKind::Void;
 
@@ -238,6 +244,7 @@ fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
         NativeRetKind::ObjFromJsonStr => "NR_OBJ_FROM_JSON_STR",
         NativeRetKind::BigInt => "NR_BIGINT",
         NativeRetKind::F64 => "NR_F64",
+        NativeRetKind::Bool => "NR_BOOL",
         NativeRetKind::I32Void => "NR_I32",
         NativeRetKind::Void => "NR_VOID",
     }

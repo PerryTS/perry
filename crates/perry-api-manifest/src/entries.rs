@@ -1475,6 +1475,44 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method_sig("uuid", "v7", false, None, &[], TypeSpec::String),
     method_sig(
         "uuid",
+        "v5",
+        false,
+        None,
+        &[
+            ParamSpec::Named {
+                name: "name",
+                ty: TypeSpec::String,
+                optional: false,
+            },
+            ParamSpec::Named {
+                name: "namespace",
+                ty: TypeSpec::String,
+                optional: false,
+            },
+        ],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "uuid",
+        "v3",
+        false,
+        None,
+        &[
+            ParamSpec::Named {
+                name: "name",
+                ty: TypeSpec::String,
+                optional: false,
+            },
+            ParamSpec::Named {
+                name: "namespace",
+                ty: TypeSpec::String,
+                optional: false,
+            },
+        ],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "uuid",
         "validate",
         false,
         None,
@@ -1484,6 +1522,18 @@ pub static API_MANIFEST: &[ApiEntry] = &[
             optional: false,
         }],
         TypeSpec::Bool,
+    ),
+    method_sig(
+        "uuid",
+        "version",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "id",
+            ty: TypeSpec::String,
+            optional: false,
+        }],
+        TypeSpec::Number,
     ),
     method_sig(
         "jsonwebtoken",

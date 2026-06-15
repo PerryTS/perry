@@ -37,6 +37,50 @@ pub extern "C" fn js_uuid_v7() -> *mut StringHeader {
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
+/// Read a `*const StringHeader` into a `&str`, or `""` if null / invalid UTF-8.
+unsafe fn read_str<'a>(str_ptr: *const StringHeader) -> &'a str {
+    if str_ptr.is_null() {
+        return "";
+    }
+    let len = (*str_ptr).byte_len as usize;
+    let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
+    std::str::from_utf8(bytes).unwrap_or("")
+}
+
+/// Parse a namespace argument (string-UUID form) into a `Uuid`, falling
+/// back to the nil UUID when the argument isn't a parseable UUID string.
+/// The array-namespace form is only reachable via `perry.compilePackages`.
+unsafe fn parse_namespace(ns_ptr: *const StringHeader) -> Uuid {
+    Uuid::parse_str(read_str(ns_ptr)).unwrap_or_else(|_| Uuid::nil())
+}
+
+/// Generate a v5 (SHA-1 name-based) UUID and return it as a string
+/// uuid.v5(name, namespace) -> string
+#[no_mangle]
+pub unsafe extern "C" fn js_uuid_v5(
+    name_ptr: *const StringHeader,
+    ns_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let namespace = parse_namespace(ns_ptr);
+    let uuid = Uuid::new_v5(&namespace, read_str(name_ptr).as_bytes());
+    let uuid_str = uuid.to_string();
+    js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
+}
+
+/// Generate a v3 (MD5 name-based) UUID and return it as a string
+/// uuid.v3(name, namespace) -> string
+#[no_mangle]
+pub unsafe extern "C" fn js_uuid_v3(
+    name_ptr: *const StringHeader,
+    ns_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let namespace = parse_namespace(ns_ptr);
+    let uuid = Uuid::new_v3(&namespace, read_str(name_ptr).as_bytes());
+    let uuid_str = uuid.to_string();
+    js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
+}
+
 /// Validate if a string is a valid UUID
 /// uuid.validate(str) -> boolean
 #[no_mangle]
