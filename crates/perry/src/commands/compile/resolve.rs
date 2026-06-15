@@ -894,24 +894,53 @@ pub(super) fn resolve_relative_import_path(
     import_source: &str,
     importer_path: &Path,
 ) -> Option<PathBuf> {
+    resolve_relative_import_paths(import_source, importer_path)
+        .map(|resolved| resolved.canonical_path)
+}
+
+pub(super) struct ResolvedPath {
+    pub source_path: PathBuf,
+    pub canonical_path: PathBuf,
+}
+
+pub(super) fn resolve_relative_import_paths(
+    import_source: &str,
+    importer_path: &Path,
+) -> Option<ResolvedPath> {
     if !is_relative_specifier(import_source) {
         return None;
     }
     let parent = importer_path.parent()?;
     let resolved = parent.join(import_source);
-    let path = resolve_with_extensions(&resolved).or_else(|| {
-        // Source import specifiers are resolved against the path as written by
-        // the program. If that path contains a symlinked component such as
-        // /tmp, asking the filesystem about "a/../b" can follow the symlink
-        // before applying ".." and accidentally probe the canonical sibling.
-        let lexical = normalize_path_lexically(&resolved);
+    // Source import specifiers are resolved against the path as written by the
+    // program. If that path contains a symlinked component such as /tmp, asking
+    // the filesystem about "a/../b" can follow the symlink before applying ".."
+    // and accidentally probe the canonical sibling.
+    let lexical = normalize_path_lexically(&resolved);
+    let source_path = resolve_with_extensions(&lexical).or_else(|| {
         if lexical == resolved {
             None
         } else {
-            resolve_with_extensions(&lexical)
+            resolve_with_extensions(&resolved)
         }
     })?;
-    path.canonicalize().ok()
+    let canonical_path = source_path.canonicalize().ok()?;
+    Some(ResolvedPath {
+        source_path,
+        canonical_path,
+    })
+}
+
+pub(super) fn resolve_absolute_import_paths(import_source: &str) -> Option<ResolvedPath> {
+    if !import_source.starts_with('/') {
+        return None;
+    }
+    let source_path = resolve_with_extensions(&PathBuf::from(import_source))?;
+    let canonical_path = source_path.canonicalize().ok()?;
+    Some(ResolvedPath {
+        source_path,
+        canonical_path,
+    })
 }
 
 fn normalize_path_lexically(path: &Path) -> PathBuf {
@@ -920,7 +949,12 @@ fn normalize_path_lexically(path: &Path) -> PathBuf {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !normalized.pop() {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else {
                     normalized.push(component.as_os_str());
                 }
             }

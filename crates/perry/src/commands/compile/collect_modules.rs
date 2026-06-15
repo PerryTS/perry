@@ -135,23 +135,27 @@ pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &st
         // so the most common case (top-level package brings in submodules)
         // is covered. Inside a package's `node_modules` tree, all
         // sibling imports are relative-path anyway.
-        if !(spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/')) {
+        if !(super::resolve::is_relative_specifier(&spec) || spec.starts_with('/')) {
             continue;
         }
         let resolved_path = if spec.starts_with('/') {
-            let candidate = PathBuf::from(&spec);
-            super::resolve::resolve_with_extensions(&candidate)
-                .and_then(|path| path.canonicalize().ok())
+            super::resolve::resolve_absolute_import_paths(&spec)
         } else {
-            super::resolve::resolve_relative_import_path(&spec, file_path)
+            super::resolve::resolve_relative_import_paths(&spec, file_path)
         };
-        if let Some(canon) = resolved_path {
-            if seen.insert(canon.clone()) {
-                out.push(canon);
+        if let Some(resolved) = resolved_path {
+            if seen.insert(resolved.canonical_path.clone()) {
+                out.push(resolved.source_path);
             }
         }
     }
     out
+}
+
+struct ResolvedImport {
+    canonical_path: PathBuf,
+    source_path: PathBuf,
+    kind: ModuleKind,
 }
 
 fn cached_resolve_import_with_lexical_base(
@@ -159,17 +163,50 @@ fn cached_resolve_import_with_lexical_base(
     lexical_importer_path: &Path,
     canonical_importer_path: &Path,
     ctx: &mut CompilationContext,
-) -> Option<(PathBuf, ModuleKind)> {
+) -> Option<ResolvedImport> {
     // Module collection keys and reads use canonical paths, but source text
     // relative specifiers are written against the importer path the user
     // compiled. On platforms where /tmp is a symlink, resolving imports from
     // the canonical /private/tmp path can make a valid "../.." edge point at a
     // nonexistent sibling and leave imported classes unresolved.
-    let resolved = cached_resolve_import(import_source, lexical_importer_path, ctx);
+    let resolved = cached_resolve_import_from_base(import_source, lexical_importer_path, ctx);
     if resolved.is_some() || lexical_importer_path == canonical_importer_path {
         return resolved;
     }
-    cached_resolve_import(import_source, canonical_importer_path, ctx)
+    cached_resolve_import_from_base(import_source, canonical_importer_path, ctx)
+}
+
+fn cached_resolve_import_from_base(
+    import_source: &str,
+    importer_path: &Path,
+    ctx: &mut CompilationContext,
+) -> Option<ResolvedImport> {
+    let (canonical_path, kind) = cached_resolve_import(import_source, importer_path, ctx)?;
+    let source_path = source_visible_resolved_path(import_source, importer_path, &canonical_path);
+    Some(ResolvedImport {
+        canonical_path,
+        source_path,
+        kind,
+    })
+}
+
+fn source_visible_resolved_path(
+    import_source: &str,
+    importer_path: &Path,
+    canonical_path: &Path,
+) -> PathBuf {
+    let resolved = if import_source.starts_with('/') {
+        super::resolve::resolve_absolute_import_paths(import_source)
+    } else if super::resolve::is_relative_specifier(import_source) {
+        super::resolve::resolve_relative_import_paths(import_source, importer_path)
+    } else {
+        None
+    };
+
+    resolved
+        .filter(|path| path.canonical_path == canonical_path)
+        .map(|path| path.source_path)
+        .unwrap_or_else(|| canonical_path.to_path_buf())
 }
 
 /// Issue #841: Node.js submodules that Perry knows about at the
@@ -1131,9 +1168,12 @@ fn collect_module_one(
             continue;
         }
 
-        if let Some((resolved_path, kind)) =
+        if let Some(resolved) =
             cached_resolve_import_with_lexical_base(&import.source, entry_path, &canonical, ctx)
         {
+            let resolved_path = resolved.canonical_path;
+            let source_path = resolved.source_path;
+            let kind = resolved.kind;
             import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
             import.module_kind = kind;
             if let Some(sidecar) =
@@ -1255,7 +1295,7 @@ fn collect_module_one(
                             pkg_dir = dir.parent();
                         }
                     }
-                    pending.push(resolved_path);
+                    pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
                     // Perry native extension packages (ioredis, ethers, ws, mysql2, dotenv)
@@ -1368,7 +1408,7 @@ fn collect_module_one(
                         OutputFormat::Json => {}
                     }
 
-                    pending.push(resolved_path);
+                    pending.push(source_path);
                 }
                 ModuleKind::NativeRust => {
                     // Native Rust modules are handled by stdlib
@@ -1480,9 +1520,12 @@ fn collect_module_one(
                 collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
                 ..Default::default()
             });
-            if let Some((resolved_path, kind)) =
+            if let Some(resolved) =
                 cached_resolve_import_with_lexical_base(src.as_str(), entry_path, &canonical, ctx)
             {
+                let resolved_path = resolved.canonical_path;
+                let source_path = resolved.source_path;
+                let kind = resolved.kind;
                 if let Some(sidecar) =
                     declaration_sidecar_for_resolved_import(src.as_str(), &resolved_path)
                 {
@@ -1571,7 +1614,7 @@ fn collect_module_one(
                 }
 
                 match kind {
-                    ModuleKind::NativeCompiled => pending.push(resolved_path),
+                    ModuleKind::NativeCompiled => pending.push(source_path),
                     ModuleKind::Interpreted => {
                         // JS runtime (V8) support was removed, so interpreted
                         // node_modules dependencies are not followed. A direct

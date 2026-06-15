@@ -1364,6 +1364,27 @@ mod manifest_parse_tests {
 }
 
 #[cfg(test)]
+mod lexical_path_tests {
+    use super::*;
+
+    #[test]
+    fn lexical_normalization_preserves_leading_parent_segments() {
+        assert_eq!(
+            normalize_path_lexically(std::path::Path::new("../../dep")),
+            std::path::PathBuf::from("../../dep")
+        );
+    }
+
+    #[test]
+    fn lexical_normalization_pops_only_normal_segments() {
+        assert_eq!(
+            normalize_path_lexically(std::path::Path::new("app/../../dep")),
+            std::path::PathBuf::from("../dep")
+        );
+    }
+}
+
+#[cfg(test)]
 mod module_spec_tests {
     use super::split_module_spec;
 

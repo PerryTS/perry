@@ -23,7 +23,7 @@ fi
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-mkdir -p "$TMPDIR/real-parent/app" "$TMPDIR/alias-parent/outside"
+mkdir -p "$TMPDIR/real-parent/app" "$TMPDIR/alias-parent/outside" "$TMPDIR/real-parent/outside"
 ln -s "$TMPDIR/real-parent/app" "$TMPDIR/alias-parent/app"
 
 cat > "$TMPDIR/alias-parent/outside/dep.ts" <<'TS'
@@ -40,10 +40,33 @@ export class ExternalCtor {
 }
 TS
 
-cat > "$TMPDIR/alias-parent/app/main.ts" <<'TS'
+cat > "$TMPDIR/real-parent/outside/dep.ts" <<'TS'
+export class ExternalCtor {
+  value: string;
+
+  constructor(value: string) {
+    this.value = "decoy:" + value;
+  }
+
+  marker(): string {
+    return this.value;
+  }
+}
+TS
+
+cat > "$TMPDIR/alias-parent/app/child.ts" <<'TS'
 import { ExternalCtor } from "../outside/dep";
 
-const value: any = new ExternalCtor("ready");
+export function makeValue(): any {
+  return new ExternalCtor("ready");
+}
+TS
+
+cat > "$TMPDIR/alias-parent/app/main.ts" <<'TS'
+import { ExternalCtor } from "../outside/dep";
+import { makeValue } from "./child";
+
+const value: any = makeValue();
 console.log("field", value.value);
 console.log("method", typeof value.marker);
 console.log("call", value.marker());
