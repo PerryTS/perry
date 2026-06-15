@@ -928,11 +928,28 @@ entry:
         )
 
     def test_generic_native_rep_checks_require_configured_records(self):
+        # The numeric indexed read is inlined: a guarded fast block computes the
+        # element pointer (inttoptr) and performs a direct `load double` instead
+        # of calling js_array_numeric_get_f64_unboxed. Push/set still go through
+        # their guarded raw-f64 helpers.
         ir = """
 define i32 @main() {
 entry:
   call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
-  call double @js_array_numeric_get_f64_unboxed(i64 1, i32 0)
+  %g = call i32 @js_typed_feedback_numeric_array_index_get_guard(i64 1, double 0.0, double 0.0, i32 0, i32 1)
+  %gc = icmp ne i32 %g, 0
+  br i1 %gc, label %bidx.num.fast.1, label %bidx.num.fallback.2
+
+bidx.num.fast.1:
+  %addr = add i64 1, 8
+  %p = inttoptr i64 %addr to ptr
+  %v = load double, ptr %p, align 8
+  br label %bidx.num.merge.3
+
+bidx.num.fallback.2:
+  br label %bidx.num.merge.3
+
+bidx.num.merge.3:
   call i32 @js_array_numeric_set_f64_unboxed(i64 1, i32 0, double 3.0)
   ret i32 0
 }
