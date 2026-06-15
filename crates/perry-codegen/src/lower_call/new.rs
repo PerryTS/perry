@@ -1860,6 +1860,22 @@ pub(crate) fn apply_field_initializers_recursive(
         let mut init_pairs: Vec<(String, Expr)> = Vec::new();
         let mut init_pairs_computed: Vec<(Expr, Expr)> = Vec::new();
         for field in &class_fields {
+            // Wall 46: synthesized capture fields (`__perry_cap_*`) are populated
+            // EXCLUSIVELY by the constructor's capture-param assignments — for a
+            // class constructed directly, by its own ctor; for a subclass of an
+            // (inherited) dynamic parent, by super()'s parent-ctor run. They carry
+            // `init: None`, so the default `Expr::Undefined` write below would
+            // re-initialize them to `undefined` during the derived field-init
+            // phase (which runs AFTER super()), CLOBBERING the real captured value
+            // super already stored. That is the Next.js `NextNodeServer extends
+            // _baseserver.default` failure: base-server's `_iserror`/`_utils`/
+            // `_log` read `undefined` in inherited methods. Field-init must never
+            // touch these — skip them so the ctor param assignment is the sole
+            // writer (verified: captures are correct at the parent ctor end and
+            // only vanish during the derived ctor's post-super field-init).
+            if field.key_expr.is_none() && field.name.starts_with("__perry_cap_") {
+                continue;
+            }
             let init = match &field.init {
                 Some(e) => e.clone(),
                 None => Expr::Undefined,
