@@ -1645,6 +1645,21 @@ pub fn try_array_proto_chain_method(
     if !proto_chain_contains_real_array(raw as usize) {
         return None;
     }
+    dispatch_arraylike_read_method(object, method, args_ptr, args_len)
+}
+
+/// Dispatch a non-mutating generic `Array.prototype` method (the spec-generic
+/// engine over `[[Get]]`/`length`) on an arbitrary array-like receiver.
+/// Returns `None` for an unsupported method name. The receiver may be a plain
+/// object, a Proxy (#5196), etc. — `al_get`/`al_length` route element reads
+/// through the receiver's `[[Get]]` (so proxy `get` traps fire). Callers are
+/// responsible for any receiver/own-property gating they need.
+pub fn dispatch_arraylike_read_method(
+    object: f64,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
     let a = |i: usize| arg_at(args_ptr, args_len, i);
     let has = |i: usize| (args_len > i) as i32;
     Some(match method {
