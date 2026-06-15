@@ -263,6 +263,25 @@ pub fn compute_max_func_id(module: &Module) -> FuncId {
         for member in &class.computed_members {
             scan_expr_for_max_func(&member.key_expr, &mut max_id);
         }
+        // Issue #5143: class FIELD initializers (`request = (input) => ...`)
+        // and computed-key expressions also live in this FuncId namespace.
+        // Their closures are NOT reachable through any method/constructor
+        // body, so without scanning them the iterator/generator
+        // state-machine transform can reuse a field-initializer closure's
+        // FuncId for a synthesized step function — at codegen the step body
+        // wins and the class field ends up bound to the wrong function
+        // (Hono's `app.request()` returned a stray iterator closure).
+        for field in class.fields.iter().chain(class.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                scan_expr_for_max_func(init, &mut max_id);
+            }
+            if let Some(key_expr) = &field.key_expr {
+                scan_expr_for_max_func(key_expr, &mut max_id);
+            }
+        }
+        if let Some(extends_expr) = &class.extends_expr {
+            scan_expr_for_max_func(extends_expr, &mut max_id);
+        }
     }
     max_id
 }
@@ -439,5 +458,88 @@ mod tests {
             max_local, 9,
             "closure param LocalId inside ObjectAssign sources"
         );
+    }
+
+    fn arrow_field(name: &str, func_id: FuncId) -> ClassField {
+        ClassField {
+            name: name.to_string(),
+            key_expr: None,
+            ty: Type::Any,
+            init: Some(Expr::Closure {
+                func_id,
+                params: Vec::new(),
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(Expr::Integer(0)))],
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }),
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        }
+    }
+
+    fn class_with_fields(name: &str, fields: Vec<ClassField>) -> Class {
+        Class {
+            id: 1,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            fields,
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            computed_members: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+        }
+    }
+
+    /// #5143: an arrow-function CLASS FIELD initializer (`request = (input)
+    /// => ...`) carries a closure whose FuncId is reachable only through
+    /// `class.fields[].init` — no method/constructor body holds it. Before
+    /// the fix, `compute_max_func_id` skipped class fields, so the
+    /// generator/async state-machine transform reused that field's FuncId
+    /// for a synthesized step function; at codegen the step body won and the
+    /// class field bound the wrong function (Hono's `app.request()` returned
+    /// undefined). The scan must see field-initializer closures.
+    #[test]
+    fn class_field_initializer_closures_visible_to_max_func_id() {
+        let mut module = Module::new("test");
+        module
+            .classes
+            .push(class_with_fields("Hono", vec![arrow_field("request", 50)]));
+        assert_eq!(
+            compute_max_func_id(&module),
+            50,
+            "field-initializer closure FuncId must be counted"
+        );
+    }
+
+    /// Companion: static-field initializer closures live in the same FuncId
+    /// namespace and must also be visible.
+    #[test]
+    fn static_field_initializer_closures_visible_to_max_func_id() {
+        let mut module = Module::new("test");
+        let mut class = class_with_fields("C", Vec::new());
+        class.static_fields.push(arrow_field("handler", 73));
+        module.classes.push(class);
+        assert_eq!(compute_max_func_id(&module), 73);
     }
 }
