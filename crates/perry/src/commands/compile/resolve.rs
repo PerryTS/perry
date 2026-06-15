@@ -38,6 +38,7 @@ use super::CompilationContext;
 use super::{NativeBackend, NativeLibraryManifest};
 
 mod native_library;
+mod tsconfig_paths;
 pub(crate) use native_library::validate_native_library_manifest_value;
 pub(super) use native_library::{
     has_perry_native_library, has_perry_native_module, parse_native_library_manifest,
@@ -1201,6 +1202,27 @@ pub(super) fn resolve_import(
                 return Some((canonical, kind));
             }
         }
+    }
+
+    // Final additive fallback (#5214): tsconfig `compilerOptions.paths` /
+    // `baseUrl`. Consulted only after relative + package + file: resolution
+    // all failed — i.e. exactly the specifiers that would otherwise be
+    // "Could not resolve import". A specifier matched here resolves to a real
+    // file inside the project, so classify it like a relative/user import:
+    // `.ts`/`.tsx` and any user (non-node_modules) file compile natively; only
+    // genuine node_modules JS stays Interpreted.
+    if let Some(canonical) = tsconfig_paths::resolve_tsconfig_paths(import_source, importer_path) {
+        let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
+            || compile_package_dirs
+                .values()
+                .any(|dir| canonical.starts_with(dir));
+        let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+        let kind = if is_js_file(&canonical) && !in_compile_pkg && in_node_modules {
+            ModuleKind::Interpreted
+        } else {
+            ModuleKind::NativeCompiled
+        };
+        return Some((canonical, kind));
     }
 
     None
