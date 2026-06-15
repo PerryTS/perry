@@ -450,7 +450,7 @@ validator = { version = "0.20", features = ["derive"], optional = true }
 regex = { version = "1.12", optional = true }
 
 # IDs
-uuid = { version = "1.23", features = ["v4", "v1", "v7"], optional = true }
+uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"], optional = true }
 nanoid = { version = "0.5", optional = true }
 
 # LRU Cache — optional from v0.5.539 so the well-known flip can

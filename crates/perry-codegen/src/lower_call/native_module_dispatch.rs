@@ -174,7 +174,7 @@ pub fn lower_native_module_dispatch(
         | NativeRetKind::Str
         | NativeRetKind::ObjFromJsonStr
         | NativeRetKind::BigInt => I64,
-        NativeRetKind::F64 => DOUBLE,
+        NativeRetKind::F64 | NativeRetKind::Bool => DOUBLE,
         NativeRetKind::I32Void => I32,
         NativeRetKind::Void => crate::types::VOID,
     };
@@ -272,6 +272,17 @@ pub fn lower_native_module_dispatch(
             Ok(nanbox_bigint_inline(blk, &raw))
         }
         NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, sig.runtime, &arg_slices)),
+        NativeRetKind::Bool => {
+            // Runtime returns the FFI bool-as-f64 convention (1.0/0.0).
+            // Box it as a real JS boolean so `===`, `if`, and
+            // `console.log` see `true`/`false`, not the numbers 1/0.
+            let blk = ctx.block();
+            let raw = blk.call(DOUBLE, sig.runtime, &arg_slices);
+            let is_true = blk.fcmp("one", &raw, "0.0");
+            let true_val = double_literal(f64::from_bits(crate::nanbox::TAG_TRUE));
+            let false_val = double_literal(f64::from_bits(crate::nanbox::TAG_FALSE));
+            Ok(blk.select(crate::types::I1, &is_true, DOUBLE, &true_val, &false_val))
+        }
         NativeRetKind::I32Void => {
             let _discard = ctx.block().call(I32, sig.runtime, &arg_slices);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
