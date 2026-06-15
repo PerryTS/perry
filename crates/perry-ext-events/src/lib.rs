@@ -48,8 +48,9 @@ use target_helpers::{
 };
 mod module_iterators;
 use module_iterators::{
-    events_on_abort_listener, events_on_queue_listener, events_once_event_target_listener,
-    first_rest_arg_or_undefined, rest_array_or_empty,
+    events_on_abort_listener, events_on_queue_listener, events_once_abort_listener,
+    events_once_event_target_listener, events_once_stream_reject_listener,
+    events_once_stream_resolve_listener,
 };
 
 const MIN_HEAP_POINTER: u64 = 0x1000;
@@ -1573,71 +1574,10 @@ pub unsafe extern "C" fn js_event_emitter_raw_listeners(
 // Module-level helpers — `events.once(em, name)` / `events.on(em, name)` /
 // `events.getEventListeners(em, name)` / `events.listenerCount(em, name)` /
 // `events.setMaxListeners(n, em)` / `events.getMaxListeners(em)`.
+// The `events.once` listener trampolines (abort / stream-resolve /
+// stream-reject) live in `module_iterators.rs` alongside
+// `events_once_event_target_listener`.
 // ============================================================================
-
-extern "C" fn events_once_abort_listener(closure: *const RawClosureHeader) -> f64 {
-    unsafe {
-        let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
-        let promise = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-        let pending = get_event_emitter_mut(handle)
-            .and_then(|emitter| remove_pending_once_promise(emitter, promise));
-        if let Some(pending) = pending {
-            cleanup_pending_abort_listener(&pending);
-            if !pending.promise.is_null() {
-                js_promise_reject(pending.promise, js_abort_error_value());
-                js_native_async_drop_promise_token(pending.promise);
-            }
-        }
-    }
-    undefined_value()
-}
-
-extern "C" fn events_once_stream_resolve_listener(
-    closure: *const RawClosureHeader,
-    rest: f64,
-) -> f64 {
-    unsafe {
-        let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-        let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
-        let error_listener = js_closure_get_capture_ptr(closure, 2);
-        let error_event_ptr = js_closure_get_capture_ptr(closure, 3);
-        if promise.is_null() {
-            return undefined_value();
-        }
-        if handle != 0 && error_listener != 0 && error_event_ptr != 0 {
-            let error_event =
-                f64::from_bits(nanbox_string_bits(error_event_ptr as *mut StringHeader));
-            let error_listener_value = nanbox_pointer_bits(error_listener);
-            let _ =
-                js_node_stream_method_remove_listener(handle, error_event, error_listener_value);
-        }
-        js_promise_resolve(promise, rest_array_or_empty(rest));
-        js_native_async_drop_promise_token(promise);
-    }
-    undefined_value()
-}
-
-extern "C" fn events_once_stream_reject_listener(
-    closure: *const RawClosureHeader,
-    rest: f64,
-) -> f64 {
-    unsafe {
-        let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-        let handle = js_closure_get_capture_ptr(closure, 1) as Handle;
-        let event_name_ptr = js_closure_get_capture_ptr(closure, 2);
-        let resolve_listener = js_closure_get_capture_ptr(closure, 3);
-        if handle != 0 && event_name_ptr != 0 && resolve_listener != 0 {
-            let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
-            let resolve_listener_value = nanbox_pointer_bits(resolve_listener);
-            let _ = js_node_stream_method_remove_listener(handle, event, resolve_listener_value);
-        }
-        if !promise.is_null() {
-            js_promise_reject(promise, first_rest_arg_or_undefined(rest));
-            js_native_async_drop_promise_token(promise);
-        }
-    }
-    undefined_value()
-}
 
 /// `events.once(emitter, eventName[, options])` — returns a Promise that resolves
 /// to the args array from the next matching event.
