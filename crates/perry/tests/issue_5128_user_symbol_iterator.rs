@@ -88,6 +88,39 @@ console.log(it.next().value, it.next().value, it.next().done);
     );
 }
 
+/// The same fix must apply to class *expressions* — `lower_class_from_ast`
+/// mirrors `lower_class_decl`, so `new (class { *[Symbol.iterator]() {…} })()`
+/// and a named class-expression binding are iterable for every runtime consumer.
+#[test]
+fn class_expression_generator_symbol_iterator_is_iterable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const Range = class {
+  lo: number; hi: number;
+  constructor(lo: number, hi: number) { this.lo = lo; this.hi = hi; }
+  *[Symbol.iterator]() { for (let i = this.lo; i <= this.hi; i++) yield i; }
+};
+console.log([...new Range(1, 5)].join(","));    // spread
+console.log(Math.max(...new Range(1, 5)));       // Math.max spread
+let s = 0; for (const x of new Range(1, 5)) s += x; console.log(s); // for-of
+const r = new Range(1, 3);
+console.log([...r].join(","));                   // spread via variable
+const [a, b, c] = new Range(10, 12); console.log(a, b, c); // destructuring
+console.log(Array.from(new Range(1, 4)).join(",")); // Array.from
+const it = new Range(7, 8)[Symbol.iterator]();   // manual iterator
+console.log(it.next().value, it.next().value, it.next().done);
+// anonymous class expression spread directly
+console.log([...new (class { *[Symbol.iterator]() { yield 7; yield 8; } })()].join(","));
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "1,2,3,4,5\n5\n15\n1,2,3\n10 11 12\n1,2,3,4\n7 8 true\n7,8\n"
+    );
+}
+
 /// A non-generator `[Symbol.iterator]()` method (delegating to a backing
 /// array's iterator) must also be reachable by runtime consumers, and plain
 /// array/string spreads must keep working.

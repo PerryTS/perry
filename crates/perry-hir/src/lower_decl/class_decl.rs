@@ -131,6 +131,91 @@ fn lower_noncomputed_class_member_registration(
     })
 }
 
+/// Lower a generator `*[Symbol.iterator]()` class method (already lowered into
+/// `func`, named `@@iterator`) into the runtime `@@iterator` vtable entry.
+///
+/// The body is lifted to a top-level `__perry_iter_<class>` generator with
+/// `this` as an explicit first parameter — the generator transform (which only
+/// visits `module.functions`) then rewrites it to the `{next, return, throw}`
+/// closure triple, and the syntactic `for…of` fast path dispatches to it
+/// directly via `iterator_func_for_class`.
+///
+/// But every *runtime*-dispatched iterator consumer (spread `[...x]`,
+/// `Math.max(...x)`, destructuring, `x[Symbol.iterator]()`, `Array.from`)
+/// resolves `@@iterator` through the class registry instead. So this also
+/// returns a synthetic NON-generator `@@iterator` wrapper method that forwards
+/// to the lifted generator (`return __perry_iter_X(this)`) for the caller to
+/// append to the instance vtable. Without it the class carries no `@@iterator`
+/// for those consumers to find and they throw "value is not iterable" (#5128).
+/// (The runtime maps the well-known `Symbol.iterator` to this `@@iterator`
+/// method name in `js_object_get_symbol_property`.)
+///
+/// Shared by `lower_class_decl` and `lower_class_from_ast` so class
+/// declarations and class expressions behave identically.
+fn synthesize_symbol_iterator_wrapper(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    func: &mut Function,
+) -> Function {
+    let this_id = ctx.fresh_local();
+    let mut new_params = Vec::with_capacity(func.params.len() + 1);
+    new_params.push(Param {
+        id: this_id,
+        name: "this".to_string(),
+        ty: Type::Named(class_name.to_string()),
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    });
+    new_params.append(&mut func.params);
+
+    let mut body = std::mem::take(&mut func.body);
+    crate::analysis::replace_this_in_stmts(&mut body, this_id);
+
+    let top_fn_id = ctx.fresh_func();
+    let top_fn = Function {
+        id: top_fn_id,
+        name: format!("__perry_iter_{}", class_name),
+        type_params: Vec::new(),
+        params: new_params,
+        return_type: Type::Any,
+        body,
+        is_async: false,
+        is_generator: true,
+        is_strict: true,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+    };
+    ctx.pending_functions.push(top_fn);
+    ctx.iterator_func_for_class
+        .insert(class_name.to_string(), top_fn_id);
+
+    Function {
+        id: ctx.fresh_func(),
+        name: "@@iterator".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::FuncRef(top_fn_id)),
+            args: vec![Expr::This],
+            type_args: Vec::new(),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        was_plain_async: false,
+        was_unrolled: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+    }
+}
+
 pub fn lower_class_decl(
     ctx: &mut LoweringContext,
     class_decl: &ast::ClassDecl,
@@ -707,85 +792,12 @@ pub fn lower_class_decl(
                         // removed in v0.5.319. See the v0.5.317 entry for the
                         // history and `test_issue_154_using_dispose.ts` for the
                         // regression test.
-                        // `*[Symbol.iterator]()` — lift to a top-level
-                        // generator function with `this` as an explicit
-                        // first parameter. The generator transform
-                        // (which only visits `module.functions`) then
-                        // rewrites it to return the `{next, return,
-                        // throw}` closure triple. For-of sites use
-                        // `iterator_func_for_class` to dispatch.
+                        // `*[Symbol.iterator]()` — lift to a top-level generator
+                        // and register a synthetic `@@iterator` wrapper so both
+                        // the `for…of` fast path and runtime-dispatched iterator
+                        // consumers work (#5128). See the helper for details.
                         if prop_name == "@@iterator" && func.is_generator && !method.is_static {
-                            let this_id = ctx.fresh_local();
-                            let mut new_params = Vec::with_capacity(func.params.len() + 1);
-                            new_params.push(Param {
-                                id: this_id,
-                                name: "this".to_string(),
-                                ty: Type::Named(name.clone()),
-                                default: None,
-                                decorators: Vec::new(),
-                                is_rest: false,
-                                arguments_object: None,
-                            });
-                            new_params.append(&mut func.params);
-
-                            let mut body = std::mem::take(&mut func.body);
-                            crate::analysis::replace_this_in_stmts(&mut body, this_id);
-
-                            let top_name = format!("__perry_iter_{}", name);
-                            let top_fn_id = ctx.fresh_func();
-                            let top_fn = Function {
-                                id: top_fn_id,
-                                name: top_name,
-                                type_params: Vec::new(),
-                                params: new_params,
-                                return_type: Type::Any,
-                                body,
-                                is_async: false,
-                                is_generator: true,
-                                is_strict: true,
-                                was_plain_async: false,
-                                was_unrolled: false,
-                                is_exported: false,
-                                captures: Vec::new(),
-                                decorators: Vec::new(),
-                            };
-                            ctx.pending_functions.push(top_fn);
-                            ctx.iterator_func_for_class.insert(name.clone(), top_fn_id);
-
-                            // #5128: also register a synthetic NON-generator
-                            // `@@iterator` class method that forwards to the
-                            // lifted generator (`return __perry_iter_X(this)`).
-                            // The syntactic `for…of` fast path dispatches to the
-                            // lifted function directly via `iterator_func_for_class`,
-                            // but every *runtime*-dispatched iterator consumer
-                            // (spread `[...x]`, `Math.max(...x)`, destructuring,
-                            // `x[Symbol.iterator]()`) resolves `@@iterator` through
-                            // the class registry. Without this method the class has
-                            // no `@@iterator` for them to find, so they threw
-                            // "value is not iterable". (The runtime maps the
-                            // well-known `Symbol.iterator` to this `@@iterator`
-                            // method name in `js_object_get_symbol_property`.)
-                            let wrapper_fn_id = ctx.fresh_func();
-                            let wrapper = Function {
-                                id: wrapper_fn_id,
-                                name: "@@iterator".to_string(),
-                                type_params: Vec::new(),
-                                params: Vec::new(),
-                                return_type: Type::Any,
-                                body: vec![Stmt::Return(Some(Expr::Call {
-                                    callee: Box::new(Expr::FuncRef(top_fn_id)),
-                                    args: vec![Expr::This],
-                                    type_args: Vec::new(),
-                                }))],
-                                is_async: false,
-                                is_generator: false,
-                                is_strict: true,
-                                was_plain_async: false,
-                                was_unrolled: false,
-                                is_exported: false,
-                                captures: Vec::new(),
-                                decorators: Vec::new(),
-                            };
+                            let wrapper = synthesize_symbol_iterator_wrapper(ctx, &name, &mut func);
                             methods.push(wrapper);
                             continue;
                         }
@@ -1425,6 +1437,15 @@ pub fn lower_class_from_ast(
                     // Numeric-literal member names — see the parallel arm in
                     // `lower_class_decl`. Canonical ToString of the value.
                     ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), true),
+                    // `[Symbol.iterator]() {}` / `*[Symbol.iterator]() {}` on a
+                    // class *expression* — mirror the declaration path so
+                    // `new (class { *[Symbol.iterator]() {…} })()` is iterable
+                    // for spread, `Array.from`, destructuring, and manual
+                    // `obj[Symbol.iterator]()` calls (#5128). The generator lift
+                    // happens in the `Method` arm below.
+                    ast::PropName::Computed(computed) if is_symbol_iterator_key(&computed.expr) => {
+                        ("@@iterator".to_string(), false)
+                    }
                     ast::PropName::Computed(computed)
                         if is_inspect_custom_key(ctx, &computed.expr)
                             && !method.is_static
@@ -1467,9 +1488,17 @@ pub fn lower_class_from_ast(
                         setters.push((prop_name, func));
                     }
                     ast::MethodKind::Method => {
-                        let func = with_static_member_context(ctx, method.is_static, |ctx| {
+                        let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
                             lower_class_method(ctx, method)
                         })?;
+                        // `*[Symbol.iterator]()` — lift to a top-level generator
+                        // and register a synthetic `@@iterator` wrapper (#5128),
+                        // exactly as the class-declaration path does above.
+                        if prop_name == "@@iterator" && func.is_generator && !method.is_static {
+                            let wrapper = synthesize_symbol_iterator_wrapper(ctx, name, &mut func);
+                            methods.push(wrapper);
+                            continue;
+                        }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx, method, &prop_name,

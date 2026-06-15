@@ -1,3 +1,29 @@
+## v0.5.1173 — fix(hir): mirror @@iterator lowering in class-expression path (#5128 review)
+
+Follow-up to #5161 (CodeRabbit review). The #5128 fix that makes a user class
+with a generator `*[Symbol.iterator]()` iterable for runtime-dispatched consumers
+(spread, `Math.max(...)`, `Array.from`, destructuring, manual
+`obj[Symbol.iterator]()`) was only wired into the class-*declaration* lowering
+(`lower_class_decl`). The parallel class-*expression* path (`lower_class_from_ast`)
+dropped computed `[Symbol.iterator]` members unless they were `util.inspect.custom`,
+so `new (class { *[Symbol.iterator]() {…} })()` and named class-expression bindings
+stayed non-iterable.
+
+- **HIR** (`lower_decl/class_decl.rs`): extracted the generator-lift + synthetic
+  non-generator `@@iterator` wrapper into a shared `synthesize_symbol_iterator_wrapper`
+  helper and called it from both `lower_class_decl` and `lower_class_from_ast`. The
+  class-expression `PropName::Computed` arm now recognizes `[Symbol.iterator]` (mapping
+  to `@@iterator`) instead of silently dropping it, which also fixes the plain
+  non-generator case.
+- **Runtime** (`array/iterator.rs`): `array_from_spread_value` now restores
+  `IMPLICIT_THIS` on the exception path too — the iterator-factory call is wrapped in
+  the same setjmp/trap/restore pattern as `async_from_sync_call_cached_raw`, so a
+  throwing factory can no longer leak the thread-local receiver into later calls.
+- **Tests**: added `class_expression_generator_symbol_iterator_is_iterable` mirroring
+  the declaration-form regression suite (spread incl. via variable, `Math.max`,
+  `for…of`, destructuring, `Array.from`, manual iterator, anonymous-class-expression
+  spread).
+
 ## v0.5.1172 — feat(ui-windows-winui): render-backend dispatch seam + startup probe (#4680 step 3)
 
 Builds on the Windows App SDK bootstrap probe. Adds `winui::backend` — the single
