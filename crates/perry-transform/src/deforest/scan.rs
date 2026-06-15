@@ -253,7 +253,15 @@ fn scan_stmt_for_closures(
             }
         }
         Stmt::Labeled { body, .. } => scan_stmt_for_closures(body, candidates, out),
-        _ => {}
+        // Leaf statements with no nested expressions or statements —
+        // nothing to walk. Listed explicitly (no `_` catch-all) so a
+        // future `Stmt` variant that DOES carry a closure forces a
+        // compile error here instead of being silently skipped.
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
     }
 }
 
@@ -416,7 +424,14 @@ impl StmtRefAllWalker<'_> {
                 }
             }
             Stmt::Labeled { body, .. } => self.visit_stmt(body),
-            _ => {}
+            // Leaf statements — no nested expressions or statements.
+            // Listed explicitly (no `_` catch-all) so a future variant
+            // carrying expressions forces a revisit here.
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_) => {}
         }
     }
 
