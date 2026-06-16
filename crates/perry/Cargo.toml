@@ -83,3 +83,4 @@ chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+swc_common.workspace = true

@@ -22,12 +22,17 @@ fn lower_err(src: &str) -> String {
     std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
         .spawn(move || {
+            // #5245: the unimplemented-API gate only refuses at compile time in
+            // strict mode; the default now defers to a throw-on-reach value.
+            perry_hir::set_unimplemented_strict_mode(true);
             let mut cache = SourceCache::new();
             let parsed = parse_typescript_with_cache(&src, "test.ts", &mut cache)
                 .expect("parse should succeed");
-            lower_module(&parsed.module, "test", "test.ts")
+            let err = lower_module(&parsed.module, "test", "test.ts")
                 .expect_err("lowering should reject unsupported API")
-                .to_string()
+                .to_string();
+            perry_hir::set_unimplemented_strict_mode(false);
+            err
         })
         .expect("spawn lower thread")
         .join()

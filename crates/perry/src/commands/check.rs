@@ -286,25 +286,12 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
                 // diagnostic emitter can print file:line:column and the
                 // offending source snippet. Otherwise fall back to a
                 // location-less message (but still tag it with the file_id
-                // so the emitter can at least show the filename).
-                let (message, span) =
-                    if let Some(lower_err) = e.downcast_ref::<perry_hir::error::LowerError>() {
-                        let span = match lower_err.span {
-                            Some(swc_span) => Span::new(file_id, swc_span.lo.0, swc_span.hi.0),
-                            None => Span::DUMMY,
-                        };
-                        (lower_err.message.clone(), span)
-                    } else {
-                        // No span info — prefix the filename so the user at
-                        // least knows which file produced the error.
-                        (format!("{}: {}", filename, e), Span::DUMMY)
-                    };
-
-                let mut builder = Diagnostic::error(DiagnosticCode::UnsupportedFeature, message);
-                if !span.is_dummy() {
-                    builder = builder.with_span(span);
-                }
-                all_diagnostics.push(builder.build());
+                // so the emitter can at least show the filename). #5249:
+                // shared with the `compile` path so both front-ends render
+                // lowering errors identically.
+                all_diagnostics.push(super::lower_diagnostic::lower_error_to_diagnostic(
+                    &e, file_id, &filename,
+                ));
             }
         }
 

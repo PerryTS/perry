@@ -326,7 +326,10 @@ fn test_array_clone_prefers_buffer_registry_before_gc_header_probe() {
     for _ in 0..4 {
         let fake_prev = crate::buffer::buffer_alloc(8);
         let buf = crate::buffer::buffer_alloc(4);
+        // Each slab slot is `GC_HEADER_SIZE` (the #5226 sentinel that precedes
+        // every buffer pointer) plus the 8-byte-aligned header+capacity.
         let expected_next = fake_prev as usize
+            + crate::gc::GC_HEADER_SIZE
             + ((std::mem::size_of::<crate::buffer::BufferHeader>() + 8 + 7) & !7);
         if buf as usize == expected_next {
             adjacent = Some((fake_prev, buf));
