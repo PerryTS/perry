@@ -29,6 +29,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
+# Run-scoped temp dir — fixed /tmp names would let concurrent runs (a second
+# PR, local + CI on the same box, or the future node-suite-guard alongside)
+# clobber each other's failure lists and produce a false gate result.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/perry-gap.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
 echo "==> Running gap suite (test-files/test_gap_*.ts) via run_parity_tests.sh --filter test_gap_"
 # run_parity_tests.sh exits 1 when AGGREGATE parity < 80%. We gate on "no NEW
 # untriaged failures" instead (below), so don't let its aggregate exit abort us.
@@ -47,22 +53,22 @@ fi
 # whole failure set is the gap failure set. Drop empty entries (run_parity_tests.sh
 # emits compile: [""] when there are zero compile failures).
 jq -r '(.failures.parity // []) + (.failures.compile // []) | .[] | select(. != "")' \
-  "$REPORT" | sort -u > /tmp/gap_all_fails.txt
+  "$REPORT" | sort -u > "$WORK/all_fails.txt"
 
 if [[ -f "$KNOWN" ]]; then
   # known_failures.json is keyed by test name; skip the audit-metadata _schema key.
-  jq -r 'keys[] | select(. != "_schema")' "$KNOWN" | sort -u > /tmp/gap_known.txt
+  jq -r 'keys[] | select(. != "_schema")' "$KNOWN" | sort -u > "$WORK/known.txt"
 else
-  : > /tmp/gap_known.txt
+  : > "$WORK/known.txt"
 fi
 
-comm -23 /tmp/gap_all_fails.txt /tmp/gap_known.txt > /tmp/gap_new.txt
-TOTAL=$(wc -l < /tmp/gap_all_fails.txt | tr -d ' ')
+comm -23 "$WORK/all_fails.txt" "$WORK/known.txt" > "$WORK/new.txt"
+TOTAL=$(wc -l < "$WORK/all_fails.txt" | tr -d ' ')
 
-if [[ -s /tmp/gap_new.txt ]]; then
+if [[ -s "$WORK/new.txt" ]]; then
   echo "" >&2
   echo "NEW gap failures (not triaged in test-parity/known_failures.json):" >&2
-  sed 's/^/  - /' /tmp/gap_new.txt >&2
+  sed 's/^/  - /' "$WORK/new.txt" >&2
   echo "" >&2
   echo "Fix the regression, or — if the failure is intentional/known — add a" >&2
   echo "triaged entry to test-parity/known_failures.json (category + reason)." >&2
