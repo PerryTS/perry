@@ -294,20 +294,20 @@ fn assert_too_deep(source: String) {
 
 #[test]
 fn test_lower_rejects_deep_binary_chain() {
-    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) + 1;
     let chain: Vec<&str> = vec!["1"; n];
     assert_too_deep(format!("var x = {};\n", chain.join("+")));
 }
 
 #[test]
 fn test_lower_rejects_deep_member_chain() {
-    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) + 1;
     assert_too_deep(format!("var o = {{}};\nvar x = o{};\n", ".a".repeat(n)));
 }
 
 #[test]
 fn test_lower_rejects_deep_logical_chain() {
-    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) + 1;
     let chain: Vec<&str> = vec!["a"; n];
     assert_too_deep(format!("var a = 0;\nvar x = {};\n", chain.join("||")));
 }

@@ -32,13 +32,13 @@ use crate::lower_types::extract_ts_type_with_ctx;
 /// thousands of nodes deep; left unguarded these overflow the stack and
 /// SIGABRT (exit 134) with no diagnostic at all. The compiler runs its
 /// collect/lower walk on a 128 MB stack (`perry-main`, see `crates/perry/
-/// src/main.rs`), and the heaviest shape (member chains) consumes on the
-/// order of ~16 KB of stack per level, so this ceiling keeps worst-case
-/// lowering depth well under ~32 MB — far below the stack limit — while still
-/// sitting far above anything hand-written code or a reasonable build emits.
+/// src/main.rs`). Keep the ceiling conservative so even high-overhead debug
+/// and test builds trip the guard before the native stack is close to
+/// exhaustion, while still sitting far above anything hand-written code or a
+/// reasonable build emits.
 /// The only inputs it rejects are the degenerate ones that would otherwise
 /// crash, and they now get a clean "nested too deeply" diagnostic instead.
-pub(crate) const MAX_EXPR_LOWER_DEPTH: u32 = 2000;
+pub(crate) const MAX_EXPR_LOWER_DEPTH: u32 = 512;
 
 fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
     match member.kind {
