@@ -194,15 +194,16 @@ extern "C" fn thunk_vm_create_context(_closure: *const ClosureHeader, sandbox: f
 
 // ----- submodule table -----
 
-const SUBMODULES: &[SubmoduleSpec] = &[
-    SubmoduleSpec {
+// ----- per-submodule specs (devirt) -----
+static SUBMOD_VM: SubmoduleSpec = SubmoduleSpec {
         key: "vm",
         exports: &[ExportSpec {
             name: "createContext",
             thunk: ExportThunk::Fn1(thunk_vm_create_context),
         }],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_TIMERS: SubmoduleSpec = SubmoduleSpec {
         // node:timers namespace object (`import * as timers`). Named imports
         // bypass this (compile.rs) to keep the global fast-path. (#1213)
         key: "timers",
@@ -232,8 +233,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(timers_ns_clear_immediate),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_TIMERS_PROMISES: SubmoduleSpec = SubmoduleSpec {
         key: "timers_promises",
         exports: &[
             ExportSpec {
@@ -253,8 +255,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(timers_promises_scheduler),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_FS_PROMISES: SubmoduleSpec = SubmoduleSpec {
         key: "fs_promises",
         exports: &[
             ExportSpec {
@@ -390,8 +393,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_fs_promises_constants),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_READLINE_PROMISES: SubmoduleSpec = SubmoduleSpec {
         key: "readline_promises",
         exports: &[
             ExportSpec {
@@ -407,8 +411,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn2(thunk_readline_Readline),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_STREAM_PROMISES: SubmoduleSpec = SubmoduleSpec {
         key: "stream_promises",
         exports: &[
             ExportSpec {
@@ -420,8 +425,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn2(thunk_streamP_finished),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_STREAM_CONSUMERS: SubmoduleSpec = SubmoduleSpec {
         key: "stream_consumers",
         exports: &[
             ExportSpec {
@@ -449,12 +455,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_consumers_blob),
             },
         ],
-    },
-    // #1545: node:stream/web exports the full WHATWG Web Streams class set.
-    // Every entry maps to the same throwing thunk — its sole purpose is to
-    // give each name `typeof === "function"` and a namespace slot; real
-    // construction goes through codegen's builtin `new` dispatch.
-    SubmoduleSpec {
+    };
+
+static SUBMOD_STREAM_WEB: SubmoduleSpec = SubmoduleSpec {
         key: "stream_web",
         exports: &[
             ExportSpec {
@@ -526,11 +529,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
             },
         ],
-    },
-    // #1671: hono/jsx/server — the JSX runtime helpers. `jsx`/`jsxs` forward
-    // to the built-in `js_jsx` renderer; `Fragment` renders its children;
-    // `JSXNode` is an exposed stub (Perry boxes nodes internally).
-    SubmoduleSpec {
+    };
+
+static SUBMOD_HONO_JSX_SERVER: SubmoduleSpec = SubmoduleSpec {
         key: "hono_jsx_server",
         exports: &[
             ExportSpec {
@@ -550,11 +551,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_hono_jsxnode),
             },
         ],
-    },
-    // #1671: hono/jsx/streaming — server-side streaming helpers.
-    // `renderToReadableStream` renders eagerly to a single-chunk ReadableStream;
-    // `Suspense` renders its children (Perry has no streaming-suspension point).
-    SubmoduleSpec {
+    };
+
+static SUBMOD_HONO_JSX_STREAMING: SubmoduleSpec = SubmoduleSpec {
         key: "hono_jsx_streaming",
         exports: &[
             ExportSpec {
@@ -566,8 +565,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_hono_suspense),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_SYS: SubmoduleSpec = SubmoduleSpec {
         key: "sys",
         exports: &[
             ExportSpec {
@@ -599,13 +599,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_sys_isArray),
             },
         ],
-    },
-    // #906 follow-up: pino reads `tracingChannel('pino_asJson')` at
-    // module init time. The thunks here return useful stub values
-    // (an object with `hasSubscribers: false`) instead of throwing,
-    // so pino's "no subscribers → fast path" branch is taken and the
-    // tracing machinery never enters.
-    SubmoduleSpec {
+    };
+
+static SUBMOD_DIAGNOSTICS_CHANNEL: SubmoduleSpec = SubmoduleSpec {
         key: "diagnostics_channel",
         exports: &[
             ExportSpec {
@@ -641,8 +637,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
         key: "trace_events",
         exports: &[
             ExportSpec {
@@ -654,8 +651,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_trace_events_getEnabledCategories),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
         key: "test",
         exports: &[
             ExportSpec {
@@ -720,8 +718,9 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_test_run),
             },
         ],
-    },
-    SubmoduleSpec {
+    };
+
+static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
         key: "test_reporters",
         exports: &[
             ExportSpec {
@@ -745,12 +744,101 @@ const SUBMODULES: &[SubmoduleSpec] = &[
                 thunk: ExportThunk::Fn1(thunk_reporter_lcov),
             },
         ],
-    },
-];
+    };
 
-fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
-    SUBMODULES.iter().find(|s| s.key == key)
+// ----- submodule registry (devirt) -----
+use std::sync::atomic::AtomicPtr;
+#[derive(Copy, Clone)]
+#[repr(usize)]
+enum SubmodBucket { Vm, Timers, TimersPromises, FsPromises, ReadlinePromises, StreamPromises, StreamConsumers, StreamWeb, HonoJsxServer, HonoJsxStreaming, Sys, DiagnosticsChannel, TraceEvents, Test, TestReporters, }
+const SUBMOD_COUNT: usize = 15;
+static SUBMOD_REGISTRY: [AtomicPtr<SubmoduleSpec>; SUBMOD_COUNT] =
+    [const { AtomicPtr::new(std::ptr::null_mut()) }; SUBMOD_COUNT];
+fn submod_index(key: &str) -> Option<SubmodBucket> {
+    match key {
+        "vm" => Some(SubmodBucket::Vm),
+        "timers" => Some(SubmodBucket::Timers),
+        "timers_promises" => Some(SubmodBucket::TimersPromises),
+        "fs_promises" => Some(SubmodBucket::FsPromises),
+        "readline_promises" => Some(SubmodBucket::ReadlinePromises),
+        "stream_promises" => Some(SubmodBucket::StreamPromises),
+        "stream_consumers" => Some(SubmodBucket::StreamConsumers),
+        "stream_web" => Some(SubmodBucket::StreamWeb),
+        "hono_jsx_server" => Some(SubmodBucket::HonoJsxServer),
+        "hono_jsx_streaming" => Some(SubmodBucket::HonoJsxStreaming),
+        "sys" => Some(SubmodBucket::Sys),
+        "diagnostics_channel" => Some(SubmodBucket::DiagnosticsChannel),
+        "trace_events" => Some(SubmodBucket::TraceEvents),
+        "test" => Some(SubmodBucket::Test),
+        "test_reporters" => Some(SubmodBucket::TestReporters),
+        _ => None,
+    }
 }
+fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
+    let b = submod_index(key)?;
+    let p = SUBMOD_REGISTRY[b as usize].load(Ordering::Relaxed);
+    if p.is_null() { None } else { Some(unsafe { &*(p as *const SubmoduleSpec) }) }
+}
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_vm() { SUBMOD_REGISTRY[SubmodBucket::Vm as usize].store(&SUBMOD_VM as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_timers() { SUBMOD_REGISTRY[SubmodBucket::Timers as usize].store(&SUBMOD_TIMERS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_timers_promises() { SUBMOD_REGISTRY[SubmodBucket::TimersPromises as usize].store(&SUBMOD_TIMERS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_fs_promises() { SUBMOD_REGISTRY[SubmodBucket::FsPromises as usize].store(&SUBMOD_FS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_readline_promises() { SUBMOD_REGISTRY[SubmodBucket::ReadlinePromises as usize].store(&SUBMOD_READLINE_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_stream_promises() { SUBMOD_REGISTRY[SubmodBucket::StreamPromises as usize].store(&SUBMOD_STREAM_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_stream_consumers() { SUBMOD_REGISTRY[SubmodBucket::StreamConsumers as usize].store(&SUBMOD_STREAM_CONSUMERS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_stream_web() { SUBMOD_REGISTRY[SubmodBucket::StreamWeb as usize].store(&SUBMOD_STREAM_WEB as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_hono_jsx_server() { SUBMOD_REGISTRY[SubmodBucket::HonoJsxServer as usize].store(&SUBMOD_HONO_JSX_SERVER as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_hono_jsx_streaming() { SUBMOD_REGISTRY[SubmodBucket::HonoJsxStreaming as usize].store(&SUBMOD_HONO_JSX_STREAMING as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_sys() { SUBMOD_REGISTRY[SubmodBucket::Sys as usize].store(&SUBMOD_SYS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_diagnostics_channel() { SUBMOD_REGISTRY[SubmodBucket::DiagnosticsChannel as usize].store(&SUBMOD_DIAGNOSTICS_CHANNEL as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_trace_events() { SUBMOD_REGISTRY[SubmodBucket::TraceEvents as usize].store(&SUBMOD_TRACE_EVENTS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_test() { SUBMOD_REGISTRY[SubmodBucket::Test as usize].store(&SUBMOD_TEST as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_test_reporters() { SUBMOD_REGISTRY[SubmodBucket::TestReporters as usize].store(&SUBMOD_TEST_REPORTERS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_all() {
+    js_node_submod_install_vm();
+    js_node_submod_install_timers();
+    js_node_submod_install_timers_promises();
+    js_node_submod_install_fs_promises();
+    js_node_submod_install_readline_promises();
+    js_node_submod_install_stream_promises();
+    js_node_submod_install_stream_consumers();
+    js_node_submod_install_stream_web();
+    js_node_submod_install_hono_jsx_server();
+    js_node_submod_install_hono_jsx_streaming();
+    js_node_submod_install_sys();
+    js_node_submod_install_diagnostics_channel();
+    js_node_submod_install_trace_events();
+    js_node_submod_install_test();
+    js_node_submod_install_test_reporters();
+}
+static SUBMOD_INSTALL_ALL_HOOK: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+#[no_mangle]
+pub extern "C" fn js_node_submod_enable_install_all() {
+    let f = std::hint::black_box(js_node_submod_install_all as extern "C" fn());
+    SUBMOD_INSTALL_ALL_HOOK.store(f as *mut (), Ordering::Relaxed);
+}
+pub(crate) fn run_submod_install_all_hook() {
+    let p = SUBMOD_INSTALL_ALL_HOOK.load(Ordering::Relaxed);
+    if !p.is_null() { unsafe { std::mem::transmute::<*mut (), extern "C" fn()>(p)() }; }
+}
+
+
 
 fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec> {
     submod.exports.iter().find(|e| e.name == name)
@@ -1349,6 +1437,10 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
     name_ptr: *const u8,
     name_len: u32,
 ) -> f64 {
+    // Devirt: dynamically-resolved submodules (require / getBuiltinModule / a
+    // `fs.promises`-style property access) had no codegen install — run the
+    // install-all hook so the registry is populated. Null/no-op unless armed.
+    run_submod_install_all_hook();
     let submod_bytes = std::slice::from_raw_parts(submod_key_ptr, submod_key_len as usize);
     let name_bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
     let submod_key = match std::str::from_utf8(submod_bytes) {
@@ -1430,6 +1522,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
     submod_key_ptr: *const u8,
     submod_key_len: u32,
 ) -> f64 {
+    run_submod_install_all_hook();
     let submod_bytes = std::slice::from_raw_parts(submod_key_ptr, submod_key_len as usize);
     let submod_key = match std::str::from_utf8(submod_bytes) {
         Ok(s) => s,

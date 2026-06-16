@@ -92,3 +92,40 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_zlib",
     "js_nm_install_all",
 ];
+
+/// Submodule (`node:fs/promises`, `node:stream/web`, …) dispatch-install symbol
+/// for a sentinel submodule key, or `None` if unknown. Mirrors perry-runtime
+/// `submod_index`. Emitted at `js_node_submodule_namespace` sites so a submodule's
+/// thunks (fs/promises etc.) are referenced only when it is imported.
+pub(crate) fn nm_submod_install_symbol(key: &str) -> Option<&'static str> {
+    match key {
+        "vm" => Some("js_node_submod_install_vm"),
+        "timers" => Some("js_node_submod_install_timers"),
+        "timers_promises" => Some("js_node_submod_install_timers_promises"),
+        "fs_promises" => Some("js_node_submod_install_fs_promises"),
+        "readline_promises" => Some("js_node_submod_install_readline_promises"),
+        "stream_promises" => Some("js_node_submod_install_stream_promises"),
+        "stream_consumers" => Some("js_node_submod_install_stream_consumers"),
+        "stream_web" => Some("js_node_submod_install_stream_web"),
+        "hono_jsx_server" => Some("js_node_submod_install_hono_jsx_server"),
+        "hono_jsx_streaming" => Some("js_node_submod_install_hono_jsx_streaming"),
+        "sys" => Some("js_node_submod_install_sys"),
+        "diagnostics_channel" => Some("js_node_submod_install_diagnostics_channel"),
+        "trace_events" => Some("js_node_submod_install_trace_events"),
+        "test" => Some("js_node_submod_install_test"),
+        "test_reporters" => Some("js_node_submod_install_test_reporters"),
+        _ => None,
+    }
+}
+
+pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
+    "js_node_submod_install_vm", "js_node_submod_install_timers",
+    "js_node_submod_install_timers_promises", "js_node_submod_install_fs_promises",
+    "js_node_submod_install_readline_promises", "js_node_submod_install_stream_promises",
+    "js_node_submod_install_stream_consumers", "js_node_submod_install_stream_web",
+    "js_node_submod_install_hono_jsx_server", "js_node_submod_install_hono_jsx_streaming",
+    "js_node_submod_install_sys", "js_node_submod_install_diagnostics_channel",
+    "js_node_submod_install_trace_events", "js_node_submod_install_test",
+    "js_node_submod_install_test_reporters",
+    "js_node_submod_install_all", "js_node_submod_enable_install_all",
+];

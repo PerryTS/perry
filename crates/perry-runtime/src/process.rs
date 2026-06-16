@@ -2556,6 +2556,7 @@ fn find_nearest_package_json(specifier: &str, base: &str) -> Option<String> {
 #[no_mangle]
 pub extern "C" fn js_process_get_builtin_module_devirt(id: f64) -> f64 {
     crate::object::js_nm_enable_install_all();
+    crate::node_submodules::js_node_submod_enable_install_all();
     js_process_get_builtin_module(id)
 }
 
