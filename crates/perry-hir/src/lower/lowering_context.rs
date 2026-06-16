@@ -644,4 +644,19 @@ pub struct LoweringContext {
     /// letting pathologically-nested expressions overflow the native stack and
     /// SIGABRT.
     pub(crate) expr_lower_depth: u32,
+    /// Perf: a single-slot memo of an already-lowered member receiver, keyed by
+    /// its source span `(lo, hi)`. Set by the chained-native-method dispatch
+    /// helper (`try_static_method_and_instance`) just before it returns
+    /// `Err(args)` after lowering `member.obj` to inspect it; consumed once by
+    /// `lower_member_inner` when the `lower_call_inner` fall-through tail
+    /// re-lowers the same member callee. Without it, a long native-fluent
+    /// method chain (`K.name(..).description(..).option(..)…` — commander/minified
+    /// CLI builders) re-lowers the entire receiver prefix at every chain level
+    /// (the helper lowers it, finds the inner result is not a `NativeMethodCall`,
+    /// discards it, and the tail lowers it again — compounding to exponential
+    /// blowup). The memo lets the tail reuse the helper's lowering, so each
+    /// receiver subtree is lowered exactly once. Lowering a receiver is
+    /// idempotent w.r.t. the value produced (the fluent-success path already
+    /// reuses the same lowered receiver), so reusing it is semantics-preserving.
+    pub(crate) prelowered_member_receiver: Option<((u32, u32), Expr)>,
 }

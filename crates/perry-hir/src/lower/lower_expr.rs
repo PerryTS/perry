@@ -495,7 +495,68 @@ fn expr_uses_stack_heavy_chain_lowering(expr: &ast::Expr) -> bool {
     matches!(expr, ast::Expr::Bin(_) | ast::Expr::Member(_))
 }
 
+/// Re-lowering diagnostics, fully gated behind the `PERRY_TRACE_RELOWER` env
+/// var (zero overhead unless set). Counts every `lower_expr` invocation keyed
+/// by source span, so a span lowered far more than once flags redundant
+/// re-lowering (the classic source of super-linear HIR-lowering blowup on
+/// minified bundles). On every N-million calls — and so still on a kill — it
+/// dumps the total/distinct counts and the top re-lowered spans to stderr.
+/// Kept (env-gated) as a standing diagnostic for future lowering perf work.
+pub(crate) mod relower_trace {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+    static INIT: AtomicBool = AtomicBool::new(false);
+    static TOTAL: AtomicU64 = AtomicU64::new(0);
+
+    thread_local! {
+        static SPANS: RefCell<HashMap<(u32, u32), u32>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn enabled() -> bool {
+        if !INIT.load(Ordering::Relaxed) {
+            let on = std::env::var("PERRY_TRACE_RELOWER").is_ok();
+            ENABLED.store(on, Ordering::Relaxed);
+            INIT.store(true, Ordering::Relaxed);
+        }
+        ENABLED.load(Ordering::Relaxed)
+    }
+
+    pub fn record(lo: u32, hi: u32) {
+        let n = TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+        SPANS.with(|m| {
+            *m.borrow_mut().entry((lo, hi)).or_insert(0) += 1;
+        });
+        if n % 5_000_000 == 0 {
+            dump(&format!("periodic@{n}"));
+        }
+    }
+
+    fn dump(tag: &str) {
+        SPANS.with(|m| {
+            let m = m.borrow();
+            let total = TOTAL.load(Ordering::Relaxed);
+            let distinct = m.len();
+            let mut v: Vec<_> = m.iter().map(|(k, c)| (*c, *k)).collect();
+            v.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            eprintln!(
+                "RELOWER[{tag}] total={total} distinct={distinct} ratio={:.2}",
+                total as f64 / distinct.max(1) as f64
+            );
+            for (c, (lo, hi)) in v.into_iter().take(20) {
+                eprintln!("RELOWER  span {lo}..{hi} count={c}");
+            }
+        });
+    }
+}
+
 pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
+    if relower_trace::enabled() {
+        let sp = expr.span();
+        relower_trace::record(sp.lo.0, sp.hi.0);
+    }
     // #5259: guard the recursive descent. Without this, a pathologically
     // nested expression (`1+1+…`, `o.a.a.…`, `a||a||…`) overflows the native
     // stack and SIGABRTs with no diagnostic. The depth counter turns that into
