@@ -10,7 +10,14 @@ use super::*;
 /// literal, call, member expression, etc.) — those cases need the IIFE's
 /// `module.exports` machinery to resolve correctly.
 pub fn extract_single_module_exports_assignment(source: &str) -> Option<String> {
-    let re = regex::Regex::new(r#"(?m)^\s*module\.exports\s*=\s*([^;\n]+?)\s*;?\s*$"#).ok()?;
+    // Issue #5275: also accept the bracket/computed-string-literal form
+    // `module['exports'] = X` / `module["exports"] = X`, equivalent to the
+    // dot form. A genuinely dynamic `module[k] = X` (non-string-literal key)
+    // is NOT matched and stays on the runtime `_cjs` path.
+    let re = regex::Regex::new(
+        r#"(?m)^\s*module(?:\.exports|\[\s*'exports'\s*\]|\[\s*"exports"\s*\])\s*=\s*([^;\n]+?)\s*;?\s*$"#,
+    )
+    .ok()?;
     let ident_re = regex::Regex::new(r#"^[A-Za-z_$][A-Za-z0-9_$]*$"#).ok()?;
     let mut found: Option<String> = None;
     for cap in re.captures_iter(source) {
@@ -367,6 +374,24 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     )
     .unwrap();
     for cap in dot_re.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            push_unique(&mut names, m.as_str());
+        }
+    }
+
+    // Issue #5275: bracket / computed-string-literal named exports —
+    // `exports['name'] = …` / `exports["name"] = …` (and the
+    // `module.exports['name'] = …` variant). Equivalent to the dot form.
+    // The leading boundary class excludes `.` so `e.exports['X'] = …` (an
+    // inner webpack/ncc module's own exports param) is not mistaken for a
+    // named export of the outer bundle — mirroring the dot matcher above. A
+    // genuinely dynamic `exports[k] = …` (non-string-literal key) does not
+    // match and stays on the `_cjs` runtime path.
+    let bracket_re = regex::Regex::new(
+        r#"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\[\s*['"]([A-Za-z_$][A-Za-z0-9_$]*)['"]\s*\]\s*="#,
+    )
+    .unwrap();
+    for cap in bracket_re.captures_iter(source) {
         if let Some(m) = cap.get(1) {
             push_unique(&mut names, m.as_str());
         }
