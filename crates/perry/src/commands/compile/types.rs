@@ -678,13 +678,18 @@ pub struct CompilationContext {
     /// rebuild without the `bundled-streams` feature. This set lets
     /// the registry drain inject the missing feature directly.
     pub extra_stdlib_features: BTreeSet<&'static str>,
-    /// #503: when true, HIR lowering refuses dynamic-dispatch on known
+    /// #503/#5263: when true, HIR lowering refuses dynamic-dispatch on known
     /// stdlib namespaces (`process[runtimeVar]()` and similar). Default
-    /// true. Sources, last wins: `perry.allowDynamicStdlibDispatch: true`
-    /// in package.json → env `PERRY_ALLOW_DYNAMIC_STDLIB=1` flips this
-    /// off. An array value (`["@scope/pkg", ...]`) keeps refusal on but
-    /// allows the listed packages — captured in
-    /// `allow_dynamic_stdlib_packages`.
+    /// **false** (#5263 — allow): dynamic member access over a *linked*
+    /// namespace can only reach methods perry already statically linked, so it
+    /// is dynamic selection among a known set, not arbitrary code. The refusal
+    /// is re-armed by `--lockdown` (the supply-chain gate, #496), or by an
+    /// explicit opt-in: `perry.allowDynamicStdlibDispatch: false` in
+    /// package.json / env `PERRY_ALLOW_DYNAMIC_STDLIB=0`. `…: true` / `=1`
+    /// keeps the default-allow even under those explicit knobs (last wins). An
+    /// array value (`["@scope/pkg", ...]`) is captured in
+    /// `allow_dynamic_stdlib_packages` and is meaningful only while refusal is
+    /// active (i.e. under lockdown / explicit re-enable).
     pub refuse_dynamic_stdlib_dispatch: bool,
     /// #5206: strict-eval mode. When true, a runtime-unknown `eval(...)` /
     /// `new Function(<dynamic body>)` site is a hard compile-time refusal
@@ -914,7 +919,15 @@ impl CompilationContext {
             windows_subsystem: "auto".to_string(),
             entry_canonical: None,
             extra_stdlib_features: BTreeSet::new(),
-            refuse_dynamic_stdlib_dispatch: true,
+            // #5263: default-allow dynamic stdlib member access. Dynamic
+            // `fs[name]` over the *linked* namespace can only select among
+            // methods perry already statically linked (dynamic selection of a
+            // known set, not arbitrary code), so it is safe by default and is
+            // needed by legitimate packages (graceful-fs's symbol-keyed retry
+            // queue, fs-extra's `fs[method]` wrapping). The refusal is re-armed
+            // under `--lockdown` (the supply-chain gate) or by an explicit
+            // `perry.allowDynamicStdlibDispatch: false` / `PERRY_ALLOW_DYNAMIC_STDLIB=0`.
+            refuse_dynamic_stdlib_dispatch: false,
             strict_eval: false,
             strict_dynamic_import: false,
             strict_unimplemented: false,

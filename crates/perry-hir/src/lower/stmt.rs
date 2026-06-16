@@ -69,18 +69,15 @@ fn emit_class_expression_value_binding(
         }
         id
     } else if is_var {
-        if let Some(id) = ctx
+        // Bind the lookup result first so the `iter_named` borrow of
+        // `ctx.locals` ends before the mutable reuse below (#5267).
+        let existing_var = ctx
             .locals
-            .iter()
-            .rev()
-            .find(|(name, id, _)| name == bind_name && ctx.var_hoisted_ids.contains(id))
-            .map(|(_, id, _)| *id)
-        {
-            if let Some((_, _, existing_ty)) =
-                ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
-            {
-                *existing_ty = ty.clone();
-            }
+            .iter_named(bind_name)
+            .find(|(_, (_, id, _))| ctx.var_hoisted_ids.contains(id))
+            .map(|(pos, (_, id, _))| (pos, *id));
+        if let Some((reuse_pos, id)) = existing_var {
+            *ctx.locals.type_mut_at(reuse_pos) = ty.clone();
             id
         } else {
             ctx.define_local(bind_name.to_string(), ty.clone())

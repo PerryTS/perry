@@ -1193,11 +1193,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // branch still wins because class names get
                     // registered into both maps.
                     if let Some(submod_key) = ctx.namespace_node_submodules.get(name) {
+                        let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
                         let submod_label = emit_string_literal_global(ctx, submod_key);
                         let name_label = emit_string_literal_global(ctx, property);
                         let submod_len = submod_key.len();
                         let name_len = property.len();
                         let blk = ctx.block();
+                        if let Some(s) = install_sym {
+                            blk.call_void(s, &[]);
+                        }
                         return Ok(blk.call(
                             DOUBLE,
                             "js_node_submodule_namespace_member",

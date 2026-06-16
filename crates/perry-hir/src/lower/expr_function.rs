@@ -742,10 +742,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                             let name = ident.id.sym.to_string();
                             let already_in_scope = ctx
                                 .locals
-                                .iter()
-                                .enumerate()
-                                .rev()
-                                .any(|(idx, (n, _, _))| n == &name && idx >= outer_locals_len);
+                                .lookup_index_in_scope(&name, outer_locals_len)
+                                .is_some();
                             if !already_in_scope {
                                 let id = ctx.define_local(name, Type::Any);
                                 // Mark as hoisted so closures created
@@ -786,11 +784,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     let name = fn_decl.ident.sym.to_string();
                     let existing_in_scope = ctx
                         .locals
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find(|(idx, (n, _, _))| n == &name && *idx >= outer_locals_len)
-                        .map(|(_, (_, id, _))| *id);
+                        .lookup_index_in_scope(&name, outer_locals_len)
+                        .map(|pos| ctx.locals[pos].1);
                     let local_id = if let Some(existing) = existing_in_scope {
                         existing
                     } else {
@@ -831,10 +826,10 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                         for decl in &var_decl.decls {
                             if let ast::Pat::Ident(ident) = &decl.name {
                                 let name = ident.id.sym.to_string();
-                                let already_in_scope =
-                                    ctx.locals.iter().enumerate().rev().any(|(idx, (n, _, _))| {
-                                        n == &name && idx >= outer_locals_len
-                                    });
+                                let already_in_scope = ctx
+                                    .locals
+                                    .lookup_index_in_scope(&name, outer_locals_len)
+                                    .is_some();
                                 if !already_in_scope {
                                     let id = ctx.define_local(name, Type::Any);
                                     // Boxed-capture semantics: a closure
@@ -878,10 +873,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             for name in names {
                 let already_in_scope = ctx
                     .locals
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .any(|(idx, (n, _, _))| n == &name && idx >= outer_locals_len);
+                    .lookup_index_in_scope(&name, outer_locals_len)
+                    .is_some();
                 if !already_in_scope {
                     let id = ctx.define_local(name.clone(), Type::Any);
                     ctx.var_hoisted_ids.insert(id);

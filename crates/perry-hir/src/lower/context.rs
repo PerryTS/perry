@@ -48,7 +48,7 @@ impl LoweringContext {
             next_type_alias_id: 0,
             tagged_template_site_salt,
             next_tagged_template_site_id: 0,
-            locals: Vec::new(),
+            locals: crate::lower::Locals::new(),
             globals: Vec::new(),
             functions: Vec::new(),
             func_defaults: Vec::new(),
@@ -705,15 +705,11 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_local(&self, name: &str) -> Option<LocalId> {
-        self.locals
-            .iter()
-            .rev()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, id, _)| *id)
+        self.locals.lookup(name)
     }
 
     fn lookup_local_index(&self, name: &str) -> Option<usize> {
-        self.locals.iter().rposition(|(n, _, _)| n == name)
+        self.locals.lookup_index(name)
     }
 
     /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a
@@ -762,11 +758,7 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_local_type(&self, name: &str) -> Option<&Type> {
-        self.locals
-            .iter()
-            .rev()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, _, ty)| ty)
+        self.locals.lookup_type(name)
     }
 
     pub(crate) fn lookup_func(&self, name: &str) -> Option<FuncId> {
@@ -1242,7 +1234,7 @@ impl LoweringContext {
         self.scope_local_marks.pop();
         if self.locals.len() > mark.0 {
             let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
-            for entry in self.locals.drain(mark.0..) {
+            for entry in self.locals.drain_from(mark.0) {
                 if self.sloppy_implicit_global_ids.contains(&entry.1) {
                     kept.push(entry);
                 }
@@ -1299,7 +1291,7 @@ impl LoweringContext {
         // module-scoped bindings too — keep them visible after the block.
         if self.locals.len() > locals_mark {
             let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
-            for entry in self.locals.drain(locals_mark..) {
+            for entry in self.locals.drain_from(locals_mark) {
                 if self.var_hoisted_ids.contains(&entry.1)
                     || self.sloppy_implicit_global_ids.contains(&entry.1)
                 {

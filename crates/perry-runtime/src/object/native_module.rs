@@ -3102,6 +3102,17 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
 }
 
 pub(crate) fn native_module_get_builtin_module_value(module_name: &str) -> f64 {
+    // Devirt: this is the runtime-dynamic builtin resolver (`require(spec)`,
+    // `process.getBuiltinModule(spec)`) — `module_name` is only known at runtime,
+    // so codegen could not emit the per-module dispatch install. Run the
+    // install-all hook so a dynamically-resolved namespace can dispatch methods.
+    // The hook is an INDIRECT pointer (null unless codegen emitted
+    // `js_nm_enable_install_all()` because the program actually uses dynamic
+    // require/getBuiltinModule) — so this resolver, which is linked into every
+    // program via the always-present `process.getBuiltinModule` method table,
+    // does NOT statically reference `js_nm_install_all` and therefore does not
+    // pin every bucket. Static imports keep their precise per-module installs.
+    super::native_module_registry::nm_run_install_all_hook();
     cjs_default_export_value(module_name).unwrap_or_else(|| {
         js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
     })
@@ -3134,6 +3145,17 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "async_hooks.default"
             | "constants"
             | "constants.default"
+            // #5263: cache the top-level namespace objects whose dynamic
+            // member access is now allowed by default. A stable (cached)
+            // namespace object means a user-set symbol property
+            // (`fs[Symbol.for('graceful-fs.queue')] = queue`, keyed by object
+            // pointer in `SYMBOL_PROPERTIES`) round-trips on reads — otherwise
+            // each `NativeModuleRef` mints a fresh object and the write is lost.
+            // String-keyed writes already persist via the module-keyed
+            // `NATIVE_NAMESPACE_PROP_OVERRIDES` side-table. These are pure
+            // tag+name holders (all real dispatch keys off the module name, not
+            // object state), so caching only affects object identity.
+            | "fs"
             | "dns.default"
             | "dns/promises.default"
             | "child_process.default"
@@ -3231,6 +3253,16 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         property_name_len,
     ))
     .unwrap_or("");
+    // #5263 / monkey-patch parity: a user-stored override of a namespace
+    // property (`fs[k] = v`, `require('node:timers').setImmediate = fn`) wins
+    // all built-in resolution below — CJS exports are mutable in Node, and
+    // dynamic stdlib member writes are allowed by default. This mirrors
+    // `vt_get_own_field`, which the generic object-by-name read path uses; the
+    // codegen `NativeModuleRef` fast-path landed here without consulting the
+    // side-table, so writes via `PutValueSet` didn't round-trip on reads.
+    if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
+        return value;
+    }
     if module_name == "process.namespace" && property_name == "default" {
         return cjs_default_export_value("process")
             .unwrap_or_else(|| js_create_native_module_namespace(b"process".as_ptr(), 7));

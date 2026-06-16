@@ -67,8 +67,9 @@ pub struct LoweringContext {
     pub(crate) tagged_template_site_salt: u64,
     /// Counter for generating unique tagged-template call-site IDs.
     pub(crate) next_tagged_template_site_id: u32,
-    /// Current scope's local variables: name -> (id, type)
-    pub(crate) locals: Vec<(String, LocalId, Type)>,
+    /// Current scope's local variables: name -> (id, type), with an O(1)
+    /// name→position index for innermost-binding resolution (#5267).
+    pub(crate) locals: crate::lower::Locals,
     /// LocalIds that represent immutable bindings (`const`, imports, and
     /// other lexical bindings that must throw when assigned).
     pub(crate) immutable_locals: HashSet<LocalId>,

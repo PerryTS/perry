@@ -451,13 +451,10 @@ pub(super) fn apply_pkg_and_toml_config(
         }
         _ => {}
     }
-    // #503: install the resolved configuration into the HIR thread-locals
-    // before any module lowering begins. Re-installed per-thread by
-    // `collect_modules.rs` (rayon workers don't inherit thread-locals),
-    // but this set covers the driver thread's own lowering work and
-    // serves as documentation of the source of truth.
-    perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
-    perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+    // #503/#5263: the resolved configuration is installed into the HIR
+    // thread-locals further below — AFTER lockdown is fully resolved (env +
+    // CLI), because lockdown re-arms the dynamic-dispatch refusal that #5263
+    // turned off by default. See the install just after the lockdown ladder.
 
     // #497: `PERRY_ALLOW_PERRY_FEATURES=1` opts every name into both
     // host allowlists at once — emergency escape hatch for builds
@@ -515,6 +512,24 @@ pub(super) fn apply_pkg_and_toml_config(
     if args.lockdown {
         ctx.lockdown = true;
     }
+
+    // #5263: lockdown is the supply-chain gate that re-arms the
+    // dynamic-stdlib-dispatch refusal (#503), which is allow-by-default since
+    // #5263. An explicit `perry.allowDynamicStdlibDispatch: false` /
+    // `PERRY_ALLOW_DYNAMIC_STDLIB=0` already set `refuse_dynamic_stdlib_dispatch`
+    // true above; lockdown forces it on regardless. Computed here, after the
+    // lockdown ladder is fully resolved (package.json → env → CLI).
+    if ctx.lockdown {
+        ctx.refuse_dynamic_stdlib_dispatch = true;
+    }
+
+    // #503/#5263: install the resolved configuration into the HIR
+    // thread-locals before any module lowering begins. Re-installed
+    // per-thread by `collect_modules.rs` (rayon workers don't inherit
+    // thread-locals), but this set covers the driver thread's own lowering
+    // work and serves as documentation of the source of truth.
+    perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
+    perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
 
     // #5206 — strict-eval precedence (last wins): package.json
     // `perry.eval`/`perry.strict` (read above) → perry.toml `[perry] eval` /

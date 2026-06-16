@@ -305,11 +305,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if submod_key == "diagnostics_channel"
                     && matches!(exported_name.as_str(), "Channel" | "BoundedChannel")
                 {
+                    let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
                     let submod_label = emit_string_literal_global(ctx, submod_key);
                     let name_label = emit_string_literal_global(ctx, exported_name);
                     let submod_len = submod_key.len();
                     let name_len = exported_name.len();
                     let blk = ctx.block();
+                    if let Some(s) = install_sym {
+                        blk.call_void(s, &[]);
+                    }
                     let ty_v = blk.call(
                         DOUBLE,
                         "js_node_submodule_export_as_function",

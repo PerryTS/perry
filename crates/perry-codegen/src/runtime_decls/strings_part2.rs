@@ -185,6 +185,24 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // a NaN-boxed ObjectHeader pointer whose fields are the function
     // singletons emitted by `js_node_submodule_export_as_function`.
     module.declare_function("js_node_submodule_namespace", DOUBLE, &[PTR, I32]);
+    // Submodule devirt installs (devirt phase 3)
+    module.declare_function("js_node_submod_install_vm", VOID, &[]);
+    module.declare_function("js_node_submod_install_timers", VOID, &[]);
+    module.declare_function("js_node_submod_install_timers_promises", VOID, &[]);
+    module.declare_function("js_node_submod_install_fs_promises", VOID, &[]);
+    module.declare_function("js_node_submod_install_readline_promises", VOID, &[]);
+    module.declare_function("js_node_submod_install_stream_promises", VOID, &[]);
+    module.declare_function("js_node_submod_install_stream_consumers", VOID, &[]);
+    module.declare_function("js_node_submod_install_stream_web", VOID, &[]);
+    module.declare_function("js_node_submod_install_hono_jsx_server", VOID, &[]);
+    module.declare_function("js_node_submod_install_hono_jsx_streaming", VOID, &[]);
+    module.declare_function("js_node_submod_install_sys", VOID, &[]);
+    module.declare_function("js_node_submod_install_diagnostics_channel", VOID, &[]);
+    module.declare_function("js_node_submod_install_trace_events", VOID, &[]);
+    module.declare_function("js_node_submod_install_test", VOID, &[]);
+    module.declare_function("js_node_submod_install_test_reporters", VOID, &[]);
+    module.declare_function("js_node_submod_install_all", VOID, &[]);
+    module.declare_function("js_node_submod_enable_install_all", VOID, &[]);
     // Issue #692: stub for default-imported callables from unresolved modules —
     // returns NaN-boxed undefined and prints a one-shot diagnostic, so the
     // program links instead of failing with `undefined reference to 'default'`.
