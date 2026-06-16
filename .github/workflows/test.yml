@@ -110,11 +110,19 @@ jobs:
   api-docs-drift:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "2G"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -167,11 +175,35 @@ jobs:
     # don't exercise any platform behavior; they're pure logic +
     # codegen.
     runs-on: ubuntu-latest
+    # Was unbounded (the workflow default of 360 min). This gate legitimately
+    # runs ~45-50 min (per-package serial build+prune loop below, plus the big
+    # stdlib links), and a cold sccache run can be a bit slower — so the bound
+    # is set well ABOVE the real runtime: it exists only to cut a true hang
+    # (e.g. a flaky link SIGBUS retry storm) at ~2 h instead of 6 h, never to
+    # fail a normal slow run.
+    timeout-minutes: 120
+    # sccache (compiler-level cache, shared across ALL branches/jobs via the
+    # GitHub Actions cache backend) on top of Swatinem/rust-cache (target/ +
+    # registry). rust-cache only writes on main (save-if below), so PRs can't
+    # warm it — and any change to the constantly-churning perry-runtime
+    # invalidates the whole downstream target/, whereas sccache still reuses
+    # the unchanged compilation units. CARGO_INCREMENTAL=0 is required: sccache
+    # cannot cache incremental builds. SCCACHE_CACHE_SIZE bounds the on-runner
+    # cache so it doesn't compound this job's known disk pressure (the prune
+    # loop below).
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "2G"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -314,11 +346,19 @@ jobs:
   compiler-output-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "2G"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - uses: Swatinem/rust-cache@v2
         with:
