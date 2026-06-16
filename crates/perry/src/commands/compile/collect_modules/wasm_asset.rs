@@ -113,7 +113,9 @@ fn parse_export_section(payload: &[u8]) -> Option<Vec<String>> {
         if name_end > payload.len() {
             return None;
         }
-        let name = std::str::from_utf8(&payload[pos..name_end]).ok()?.to_string();
+        let name = std::str::from_utf8(&payload[pos..name_end])
+            .ok()?
+            .to_string();
         pos = name_end;
         // 1-byte export kind (0 = func, 1 = table, 2 = mem, 3 = global), then
         // the uleb index. We include *every* kind as a throwing function stub —
@@ -159,7 +161,8 @@ pub(crate) fn synthesize_wasm_stub_module(bytes: &[u8], display_name: &str) -> W
          — full .wasm ESM instantiation is tracked in #5234",
         display_name
     );
-    let msg_lit = serde_json::to_string(&msg).unwrap_or_else(|_| "\"wasm module unavailable\"".into());
+    let msg_lit =
+        serde_json::to_string(&msg).unwrap_or_else(|_| "\"wasm module unavailable\"".into());
 
     let mut src = String::new();
     src.push_str("// #5235: synthesized deferred stub for a .wasm import.\n");
@@ -187,7 +190,9 @@ pub(crate) fn synthesize_wasm_stub_module(bytes: &[u8], display_name: &str) -> W
     }
     // Throwing default export: a function so `import w from "./x.wasm"; w()`
     // throws on call, and bare `import w from "./x.wasm"` (no call) is fine.
-    src.push_str("export default function (...args: any[]): any { return __perry_wasm_unavailable(); }\n");
+    src.push_str(
+        "export default function (...args: any[]): any { return __perry_wasm_unavailable(); }\n",
+    );
 
     WasmStubModule { source: src }
 }
@@ -228,7 +233,10 @@ mod tests {
     fn synthesizes_named_and_default_stub() {
         let src = synthesize_wasm_stub_module(&add_wasm(), "add.wasm").source;
         assert!(src.contains("export function add("), "named stub present");
-        assert!(src.contains("export default function"), "default stub present");
+        assert!(
+            src.contains("export default function"),
+            "default stub present"
+        );
         assert!(src.contains("#5234"), "references real-integration issue");
         assert!(src.contains("add.wasm"), "names the file in the message");
     }

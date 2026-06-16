@@ -5325,6 +5325,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "swc_common",
  "swc_ecma_ast",
  "tar",
  "tempfile",
