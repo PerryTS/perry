@@ -996,15 +996,29 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         return None;
     }
     let key_name = key_to_rust_string(key)?;
-    if let Some(acc) = crate::object::get_accessor_descriptor(obj_ptr, &key_name) {
-        return Some(OwnSetDescriptor::Accessor {
-            setter_bits: acc.set,
-        });
-    }
-    if let Some(attrs) = crate::object::get_property_attrs(obj_ptr, &key_name) {
-        return Some(OwnSetDescriptor::Data {
-            writable: attrs.writable(),
-        });
+    // `ACCESSOR_DESCRIPTORS` / `PROPERTY_DESCRIPTORS` are keyed by raw address,
+    // so a fresh object reusing a freed address would otherwise read back the
+    // previous tenant's stale getter-only accessor / non-writable descriptor and
+    // report this `obj.k = v` as read-only — falsely throwing "Cannot assign to
+    // read only property" on a plain `{}` (Next.js app-page-turbo runtime's
+    // `exports.Fragment = …`, reached here once a descriptor on Object.prototype
+    // disables the plain-object [[Set]] fast path process-wide, #5054). Gate on
+    // the per-object `OBJ_FLAG_HAS_DESCRIPTORS` flag — set reliably for every
+    // descriptor installed on a `GC_TYPE_OBJECT`, and clear on a fresh
+    // allocation. Closures don't carry the flag, so keep consulting the side
+    // tables for them (their `name`/`length` + user `defineProperty` descriptors
+    // live there).
+    if crate::object::object_has_descriptors(obj_ptr) || crate::closure::is_closure_ptr(obj_ptr) {
+        if let Some(acc) = crate::object::get_accessor_descriptor(obj_ptr, &key_name) {
+            return Some(OwnSetDescriptor::Accessor {
+                setter_bits: acc.set,
+            });
+        }
+        if let Some(attrs) = crate::object::get_property_attrs(obj_ptr, &key_name) {
+            return Some(OwnSetDescriptor::Data {
+                writable: attrs.writable(),
+            });
+        }
     }
     if crate::closure::is_closure_ptr(obj_ptr) {
         if crate::object::has_own_helpers::closure_own_key_present(obj_ptr, &key_name) {

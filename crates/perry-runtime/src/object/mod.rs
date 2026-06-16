@@ -750,6 +750,27 @@ pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs>
     PROPERTY_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
 }
 
+/// Whether this specific object has ever had a property descriptor installed on
+/// it (`OBJ_FLAG_HAS_DESCRIPTORS`, set by [`note_descriptor_target`] for every
+/// `PROPERTY_DESCRIPTORS` insertion on a `GC_TYPE_OBJECT`). The flag lives in
+/// the GcHeader and travels with the object across evacuation.
+///
+/// `PROPERTY_DESCRIPTORS` is keyed by raw address, so once a freed object's slot
+/// is reused by a fresh object, a stale `(addr, key)` descriptor entry would be
+/// read back for the new object — falsely reporting e.g. a `writable: false`
+/// `Fragment` on a brand-new `{}` and throwing "Cannot assign to read only
+/// property". A fresh allocation's `_reserved` is zeroed, so gating descriptor
+/// lookups on this per-object flag avoids the stale-address-reuse false
+/// positive (Next.js app-page-turbo runtime's webpack `exports.Fragment = …`).
+pub(crate) fn object_has_descriptors(obj: usize) -> bool {
+    unsafe {
+        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj) {
+            return header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0;
+        }
+    }
+    false
+}
+
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     note_descriptor_target(obj);
