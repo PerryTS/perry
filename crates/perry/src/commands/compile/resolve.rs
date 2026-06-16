@@ -501,11 +501,25 @@ pub(super) fn resolve_package_entry(package_dir: &Path, subpath: Option<&str>) -
         // files the build didn't load, so `@swc/helpers`' `import` target
         // (`esm/*.js`) is absent while the `default` target (`cjs/*.cjs`)
         // is present — Node resolves the latter at require time.
-        for entry in resolve_exports_candidates(exports, &export_key) {
-            let entry_path = package_dir.join(&entry);
+        let candidates = resolve_exports_candidates(exports, &export_key);
+        for entry in &candidates {
+            let entry_path = package_dir.join(entry);
             if entry_path.exists() {
                 return Some(entry_path);
             }
+        }
+        // Per Node's resolution algorithm, an applicable `"exports"` entry takes
+        // precedence over the legacy `"module"`/`"main"` fields (#5237). When
+        // `exports` defines this specifier, it is authoritative: never fall
+        // back to `module`/`main` for it, even if no candidate was found on
+        // disk above. Falling through mis-resolved e.g. `y18n` (a `yargs` dep)
+        // to its `"module"` target `./build/lib/index.js` — a named-export-only
+        // file with no `default` — instead of the `exports.import` target
+        // `./index.mjs`. We only return early when `exports` actually produced
+        // a candidate; an empty list means `exports` doesn't cover this
+        // specifier, so the legacy-field fallback below still applies.
+        if let Some(first) = candidates.first() {
+            return resolve_with_extensions(&package_dir.join(first));
         }
     }
 
@@ -608,6 +622,10 @@ fn resolve_exports_with_conditions(
 ) -> Option<String> {
     match exports {
         serde_json::Value::String(s) => Some(s.clone()),
+        // Node "exports" fallback arrays: return the first element that resolves.
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|item| resolve_exports_with_conditions(item, subpath, conditions)),
         serde_json::Value::Object(map) => {
             // Try the specific subpath first
             if let Some(entry) = map.get(subpath) {
@@ -706,6 +724,16 @@ pub(super) fn resolve_exports_candidates(
             serde_json::Value::String(s) => {
                 if !out.contains(s) {
                     out.push(s.clone());
+                }
+            }
+            // Node "exports" fallback arrays (e.g. y18n's
+            // `[{ "import": "./index.mjs", "require": "./build/index.cjs" }, "./build/index.cjs"]`).
+            // Each element is tried in order; we gather every resolution so the
+            // disk-existence walk in `resolve_package_entry` can pick the first
+            // that is present.
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect(item, subpath, out);
                 }
             }
             serde_json::Value::Object(map) => {
