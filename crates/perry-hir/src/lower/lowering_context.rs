@@ -368,6 +368,32 @@ pub struct LoweringContext {
     pub(crate) imported_functions_index: HashMap<String, usize>,
     /// Shadow index: local alias name -> index in `builtin_module_aliases` Vec
     pub(crate) builtin_module_aliases_index: HashMap<String, usize>,
+    /// Perf index for `native_instances` (which is scope-stack-like: pushed on
+    /// scope entry, truncated on scope exit). Maps name -> STACK of indices into
+    /// the `native_instances` Vec, innermost (last) on top. `lookup_native_instance`
+    /// reads the top index for O(1) last-match-wins resolution (mirrors the old
+    /// reverse scan's shadowing); on `truncate(mark)` every index >= mark is
+    /// popped off each name's stack (and empty stacks removed), so an inner
+    /// binding stops shadowing the moment its scope pops. See
+    /// `register_native_instance` / `truncate_native_instances`.
+    pub(crate) native_instances_index: HashMap<String, Vec<usize>>,
+    /// Perf index for `module_native_instances` (module-level, push-only, never
+    /// truncated). Scanned in reverse (last-match-wins) by
+    /// `lookup_native_instance`'s fallback arm, so the index stores the LAST
+    /// pushed index per name (overwritten on every push). O(1) lookup.
+    pub(crate) module_native_instances_index: HashMap<String, usize>,
+    /// Perf index for `func_return_native_instances` (push-only, never
+    /// truncated). The old lookup scanned FORWARD (first-match-wins), so the
+    /// index keeps the FIRST pushed index per name (`entry().or_insert`).
+    pub(crate) func_return_native_instances_index: HashMap<String, usize>,
+    /// Perf index for `native_modules` (push-only, never truncated). The old
+    /// `lookup_native_module` scanned FORWARD (first-match-wins), so the index
+    /// keeps the FIRST pushed index per name (`entry().or_insert`).
+    pub(crate) native_modules_index: HashMap<String, usize>,
+    /// Perf index for `class_statics` (push-only, never truncated). The old
+    /// `has_static_method`/`has_static_field` scanned FORWARD (first-match-wins),
+    /// so the index keeps the FIRST pushed index per class name.
+    pub(crate) class_statics_index: HashMap<String, usize>,
     /// Local names bound to a `path` sub-namespace (`const w = path.win32`).
     /// Maps the local name -> (root identifier name, sub "win32"|"posix").
     /// Resolution of the root identifier to the `path` module is deferred to

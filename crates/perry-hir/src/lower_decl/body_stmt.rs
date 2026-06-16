@@ -1848,7 +1848,7 @@ pub fn find_native_return_in_stmts(
                         let var = ident.sym.as_ref();
                         for i in ni_start..ctx.native_instances.len() {
                             if ctx.native_instances[i].0 == var {
-                                ctx.func_return_native_instances.push((
+                                ctx.push_func_return_native_instance((
                                     func_name.to_string(),
                                     ctx.native_instances[i].1.clone(),
                                     ctx.native_instances[i].2.clone(),

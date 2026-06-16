@@ -192,7 +192,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                         _ => Some("Instance"),
                                     };
                                     if let Some(class_name) = class_name {
-                                        ctx.module_native_instances.push((
+                                        ctx.push_module_native_instance((
                                             var_name.clone(),
                                             module_name.to_string(),
                                             class_name.to_string(),
@@ -217,7 +217,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             module_name.clone(),
                             class_name_str.to_string(),
                         );
-                        ctx.module_native_instances.push((
+                        ctx.push_module_native_instance((
                             var_name.clone(),
                             module_name,
                             class_name_str.to_string(),
@@ -230,7 +230,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             if let ast::Expr::Ident(rhs_ident) = inner_rhs {
                 let rhs_name = rhs_ident.sym.as_ref();
                 if let Some((module, class)) = ctx.lookup_native_instance(rhs_name) {
-                    ctx.module_native_instances.push((
+                    ctx.push_module_native_instance((
                         var_name,
                         module.to_string(),
                         class.to_string(),

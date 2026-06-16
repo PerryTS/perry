@@ -227,7 +227,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             let module_alias = &type_name[..dot_pos];
             let class_name = &type_name[dot_pos + 1..];
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
-                ctx.func_return_native_instances.push((
+                ctx.push_func_return_native_instance((
                     name.clone(),
                     module_name.to_string(),
                     class_name.to_string(),
@@ -245,7 +245,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
                 _ => None,
             };
             if let Some((module, class)) = module_info {
-                ctx.func_return_native_instances.push((
+                ctx.push_func_return_native_instance((
                     name.clone(),
                     module.to_string(),
                     class.to_string(),
