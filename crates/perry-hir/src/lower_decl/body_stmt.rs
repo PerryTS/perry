@@ -1025,6 +1025,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         callee: Box::new(Expr::FuncRef(iter_fn_id)),
                         args: vec![iter_expr_raw],
                         type_args: vec![],
+                        byte_offset: 0,
                     }
                 } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
                     async_iterator_method_call(iter_expr_raw)
@@ -1036,6 +1037,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         }),
                         args: vec![],
                         type_args: vec![],
+                        byte_offset: 0,
                     }
                 } else if is_readline_interface_for_await {
                     Expr::NativeMethodCall {
@@ -1069,6 +1071,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     }),
                     args: vec![],
                     type_args: vec![],
+                    byte_offset: 0,
                 };
                 let next_call = if needs_await {
                     Expr::Await(Box::new(raw_next_call))

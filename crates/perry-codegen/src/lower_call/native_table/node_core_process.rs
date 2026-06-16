@@ -425,7 +425,11 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "getBuiltinModule",
         class_filter: None,
-        runtime: "js_process_get_builtin_module",
+        // Devirt: target the wrapper that arms the install-all hook, so only
+        // programs that actually call getBuiltinModule pull in all dispatch
+        // buckets (the dynamically-resolved namespace's module is not known at
+        // compile time). See js_process_get_builtin_module_devirt.
+        runtime: "js_process_get_builtin_module_devirt",
         args: &[NA_F64],
         ret: NR_F64,
     },

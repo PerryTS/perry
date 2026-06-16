@@ -131,6 +131,7 @@ impl SH for Import {
             is_dynamic,
             is_dynamic_target,
             is_deferred_require,
+            is_adopted_require,
         } = self;
         source.hash(h);
         specifiers.hash(h);
@@ -141,6 +142,7 @@ impl SH for Import {
         is_dynamic.hash(h);
         is_dynamic_target.hash(h);
         is_deferred_require.hash(h);
+        is_adopted_require.hash(h);
     }
 }
 

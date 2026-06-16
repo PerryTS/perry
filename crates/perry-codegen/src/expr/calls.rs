@@ -47,6 +47,39 @@ use super::{
     I18nLowerCtx,
 };
 
+/// #5247: under `--debug-symbols`, emit a `js_set_call_location(file, line)`
+/// runtime call right before a dynamic method dispatch so the
+/// "X is not a function" throw path can render `at <file>:<line>` in the thrown
+/// TypeError's `.stack`. Resolves the *pending* call byte offset (recorded by
+/// the `Expr::Call` dispatcher) → `(file, line)` via the module's installed
+/// debug-location context. No-op (no IR emitted) when the context is absent
+/// (default build) or the pending offset is 0 (synthesized call).
+///
+/// Called at the dispatch emission site (after the call's arguments are
+/// lowered) with the offset the dispatcher captured at entry — before any
+/// nested-call argument overwrote the shared pending offset — so the location
+/// reflects the OUTER call, not its last-lowered argument.
+pub(crate) fn emit_call_location_at(ctx: &mut FnCtx<'_>, byte_offset: u32) {
+    let Some((file, line)) = ctx
+        .strings
+        .call_location_for(byte_offset)
+        .map(|(f, l)| (f.to_string(), l))
+    else {
+        return;
+    };
+    let file_label = emit_string_literal_global(ctx, &file);
+    let file_len = file.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_set_call_location",
+        &[
+            (PTR, &file_label),
+            (I64, &file_len.to_string()),
+            (I32, &line.to_string()),
+        ],
+    );
+}
+
 /// #2013/#3146: emit a setup-time `validateString` call. `value_box` is the
 /// original NaN-boxed value; `name` is the static argument name node uses in
 /// the error (`"algorithm"` for `createHash`, `"hmac"` for `createHmac`'s
@@ -2369,13 +2402,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Calls --------
-        Expr::Call { callee, args, .. } => {
+        Expr::Call {
+            callee,
+            args,
+            byte_offset,
+            ..
+        } => {
             for arg in args {
                 super::downgrade_buffer_aliases_in_expr(
                     ctx,
                     arg,
                     crate::native_value::MaterializationReason::UnknownCallEscape,
                 );
+            }
+            // #5247: under `--debug-symbols`, record this call's source byte
+            // offset so the dynamic method-dispatch emission site can emit a
+            // `js_set_call_location` immediately before the throwing dispatch
+            // (after the call's args — which may be nested calls that overwrite
+            // this — have been lowered). The dynamic dispatch path renders it as
+            // `at <file>:<line>` in the "X is not a function" TypeError's
+            // `.stack`. No-op in the default build.
+            if ctx.strings.debug_locations_enabled() {
+                ctx.strings.set_pending_call_offset(*byte_offset);
             }
             lower_call(ctx, callee, args)
         }

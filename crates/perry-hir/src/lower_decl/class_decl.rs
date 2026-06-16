@@ -204,6 +204,7 @@ fn synthesize_symbol_iterator_wrapper(
             callee: Box::new(Expr::FuncRef(top_fn_id)),
             args: vec![Expr::This],
             type_args: Vec::new(),
+            byte_offset: 0,
         }))],
         is_async: false,
         is_generator: false,

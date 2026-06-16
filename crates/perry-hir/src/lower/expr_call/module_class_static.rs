@@ -172,6 +172,7 @@ pub(super) fn try_module_class_static(
                                         }),
                                         args: call_args,
                                         type_args: Vec::new(),
+                                        byte_offset: 0,
                                     }));
                                 }
                                 return Ok(Ok(Expr::NativeMethodCall {

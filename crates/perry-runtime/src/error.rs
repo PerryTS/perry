@@ -81,13 +81,65 @@ pub struct ErrorHeader {
     pub errors: *mut crate::array::ArrayHeader,
 }
 
+thread_local! {
+    /// #5247: the source location (`file`, 1-based `line`) of the call
+    /// currently being dispatched, set by codegen-emitted
+    /// `js_set_call_location` immediately before a dynamic method/call
+    /// dispatch that can throw "X is not a function" / "is not a
+    /// constructor". `make_stack` reads it so the thrown TypeError's
+    /// `.stack` shows `at <file>:<line>` instead of `at <anonymous>`.
+    ///
+    /// Only populated when the program was compiled with `--debug-symbols`
+    /// (the flag that gates the codegen emission). `None` in the default
+    /// build, so release perf and the `<anonymous>` fallback are unchanged.
+    static CURRENT_CALL_LOCATION: std::cell::RefCell<Option<(String, u32)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// #5247: record the source location of the call about to be dispatched.
+/// Codegen emits this call right before a dynamic dispatch under
+/// `--debug-symbols`. `file_ptr`/`file_len` are the (UTF-8) source path;
+/// `line` is the 1-based line number. A `line` of 0 clears the location.
+///
+/// # Safety
+/// `file_ptr` must point to `file_len` valid bytes, or be null with
+/// `file_len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn js_set_call_location(file_ptr: *const u8, file_len: usize, line: u32) {
+    if line == 0 || file_ptr.is_null() || file_len == 0 {
+        CURRENT_CALL_LOCATION.with(|c| *c.borrow_mut() = None);
+        return;
+    }
+    let bytes = std::slice::from_raw_parts(file_ptr, file_len);
+    let file = String::from_utf8_lossy(bytes).into_owned();
+    CURRENT_CALL_LOCATION.with(|c| *c.borrow_mut() = Some((file, line)));
+}
+
+// Generated-code-only callee: anchor against the auto-optimize LTO dead-strip
+// (see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_SET_CALL_LOCATION: unsafe extern "C" fn(*const u8, usize, u32) =
+    js_set_call_location;
+
+/// #5247: render the current call-location frame, or `<anonymous>` when no
+/// location was recorded (default builds, or a synthesized/offset-less site).
+fn current_stack_frame() -> String {
+    CURRENT_CALL_LOCATION.with(|c| match &*c.borrow() {
+        Some((file, line)) => format!("    at {}:{}", file, line),
+        None => "    at <anonymous>".to_string(),
+    })
+}
+
 unsafe fn make_stack(name: &str, message: &str) -> *mut StringHeader {
-    // Build a simple "<name>: <message>\n    at <anonymous>" string.
-    // Real stack traces are not implemented; the test only checks `.includes(message)`.
+    // Build a simple "<name>: <message>\n    at <file>:<line>" string
+    // (or "<anonymous>" when no #5247 source location is recorded). Real
+    // multi-frame stack traces are not implemented; the test only checks
+    // `.includes(message)`.
+    let frame = current_stack_frame();
     let s = if message.is_empty() {
-        format!("{}\n    at <anonymous>", name)
+        format!("{}\n{}", name, frame)
     } else {
-        format!("{}: {}\n    at <anonymous>", name, message)
+        format!("{}: {}\n{}", name, message, frame)
     };
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }

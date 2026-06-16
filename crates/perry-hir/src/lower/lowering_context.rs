@@ -67,8 +67,9 @@ pub struct LoweringContext {
     pub(crate) tagged_template_site_salt: u64,
     /// Counter for generating unique tagged-template call-site IDs.
     pub(crate) next_tagged_template_site_id: u32,
-    /// Current scope's local variables: name -> (id, type)
-    pub(crate) locals: Vec<(String, LocalId, Type)>,
+    /// Current scope's local variables: name -> (id, type), with an O(1)
+    /// name→position index for innermost-binding resolution (#5267).
+    pub(crate) locals: crate::lower::Locals,
     /// LocalIds that represent immutable bindings (`const`, imports, and
     /// other lexical bindings that must throw when assigned).
     pub(crate) immutable_locals: HashSet<LocalId>,
@@ -609,4 +610,10 @@ pub struct LoweringContext {
     /// object literals, counters). Built once per module in
     /// `lower_module_full`; consumed by `const_fold_fn`.
     pub(crate) fn_ctor_env: super::fn_ctor_env::FnCtorEnv,
+    /// Current recursion depth of `lower_expr` (#5259). Incremented on entry,
+    /// decremented on exit. Once it exceeds `MAX_EXPR_LOWER_DEPTH`, lowering
+    /// bails with a clean "nested too deeply" diagnostic instead of letting a
+    /// pathologically-nested expression chain (bundler/minifier output like
+    /// `1+1+…+1` or `o.a.a.…a`) overflow the native stack and SIGABRT.
+    pub(crate) expr_lower_depth: u32,
 }

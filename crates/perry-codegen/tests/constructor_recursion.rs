@@ -47,6 +47,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 

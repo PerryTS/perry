@@ -443,6 +443,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     _ => {}
@@ -579,6 +580,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     "on"
@@ -2367,8 +2369,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             //   - the index is NOT a string literal at the source level
             //     (literal keys are caught by the fold below, and never
             //     constitute string-obfuscation),
-            //   - the refusal pass is enabled (`PERRY_ALLOW_DYNAMIC_STDLIB=0` /
-            //     `perry.allowDynamicStdlibDispatch: false`; on by default),
+            //   - the refusal pass is enabled — OFF by default since #5263,
+            //     re-armed under `--lockdown` / `perry.lockdown` or the explicit
+            //     opt-out `PERRY_ALLOW_DYNAMIC_STDLIB=0` /
+            //     `perry.allowDynamicStdlibDispatch: false`,
             //   - the currently-lowering source file does NOT belong to a
             //     package on the per-package allow-list, and
             //   - there is no `// @perry-allow-dynamic` line annotation on
@@ -2486,6 +2490,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     }),
                     args: vec![*index],
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 });
             }
             Ok(Expr::IndexGet { object, index })

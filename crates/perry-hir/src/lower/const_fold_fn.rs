@@ -1449,5 +1449,6 @@ fn build_eval_completion_iife(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }))
 }

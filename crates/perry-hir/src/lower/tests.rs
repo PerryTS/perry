@@ -257,3 +257,73 @@ fn test_lower_namespace_var_lookup() {
     assert_eq!(ctx.lookup_namespace_var("Utils", "missing"), None);
     assert_eq!(ctx.lookup_namespace_var("Other", "helper"), None);
 }
+
+/// Run `f` on a thread with the same large (128 MB) stack the real compiler
+/// uses for its collect/lower walk (`perry-main`, see `crates/perry/src/
+/// main.rs`). The default cargo-test harness thread is only ~2 MB, which is
+/// far too small to parse or lower the multi-thousand-node chains these
+/// `#5259` tests build — without this, parsing/lowering them would overflow
+/// the *test* stack before the depth guard ever fires.
+fn run_with_large_stack<F: FnOnce() + Send + 'static>(f: F) {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn large-stack thread")
+        .join()
+        .expect("test body panicked");
+}
+
+/// #5259: deeply-nested expression chains must surface a diagnostic instead
+/// of overflowing the native stack and SIGABRT-ing the whole process. Each
+/// shape (binary `1+1+…`, member `o.a.a.…`, logical `a||a||…`) recurses once
+/// per node in `lower_expr`; past `MAX_EXPR_LOWER_DEPTH` lowering bails with a
+/// "nested too deeply" error rather than recursing further.
+fn assert_too_deep(source: String) {
+    run_with_large_stack(move || {
+        let module =
+            perry_parser::parse_typescript(&source, "deep.ts").expect("source should parse fine");
+        let err = super::lower_module(&module, "deep", "deep.ts")
+            .expect_err("deeply-nested expression must be rejected, not lowered");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("nested too deeply"),
+            "expected a depth diagnostic, got: {msg}"
+        );
+    });
+}
+
+#[test]
+fn test_lower_rejects_deep_binary_chain() {
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    let chain: Vec<&str> = vec!["1"; n];
+    assert_too_deep(format!("var x = {};\n", chain.join("+")));
+}
+
+#[test]
+fn test_lower_rejects_deep_member_chain() {
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    assert_too_deep(format!("var o = {{}};\nvar x = o{};\n", ".a".repeat(n)));
+}
+
+#[test]
+fn test_lower_rejects_deep_logical_chain() {
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    let chain: Vec<&str> = vec!["a"; n];
+    assert_too_deep(format!("var a = 0;\nvar x = {};\n", chain.join("||")));
+}
+
+/// A chain comfortably under the ceiling still lowers cleanly — the guard
+/// must not reject ordinary (if large) expressions.
+#[test]
+fn test_lower_accepts_chain_under_limit() {
+    run_with_large_stack(|| {
+        let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) / 2;
+        let chain: Vec<&str> = vec!["1"; n];
+        let source = format!("var x = {};\n", chain.join("+"));
+        let module = perry_parser::parse_typescript(&source, "ok.ts").expect("parses");
+        assert!(
+            super::lower_module(&module, "ok", "ok.ts").is_ok(),
+            "a chain under the depth ceiling must lower without error"
+        );
+    });
+}

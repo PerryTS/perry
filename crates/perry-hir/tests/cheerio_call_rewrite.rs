@@ -105,6 +105,7 @@ fn non_native_fluent_chains_are_walked_linearly() {
             return_type: Type::Any,
         }],
         type_args: Vec::new(),
+        byte_offset: 0,
     };
 
     for i in 0..32 {
@@ -119,6 +120,7 @@ fn non_native_fluent_chains_are_walked_linearly() {
                 return_type: Type::Any,
             }],
             type_args: Vec::new(),
+            byte_offset: 0,
         };
     }
 
@@ -129,6 +131,7 @@ fn non_native_fluent_chains_are_walked_linearly() {
         }),
         args: Vec::new(),
         type_args: Vec::new(),
+        byte_offset: 0,
     };
 
     let mut module = Module::new("non-native-fluent-chain");

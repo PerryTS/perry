@@ -48,7 +48,11 @@ impl SH for Expr {
             Expr::Unary { op, operand } => { tag(h, 15); op.hash(h); operand.as_ref().hash(h); }
             Expr::Compare { op, left, right } => { tag(h, 16); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             Expr::Logical { op, left, right } => { tag(h, 17); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
-            Expr::Call { callee, args, type_args, } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            // #5247: `byte_offset` is diagnostic-only (source-location metadata
+            // for runtime TypeErrors); deliberately excluded from the stable hash
+            // so source whitespace edits that shift offsets don't bust the object
+            // cache.
+            Expr::Call { callee, args, type_args, .. } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::CallSpread { callee, args, type_args, } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }

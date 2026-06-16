@@ -4031,6 +4031,17 @@ pub fn run_with_parse_cache(
                 // alone is insufficient because it's empty when the
                 // target has no `export` statements.
                 is_dynamic_import_target: dyn_target_paths.contains(path),
+                // #5247: source-location tracking for the dynamic call-dispatch
+                // throw path. Gated by `--debug-symbols` so the default build is
+                // unchanged (no source read, no per-call emission). When on, read
+                // the module's original source so codegen can map a Call's byte
+                // offset to a 1-based line.
+                debug_locations: args.debug_symbols,
+                module_source: if args.debug_symbols {
+                    std::fs::read_to_string(path).ok()
+                } else {
+                    None
+                },
             };
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this

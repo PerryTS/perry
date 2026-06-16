@@ -113,6 +113,13 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Explicit type arguments (e.g., identity<number>(x))
         type_args: Vec<Type>,
+        /// #5247: byte offset (`call.span.lo.0`) of this call expression in its
+        /// module's source, captured at AST→HIR lowering. Used by codegen (under
+        /// `--debug-symbols`) to attach a `file:line` to the runtime "X is not a
+        /// function" TypeError thrown by the dynamic method-dispatch path. `0`
+        /// when unknown (synthesized calls from transforms/intrinsics, etc.) —
+        /// a 0 sentinel resolves to no location, falling back to `<anonymous>`.
+        byte_offset: u32,
     },
 
     /// Function call with spread arguments (e.g., fn(a, ...arr, b))

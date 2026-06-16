@@ -146,6 +146,7 @@ fn throw_eval_syntax_error_expr(msg: &str) -> Expr {
         }),
         args: vec![Expr::String(msg.to_string())],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 

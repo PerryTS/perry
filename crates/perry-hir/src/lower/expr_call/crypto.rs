@@ -124,6 +124,7 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
             }),
             args,
             type_args: vec![],
+            byte_offset: 0,
         }),
         // `randomUUIDv7([options])` — options accepted for shape parity but
         // do not affect the generated value (#2550).
@@ -145,6 +146,7 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
                     }),
                     args,
                     type_args: vec![],
+                    byte_offset: 0,
                 });
             }
             Some(Expr::CryptoRandomBytes(Box::new(
@@ -210,6 +212,7 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
             }),
             args,
             type_args: vec![],
+            byte_offset: 0,
         }),
         // `crypto.hash(alg, data, enc?)` — Node 21+ one-shot helper.
         // Expand into the `createHash(alg).update(data).digest(enc)`
@@ -234,16 +237,19 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
                                 }),
                                 args: vec![alg],
                                 type_args: vec![],
+                                byte_offset: 0,
                             }),
                             property: "update".to_string(),
                         }),
                         args: vec![data],
                         type_args: vec![],
+                        byte_offset: 0,
                     }),
                     property: "digest".to_string(),
                 }),
                 args: vec![enc],
                 type_args: vec![],
+                byte_offset: 0,
             })
         }
         _ => None,

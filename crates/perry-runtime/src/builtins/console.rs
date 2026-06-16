@@ -1336,11 +1336,13 @@ pub extern "C" fn js_console_assert_spread(cond: f64, args_arr_handle: i64) {
 
 // === console.trace ===
 //
-// Node writes `Trace: <msg>` + a JS stack trace to **stderr**. Perry can't
-// reproduce Node's TS source positions without a source-map / DWARF pass,
-// but `std::backtrace::Backtrace::force_capture()` gives us the native
-// call stack for free — good enough to see *where* the trace was called
-// from, which is what issue #20 is actually asking for.
+// Node writes `Trace: <msg>` + a JS stack trace to **stderr**. Perry's stack
+// traces are intentionally coarse (see `error.rs` `make_stack`: "Real stack
+// traces are not implemented"), so console.trace emits the same `at <anonymous>`
+// frame `Error().stack` does. We deliberately do NOT use
+// `std::backtrace::Backtrace::force_capture()`: it pulled the std DWARF
+// symbolizer (gimli/addr2line/dwarf, ~143KB) into every binary, and on stripped
+// release builds every frame symbolicated to `__mh_execute_header` anyway.
 #[no_mangle]
 pub extern "C" fn js_console_trace(value: f64) {
     let jsval = JSValue::from_bits(value.to_bits());
@@ -1364,56 +1366,12 @@ pub extern "C" fn js_console_trace(value: f64) {
     } else {
         eprintln!("Trace: {}", format_jsvalue(value, 0));
     }
-    let bt = std::backtrace::Backtrace::force_capture();
-    let rendered = format!("{}", bt);
-    // Parse the Display output into (header, continuation*) frames. The
-    // header looks like "   N: symbol" and each continuation starts with
-    // "at …". Drop frames whose header matches internal noise (the
-    // std::backtrace plumbing itself, plus `js_console_trace` — the user
-    // already sees `Trace:` above). Collapse consecutive identical headers
-    // (what you get on stripped builds, where every frame symbolicates to
-    // `__mh_execute_header`).
-    let noise = ["backtrace", "Backtrace::", "js_console_trace"];
-    let is_header =
-        |t: &str| t.chars().next().is_some_and(|c| c.is_ascii_digit()) && t.contains(':');
-    let mut frames: Vec<(String, Vec<String>)> = Vec::new();
-    for line in rendered.lines() {
-        let t = line.trim_start();
-        if t.is_empty() || t.starts_with("note:") {
-            continue;
-        }
-        if is_header(t) {
-            let sym = t.split_once(':').map(|(_, r)| r.trim()).unwrap_or(t);
-            frames.push((sym.to_string(), Vec::new()));
-        } else if let Some(last) = frames.last_mut() {
-            last.1.push(t.to_string());
-        }
-    }
-    let mut emitted = 0usize;
-    let mut prev_sym: Option<String> = None;
-    let mut dup_run = 0usize;
-    for (sym, cont) in frames {
-        if noise.iter().any(|p| sym.contains(p)) {
-            continue;
-        }
-        if prev_sym.as_deref() == Some(sym.as_str()) {
-            dup_run += 1;
-            continue;
-        }
-        if dup_run > 0 {
-            eprintln!("        (… {} more identical frames)", dup_run);
-            dup_run = 0;
-        }
-        eprintln!("    {}: {}", emitted, sym);
-        for c in cont {
-            eprintln!("             {}", c);
-        }
-        emitted += 1;
-        prev_sym = Some(sym);
-    }
-    if dup_run > 0 {
-        eprintln!("        (… {} more identical frames)", dup_run);
-    }
+    // Perry stack traces are intentionally coarse (error.rs make_stack:
+    // "Real stack traces are not implemented") — match `Error().stack`
+    // and drop the std DWARF symbolizer (gimli/addr2line/dwarf ~143KB) that
+    // `Backtrace::force_capture()` pulls into every binary; on stripped
+    // release builds those frames are all `__mh_execute_header` anyway.
+    emit_console_trace_stack();
 }
 
 #[no_mangle]
@@ -1433,55 +1391,9 @@ pub extern "C" fn js_console_trace_spread(arr_ptr: *const crate::array::ArrayHea
 }
 
 fn emit_console_trace_stack() {
-    let bt = std::backtrace::Backtrace::force_capture();
-    let rendered = format!("{}", bt);
-    let noise = [
-        "backtrace",
-        "Backtrace::",
-        "js_console_trace",
-        "js_console_trace_spread",
-        "emit_console_trace_stack",
-    ];
-    let is_header =
-        |t: &str| t.chars().next().is_some_and(|c| c.is_ascii_digit()) && t.contains(':');
-    let mut frames: Vec<(String, Vec<String>)> = Vec::new();
-    for line in rendered.lines() {
-        let t = line.trim_start();
-        if t.is_empty() || t.starts_with("note:") {
-            continue;
-        }
-        if is_header(t) {
-            let sym = t.split_once(':').map(|(_, r)| r.trim()).unwrap_or(t);
-            frames.push((sym.to_string(), Vec::new()));
-        } else if let Some(last) = frames.last_mut() {
-            last.1.push(t.to_string());
-        }
-    }
-    let mut emitted = 0usize;
-    let mut prev_sym: Option<String> = None;
-    let mut dup_run = 0usize;
-    for (sym, cont) in frames {
-        if noise.iter().any(|p| sym.contains(p)) {
-            continue;
-        }
-        if prev_sym.as_deref() == Some(sym.as_str()) {
-            dup_run += 1;
-            continue;
-        }
-        if dup_run > 0 {
-            eprintln!("        (… {} more identical frames)", dup_run);
-            dup_run = 0;
-        }
-        eprintln!("    {}: {}", emitted, sym);
-        for c in cont.into_iter().take(2) {
-            eprintln!("        {}", c);
-        }
-        emitted += 1;
-        prev_sym = Some(sym);
-        if emitted >= 8 {
-            break;
-        }
-    }
+    // Coarse JS frame, consistent with `Error().stack`. Avoids
+    // `std::backtrace::Backtrace` so the std DWARF symbolizer is not linked.
+    eprintln!("    at <anonymous>");
 }
 
 // === console.clear ===

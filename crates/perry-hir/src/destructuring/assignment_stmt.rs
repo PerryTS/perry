@@ -38,6 +38,7 @@ fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
         }),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 

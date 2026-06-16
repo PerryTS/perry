@@ -176,6 +176,46 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // lowered to `0.0` and any subsequent member access returned
     // undefined, tripping the spec property-access throw.
     module.declare_function("js_create_native_module_namespace", DOUBLE, &[PTR, I64]);
+    // Per-module native-module dispatch-install symbols (devirt). Codegen emits
+    // the matching one at each js_create_native_module_namespace site.
+    module.declare_function("js_nm_install_assert", VOID, &[]);
+    module.declare_function("js_nm_install_async_hooks", VOID, &[]);
+    module.declare_function("js_nm_install_bigint", VOID, &[]);
+    module.declare_function("js_nm_install_buffer", VOID, &[]);
+    module.declare_function("js_nm_install_child_process", VOID, &[]);
+    module.declare_function("js_nm_install_cluster", VOID, &[]);
+    module.declare_function("js_nm_install_console", VOID, &[]);
+    module.declare_function("js_nm_install_crypto", VOID, &[]);
+    module.declare_function("js_nm_install_dgram", VOID, &[]);
+    module.declare_function("js_nm_install_dns", VOID, &[]);
+    module.declare_function("js_nm_install_domain", VOID, &[]);
+    module.declare_function("js_nm_install_events", VOID, &[]);
+    module.declare_function("js_nm_install_fs", VOID, &[]);
+    module.declare_function("js_nm_install_http", VOID, &[]);
+    module.declare_function("js_nm_install_inspector", VOID, &[]);
+    module.declare_function("js_nm_install_module", VOID, &[]);
+    module.declare_function("js_nm_install_net", VOID, &[]);
+    module.declare_function("js_nm_install_os", VOID, &[]);
+    module.declare_function("js_nm_install_path", VOID, &[]);
+    module.declare_function("js_nm_install_perf", VOID, &[]);
+    module.declare_function("js_nm_install_process", VOID, &[]);
+    module.declare_function("js_nm_install_punycode", VOID, &[]);
+    module.declare_function("js_nm_install_querystring", VOID, &[]);
+    module.declare_function("js_nm_install_readline", VOID, &[]);
+    module.declare_function("js_nm_install_repl", VOID, &[]);
+    module.declare_function("js_nm_install_sea", VOID, &[]);
+    module.declare_function("js_nm_install_sqlite", VOID, &[]);
+    module.declare_function("js_nm_install_stream", VOID, &[]);
+    module.declare_function("js_nm_install_timers", VOID, &[]);
+    module.declare_function("js_nm_install_tls", VOID, &[]);
+    module.declare_function("js_nm_install_tty", VOID, &[]);
+    module.declare_function("js_nm_install_url", VOID, &[]);
+    module.declare_function("js_nm_install_util", VOID, &[]);
+    module.declare_function("js_nm_install_v8", VOID, &[]);
+    module.declare_function("js_nm_install_vm", VOID, &[]);
+    module.declare_function("js_nm_install_wasi", VOID, &[]);
+    module.declare_function("js_nm_install_zlib", VOID, &[]);
+    module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
     // Object rest destructuring: copy all properties from src except excluded keys.
     // Takes a src object ptr and an array of NaN-boxed strings (the excluded keys),
