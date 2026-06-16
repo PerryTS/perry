@@ -72,10 +72,8 @@ pub(crate) fn pre_register_forward_captured_lets(
                         }
                         let already_in_scope = ctx
                             .locals
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .any(|(idx, (n, _, _))| n == &name && idx >= body_entry_locals_len);
+                            .lookup_index_in_scope(&name, body_entry_locals_len)
+                            .is_some();
                         if !already_in_scope {
                             let id = ctx.define_local(name, Type::Any);
                             ctx.var_hoisted_ids.insert(id);
@@ -558,11 +556,13 @@ fn predefine_var_bindings_in_function_body(
     let mut created = Vec::new();
     let scope_start = ctx.scope_local_marks.last().copied().unwrap_or(0);
     for name in names {
-        let existing_current_scope = ctx.locals[scope_start..]
-            .iter()
-            .rev()
-            .find(|(n, _, _)| n == &name)
-            .map(|(_, id, _)| *id);
+        // O(1) innermost-in-scope lookup instead of an O(n) reverse scan of
+        // `locals[scope_start..]` per var name — the per-binding scan made a
+        // function body with N `var`s lower in O(n²) (#5267).
+        let existing_current_scope = ctx
+            .locals
+            .lookup_index_in_scope(&name, scope_start)
+            .map(|pos| ctx.locals[pos].1);
         let local_id = existing_current_scope.unwrap_or_else(|| {
             let id = ctx.define_local(name.clone(), Type::Any);
             created.push((name, id));
