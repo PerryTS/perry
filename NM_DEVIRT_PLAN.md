@@ -62,7 +62,18 @@ sound graceful degradation (install_all), semantics never change with a build fl
     - js_nm_enable_install_all() (black_box'd, sole ref to js_nm_install_all) armed by js_process_get_builtin_module_devirt (codegen getBuiltinModule table target)
     - black_box REQUIRED: else whole-program opt devirtualizes the single-ptr indirect call → re-pins all (per-bucket array is immune, runtime-indexed).
     - Verified: getBuiltinModule(dynamic+literal), require(literal), global process, static import — all byte-identical to node; hello-world __text 4,058,968 (install_all absent). RESIDUAL EDGE: require(runtimeVar) of builtin (module_require.rs:121, not armed) — narrow, likely deferred anyway.
-[ ] constructor-dispatcher (js_new_function_construct, class_registry.rs) — phase 2 (residual child_process/cluster/readline syms still pinned by it; another chunk of __text).
+[x] PHASE 2 DONE (commit 8406fafea) — node-module-namespaced constructor devirt:
+    - 8 direct-call ctor blocks (tty/fs/vm/tls/wasi/readline/repl/stream) in js_new_function_construct
+      → per-module nm_ctor_<m> fns (class_registry.rs) routed via NM_CTOR_REGISTRY, registered by the
+      SAME js_nm_install_<module>() (no new codegen). Globals (URL/WeakSet/Error/TypedArray) stay inline;
+      http/events/zlib/sqlite already dynamic-dispatch.
+    - Measured: hello-world __text 4,058,968 → 3,971,252 (repl fully stripped). TOTAL from baseline
+      4,667,824 → 3,971,252 = −696,572 (−14.9%); binary 5.4MB → ~4.6MB.
+    - Correct: new stream.Readable/Writable/Transform, global new URL/TextEncoder/WeakSet/Error/Uint8Array,
+      + all 6 phase-1 cases.
+[ ] PHASE 3 (diminishing returns) — residual node_stream/tls/child_process/cluster pinned by INTRA-subsystem
+    refs (js_node_stream_from_web→readable_new) + method-dispatch internals that construct streams. Would
+    need devirtualizing those internal paths too.
 
 ## Generators (in /tmp, re-runnable from git HEAD)
 /tmp/nm_generate.py (dispatch file), /tmp/nm_gen_registry.py (registry). Both read
