@@ -813,8 +813,12 @@ mod tests {
         // Unique location so this test's recorded site is identifiable even if
         // sibling tests push to the process-global sink concurrently.
         let loc = "/app/unimpl_defers_fixture.ts:42";
-        let decision =
-            check_unimplemented_api("`process.binding` is not implemented (#463)", "process.binding", loc, 0);
+        let decision = check_unimplemented_api(
+            "`process.binding` is not implemented (#463)",
+            "process.binding",
+            loc,
+            0,
+        );
         match decision {
             UnimplementedDecision::DeferToRuntimeError(msg) => {
                 assert!(msg.contains("process.binding"), "msg: {msg}");
