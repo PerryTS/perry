@@ -643,9 +643,9 @@ fn lower_assignment_target(
                                 {
                                     None
                                 } else if ctx.lookup_class(&cls_name).is_some()
-                                    && ctx.lookup_class_accessor_names(&cls_name).is_some_and(
-                                        |names| names.iter().any(|n| n == &method_name),
-                                    )
+                                    && ctx
+                                        .lookup_class_accessor_names(&cls_name)
+                                        .is_some_and(|names| names.contains_any(&method_name))
                                 {
                                     // `C.prototype.<accessor> = v` where `<accessor>`
                                     // is a `set`/`get` declared on the class is an

@@ -10,6 +10,7 @@ use perry_types::{FuncId, GlobalId, LocalId, Type, TypeParam};
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::*;
+use crate::ClassAccessorNames;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WithEnvFrame {
@@ -106,7 +107,7 @@ pub struct LoweringContext {
     /// avoiding the creation of shadow fields that cause later index shift bugs after
     /// inheritance resolution in codegen.
     pub(crate) class_field_names: Vec<(String, Vec<String>)>,
-    /// Issue #665 (sixth pass): per-class set of getter+setter property names.
+    /// Issue #665 (sixth pass): per-class set of getter and setter property names.
     /// Used by the "infer fields from ctor body `this.x = ...`" pass to avoid
     /// mis-categorising a setter assignment as an own data field — the
     /// rate-limiter-flexible `set points(v)` / `this.points = opts.points`
@@ -116,7 +117,7 @@ pub struct LoweringContext {
     /// Populated alongside `register_class_field_names`; looked up via
     /// `lookup_class_accessor_names` and walked across the parent chain when
     /// processing a subclass's ctor body.
-    pub(crate) class_accessor_names: Vec<(String, Vec<String>)>,
+    pub(crate) class_accessor_names: Vec<(String, ClassAccessorNames)>,
     /// Issue #562: class name → `(module, class)` tuple from
     /// `native_extends`. Populated when lowering each class, consumed by
     /// `destructuring.rs` to register `let x = new SubclassOfStream()`

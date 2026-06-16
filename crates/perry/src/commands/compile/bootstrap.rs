@@ -164,7 +164,7 @@ pub(super) fn rerun_collect_with_class_field_types(
         return Ok(());
     }
     let mut field_map: HashMap<String, Vec<(String, perry_types::Type)>> = HashMap::new();
-    let mut accessor_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut accessor_map: HashMap<String, perry_hir::ClassAccessorNames> = HashMap::new();
     let mut parent_map: HashMap<String, String> = HashMap::new();
     for hir_module in ctx.native_modules.values() {
         for class in &hir_module.classes {
@@ -174,17 +174,12 @@ pub(super) fn rerun_collect_with_class_field_types(
                 .map(|f| (f.name.clone(), f.ty.clone()))
                 .collect();
             field_map.entry(class.name.clone()).or_insert(fields);
-            let mut accessors = Vec::new();
-            let mut seen = HashSet::new();
-            for name in class
-                .getters
-                .iter()
-                .map(|(n, _)| n)
-                .chain(class.setters.iter().map(|(n, _)| n))
-            {
-                if seen.insert(name.clone()) {
-                    accessors.push(name.clone());
-                }
+            let mut accessors = perry_hir::ClassAccessorNames::default();
+            for (name, _) in &class.getters {
+                accessors.insert_getter(name.clone());
+            }
+            for (name, _) in &class.setters {
+                accessors.insert_setter(name.clone());
             }
             accessor_map.entry(class.name.clone()).or_insert(accessors);
             if let Some(parent_name) = &class.extends_name {
@@ -203,12 +198,7 @@ pub(super) fn rerun_collect_with_class_field_types(
                 continue;
             }
             let entry = accessor_map.entry(class_name).or_default();
-            for accessor in parent_accessors {
-                if !entry.contains(&accessor) {
-                    entry.push(accessor);
-                    changed = true;
-                }
-            }
+            changed |= entry.extend_from(&parent_accessors);
         }
     }
     if field_map.is_empty() && accessor_map.is_empty() {

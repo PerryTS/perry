@@ -285,7 +285,7 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
-    imported_class_accessors: Option<&std::collections::HashMap<String, Vec<String>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
 ) -> Result<(Module, ClassId)> {
     lower_module_full(
@@ -338,7 +338,7 @@ pub fn lower_module_full(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
-    imported_class_accessors: Option<&std::collections::HashMap<String, Vec<String>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
     is_external_module: bool,
 ) -> Result<(Module, ClassId)> {

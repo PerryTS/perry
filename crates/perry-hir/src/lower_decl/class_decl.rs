@@ -997,8 +997,7 @@ pub fn lower_class_decl(
         // accessor when a subclass instance's `.points` was read across
         // modules (the runtime's setter dispatch walks the class vtable
         // chain correctly, but the spurious own-data slot wins lookup).
-        let mut accessor_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut accessor_names = crate::ClassAccessorNames::default();
         for member in &class_decl.class.body {
             match member {
                 ast::ClassMember::Method(m)
@@ -1010,12 +1009,29 @@ pub fn lower_class_decl(
                         ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
                         _ => continue,
                     };
-                    accessor_names.insert(key);
+                    match m.kind {
+                        ast::MethodKind::Getter => {
+                            accessor_names.insert_getter(key);
+                        }
+                        ast::MethodKind::Setter => {
+                            accessor_names.insert_setter(key);
+                        }
+                        _ => {}
+                    }
                 }
                 ast::ClassMember::PrivateMethod(m)
                     if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
                 {
-                    accessor_names.insert(format!("#{}", m.key.name));
+                    let key = format!("#{}", m.key.name);
+                    match m.kind {
+                        ast::MethodKind::Getter => {
+                            accessor_names.insert_getter(key);
+                        }
+                        ast::MethodKind::Setter => {
+                            accessor_names.insert_setter(key);
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -1025,9 +1041,7 @@ pub fn lower_class_decl(
         // on the direct parent suffices.
         if let Some(ref parent_name) = extends_name {
             if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
-                for a in parent_accessors {
-                    accessor_names.insert(a.clone());
-                }
+                accessor_names.extend_from(parent_accessors);
             }
         }
 
@@ -1074,7 +1088,7 @@ pub fn lower_class_decl(
                                             let fname = prop_ident.sym.to_string();
                                             if !declared_field_names.contains(&fname)
                                                 && !inherited_field_names.contains(&fname)
-                                                && !accessor_names.contains(&fname)
+                                                && !accessor_names.contains_any(&fname)
                                                 && !method_names.contains(&fname)
                                             {
                                                 fields.push(ClassField {
@@ -1112,10 +1126,9 @@ pub fn lower_class_decl(
 
         // Issue #665: register own+inherited accessor names so subclasses
         // lowered after this one can also skip them when scanning ctor
-        // bodies. `accessor_names` already contains the union from the
-        // parent-chain lookup above.
-        let accessor_list: Vec<String> = accessor_names.into_iter().collect();
-        ctx.register_class_accessor_names(name.clone(), accessor_list);
+        // bodies. `accessor_names` already contains the getter/setter names
+        // from the parent-chain lookup above.
+        ctx.register_class_accessor_names(name.clone(), accessor_names);
 
         // Issue #302: also register field TYPES so the for-of arm can
         // detect `for (... of this.someMap)` patterns. Only own fields are
@@ -1662,19 +1675,19 @@ pub fn lower_class_from_ast(
     // `var C = class { set ''(p){…} }; C.prototype[''] = v`) were silently
     // dropped to `RegisterPrototypeMethod`. Test262 accessor-name-inst setters.
     {
-        let mut accessor_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for (prop_name, _) in getters.iter().chain(setters.iter()) {
-            accessor_names.insert(prop_name.clone());
+        let mut accessor_names = crate::ClassAccessorNames::default();
+        for (prop_name, _) in &getters {
+            accessor_names.insert_getter(prop_name.clone());
+        }
+        for (prop_name, _) in &setters {
+            accessor_names.insert_setter(prop_name.clone());
         }
         if let Some(ref parent_name) = extends_name {
             if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
-                for a in parent_accessors {
-                    accessor_names.insert(a.clone());
-                }
+                accessor_names.extend_from(parent_accessors);
             }
         }
-        ctx.register_class_accessor_names(name.to_string(), accessor_names.into_iter().collect());
+        ctx.register_class_accessor_names(name.to_string(), accessor_names);
     }
 
     // Issue #740: synthesize __perry_cap_* capture machinery for class

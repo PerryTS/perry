@@ -60,6 +60,14 @@ export class BaseTexture {
     this.source.data = value;
   }
 
+  get readOnlyTag(): string {
+    return "base-read-only";
+  }
+
+  set writeOnlyTag(value: string) {
+    this.source.writeOnlyTag = value;
+  }
+
   set needsUpdate(value: boolean) {
     if (value === true) {
       this.version++;
@@ -106,6 +114,7 @@ class DataTextureLike extends BaseTexture {
     this.generateMipmaps = false;
     this.flipY = false;
     this.unpackAlignment = 1;
+    this.writeOnlyTag = "ctor-setter";
   }
 }
 
@@ -119,16 +128,23 @@ assert(texture.image !== undefined, "inherited getter returned image");
 assert(texture.image.data === payload, "payload identity preserved");
 assert(texture.image.width === 2, "width preserved");
 assert(texture.image.height === 1, "height preserved");
+assert(texture.readOnlyTag === "base-read-only", "getter-only inherited accessor read");
+assert(texture.source.writeOnlyTag === "ctor-setter", "setter-only inherited accessor constructor write");
 assert(texture.magFilter === NearestFilter, "magFilter subclass default");
 assert(texture.minFilter === NearestFilter, "minFilter subclass default");
 assert(texture.generateMipmaps === false, "subclass generateMipmaps override");
 assert(texture.flipY === false, "subclass flipY override");
 assert(texture.unpackAlignment === 1, "subclass unpackAlignment override");
 assert(!Object.keys(texture).includes("image"), "accessor write did not create own image slot");
+assert(!Object.keys(texture).includes("readOnlyTag"), "getter-only inherited accessor did not create own slot");
+assert(!Object.keys(texture).includes("writeOnlyTag"), "setter-only inherited accessor did not create own slot");
 
 const replacement = { data: payload, width: 4, height: 3 };
 texture.image = replacement;
 assert(texture.image === replacement, "inherited setter assignment round-trips");
+
+texture.writeOnlyTag = "post-constructor";
+assert(texture.source.writeOnlyTag === "post-constructor", "setter-only inherited accessor post-constructor write");
 
 texture.needsUpdate = true;
 assert(texture.version === 1, "needsUpdate increments texture version");

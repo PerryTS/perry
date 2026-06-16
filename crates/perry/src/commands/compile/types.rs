@@ -623,8 +623,9 @@ pub struct CompilationContext {
     /// Cross-module class accessor names collected alongside field types.
     /// HIR lowering uses this to avoid inferring subclass `this.x = ...`
     /// constructor writes as data fields when `x` is an inherited accessor
-    /// from an imported superclass.
-    pub cross_module_class_accessors: HashMap<String, Vec<String>>,
+    /// from an imported superclass. Getter and setter names stay separate so
+    /// imported accessors preserve their JavaScript descriptor capabilities.
+    pub cross_module_class_accessors: HashMap<String, perry_hir::ClassAccessorNames>,
     /// Minimum Windows version for `--target windows` builds. One of `"7"`,
     /// `"8"`, `"10"`. `"10"` (default) means "no subsystem version suffix";
     /// `"7"` and `"8"` emit `,5.1` / `,6.02` on the linker `/SUBSYSTEM:` flag
