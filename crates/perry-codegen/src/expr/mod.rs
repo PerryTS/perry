@@ -399,6 +399,14 @@ pub(crate) struct FnCtx<'a> {
     /// native constructor lowering read `const init = {...}; new Request(url,
     /// init)` with the same field extractor used for inline object literals.
     pub option_object_locals: std::collections::HashMap<u32, Vec<(String, Expr)>>,
+    /// LocalIds of immutable locals provably initialized from an object
+    /// literal (`const o = { … }`, including method-bearing literals that
+    /// lower to an object-building IIFE). #5271: a builtin-named method on
+    /// such a receiver (`o.trim()`, joi's `internals.trim(v, s)`) is the
+    /// object's OWN method, never `String.prototype.<m>` — so the static
+    /// String-method fast path must NOT claim it even when the call's arity
+    /// happens to match the String builtin.
+    pub object_literal_locals: std::collections::HashSet<u32>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
     /// Locals that are namespace imports (`import * as X from "./mod"`).
