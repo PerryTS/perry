@@ -1674,7 +1674,9 @@ pub(crate) unsafe fn nm_ctor_fs(
     args_len: usize,
 ) -> Option<f64> {
     if method == "Utf8Stream" {
-        return Some(crate::fs::js_fs_utf8_stream_new(nm_ctor_arg(args_ptr, args_len, 0)));
+        return Some(crate::fs::js_fs_utf8_stream_new(nm_ctor_arg(
+            args_ptr, args_len, 0,
+        )));
     }
     if matches!(
         method,

@@ -130,100 +130,118 @@ pub(crate) struct NmCtx {
 
 /// General (non-path) marshalling closures from the old prologue. Identifiers are
 /// passed in so the `let` bindings carry call-site hygiene (visible to the arms).
-macro_rules! nm_general_closures { ($obj:ident, $args_ptr:ident, $args_len:ident, $arg:ident, $i32_arg:ident, $bool_to_f64:ident, $str_to_f64:ident, $pack_args:ident, $pack_args_from:ident, $bool_tag:ident, $ptr_addr:ident, $optional_ptr_addr:ident, $_arg_event_ptr:ident, $arg_bits:ident, $_arg_closure_ptr:ident, $ptr_to_f64:ident, $typed_kind:ident) => {
-    let $arg = |n: usize| -> f64 {
-        if n < $args_len && !$args_ptr.is_null() {
-            *$args_ptr.add(n)
-        } else {
-            f64::from_bits(JSValue::undefined().bits())
-        }
+macro_rules! nm_general_closures {
+    ($obj:ident, $args_ptr:ident, $args_len:ident, $arg:ident, $i32_arg:ident, $bool_to_f64:ident, $str_to_f64:ident, $pack_args:ident, $pack_args_from:ident, $bool_tag:ident, $ptr_addr:ident, $optional_ptr_addr:ident, $_arg_event_ptr:ident, $arg_bits:ident, $_arg_closure_ptr:ident, $ptr_to_f64:ident, $typed_kind:ident) => {
+        let $arg = |n: usize| -> f64 {
+            if n < $args_len && !$args_ptr.is_null() {
+                *$args_ptr.add(n)
+            } else {
+                f64::from_bits(JSValue::undefined().bits())
+            }
+        };
+        let $i32_arg = |n: usize| -> i32 {
+            let v = $arg(n);
+            let bits = v.to_bits();
+            if (bits >> 48) == 0x7FFE {
+                return (bits & 0xFFFF_FFFF) as u32 as i32;
+            }
+            if v.is_nan() || v.is_infinite() {
+                0
+            } else {
+                v as i32
+            }
+        };
+        let $bool_to_f64 = |v: i32| -> f64 {
+            if v != 0 {
+                f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
+            } else {
+                f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
+            }
+        };
+        let $str_to_f64 = |ptr: *mut crate::StringHeader| -> f64 {
+            f64::from_bits(JSValue::string_ptr(ptr).bits())
+        };
+        let $pack_args = || -> *mut crate::array::ArrayHeader {
+            let mut arr = crate::array::js_array_alloc($args_len as u32);
+            for i in 0..$args_len {
+                arr = crate::array::js_array_push_f64(arr, $arg(i));
+            }
+            arr
+        };
+        let $pack_args_from = |start: usize| -> *mut crate::array::ArrayHeader {
+            let len = $args_len.saturating_sub(start);
+            let mut arr = crate::array::js_array_alloc(len as u32);
+            for i in start..$args_len {
+                arr = crate::array::js_array_push_f64(arr, $arg(i));
+            }
+            arr
+        };
+        let $bool_tag = |v: bool| -> f64 {
+            if v {
+                f64::from_bits(0x7FFC_0000_0000_0004)
+            } else {
+                f64::from_bits(0x7FFC_0000_0000_0003)
+            }
+        };
+        let $ptr_addr = |v: f64| -> usize {
+            let bits = v.to_bits();
+            if (bits >> 48) >= 0x7FF8 {
+                (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+            } else {
+                bits as usize
+            }
+        };
+        let $optional_ptr_addr = |v: f64| -> usize {
+            let value = JSValue::from_bits(v.to_bits());
+            if value.is_undefined() || value.is_null() {
+                0
+            } else {
+                $ptr_addr(v)
+            }
+        };
+        let $_arg_event_ptr = |n: usize| -> *const crate::StringHeader {
+            crate::value::js_get_string_pointer_unified($arg(n)) as *const crate::StringHeader
+        };
+        let $arg_bits = |n: usize| -> i64 { $arg(n).to_bits() as i64 };
+        let $_arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
+            if n >= $args_len {
+                return std::ptr::null();
+            }
+            let v = $arg(n);
+            let jsv = JSValue::from_bits(v.to_bits());
+            if jsv.is_undefined() || jsv.is_null() {
+                std::ptr::null()
+            } else {
+                $ptr_addr(v) as *const crate::closure::ClosureHeader
+            }
+        };
+        let $ptr_to_f64 = |ptr: *const u8| -> f64 { f64::from_bits(JSValue::pointer(ptr).bits()) };
+        let $typed_kind = |v: f64| -> Option<u8> {
+            let addr = $ptr_addr(v);
+            if crate::buffer::is_uint8array_buffer(addr) {
+                Some(crate::typedarray::KIND_UINT8)
+            } else {
+                crate::typedarray::lookup_typed_array_kind(addr)
+            }
+        };
+        let _ = (
+            &$arg,
+            &$i32_arg,
+            &$bool_to_f64,
+            &$str_to_f64,
+            &$pack_args,
+            &$pack_args_from,
+            &$bool_tag,
+            &$ptr_addr,
+            &$optional_ptr_addr,
+            &$_arg_event_ptr,
+            &$arg_bits,
+            &$_arg_closure_ptr,
+            &$ptr_to_f64,
+            &$typed_kind,
+        );
     };
-    let $i32_arg = |n: usize| -> i32 {
-        let v = $arg(n);
-        let bits = v.to_bits();
-        if (bits >> 48) == 0x7FFE {
-            return (bits & 0xFFFF_FFFF) as u32 as i32;
-        }
-        if v.is_nan() || v.is_infinite() {
-            0
-        } else {
-            v as i32
-        }
-    };
-    let $bool_to_f64 = |v: i32| -> f64 {
-        if v != 0 {
-            f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
-        } else {
-            f64::from_bits(0x7FFC_0000_0000_0003) // TAG_FALSE
-        }
-    };
-    let $str_to_f64 =
-        |ptr: *mut crate::StringHeader| -> f64 { f64::from_bits(JSValue::string_ptr(ptr).bits()) };
-    let $pack_args = || -> *mut crate::array::ArrayHeader {
-        let mut arr = crate::array::js_array_alloc($args_len as u32);
-        for i in 0..$args_len {
-            arr = crate::array::js_array_push_f64(arr, $arg(i));
-        }
-        arr
-    };
-    let $pack_args_from = |start: usize| -> *mut crate::array::ArrayHeader {
-        let len = $args_len.saturating_sub(start);
-        let mut arr = crate::array::js_array_alloc(len as u32);
-        for i in start..$args_len {
-            arr = crate::array::js_array_push_f64(arr, $arg(i));
-        }
-        arr
-    };
-    let $bool_tag = |v: bool| -> f64 {
-        if v {
-            f64::from_bits(0x7FFC_0000_0000_0004)
-        } else {
-            f64::from_bits(0x7FFC_0000_0000_0003)
-        }
-    };
-    let $ptr_addr = |v: f64| -> usize {
-        let bits = v.to_bits();
-        if (bits >> 48) >= 0x7FF8 {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else {
-            bits as usize
-        }
-    };
-    let $optional_ptr_addr = |v: f64| -> usize {
-        let value = JSValue::from_bits(v.to_bits());
-        if value.is_undefined() || value.is_null() {
-            0
-        } else {
-            $ptr_addr(v)
-        }
-    };
-    let $_arg_event_ptr = |n: usize| -> *const crate::StringHeader {
-        crate::value::js_get_string_pointer_unified($arg(n)) as *const crate::StringHeader
-    };
-    let $arg_bits = |n: usize| -> i64 { $arg(n).to_bits() as i64 };
-    let $_arg_closure_ptr = |n: usize| -> *const crate::closure::ClosureHeader {
-        if n >= $args_len {
-            return std::ptr::null();
-        }
-        let v = $arg(n);
-        let jsv = JSValue::from_bits(v.to_bits());
-        if jsv.is_undefined() || jsv.is_null() {
-            std::ptr::null()
-        } else {
-            $ptr_addr(v) as *const crate::closure::ClosureHeader
-        }
-    };
-    let $ptr_to_f64 = |ptr: *const u8| -> f64 { f64::from_bits(JSValue::pointer(ptr).bits()) };
-    let $typed_kind = |v: f64| -> Option<u8> {
-        let addr = $ptr_addr(v);
-        if crate::buffer::is_uint8array_buffer(addr) {
-            Some(crate::typedarray::KIND_UINT8)
-        } else {
-            crate::typedarray::lookup_typed_array_kind(addr)
-        }
-    };
-    let _ = (&$arg, &$i32_arg, &$bool_to_f64, &$str_to_f64, &$pack_args, &$pack_args_from, &$bool_tag, &$ptr_addr, &$optional_ptr_addr, &$_arg_event_ptr, &$arg_bits, &$_arg_closure_ptr, &$ptr_to_f64, &$typed_kind,);
-} }
+}
 
 /// Thin router — extract+normalize the module name, dispatch via the per-module
 /// registry. Names no bucket fn, so unused modules dead-strip.
@@ -271,18 +289,52 @@ pub(crate) unsafe fn dispatch_native_module_method(
         "punycode.default" => ("punycode", false),
         _ => (module_name, false),
     };
-    let ctx = NmCtx { obj, args_ptr, args_len, assert_skip_prototype };
+    let ctx = NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    };
     match super::native_module_registry::nm_dispatch_lookup(module_name) {
         Some(f) => f(&ctx, module_name, method_name),
         None => f64::from_bits(JSValue::undefined().bits()),
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("assert", "default") | ("assert/strict", "default") => js_assert_ok(arg(0), arg(1)),
         ("assert", "strict") | ("assert/strict", "strict") => js_assert_ok(arg(0), arg(1)),
@@ -358,11 +410,44 @@ pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
-pub(crate) unsafe fn nm_dispatch_async_hooks(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
+pub(crate) unsafe fn nm_dispatch_async_hooks(
+    ctx: &NmCtx,
+    module_name: &str,
+    method_name: &str,
+) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("async_hooks", "createHook") => {
             ptr_to_f64(crate::async_hooks::js_async_hooks_create_hook(arg(0)) as *const u8)
@@ -378,11 +463,40 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(ctx: &NmCtx, module_name: &str, met
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("bigint", "asIntN") => crate::object::bigint_as_n_dispatch(arg(0), arg(1), true),
         ("bigint", "asUintN") => crate::object::bigint_as_n_dispatch(arg(0), arg(1), false),
@@ -390,11 +504,40 @@ pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("buffer.Buffer", "from") => {
             let data = arg(0);
@@ -484,11 +627,44 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
-pub(crate) unsafe fn nm_dispatch_child_process(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
+pub(crate) unsafe fn nm_dispatch_child_process(
+    ctx: &NmCtx,
+    module_name: &str,
+    method_name: &str,
+) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("child_process", "spawn") => {
             let cmd = crate::string::js_string_materialize_to_heap(arg(0)) as i64;
@@ -531,11 +707,40 @@ pub(crate) unsafe fn nm_dispatch_child_process(ctx: &NmCtx, module_name: &str, m
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_cluster(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("cluster", "setupPrimary") | ("cluster", "setupMaster") => {
             crate::cluster::js_cluster_setup_primary(arg(0))
@@ -574,11 +779,40 @@ pub(crate) unsafe fn nm_dispatch_cluster(ctx: &NmCtx, module_name: &str, method_
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_console(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("console", "Console") => crate::builtins::js_console_new2(arg(0), arg(1)),
         ("console", "log") | ("console", "info") | ("console", "debug") | ("console", "dirxml") => {
@@ -661,11 +895,40 @@ pub(crate) unsafe fn nm_dispatch_console(ctx: &NmCtx, module_name: &str, method_
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("crypto", "randomFillSync") if args_len >= 1 => {
             super::native_module_crypto_random::random_fill_sync(arg(0), arg(1), arg(2))
@@ -740,11 +1003,40 @@ pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_dgram(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         #[cfg(feature = "mod-dgram")]
         ("dgram", "createSocket") | ("dgram", "Socket") => {
@@ -756,11 +1048,40 @@ pub(crate) unsafe fn nm_dispatch_dgram(ctx: &NmCtx, module_name: &str, method_na
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_dns(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("dns", "getServers") => crate::dns::dns_get_servers_value(),
         ("dns", "setServers") => crate::dns::dns_set_servers_value(arg(0)),
@@ -787,11 +1108,40 @@ pub(crate) unsafe fn nm_dispatch_dns(ctx: &NmCtx, module_name: &str, method_name
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_domain(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("domain", "Domain" | "createDomain" | "create") => {
             let ptr =
@@ -808,11 +1158,40 @@ pub(crate) unsafe fn nm_dispatch_domain(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_events(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("events", "init") => f64::from_bits(crate::value::TAG_UNDEFINED),
         ("events", "EventEmitterAsyncResource") => {
@@ -826,11 +1205,40 @@ pub(crate) unsafe fn nm_dispatch_events(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("fs", "_toUnixTimestamp") => crate::fs::js_fs_to_unix_timestamp(arg(0)),
         ("fs", "existsSync") => bool_to_f64(crate::fs::js_fs_exists_sync(arg(0))),
@@ -981,11 +1389,40 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_http(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("http", "validateHeaderName") => js_http_validate_header_name(arg(0), arg(1)),
         ("http", "validateHeaderValue") => js_http_validate_header_value(arg(0), arg(1)),
@@ -1038,11 +1475,44 @@ pub(crate) unsafe fn nm_dispatch_http(ctx: &NmCtx, module_name: &str, method_nam
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
-pub(crate) unsafe fn nm_dispatch_inspector(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
+pub(crate) unsafe fn nm_dispatch_inspector(
+    ctx: &NmCtx,
+    module_name: &str,
+    method_name: &str,
+) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("inspector", "open") => {
             crate::node_inspector::js_node_inspector_open(arg(0), arg(1), arg(2))
@@ -1071,11 +1541,40 @@ pub(crate) unsafe fn nm_dispatch_inspector(ctx: &NmCtx, module_name: &str, metho
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("module", "createRequire") => crate::module_require::js_module_create_require(arg(0)),
         ("module", "enableCompileCache") => crate::process::js_module_enable_compile_cache(arg(0)),
@@ -1107,11 +1606,40 @@ pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
         ("net", "_createServerHandle") => crate::net_validate::js_net_create_server_handle_stub(
@@ -1129,11 +1657,40 @@ pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_os(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("os", "tmpdir") => str_to_f64(crate::os::js_os_tmpdir()),
         ("os", "homedir") => str_to_f64(crate::os::js_os_homedir()),
@@ -1176,11 +1733,40 @@ pub(crate) unsafe fn nm_dispatch_os(ctx: &NmCtx, module_name: &str, method_name:
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     let require_path_str_ptr = |n: usize| -> *const crate::StringHeader {
         if n < args_len {
             let v = arg(n);
@@ -1372,11 +1958,40 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("perf_hooks", "now") => crate::date::js_performance_now(),
         ("perf_hooks", "mark") => crate::perf_hooks::js_perf_mark(arg(0), arg(1)),
@@ -1456,11 +2071,40 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
         ("process", "addListener") => crate::os::js_process_add_listener(arg_bits(0), arg_bits(1)),
@@ -1626,11 +2270,44 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
-pub(crate) unsafe fn nm_dispatch_punycode(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
+pub(crate) unsafe fn nm_dispatch_punycode(
+    ctx: &NmCtx,
+    module_name: &str,
+    method_name: &str,
+) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("punycode", "decode") => crate::punycode::js_punycode_decode(arg(0)),
         ("punycode", "encode") => crate::punycode::js_punycode_encode(arg(0)),
@@ -1650,11 +2327,44 @@ pub(crate) unsafe fn nm_dispatch_punycode(ctx: &NmCtx, module_name: &str, method
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
-pub(crate) unsafe fn nm_dispatch_querystring(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
+pub(crate) unsafe fn nm_dispatch_querystring(
+    ctx: &NmCtx,
+    module_name: &str,
+    method_name: &str,
+) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         (
             "querystring",
@@ -1674,11 +2384,44 @@ pub(crate) unsafe fn nm_dispatch_querystring(ctx: &NmCtx, module_name: &str, met
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
-pub(crate) unsafe fn nm_dispatch_readline(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
+pub(crate) unsafe fn nm_dispatch_readline(
+    ctx: &NmCtx,
+    module_name: &str,
+    method_name: &str,
+) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("readline", "clearLine") => {
             crate::readline_helpers::js_readline_clear_line_args(pack_args())
@@ -1701,11 +2444,40 @@ pub(crate) unsafe fn nm_dispatch_readline(ctx: &NmCtx, module_name: &str, method
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_repl(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("repl", "start") => crate::node_repl::js_repl_start(arg(0)),
         ("repl", "REPLServer") => crate::node_repl::js_repl_repl_server_new(arg(0)),
@@ -1718,11 +2490,40 @@ pub(crate) unsafe fn nm_dispatch_repl(ctx: &NmCtx, module_name: &str, method_nam
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_sea(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("sea", "isSea") => crate::node_sea::js_sea_is_sea(),
         ("sea", "getAsset") => crate::node_sea::js_sea_get_asset(arg(0), arg(1)),
@@ -1738,11 +2539,40 @@ pub(crate) unsafe fn nm_dispatch_sea(ctx: &NmCtx, module_name: &str, method_name
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_sqlite(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("sqlite", _) => {
             let ptr =
@@ -1764,11 +2594,40 @@ pub(crate) unsafe fn nm_dispatch_sqlite(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_stream(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("stream", _) => dispatch_stream_native_module_method(method_name, args_ptr, args_len)
             .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
@@ -1776,11 +2635,40 @@ pub(crate) unsafe fn nm_dispatch_stream(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_timers(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("timers", "setTimeout") if args_len >= 2 => {
             let cb = arg(0);
@@ -1879,11 +2767,40 @@ pub(crate) unsafe fn nm_dispatch_timers(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_tls(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("tls", "getCiphers") => crate::tls::js_tls_get_ciphers(),
         ("tls", "getCACertificates") => crate::tls::js_tls_get_ca_certificates(arg(0)),
@@ -1922,11 +2839,40 @@ pub(crate) unsafe fn nm_dispatch_tls(ctx: &NmCtx, module_name: &str, method_name
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_tty(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("tty", "isatty") => crate::tty::js_tty_isatty(arg(0)),
         ("tty", "ReadStream") => crate::tty::js_tty_read_stream_new(arg(0)),
@@ -1937,11 +2883,40 @@ pub(crate) unsafe fn nm_dispatch_tty(ctx: &NmCtx, module_name: &str, method_name
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_url(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
         ("url", "fileURLToPathBuffer") => {
@@ -1963,11 +2938,40 @@ pub(crate) unsafe fn nm_dispatch_url(ctx: &NmCtx, module_name: &str, method_name
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("util", "format") => crate::builtins::js_util_format(pack_args()),
         ("util", "formatWithOptions") => {
@@ -2217,11 +3221,40 @@ pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_nam
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("v8", "serialize") => crate::node_v8::js_v8_serialize(arg(0)),
         ("v8", "deserialize") => crate::node_v8::js_v8_deserialize(arg(0)),
@@ -2306,11 +3339,40 @@ pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name:
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_vm(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("vm", m) => crate::node_vm::dispatch_vm_method(m, arg(0), arg(1), arg(2)),
         // ── tty module ──
@@ -2318,11 +3380,40 @@ pub(crate) unsafe fn nm_dispatch_vm(ctx: &NmCtx, module_name: &str, method_name:
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
 
@@ -2331,11 +3422,40 @@ pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_nam
     }
 }
 
-#[allow(unused_variables, unused_mut, unused_unsafe, clippy::let_and_return, clippy::all)]
+#[allow(
+    unused_variables,
+    unused_mut,
+    unused_unsafe,
+    clippy::let_and_return,
+    clippy::all
+)]
 pub(crate) unsafe fn nm_dispatch_zlib(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
-    let NmCtx { obj, args_ptr, args_len, assert_skip_prototype } = *ctx;
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
-    nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
     match (module_name, method_name) {
         ("zlib", _) => {
             let ptr =

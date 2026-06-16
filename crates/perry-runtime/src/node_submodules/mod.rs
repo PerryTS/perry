@@ -196,561 +196,577 @@ extern "C" fn thunk_vm_create_context(_closure: *const ClosureHeader, sandbox: f
 
 // ----- per-submodule specs (devirt) -----
 static SUBMOD_VM: SubmoduleSpec = SubmoduleSpec {
-        key: "vm",
-        exports: &[ExportSpec {
-            name: "createContext",
-            thunk: ExportThunk::Fn1(thunk_vm_create_context),
-        }],
-    };
+    key: "vm",
+    exports: &[ExportSpec {
+        name: "createContext",
+        thunk: ExportThunk::Fn1(thunk_vm_create_context),
+    }],
+};
 
 static SUBMOD_TIMERS: SubmoduleSpec = SubmoduleSpec {
-        // node:timers namespace object (`import * as timers`). Named imports
-        // bypass this (compile.rs) to keep the global fast-path. (#1213)
-        key: "timers",
-        exports: &[
-            ExportSpec {
-                name: "setTimeout",
-                thunk: ExportThunk::Fn3(timers_ns_set_timeout),
-            },
-            ExportSpec {
-                name: "setInterval",
-                thunk: ExportThunk::Fn3(timers_ns_set_interval),
-            },
-            ExportSpec {
-                name: "setImmediate",
-                thunk: ExportThunk::Fn2(timers_ns_set_immediate),
-            },
-            ExportSpec {
-                name: "clearTimeout",
-                thunk: ExportThunk::Fn1(timers_ns_clear_timeout),
-            },
-            ExportSpec {
-                name: "clearInterval",
-                thunk: ExportThunk::Fn1(timers_ns_clear_interval),
-            },
-            ExportSpec {
-                name: "clearImmediate",
-                thunk: ExportThunk::Fn1(timers_ns_clear_immediate),
-            },
-        ],
-    };
+    // node:timers namespace object (`import * as timers`). Named imports
+    // bypass this (compile.rs) to keep the global fast-path. (#1213)
+    key: "timers",
+    exports: &[
+        ExportSpec {
+            name: "setTimeout",
+            thunk: ExportThunk::Fn3(timers_ns_set_timeout),
+        },
+        ExportSpec {
+            name: "setInterval",
+            thunk: ExportThunk::Fn3(timers_ns_set_interval),
+        },
+        ExportSpec {
+            name: "setImmediate",
+            thunk: ExportThunk::Fn2(timers_ns_set_immediate),
+        },
+        ExportSpec {
+            name: "clearTimeout",
+            thunk: ExportThunk::Fn1(timers_ns_clear_timeout),
+        },
+        ExportSpec {
+            name: "clearInterval",
+            thunk: ExportThunk::Fn1(timers_ns_clear_interval),
+        },
+        ExportSpec {
+            name: "clearImmediate",
+            thunk: ExportThunk::Fn1(timers_ns_clear_immediate),
+        },
+    ],
+};
 
 static SUBMOD_TIMERS_PROMISES: SubmoduleSpec = SubmoduleSpec {
-        key: "timers_promises",
-        exports: &[
-            ExportSpec {
-                name: "setTimeout",
-                thunk: ExportThunk::Fn3(timers_promises_set_timeout),
-            },
-            ExportSpec {
-                name: "setImmediate",
-                thunk: ExportThunk::Fn2(timers_promises_set_immediate),
-            },
-            ExportSpec {
-                name: "setInterval",
-                thunk: ExportThunk::Fn3(timers_promises_set_interval),
-            },
-            ExportSpec {
-                name: "scheduler",
-                thunk: ExportThunk::Fn1(timers_promises_scheduler),
-            },
-        ],
-    };
+    key: "timers_promises",
+    exports: &[
+        ExportSpec {
+            name: "setTimeout",
+            thunk: ExportThunk::Fn3(timers_promises_set_timeout),
+        },
+        ExportSpec {
+            name: "setImmediate",
+            thunk: ExportThunk::Fn2(timers_promises_set_immediate),
+        },
+        ExportSpec {
+            name: "setInterval",
+            thunk: ExportThunk::Fn3(timers_promises_set_interval),
+        },
+        ExportSpec {
+            name: "scheduler",
+            thunk: ExportThunk::Fn1(timers_promises_scheduler),
+        },
+    ],
+};
 
 static SUBMOD_FS_PROMISES: SubmoduleSpec = SubmoduleSpec {
-        key: "fs_promises",
-        exports: &[
-            ExportSpec {
-                name: "readFile",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_readFile),
-            },
-            ExportSpec {
-                name: "open",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_open),
-            },
-            ExportSpec {
-                name: "writeFile",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_writeFile),
-            },
-            ExportSpec {
-                name: "appendFile",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_appendFile),
-            },
-            ExportSpec {
-                name: "chmod",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_chmod),
-            },
-            ExportSpec {
-                name: "chown",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_chown),
-            },
-            ExportSpec {
-                name: "lchown",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_lchown),
-            },
-            ExportSpec {
-                name: "lchmod",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_lchmod),
-            },
-            ExportSpec {
-                name: "mkdir",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_mkdir),
-            },
-            ExportSpec {
-                name: "readdir",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_readdir),
-            },
-            ExportSpec {
-                name: "stat",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_stat),
-            },
-            ExportSpec {
-                name: "statfs",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_statfs),
-            },
-            ExportSpec {
-                name: "lstat",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_lstat),
-            },
-            ExportSpec {
-                name: "rm",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_rm),
-            },
-            ExportSpec {
-                name: "rmdir",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_rmdir),
-            },
-            ExportSpec {
-                name: "unlink",
-                thunk: ExportThunk::Fn1(thunk_fs_promises_unlink),
-            },
-            ExportSpec {
-                name: "rename",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_rename),
-            },
-            ExportSpec {
-                name: "copyFile",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_copyFile),
-            },
-            ExportSpec {
-                name: "cp",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_cp),
-            },
-            ExportSpec {
-                name: "truncate",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_truncate),
-            },
-            ExportSpec {
-                name: "utimes",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_utimes),
-            },
-            ExportSpec {
-                name: "lutimes",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_lutimes),
-            },
-            ExportSpec {
-                name: "link",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_link),
-            },
-            ExportSpec {
-                name: "symlink",
-                thunk: ExportThunk::Fn3(thunk_fs_promises_symlink),
-            },
-            ExportSpec {
-                name: "readlink",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_readlink),
-            },
-            ExportSpec {
-                name: "realpath",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_realpath),
-            },
-            ExportSpec {
-                name: "mkdtemp",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtemp),
-            },
-            ExportSpec {
-                name: "mkdtempDisposable",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtempDisposable),
-            },
-            ExportSpec {
-                name: "opendir",
-                thunk: ExportThunk::Fn1(thunk_fs_promises_opendir),
-            },
-            ExportSpec {
-                name: "glob",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_glob),
-            },
-            ExportSpec {
-                name: "watch",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_watch),
-            },
-            ExportSpec {
-                name: "access",
-                thunk: ExportThunk::Fn2(thunk_fs_promises_access),
-            },
-            ExportSpec {
-                name: "constants",
-                thunk: ExportThunk::Fn1(thunk_fs_promises_constants),
-            },
-        ],
-    };
+    key: "fs_promises",
+    exports: &[
+        ExportSpec {
+            name: "readFile",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_readFile),
+        },
+        ExportSpec {
+            name: "open",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_open),
+        },
+        ExportSpec {
+            name: "writeFile",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_writeFile),
+        },
+        ExportSpec {
+            name: "appendFile",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_appendFile),
+        },
+        ExportSpec {
+            name: "chmod",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_chmod),
+        },
+        ExportSpec {
+            name: "chown",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_chown),
+        },
+        ExportSpec {
+            name: "lchown",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_lchown),
+        },
+        ExportSpec {
+            name: "lchmod",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_lchmod),
+        },
+        ExportSpec {
+            name: "mkdir",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_mkdir),
+        },
+        ExportSpec {
+            name: "readdir",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_readdir),
+        },
+        ExportSpec {
+            name: "stat",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_stat),
+        },
+        ExportSpec {
+            name: "statfs",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_statfs),
+        },
+        ExportSpec {
+            name: "lstat",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_lstat),
+        },
+        ExportSpec {
+            name: "rm",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_rm),
+        },
+        ExportSpec {
+            name: "rmdir",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_rmdir),
+        },
+        ExportSpec {
+            name: "unlink",
+            thunk: ExportThunk::Fn1(thunk_fs_promises_unlink),
+        },
+        ExportSpec {
+            name: "rename",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_rename),
+        },
+        ExportSpec {
+            name: "copyFile",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_copyFile),
+        },
+        ExportSpec {
+            name: "cp",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_cp),
+        },
+        ExportSpec {
+            name: "truncate",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_truncate),
+        },
+        ExportSpec {
+            name: "utimes",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_utimes),
+        },
+        ExportSpec {
+            name: "lutimes",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_lutimes),
+        },
+        ExportSpec {
+            name: "link",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_link),
+        },
+        ExportSpec {
+            name: "symlink",
+            thunk: ExportThunk::Fn3(thunk_fs_promises_symlink),
+        },
+        ExportSpec {
+            name: "readlink",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_readlink),
+        },
+        ExportSpec {
+            name: "realpath",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_realpath),
+        },
+        ExportSpec {
+            name: "mkdtemp",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtemp),
+        },
+        ExportSpec {
+            name: "mkdtempDisposable",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtempDisposable),
+        },
+        ExportSpec {
+            name: "opendir",
+            thunk: ExportThunk::Fn1(thunk_fs_promises_opendir),
+        },
+        ExportSpec {
+            name: "glob",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_glob),
+        },
+        ExportSpec {
+            name: "watch",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_watch),
+        },
+        ExportSpec {
+            name: "access",
+            thunk: ExportThunk::Fn2(thunk_fs_promises_access),
+        },
+        ExportSpec {
+            name: "constants",
+            thunk: ExportThunk::Fn1(thunk_fs_promises_constants),
+        },
+    ],
+};
 
 static SUBMOD_READLINE_PROMISES: SubmoduleSpec = SubmoduleSpec {
-        key: "readline_promises",
-        exports: &[
-            ExportSpec {
-                name: "createInterface",
-                thunk: ExportThunk::Fn1(thunk_readline_createInterface),
-            },
-            ExportSpec {
-                name: "Interface",
-                thunk: ExportThunk::Fn1(thunk_readline_Interface),
-            },
-            ExportSpec {
-                name: "Readline",
-                thunk: ExportThunk::Fn2(thunk_readline_Readline),
-            },
-        ],
-    };
+    key: "readline_promises",
+    exports: &[
+        ExportSpec {
+            name: "createInterface",
+            thunk: ExportThunk::Fn1(thunk_readline_createInterface),
+        },
+        ExportSpec {
+            name: "Interface",
+            thunk: ExportThunk::Fn1(thunk_readline_Interface),
+        },
+        ExportSpec {
+            name: "Readline",
+            thunk: ExportThunk::Fn2(thunk_readline_Readline),
+        },
+    ],
+};
 
 static SUBMOD_STREAM_PROMISES: SubmoduleSpec = SubmoduleSpec {
-        key: "stream_promises",
-        exports: &[
-            ExportSpec {
-                name: "pipeline",
-                thunk: ExportThunk::Fn3(thunk_streamP_pipeline),
-            },
-            ExportSpec {
-                name: "finished",
-                thunk: ExportThunk::Fn2(thunk_streamP_finished),
-            },
-        ],
-    };
+    key: "stream_promises",
+    exports: &[
+        ExportSpec {
+            name: "pipeline",
+            thunk: ExportThunk::Fn3(thunk_streamP_pipeline),
+        },
+        ExportSpec {
+            name: "finished",
+            thunk: ExportThunk::Fn2(thunk_streamP_finished),
+        },
+    ],
+};
 
 static SUBMOD_STREAM_CONSUMERS: SubmoduleSpec = SubmoduleSpec {
-        key: "stream_consumers",
-        exports: &[
-            ExportSpec {
-                name: "text",
-                thunk: ExportThunk::Fn1(thunk_consumers_text),
-            },
-            ExportSpec {
-                name: "json",
-                thunk: ExportThunk::Fn1(thunk_consumers_json),
-            },
-            ExportSpec {
-                name: "buffer",
-                thunk: ExportThunk::Fn1(thunk_consumers_buffer),
-            },
-            ExportSpec {
-                name: "arrayBuffer",
-                thunk: ExportThunk::Fn1(thunk_consumers_arrayBuffer),
-            },
-            ExportSpec {
-                name: "bytes",
-                thunk: ExportThunk::Fn1(thunk_consumers_bytes),
-            },
-            ExportSpec {
-                name: "blob",
-                thunk: ExportThunk::Fn1(thunk_consumers_blob),
-            },
-        ],
-    };
+    key: "stream_consumers",
+    exports: &[
+        ExportSpec {
+            name: "text",
+            thunk: ExportThunk::Fn1(thunk_consumers_text),
+        },
+        ExportSpec {
+            name: "json",
+            thunk: ExportThunk::Fn1(thunk_consumers_json),
+        },
+        ExportSpec {
+            name: "buffer",
+            thunk: ExportThunk::Fn1(thunk_consumers_buffer),
+        },
+        ExportSpec {
+            name: "arrayBuffer",
+            thunk: ExportThunk::Fn1(thunk_consumers_arrayBuffer),
+        },
+        ExportSpec {
+            name: "bytes",
+            thunk: ExportThunk::Fn1(thunk_consumers_bytes),
+        },
+        ExportSpec {
+            name: "blob",
+            thunk: ExportThunk::Fn1(thunk_consumers_blob),
+        },
+    ],
+};
 
 static SUBMOD_STREAM_WEB: SubmoduleSpec = SubmoduleSpec {
-        key: "stream_web",
-        exports: &[
-            ExportSpec {
-                name: "ReadableStream",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "ReadableStreamDefaultReader",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "ReadableStreamBYOBReader",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "ReadableStreamDefaultController",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "ReadableByteStreamController",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "ReadableStreamBYOBRequest",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "WritableStream",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "WritableStreamDefaultWriter",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "WritableStreamDefaultController",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "TransformStream",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "TransformStreamDefaultController",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "ByteLengthQueuingStrategy",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "CountQueuingStrategy",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "TextEncoderStream",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "TextDecoderStream",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "CompressionStream",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-            ExportSpec {
-                name: "DecompressionStream",
-                thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
-            },
-        ],
-    };
+    key: "stream_web",
+    exports: &[
+        ExportSpec {
+            name: "ReadableStream",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "ReadableStreamDefaultReader",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "ReadableStreamBYOBReader",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "ReadableStreamDefaultController",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "ReadableByteStreamController",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "ReadableStreamBYOBRequest",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "WritableStream",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "WritableStreamDefaultWriter",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "WritableStreamDefaultController",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "TransformStream",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "TransformStreamDefaultController",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "ByteLengthQueuingStrategy",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "CountQueuingStrategy",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "TextEncoderStream",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "TextDecoderStream",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "CompressionStream",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+        ExportSpec {
+            name: "DecompressionStream",
+            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+        },
+    ],
+};
 
 static SUBMOD_HONO_JSX_SERVER: SubmoduleSpec = SubmoduleSpec {
-        key: "hono_jsx_server",
-        exports: &[
-            ExportSpec {
-                name: "jsx",
-                thunk: ExportThunk::Fn2(thunk_hono_jsx),
-            },
-            ExportSpec {
-                name: "jsxs",
-                thunk: ExportThunk::Fn2(thunk_hono_jsxs),
-            },
-            ExportSpec {
-                name: "Fragment",
-                thunk: ExportThunk::Fn1(thunk_hono_fragment),
-            },
-            ExportSpec {
-                name: "JSXNode",
-                thunk: ExportThunk::Fn1(thunk_hono_jsxnode),
-            },
-        ],
-    };
+    key: "hono_jsx_server",
+    exports: &[
+        ExportSpec {
+            name: "jsx",
+            thunk: ExportThunk::Fn2(thunk_hono_jsx),
+        },
+        ExportSpec {
+            name: "jsxs",
+            thunk: ExportThunk::Fn2(thunk_hono_jsxs),
+        },
+        ExportSpec {
+            name: "Fragment",
+            thunk: ExportThunk::Fn1(thunk_hono_fragment),
+        },
+        ExportSpec {
+            name: "JSXNode",
+            thunk: ExportThunk::Fn1(thunk_hono_jsxnode),
+        },
+    ],
+};
 
 static SUBMOD_HONO_JSX_STREAMING: SubmoduleSpec = SubmoduleSpec {
-        key: "hono_jsx_streaming",
-        exports: &[
-            ExportSpec {
-                name: "renderToReadableStream",
-                thunk: ExportThunk::Fn2(thunk_hono_render_to_readable_stream),
-            },
-            ExportSpec {
-                name: "Suspense",
-                thunk: ExportThunk::Fn1(thunk_hono_suspense),
-            },
-        ],
-    };
+    key: "hono_jsx_streaming",
+    exports: &[
+        ExportSpec {
+            name: "renderToReadableStream",
+            thunk: ExportThunk::Fn2(thunk_hono_render_to_readable_stream),
+        },
+        ExportSpec {
+            name: "Suspense",
+            thunk: ExportThunk::Fn1(thunk_hono_suspense),
+        },
+    ],
+};
 
 static SUBMOD_SYS: SubmoduleSpec = SubmoduleSpec {
-        key: "sys",
-        exports: &[
-            ExportSpec {
-                name: "format",
-                thunk: ExportThunk::Fn1(thunk_sys_format),
-            },
-            ExportSpec {
-                name: "inspect",
-                thunk: ExportThunk::Fn1(thunk_sys_inspect),
-            },
-            ExportSpec {
-                name: "debuglog",
-                thunk: ExportThunk::Fn1(thunk_sys_debuglog),
-            },
-            ExportSpec {
-                name: "deprecate",
-                thunk: ExportThunk::Fn1(thunk_sys_deprecate),
-            },
-            ExportSpec {
-                name: "promisify",
-                thunk: ExportThunk::Fn1(thunk_sys_promisify),
-            },
-            ExportSpec {
-                name: "callbackify",
-                thunk: ExportThunk::Fn1(thunk_sys_callbackify),
-            },
-            ExportSpec {
-                name: "isArray",
-                thunk: ExportThunk::Fn1(thunk_sys_isArray),
-            },
-        ],
-    };
+    key: "sys",
+    exports: &[
+        ExportSpec {
+            name: "format",
+            thunk: ExportThunk::Fn1(thunk_sys_format),
+        },
+        ExportSpec {
+            name: "inspect",
+            thunk: ExportThunk::Fn1(thunk_sys_inspect),
+        },
+        ExportSpec {
+            name: "debuglog",
+            thunk: ExportThunk::Fn1(thunk_sys_debuglog),
+        },
+        ExportSpec {
+            name: "deprecate",
+            thunk: ExportThunk::Fn1(thunk_sys_deprecate),
+        },
+        ExportSpec {
+            name: "promisify",
+            thunk: ExportThunk::Fn1(thunk_sys_promisify),
+        },
+        ExportSpec {
+            name: "callbackify",
+            thunk: ExportThunk::Fn1(thunk_sys_callbackify),
+        },
+        ExportSpec {
+            name: "isArray",
+            thunk: ExportThunk::Fn1(thunk_sys_isArray),
+        },
+    ],
+};
 
 static SUBMOD_DIAGNOSTICS_CHANNEL: SubmoduleSpec = SubmoduleSpec {
-        key: "diagnostics_channel",
-        exports: &[
-            ExportSpec {
-                name: "tracingChannel",
-                thunk: ExportThunk::Fn1(thunk_diag_tracing_channel),
-            },
-            ExportSpec {
-                name: "boundedChannel",
-                thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
-            },
-            ExportSpec {
-                name: "channel",
-                thunk: ExportThunk::Fn1(thunk_diag_channel),
-            },
-            ExportSpec {
-                name: "subscribe",
-                thunk: ExportThunk::Fn2(thunk_diag_subscribe),
-            },
-            ExportSpec {
-                name: "unsubscribe",
-                thunk: ExportThunk::Fn2(thunk_diag_unsubscribe),
-            },
-            ExportSpec {
-                name: "hasSubscribers",
-                thunk: ExportThunk::Fn1(thunk_diag_has_subscribers),
-            },
-            ExportSpec {
-                name: "Channel",
-                thunk: ExportThunk::Fn1(thunk_diag_noop),
-            },
-            ExportSpec {
-                name: "BoundedChannel",
-                thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
-            },
-        ],
-    };
+    key: "diagnostics_channel",
+    exports: &[
+        ExportSpec {
+            name: "tracingChannel",
+            thunk: ExportThunk::Fn1(thunk_diag_tracing_channel),
+        },
+        ExportSpec {
+            name: "boundedChannel",
+            thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
+        },
+        ExportSpec {
+            name: "channel",
+            thunk: ExportThunk::Fn1(thunk_diag_channel),
+        },
+        ExportSpec {
+            name: "subscribe",
+            thunk: ExportThunk::Fn2(thunk_diag_subscribe),
+        },
+        ExportSpec {
+            name: "unsubscribe",
+            thunk: ExportThunk::Fn2(thunk_diag_unsubscribe),
+        },
+        ExportSpec {
+            name: "hasSubscribers",
+            thunk: ExportThunk::Fn1(thunk_diag_has_subscribers),
+        },
+        ExportSpec {
+            name: "Channel",
+            thunk: ExportThunk::Fn1(thunk_diag_noop),
+        },
+        ExportSpec {
+            name: "BoundedChannel",
+            thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
+        },
+    ],
+};
 
 static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
-        key: "trace_events",
-        exports: &[
-            ExportSpec {
-                name: "createTracing",
-                thunk: ExportThunk::Fn1(thunk_trace_events_createTracing),
-            },
-            ExportSpec {
-                name: "getEnabledCategories",
-                thunk: ExportThunk::Fn1(thunk_trace_events_getEnabledCategories),
-            },
-        ],
-    };
+    key: "trace_events",
+    exports: &[
+        ExportSpec {
+            name: "createTracing",
+            thunk: ExportThunk::Fn1(thunk_trace_events_createTracing),
+        },
+        ExportSpec {
+            name: "getEnabledCategories",
+            thunk: ExportThunk::Fn1(thunk_trace_events_getEnabledCategories),
+        },
+    ],
+};
 
 static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
-        key: "test",
-        exports: &[
-            ExportSpec {
-                name: "default",
-                thunk: ExportThunk::Fn3(thunk_test),
-            },
-            ExportSpec {
-                name: "test",
-                thunk: ExportThunk::Fn3(thunk_test),
-            },
-            ExportSpec {
-                name: "skip",
-                thunk: ExportThunk::Fn3(thunk_test_skip),
-            },
-            ExportSpec {
-                name: "todo",
-                thunk: ExportThunk::Fn3(thunk_test_todo),
-            },
-            ExportSpec {
-                name: "only",
-                thunk: ExportThunk::Fn3(thunk_test_only),
-            },
-            ExportSpec {
-                name: "suite",
-                thunk: ExportThunk::Fn3(thunk_test),
-            },
-            ExportSpec {
-                name: "describe",
-                thunk: ExportThunk::Fn3(thunk_test),
-            },
-            ExportSpec {
-                name: "it",
-                thunk: ExportThunk::Fn3(thunk_test),
-            },
-            ExportSpec {
-                name: "before",
-                thunk: ExportThunk::Fn1(thunk_test_hook),
-            },
-            ExportSpec {
-                name: "after",
-                thunk: ExportThunk::Fn1(thunk_test_hook),
-            },
-            ExportSpec {
-                name: "beforeEach",
-                thunk: ExportThunk::Fn1(thunk_test_hook),
-            },
-            ExportSpec {
-                name: "afterEach",
-                thunk: ExportThunk::Fn1(thunk_test_hook),
-            },
-            ExportSpec {
-                name: "run",
-                thunk: ExportThunk::Fn1(thunk_test_run),
-            },
-            // Object-valued exports are handled by `special_export_value`.
-            ExportSpec {
-                name: "mock",
-                thunk: ExportThunk::Fn1(thunk_test_run),
-            },
-            ExportSpec {
-                name: "snapshot",
-                thunk: ExportThunk::Fn1(thunk_test_run),
-            },
-        ],
-    };
+    key: "test",
+    exports: &[
+        ExportSpec {
+            name: "default",
+            thunk: ExportThunk::Fn3(thunk_test),
+        },
+        ExportSpec {
+            name: "test",
+            thunk: ExportThunk::Fn3(thunk_test),
+        },
+        ExportSpec {
+            name: "skip",
+            thunk: ExportThunk::Fn3(thunk_test_skip),
+        },
+        ExportSpec {
+            name: "todo",
+            thunk: ExportThunk::Fn3(thunk_test_todo),
+        },
+        ExportSpec {
+            name: "only",
+            thunk: ExportThunk::Fn3(thunk_test_only),
+        },
+        ExportSpec {
+            name: "suite",
+            thunk: ExportThunk::Fn3(thunk_test),
+        },
+        ExportSpec {
+            name: "describe",
+            thunk: ExportThunk::Fn3(thunk_test),
+        },
+        ExportSpec {
+            name: "it",
+            thunk: ExportThunk::Fn3(thunk_test),
+        },
+        ExportSpec {
+            name: "before",
+            thunk: ExportThunk::Fn1(thunk_test_hook),
+        },
+        ExportSpec {
+            name: "after",
+            thunk: ExportThunk::Fn1(thunk_test_hook),
+        },
+        ExportSpec {
+            name: "beforeEach",
+            thunk: ExportThunk::Fn1(thunk_test_hook),
+        },
+        ExportSpec {
+            name: "afterEach",
+            thunk: ExportThunk::Fn1(thunk_test_hook),
+        },
+        ExportSpec {
+            name: "run",
+            thunk: ExportThunk::Fn1(thunk_test_run),
+        },
+        // Object-valued exports are handled by `special_export_value`.
+        ExportSpec {
+            name: "mock",
+            thunk: ExportThunk::Fn1(thunk_test_run),
+        },
+        ExportSpec {
+            name: "snapshot",
+            thunk: ExportThunk::Fn1(thunk_test_run),
+        },
+    ],
+};
 
 static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
-        key: "test_reporters",
-        exports: &[
-            ExportSpec {
-                name: "spec",
-                thunk: ExportThunk::Fn1(thunk_reporter_spec),
-            },
-            ExportSpec {
-                name: "tap",
-                thunk: ExportThunk::Fn1(thunk_reporter_tap),
-            },
-            ExportSpec {
-                name: "dot",
-                thunk: ExportThunk::Fn1(thunk_reporter_dot),
-            },
-            ExportSpec {
-                name: "junit",
-                thunk: ExportThunk::Fn1(thunk_reporter_junit),
-            },
-            ExportSpec {
-                name: "lcov",
-                thunk: ExportThunk::Fn1(thunk_reporter_lcov),
-            },
-        ],
-    };
+    key: "test_reporters",
+    exports: &[
+        ExportSpec {
+            name: "spec",
+            thunk: ExportThunk::Fn1(thunk_reporter_spec),
+        },
+        ExportSpec {
+            name: "tap",
+            thunk: ExportThunk::Fn1(thunk_reporter_tap),
+        },
+        ExportSpec {
+            name: "dot",
+            thunk: ExportThunk::Fn1(thunk_reporter_dot),
+        },
+        ExportSpec {
+            name: "junit",
+            thunk: ExportThunk::Fn1(thunk_reporter_junit),
+        },
+        ExportSpec {
+            name: "lcov",
+            thunk: ExportThunk::Fn1(thunk_reporter_lcov),
+        },
+    ],
+};
 
 // ----- submodule registry (devirt) -----
 use std::sync::atomic::AtomicPtr;
 #[derive(Copy, Clone)]
 #[repr(usize)]
-enum SubmodBucket { Vm, Timers, TimersPromises, FsPromises, ReadlinePromises, StreamPromises, StreamConsumers, StreamWeb, HonoJsxServer, HonoJsxStreaming, Sys, DiagnosticsChannel, TraceEvents, Test, TestReporters, }
+enum SubmodBucket {
+    Vm,
+    Timers,
+    TimersPromises,
+    FsPromises,
+    ReadlinePromises,
+    StreamPromises,
+    StreamConsumers,
+    StreamWeb,
+    HonoJsxServer,
+    HonoJsxStreaming,
+    Sys,
+    DiagnosticsChannel,
+    TraceEvents,
+    Test,
+    TestReporters,
+}
 const SUBMOD_COUNT: usize = 15;
 static SUBMOD_REGISTRY: [AtomicPtr<SubmoduleSpec>; SUBMOD_COUNT] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; SUBMOD_COUNT];
@@ -777,38 +793,149 @@ fn submod_index(key: &str) -> Option<SubmodBucket> {
 fn find_submodule(key: &str) -> Option<&'static SubmoduleSpec> {
     let b = submod_index(key)?;
     let p = SUBMOD_REGISTRY[b as usize].load(Ordering::Relaxed);
-    if p.is_null() { None } else { Some(unsafe { &*(p as *const SubmoduleSpec) }) }
+    if !p.is_null() {
+        return Some(unsafe { &*(p as *const SubmoduleSpec) });
+    }
+    // Unit tests call the namespace/export helpers directly, without the
+    // codegen-emitted `js_node_submod_install_<key>()` that precedes use in real
+    // programs. Lazily populate the registry so tests exercise the real lookup
+    // path. (Not compiled into production builds.)
+    #[cfg(test)]
+    {
+        js_node_submod_install_all();
+        let p = SUBMOD_REGISTRY[b as usize].load(Ordering::Relaxed);
+        if !p.is_null() {
+            return Some(unsafe { &*(p as *const SubmoduleSpec) });
+        }
+    }
+    None
+}
+
+/// Test-only: every submodule spec, for exhaustiveness checks (the production
+/// `find_submodule` resolves through the registry, not an iterable array).
+#[cfg(test)]
+pub(super) const ALL_SUBMODULE_SPECS: &[&SubmoduleSpec] = &[
+    &SUBMOD_VM,
+    &SUBMOD_TIMERS,
+    &SUBMOD_TIMERS_PROMISES,
+    &SUBMOD_FS_PROMISES,
+    &SUBMOD_READLINE_PROMISES,
+    &SUBMOD_STREAM_PROMISES,
+    &SUBMOD_STREAM_CONSUMERS,
+    &SUBMOD_STREAM_WEB,
+    &SUBMOD_HONO_JSX_SERVER,
+    &SUBMOD_HONO_JSX_STREAMING,
+    &SUBMOD_SYS,
+    &SUBMOD_DIAGNOSTICS_CHANNEL,
+    &SUBMOD_TRACE_EVENTS,
+    &SUBMOD_TEST,
+    &SUBMOD_TEST_REPORTERS,
+];
+#[no_mangle]
+pub extern "C" fn js_node_submod_install_vm() {
+    SUBMOD_REGISTRY[SubmodBucket::Vm as usize].store(
+        &SUBMOD_VM as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
 }
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_vm() { SUBMOD_REGISTRY[SubmodBucket::Vm as usize].store(&SUBMOD_VM as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_timers() {
+    SUBMOD_REGISTRY[SubmodBucket::Timers as usize].store(
+        &SUBMOD_TIMERS as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_timers() { SUBMOD_REGISTRY[SubmodBucket::Timers as usize].store(&SUBMOD_TIMERS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_timers_promises() {
+    SUBMOD_REGISTRY[SubmodBucket::TimersPromises as usize].store(
+        &SUBMOD_TIMERS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_timers_promises() { SUBMOD_REGISTRY[SubmodBucket::TimersPromises as usize].store(&SUBMOD_TIMERS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_fs_promises() {
+    SUBMOD_REGISTRY[SubmodBucket::FsPromises as usize].store(
+        &SUBMOD_FS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_fs_promises() { SUBMOD_REGISTRY[SubmodBucket::FsPromises as usize].store(&SUBMOD_FS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_readline_promises() {
+    SUBMOD_REGISTRY[SubmodBucket::ReadlinePromises as usize].store(
+        &SUBMOD_READLINE_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_readline_promises() { SUBMOD_REGISTRY[SubmodBucket::ReadlinePromises as usize].store(&SUBMOD_READLINE_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_stream_promises() {
+    SUBMOD_REGISTRY[SubmodBucket::StreamPromises as usize].store(
+        &SUBMOD_STREAM_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_stream_promises() { SUBMOD_REGISTRY[SubmodBucket::StreamPromises as usize].store(&SUBMOD_STREAM_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_stream_consumers() {
+    SUBMOD_REGISTRY[SubmodBucket::StreamConsumers as usize].store(
+        &SUBMOD_STREAM_CONSUMERS as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_stream_consumers() { SUBMOD_REGISTRY[SubmodBucket::StreamConsumers as usize].store(&SUBMOD_STREAM_CONSUMERS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_stream_web() {
+    SUBMOD_REGISTRY[SubmodBucket::StreamWeb as usize].store(
+        &SUBMOD_STREAM_WEB as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_stream_web() { SUBMOD_REGISTRY[SubmodBucket::StreamWeb as usize].store(&SUBMOD_STREAM_WEB as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_hono_jsx_server() {
+    SUBMOD_REGISTRY[SubmodBucket::HonoJsxServer as usize].store(
+        &SUBMOD_HONO_JSX_SERVER as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_hono_jsx_server() { SUBMOD_REGISTRY[SubmodBucket::HonoJsxServer as usize].store(&SUBMOD_HONO_JSX_SERVER as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_hono_jsx_streaming() {
+    SUBMOD_REGISTRY[SubmodBucket::HonoJsxStreaming as usize].store(
+        &SUBMOD_HONO_JSX_STREAMING as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_hono_jsx_streaming() { SUBMOD_REGISTRY[SubmodBucket::HonoJsxStreaming as usize].store(&SUBMOD_HONO_JSX_STREAMING as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_sys() {
+    SUBMOD_REGISTRY[SubmodBucket::Sys as usize].store(
+        &SUBMOD_SYS as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_sys() { SUBMOD_REGISTRY[SubmodBucket::Sys as usize].store(&SUBMOD_SYS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_diagnostics_channel() {
+    SUBMOD_REGISTRY[SubmodBucket::DiagnosticsChannel as usize].store(
+        &SUBMOD_DIAGNOSTICS_CHANNEL as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_diagnostics_channel() { SUBMOD_REGISTRY[SubmodBucket::DiagnosticsChannel as usize].store(&SUBMOD_DIAGNOSTICS_CHANNEL as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_trace_events() {
+    SUBMOD_REGISTRY[SubmodBucket::TraceEvents as usize].store(
+        &SUBMOD_TRACE_EVENTS as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_trace_events() { SUBMOD_REGISTRY[SubmodBucket::TraceEvents as usize].store(&SUBMOD_TRACE_EVENTS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_test() {
+    SUBMOD_REGISTRY[SubmodBucket::Test as usize].store(
+        &SUBMOD_TEST as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
-pub extern "C" fn js_node_submod_install_test() { SUBMOD_REGISTRY[SubmodBucket::Test as usize].store(&SUBMOD_TEST as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
-#[no_mangle]
-pub extern "C" fn js_node_submod_install_test_reporters() { SUBMOD_REGISTRY[SubmodBucket::TestReporters as usize].store(&SUBMOD_TEST_REPORTERS as *const SubmoduleSpec as *mut SubmoduleSpec, Ordering::Relaxed); }
+pub extern "C" fn js_node_submod_install_test_reporters() {
+    SUBMOD_REGISTRY[SubmodBucket::TestReporters as usize].store(
+        &SUBMOD_TEST_REPORTERS as *const SubmoduleSpec as *mut SubmoduleSpec,
+        Ordering::Relaxed,
+    );
+}
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_all() {
     js_node_submod_install_vm();
@@ -835,10 +962,10 @@ pub extern "C" fn js_node_submod_enable_install_all() {
 }
 pub(crate) fn run_submod_install_all_hook() {
     let p = SUBMOD_INSTALL_ALL_HOOK.load(Ordering::Relaxed);
-    if !p.is_null() { unsafe { std::mem::transmute::<*mut (), extern "C" fn()>(p)() }; }
+    if !p.is_null() {
+        unsafe { std::mem::transmute::<*mut (), extern "C" fn()>(p)() };
+    }
 }
-
-
 
 fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec> {
     submod.exports.iter().find(|e| e.name == name)

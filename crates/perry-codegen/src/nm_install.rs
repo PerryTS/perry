@@ -16,7 +16,8 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "child_process" => Some("js_nm_install_child_process"),
         "cluster" => Some("js_nm_install_cluster"),
         "console" => Some("js_nm_install_console"),
-        "crypto" | "crypto.Certificate" | "crypto.KeyObject" | "crypto.subtle" | "crypto.webcrypto" => Some("js_nm_install_crypto"),
+        "crypto" | "crypto.Certificate" | "crypto.KeyObject" | "crypto.subtle"
+        | "crypto.webcrypto" => Some("js_nm_install_crypto"),
         "dgram" => Some("js_nm_install_dgram"),
         "dns" | "dns/promises" => Some("js_nm_install_dns"),
         "domain" => Some("js_nm_install_domain"),
@@ -28,7 +29,9 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "net" => Some("js_nm_install_net"),
         "os" => Some("js_nm_install_os"),
         "path" | "path.posix" | "path.win32" => Some("js_nm_install_path"),
-        "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => Some("js_nm_install_perf"),
+        "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => {
+            Some("js_nm_install_perf")
+        }
         "process" => Some("js_nm_install_process"),
         "punycode" | "punycode.ucs2" => Some("js_nm_install_punycode"),
         "querystring" => Some("js_nm_install_querystring"),
@@ -42,7 +45,8 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "tty" => Some("js_nm_install_tty"),
         "url" => Some("js_nm_install_url"),
         "util" | "util.types" | "util/types" => Some("js_nm_install_util"),
-        "v8" | "v8.Deserializer" | "v8.GCProfiler" | "v8.Serializer" | "v8.promiseHooks" | "v8.startupSnapshot" => Some("js_nm_install_v8"),
+        "v8" | "v8.Deserializer" | "v8.GCProfiler" | "v8.Serializer" | "v8.promiseHooks"
+        | "v8.startupSnapshot" => Some("js_nm_install_v8"),
         "vm" => Some("js_nm_install_vm"),
         "wasi" => Some("js_nm_install_wasi"),
         "zlib" => Some("js_nm_install_zlib"),
@@ -119,13 +123,21 @@ pub(crate) fn nm_submod_install_symbol(key: &str) -> Option<&'static str> {
 }
 
 pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
-    "js_node_submod_install_vm", "js_node_submod_install_timers",
-    "js_node_submod_install_timers_promises", "js_node_submod_install_fs_promises",
-    "js_node_submod_install_readline_promises", "js_node_submod_install_stream_promises",
-    "js_node_submod_install_stream_consumers", "js_node_submod_install_stream_web",
-    "js_node_submod_install_hono_jsx_server", "js_node_submod_install_hono_jsx_streaming",
-    "js_node_submod_install_sys", "js_node_submod_install_diagnostics_channel",
-    "js_node_submod_install_trace_events", "js_node_submod_install_test",
+    "js_node_submod_install_vm",
+    "js_node_submod_install_timers",
+    "js_node_submod_install_timers_promises",
+    "js_node_submod_install_fs_promises",
+    "js_node_submod_install_readline_promises",
+    "js_node_submod_install_stream_promises",
+    "js_node_submod_install_stream_consumers",
+    "js_node_submod_install_stream_web",
+    "js_node_submod_install_hono_jsx_server",
+    "js_node_submod_install_hono_jsx_streaming",
+    "js_node_submod_install_sys",
+    "js_node_submod_install_diagnostics_channel",
+    "js_node_submod_install_trace_events",
+    "js_node_submod_install_test",
     "js_node_submod_install_test_reporters",
-    "js_node_submod_install_all", "js_node_submod_enable_install_all",
+    "js_node_submod_install_all",
+    "js_node_submod_enable_install_all",
 ];
