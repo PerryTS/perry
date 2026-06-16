@@ -4,6 +4,7 @@
 
 use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::stream::is_stream_api_method;
@@ -345,7 +346,27 @@ pub(super) fn try_static_method_and_instance(
             if !may_lower_to_native_method_call(ctx, &member.obj) {
                 return Ok(Err(args));
             }
-            // Lower the object expression first
+            // Lower the object expression once.
+            //
+            // Perf (O(n²)/exponential → O(n) on long native-fluent chains): this
+            // is a FULL recursive lowering of the entire receiver prefix, done
+            // speculatively to inspect whether the inner call lowered to a
+            // `NativeMethodCall` of a recognized fluent module. On a chain like
+            // `K.name(..).description(..).option(..)…` (commander / minified CLI
+            // builders) where `may_lower_to_native_method_call` over-approximates
+            // to `true` but the inner call actually lowers to a *generic* `Call`,
+            // every arm below misses, `object_expr` is discarded, and we return
+            // `Err(args)` — whereupon the `lower_call_inner` fall-through tail
+            // re-lowers the same member callee (and thus this whole prefix)
+            // again. Repeated per chain level that is exponential blowup.
+            //
+            // To make the tail reuse this lowering instead of redoing it, stash
+            // it keyed by the receiver's source span. `lower_member_inner` (the
+            // tail's receiver-lowering site) consumes it for the matching span.
+            // Reuse is sound: lowering a receiver is idempotent in the value it
+            // produces, and the fluent-success arms below already reuse this very
+            // `object_expr`.
+            let obj_span = member.obj.as_ref().span();
             let object_expr = lower_expr(ctx, &member.obj)?;
             // Check if it's a NativeMethodCall for a fluent-API native module
             if let Expr::NativeMethodCall {
@@ -488,6 +509,12 @@ pub(super) fn try_static_method_and_instance(
                     }));
                 }
             }
+            // No fluent arm matched: we are about to return `Err(args)` and the
+            // `lower_call_inner` fall-through tail will re-lower this same member
+            // callee. Hand it the receiver we just lowered so it doesn't repeat
+            // the (potentially whole-prefix) work. Keyed by span so the tail only
+            // reuses it for the exact receiver subtree.
+            ctx.prelowered_member_receiver = Some(((obj_span.lo.0, obj_span.hi.0), object_expr));
         }
     }
 
