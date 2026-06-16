@@ -358,7 +358,9 @@ pub(super) fn try_util_types_namespace(
                                     crate::UnimplementedDecision::Refuse => {
                                         crate::lower_bail!(outer_member.span, "{}", msg);
                                     }
-                                    crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                    crate::UnimplementedDecision::DeferToRuntimeError(
+                                        runtime_msg,
+                                    ) => {
                                         return Ok(Ok(
                                             super::super::const_fold_fn::synth_deferred_throw_value(
                                                 ctx,

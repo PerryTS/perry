@@ -649,6 +649,55 @@ module.exports = SafeBuffer;"#;
     }
 
     #[test]
+    fn issue_5251_class_reading_exports_stays_in_iife() {
+        // #5251: a top-level class whose body reads the cjs_wrap-injected
+        // `exports` binding (`exports.X` inside a method/ctor) must NOT be
+        // hoisted out of the IIFE — hoisting severs its closure over the
+        // injected `var exports`, so `exports.X` resolves as an unknown
+        // global and lowers to the numeric `0` sentinel inside class methods.
+        let src = "\"use strict\";\nexports.TAG = \"hi\";\nclass C { greet() { return exports.TAG + \"!\"; } }\nexports.mk = function () { return new C(); };\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/app/node_modules/re/index.js"));
+        let iife_start = wrapped
+            .find("const _cjs = (function() {")
+            .expect("expected an IIFE wrap (no flat default class), got:\n");
+        let class_pos = wrapped
+            .find("class C ")
+            .expect("class C must survive in the wrapped output");
+        assert!(
+            class_pos > iife_start,
+            "class reading `exports` must stay INSIDE the IIFE (after its \
+             opener), not hoisted above it, got:\n{}",
+            wrapped
+        );
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "re/index.js").is_ok(),
+            "wrapped module must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn issue_5251_class_without_exports_still_hoists() {
+        // Regression guard: a top-level class that does NOT touch the injected
+        // `exports`/`module`/`require` bindings must still hoist above the
+        // IIFE (so `import { D } from "pkg"` resolves to the real class).
+        let src = "\"use strict\";\nclass D { val() { return 42; } }\nexports.mkD = function () { return new D(); };\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/app/node_modules/re/index.js"));
+        let iife_start = wrapped
+            .find("const _cjs = (function() {")
+            .expect("expected an IIFE wrap, got:\n");
+        let class_pos = wrapped
+            .find("class D ")
+            .expect("class D must survive in the wrapped output");
+        assert!(
+            class_pos < iife_start,
+            "a class not referencing exports/module/require must still hoist \
+             above the IIFE, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn issue_1721_blanks_adopted_alias_require_in_body() {
         // #1721: `const c = require('./common')` adopts `c` as the import
         // local name (so `import c from './common'`). The original body line

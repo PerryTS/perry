@@ -76,6 +76,20 @@ pub struct StringPool {
     /// Ordered list of unique entries; the index in this Vec is the
     /// interned index referenced by `interned`.
     entries: Vec<StringEntry>,
+    /// #5247: source-location context for the dynamic call-dispatch throw
+    /// path. Set once per module after construction (only when the CLI
+    /// `--debug-symbols` flag is on). `None` in the default build so codegen
+    /// emits no per-call `js_set_call_location` overhead. When `Some`,
+    /// carries `(module_file_path, module_source)` so the call-lowering site
+    /// can resolve a `Call.byte_offset` to a `file:line`.
+    debug_location_ctx: Option<(String, String)>,
+    /// #5247: the byte offset of the `Expr::Call` currently being lowered,
+    /// recorded by the call dispatcher and consumed at the dynamic
+    /// method-dispatch emission site (after the call's arguments — which may
+    /// themselves be nested calls that overwrite this — have been lowered) so
+    /// the `js_set_call_location` is emitted with the *outer* call's offset
+    /// immediately before the throwing dispatch. `0` = none.
+    pending_call_offset: std::cell::Cell<u32>,
 }
 
 pub struct StringEntry {
@@ -107,11 +121,60 @@ impl StringPool {
             module_prefix,
             interned: HashMap::new(),
             entries: Vec::new(),
+            debug_location_ctx: None,
+            pending_call_offset: std::cell::Cell::new(0),
         }
     }
 
     pub fn module_prefix(&self) -> &str {
         &self.module_prefix
+    }
+
+    /// #5247: install the per-module source-location context (file path +
+    /// source text) consulted by the dynamic call-dispatch lowering when the
+    /// `--debug-symbols` flag is on. No-op otherwise (`ctx` is `None`).
+    pub fn set_debug_location_ctx(&mut self, ctx: Option<(String, String)>) {
+        self.debug_location_ctx = ctx;
+    }
+
+    /// #5247: true iff source-location tracking is active for this module
+    /// (i.e. `--debug-symbols` installed a debug-location context). Lets the
+    /// dispatch emission site skip all location work in the default build.
+    pub fn debug_locations_enabled(&self) -> bool {
+        self.debug_location_ctx.is_some()
+    }
+
+    /// #5247: record the byte offset of the call currently being lowered.
+    pub fn set_pending_call_offset(&self, byte_offset: u32) {
+        self.pending_call_offset.set(byte_offset);
+    }
+
+    /// #5247: the byte offset recorded by the most recent
+    /// [`set_pending_call_offset`]. `0` when none.
+    pub fn pending_call_offset(&self) -> u32 {
+        self.pending_call_offset.get()
+    }
+
+    /// #5247: resolve a `Call`'s source byte offset to `(file_path, line)`,
+    /// where `line` is 1-based. Returns `None` when no debug-location context
+    /// is installed (default build), the offset is `0` (synthesized call), or
+    /// the offset is out of range. SWC's `BytePos` is 1-based, matching the
+    /// `lower` crate's `current_module_source_slice`, so subtract 1.
+    pub fn call_location_for(&self, byte_offset: u32) -> Option<(&str, u32)> {
+        if byte_offset == 0 {
+            return None;
+        }
+        let (file, src) = self.debug_location_ctx.as_ref()?;
+        let offset = (byte_offset.saturating_sub(1)) as usize;
+        if offset > src.len() {
+            return None;
+        }
+        // 1-based line = 1 + count of newlines before the offset.
+        let line = 1 + src.as_bytes()[..offset]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
+        Some((file.as_str(), line as u32))
     }
 
     /// Intern a string literal. Returns the interned index, stable for the
@@ -275,5 +338,79 @@ mod tests {
         let idx = pool.intern("héllo");
         let e = pool.entry(idx);
         assert_eq!(e.byte_len, 6);
+    }
+
+    // ───────────────────── #5247 byte→line mapping ─────────────────────
+    // `call_location_for` takes an SWC `BytePos` (1-based), so byte offset N
+    // refers to source index N-1. Line is 1-based (1 + newlines before it).
+
+    fn pool_with_src(src: &str) -> StringPool {
+        let mut p = StringPool::new();
+        p.set_debug_location_ctx(Some(("foo.ts".to_string(), src.to_string())));
+        p
+    }
+
+    #[test]
+    fn call_location_none_without_debug_context() {
+        // Default build: no context installed → never resolves a location.
+        let p = StringPool::new();
+        assert_eq!(p.call_location_for(5), None);
+    }
+
+    #[test]
+    fn call_location_zero_offset_is_none() {
+        // 0 sentinel (synthesized call) → no location.
+        let p = pool_with_src("a\nb\nc");
+        assert_eq!(p.call_location_for(0), None);
+    }
+
+    #[test]
+    fn call_location_first_line() {
+        // Offsets within the first line (before any '\n') → line 1.
+        let p = pool_with_src("foo();\nbar();\n");
+        // BytePos 1 = source index 0 ('f'); BytePos 6 = index 5 (')').
+        assert_eq!(p.call_location_for(1), Some(("foo.ts", 1)));
+        assert_eq!(p.call_location_for(6), Some(("foo.ts", 1)));
+    }
+
+    #[test]
+    fn call_location_line_boundaries() {
+        // "foo();\nbar();\nbaz();\n"
+        //  index:0..5  '\n'=6  7..12 '\n'=13  14..19 '\n'=20
+        let src = "foo();\nbar();\nbaz();\n";
+        let p = pool_with_src(src);
+        // BytePos for the '\n' itself (index 6 → BytePos 7) still counts as
+        // line 1 (no newline strictly *before* it).
+        assert_eq!(p.call_location_for(7), Some(("foo.ts", 1)));
+        // First char of line 2 ('b' at index 7 → BytePos 8): one '\n' before.
+        assert_eq!(p.call_location_for(8), Some(("foo.ts", 2)));
+        // First char of line 3 ('b' at index 14 → BytePos 15): two '\n' before.
+        assert_eq!(p.call_location_for(15), Some(("foo.ts", 3)));
+    }
+
+    #[test]
+    fn call_location_last_line_and_out_of_range() {
+        let src = "x\ny\nz"; // 5 bytes, 3 lines, no trailing newline
+        let p = pool_with_src(src);
+        // 'z' at index 4 → BytePos 5: two '\n' before → line 3.
+        assert_eq!(p.call_location_for(5), Some(("foo.ts", 3)));
+        // BytePos == len+1 (index == len): clamped, still line 3 (EOF after z).
+        assert_eq!(p.call_location_for(6), Some(("foo.ts", 3)));
+        // Far out of range → None.
+        assert_eq!(p.call_location_for(100), None);
+    }
+
+    #[test]
+    fn call_location_utf8_safe() {
+        // Multi-byte chars before the call must not panic or miscount lines —
+        // we count raw bytes, and the offsets are byte offsets, so slicing on
+        // a byte boundary the compiler produced is always valid.
+        // "café();\nx();" — "café();" is 8 bytes (é = 2), '\n' at index 8.
+        let src = "café();\nx();";
+        let p = pool_with_src(src);
+        // 'x' is at byte index 9 (after "café();\n" = 9 bytes) → BytePos 10.
+        assert_eq!(p.call_location_for(10), Some(("foo.ts", 2)));
+        // A position inside line 1 → line 1.
+        assert_eq!(p.call_location_for(2), Some(("foo.ts", 1)));
     }
 }

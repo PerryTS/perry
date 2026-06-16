@@ -225,6 +225,7 @@ pub(super) fn try_strict_eval_arguments_assignment(
         }),
         args: Vec::new(),
         type_args: Vec::new(),
+        byte_offset: 0,
     })
 }
 
@@ -1317,6 +1318,7 @@ pub(super) fn try_iife_call_rewrite(
                                         callee: Box::new(lowered_callee),
                                         args: rest_args,
                                         type_args: Vec::new(),
+                                        byte_offset: 0,
                                     }));
                                 }
                             }
@@ -1441,6 +1443,7 @@ pub(super) fn try_native_module_method_apply_call(
                     }),
                     args: lowered,
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 }));
             }
         }

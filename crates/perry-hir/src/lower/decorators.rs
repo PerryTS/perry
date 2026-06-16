@@ -176,6 +176,7 @@ fn append_method_decorator_init(
                 Expr::String(method.name.clone()),
             ],
             type_args: Vec::new(),
+            byte_offset: 0,
         },
     )]);
     append_decorator_invocations(
@@ -247,6 +248,7 @@ fn append_decorator_invocations_inner(
                     callee: Box::new(base),
                     args: dec.args.clone(),
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 }),
             });
             callees.push((Expr::LocalGet(temp_id), dec.name.clone()));
@@ -260,6 +262,7 @@ fn append_decorator_invocations_inner(
             callee: Box::new(callee),
             args: invocation_args.clone(),
             type_args: Vec::new(),
+            byte_offset: 0,
         };
         match class_name_for_replacement_check {
             Some(class_name) => {

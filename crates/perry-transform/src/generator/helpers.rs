@@ -107,6 +107,7 @@ pub fn wrap_in_promise_resolve(value: Expr) -> Expr {
         }),
         args: vec![value],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 

@@ -243,6 +243,7 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -254,6 +255,7 @@ fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     if needs_await {
         Expr::Await(Box::new(call))
@@ -339,6 +341,7 @@ fn iterator_result_validated(call: Expr) -> Expr {
         }),
         args: vec![call],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -351,6 +354,7 @@ pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     })
 }
 
@@ -671,6 +675,7 @@ fn lower_runtime_for_await_iterator(
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     let next_call = Expr::Await(Box::new(raw_next_call));
     module.init.push(Stmt::Let {
@@ -865,6 +870,7 @@ pub(crate) fn lower_stmt_for_of(
                 callee: Box::new(Expr::FuncRef(iter_fn_id)),
                 args: vec![iter_expr],
                 type_args: vec![],
+                byte_offset: 0,
             }
         } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
             async_iterator_method_call(iter_expr)
@@ -876,6 +882,7 @@ pub(crate) fn lower_stmt_for_of(
                 }),
                 args: vec![],
                 type_args: vec![],
+                byte_offset: 0,
             }
         } else if is_readline_interface_for_await {
             // rl.iterator() -> readline async-iterator object; .next() then
@@ -915,6 +922,7 @@ pub(crate) fn lower_stmt_for_of(
             }),
             args: vec![],
             type_args: vec![],
+            byte_offset: 0,
         };
         let next_call = if needs_await {
             Expr::Await(Box::new(raw_next_call))

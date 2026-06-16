@@ -406,6 +406,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // `TypeError [ERR_INVALID_ARG_TYPE]` instead of dereferencing a bogus
     // pointer (segfault). Used by `crypto.createHash`/`createHmac`/`pbkdf2*`.
     module.declare_function("js_runtime_validate_string_arg", VOID, &[DOUBLE, PTR, I32]);
+    // #5247: source-location tracking for the dynamic call-dispatch throw
+    // path. Emitted before a call's dispatch only under `--debug-symbols`.
+    module.declare_function("js_set_call_location", VOID, &[PTR, I64, I32]);
     module.declare_function(
         "js_runtime_validate_crypto_key_arg",
         VOID,

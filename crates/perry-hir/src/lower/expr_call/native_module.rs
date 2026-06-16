@@ -459,16 +459,23 @@ pub(super) fn try_native_module_methods(
                                 &ctx.source_file_path,
                                 member.span.lo.0,
                             );
-                            match crate::check_unimplemented_api(&msg, &api, &location, member.span.lo.0) {
+                            match crate::check_unimplemented_api(
+                                &msg,
+                                &api,
+                                &location,
+                                member.span.lo.0,
+                            ) {
                                 crate::UnimplementedDecision::Refuse => {
                                     crate::lower_bail!(member.span, "{}", msg);
                                 }
                                 crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
-                                    return Ok(Ok(super::super::const_fold_fn::synth_deferred_throw_value(
-                                        ctx,
-                                        &runtime_msg,
-                                        member.span,
-                                    )?));
+                                    return Ok(Ok(
+                                        super::super::const_fold_fn::synth_deferred_throw_value(
+                                            ctx,
+                                            &runtime_msg,
+                                            member.span,
+                                        )?,
+                                    ));
                                 }
                             }
                         }
@@ -687,6 +694,7 @@ pub(super) fn try_native_module_methods(
                                     }),
                                     args: vec![b],
                                     type_args: vec![],
+                                    byte_offset: 0,
                                 }));
                             }
                         }
@@ -1465,6 +1473,7 @@ pub(super) fn try_native_module_methods(
                                 }),
                                 args: Vec::new(),
                                 type_args: Vec::new(),
+                                byte_offset: 0,
                             });
                             return Ok(Ok(Expr::Sequence(exprs)));
                         }
@@ -1509,6 +1518,7 @@ pub(super) fn try_native_module_methods(
                                     }),
                                     args: call_args,
                                     type_args: Vec::new(),
+                                    byte_offset: 0,
                                 }));
                             }
                         }
@@ -1546,16 +1556,23 @@ pub(super) fn try_native_module_methods(
                                 &ctx.source_file_path,
                                 member.span.lo.0,
                             );
-                            match crate::check_unimplemented_api(&msg, &api, &location, member.span.lo.0) {
+                            match crate::check_unimplemented_api(
+                                &msg,
+                                &api,
+                                &location,
+                                member.span.lo.0,
+                            ) {
                                 crate::UnimplementedDecision::Refuse => {
                                     crate::lower_bail!(member.span, "{}", msg);
                                 }
                                 crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
-                                    return Ok(Ok(super::super::const_fold_fn::synth_deferred_throw_value(
-                                        ctx,
-                                        &runtime_msg,
-                                        member.span,
-                                    )?));
+                                    return Ok(Ok(
+                                        super::super::const_fold_fn::synth_deferred_throw_value(
+                                            ctx,
+                                            &runtime_msg,
+                                            member.span,
+                                        )?,
+                                    ));
                                 }
                             }
                         }

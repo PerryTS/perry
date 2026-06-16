@@ -443,6 +443,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     _ => {}
@@ -579,6 +580,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     "on"
@@ -2331,7 +2333,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             // for the end-of-compile notice); strict-unimplemented mode restores
             // the hard #463 refusal. #2309 tree-shake deferral is handled inside.
             let api = format!("{module}.{prop}");
-            let location = crate::eval_classifier::location_string(&ctx.source_file_path, member.span.lo.0);
+            let location =
+                crate::eval_classifier::location_string(&ctx.source_file_path, member.span.lo.0);
             match crate::check_unimplemented_api(&msg, &api, &location, member.span.lo.0) {
                 crate::UnimplementedDecision::Refuse => {
                     crate::lower_bail!(member.span, "{}", msg);
@@ -2485,6 +2488,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     }),
                     args: vec![*index],
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 });
             }
             Ok(Expr::IndexGet { object, index })

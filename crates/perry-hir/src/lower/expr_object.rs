@@ -967,6 +967,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             }),
             args,
             type_args: Vec::new(),
+            byte_offset: 0,
         };
         let mut body: Vec<Stmt> = Vec::with_capacity(ops.len() * 4 + 1);
         let mut inner_local_ids = vec![param_id];
@@ -1103,6 +1104,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             callee: Box::new(closure),
             args: vec![Expr::Object(Vec::new())],
             type_args: vec![],
+            byte_offset: 0,
         });
     }
     let mut props = Vec::new();
@@ -1246,6 +1248,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         }),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     };
     for init in computed_post_init {
         match init {
@@ -1308,6 +1311,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     }),
                     args: vec![Expr::LocalGet(param_id), key, closure],
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 }));
             }
         }
@@ -1359,5 +1363,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         callee: Box::new(closure),
         args: vec![static_obj],
         type_args: vec![],
+        byte_offset: 0,
     })
 }

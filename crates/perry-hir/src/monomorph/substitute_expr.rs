@@ -55,6 +55,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             callee,
             args,
             type_args,
+            byte_offset,
         } => Expr::Call {
             callee: Box::new(substitute_expr(callee, substitutions)),
             args: args
@@ -65,6 +66,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .iter()
                 .map(|t| substitute_type(t, substitutions))
                 .collect(),
+            byte_offset: *byte_offset,
         },
         Expr::PodLayoutSizeOf { ty } => Expr::PodLayoutSizeOf {
             ty: substitute_type(ty, substitutions),
