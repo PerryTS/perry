@@ -75,10 +75,22 @@ export class BaseTexture {
     }
   }
 }
+
+export class AliasAccessorBase {
+  public marker: any = "unset";
+
+  get aliasedValue(): any {
+    return this.marker;
+  }
+
+  set aliasedValue(value: any) {
+    this.marker = value;
+  }
+}
 TS
 
 cat >"$TMPDIR/main.ts" <<'TS'
-import { BaseTexture } from "./base_texture";
+import { AliasAccessorBase, BaseTexture } from "./base_texture";
 
 const NearestFilter = 1003;
 
@@ -138,6 +150,35 @@ assert(texture.unpackAlignment === 1, "subclass unpackAlignment override");
 assert(!Object.keys(texture).includes("image"), "accessor write did not create own image slot");
 assert(!Object.keys(texture).includes("readOnlyTag"), "getter-only inherited accessor did not create own slot");
 assert(!Object.keys(texture).includes("writeOnlyTag"), "setter-only inherited accessor did not create own slot");
+
+class AliasAccessorChild extends AliasAccessorBase {}
+
+const aliasProto: any = AliasAccessorChild.prototype;
+aliasProto.aliasedValue = function badAliasPatch() {
+  return "bad";
+};
+
+const aliasInstance: any = new AliasAccessorChild();
+aliasInstance.aliasedValue = "instance-setter";
+assert(aliasInstance.aliasedValue === "instance-setter", "prototype alias write preserved accessor dispatch");
+assert(!Object.keys(aliasInstance).includes("aliasedValue"), "prototype alias accessor write did not create own slot");
+
+class StaticAccessorPollution {
+  static get constructorSlot(): string {
+    return "static-slot";
+  }
+
+  static set constructorSlot(_value: string) {}
+
+  constructor() {
+    (this as any).constructorSlot = "instance-slot";
+  }
+}
+
+const staticPollution: any = new StaticAccessorPollution();
+assert(StaticAccessorPollution.constructorSlot === "static-slot", "static accessor still works");
+assert(staticPollution.constructorSlot === "instance-slot", "static accessor did not suppress instance field");
+assert(Object.keys(staticPollution).includes("constructorSlot"), "instance constructor assignment remained an own field");
 
 const replacement = { data: payload, width: 4, height: 3 };
 texture.image = replacement;

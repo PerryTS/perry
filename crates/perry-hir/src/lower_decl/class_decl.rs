@@ -50,6 +50,55 @@ fn with_static_member_context<T>(
     result
 }
 
+fn runtime_instance_accessor_names(members: &[ast::ClassMember]) -> crate::ClassAccessorNames {
+    let mut accessor_names = crate::ClassAccessorNames::default();
+
+    for member in members {
+        match member {
+            ast::ClassMember::Method(m)
+                if !m.is_static
+                    && m.function.body.is_some()
+                    && matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+            {
+                let key = match &m.key {
+                    ast::PropName::Ident(i) => i.sym.to_string(),
+                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
+                    _ => continue,
+                };
+                match m.kind {
+                    ast::MethodKind::Getter => {
+                        accessor_names.insert_getter(key);
+                    }
+                    ast::MethodKind::Setter => {
+                        accessor_names.insert_setter(key);
+                    }
+                    _ => {}
+                }
+            }
+            ast::ClassMember::PrivateMethod(m)
+                if !m.is_static
+                    && m.function.body.is_some()
+                    && matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+            {
+                let key = format!("#{}", m.key.name);
+                match m.kind {
+                    ast::MethodKind::Getter => {
+                        accessor_names.insert_getter(key);
+                    }
+                    ast::MethodKind::Setter => {
+                        accessor_names.insert_setter(key);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    accessor_names
+}
+
 fn lower_generic_computed_class_member(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
@@ -997,45 +1046,7 @@ pub fn lower_class_decl(
         // accessor when a subclass instance's `.points` was read across
         // modules (the runtime's setter dispatch walks the class vtable
         // chain correctly, but the spurious own-data slot wins lookup).
-        let mut accessor_names = crate::ClassAccessorNames::default();
-        for member in &class_decl.class.body {
-            match member {
-                ast::ClassMember::Method(m)
-                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
-                {
-                    let key = match &m.key {
-                        ast::PropName::Ident(i) => i.sym.to_string(),
-                        ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                        ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
-                        _ => continue,
-                    };
-                    match m.kind {
-                        ast::MethodKind::Getter => {
-                            accessor_names.insert_getter(key);
-                        }
-                        ast::MethodKind::Setter => {
-                            accessor_names.insert_setter(key);
-                        }
-                        _ => {}
-                    }
-                }
-                ast::ClassMember::PrivateMethod(m)
-                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
-                {
-                    let key = format!("#{}", m.key.name);
-                    match m.kind {
-                        ast::MethodKind::Getter => {
-                            accessor_names.insert_getter(key);
-                        }
-                        ast::MethodKind::Setter => {
-                            accessor_names.insert_setter(key);
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
+        let mut accessor_names = runtime_instance_accessor_names(&class_decl.class.body);
         // Pull in accessor names from the parent chain. The parent's
         // registration stored the own+inherited union, so a single lookup
         // on the direct parent suffices.
@@ -1675,13 +1686,7 @@ pub fn lower_class_from_ast(
     // `var C = class { set ''(p){…} }; C.prototype[''] = v`) were silently
     // dropped to `RegisterPrototypeMethod`. Test262 accessor-name-inst setters.
     {
-        let mut accessor_names = crate::ClassAccessorNames::default();
-        for (prop_name, _) in &getters {
-            accessor_names.insert_getter(prop_name.clone());
-        }
-        for (prop_name, _) in &setters {
-            accessor_names.insert_setter(prop_name.clone());
-        }
+        let mut accessor_names = runtime_instance_accessor_names(&class.body);
         if let Some(ref parent_name) = extends_name {
             if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
                 accessor_names.extend_from(parent_accessors);

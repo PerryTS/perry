@@ -623,6 +623,14 @@ fn lower_assignment_target(
                     Class(String),
                     Func(Expr),
                 }
+                fn class_has_accessor(
+                    ctx: &LoweringContext,
+                    class_name: &str,
+                    method_name: &str,
+                ) -> bool {
+                    ctx.lookup_class_accessor_names(class_name)
+                        .is_some_and(|names| names.contains_any(method_name))
+                }
                 let resolved: Option<ProtoOwner> = match obj_unwrapped {
                     // (a) <ClassName>.prototype.<method>
                     //     <funcName>.prototype.<method>
@@ -643,9 +651,7 @@ fn lower_assignment_target(
                                 {
                                     None
                                 } else if ctx.lookup_class(&cls_name).is_some()
-                                    && ctx
-                                        .lookup_class_accessor_names(&cls_name)
-                                        .is_some_and(|names| names.contains_any(&method_name))
+                                    && class_has_accessor(ctx, &cls_name, &method_name)
                                 {
                                     // `C.prototype.<accessor> = v` where `<accessor>`
                                     // is a `set`/`get` declared on the class is an
@@ -705,7 +711,11 @@ fn lower_assignment_target(
                         let local_id = ctx.lookup_local(obj_ident.sym.as_ref());
                         if let Some(id) = local_id {
                             if let Some(class_name) = ctx.prototype_aliases.get(&id).cloned() {
-                                Some(ProtoOwner::Class(class_name))
+                                if class_has_accessor(ctx, &class_name, &method_name) {
+                                    None
+                                } else {
+                                    Some(ProtoOwner::Class(class_name))
+                                }
                             } else if let Some(func_id) =
                                 ctx.prototype_function_aliases.get(&id).copied()
                             {
