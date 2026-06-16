@@ -20,6 +20,7 @@ use crate::lower_string_method::{
     lower_string_concat_chain, lower_string_self_append,
 };
 #[allow(unused_imports)]
+use super::property_get::emit_inline_class_field_guard;
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
@@ -310,35 +311,55 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                        let (key_raw, guard_ok) = {
+                        let key_raw = {
                             let blk = ctx.block();
                             let key_box = blk.load(DOUBLE, &key_handle_global);
                             let key_bits = blk.bitcast_double_to_i64(&key_box);
-                            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                            let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
-                            let guard_ok = blk.call(
-                                I32,
-                                "js_typed_feedback_class_field_set_guard",
-                                &[
-                                    (I64, &site_id),
-                                    (DOUBLE, &recv_box),
-                                    (I32, &expected_class_id_str),
-                                    (I64, &expected_keys),
-                                    (I64, &key_raw),
-                                    (I32, &field_idx_str),
-                                    (DOUBLE, &val_double),
-                                    (I32, requires_raw_f64_str),
-                                ],
-                            );
-                            (key_raw, guard_ok)
+                            blk.and(I64, &key_bits, POINTER_MASK_I64)
                         };
-                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+                        let expected_keys =
+                            ctx.block().load(I64, &format!("@{}", keys_global_name));
                         let fast_idx = ctx.new_block("class_field_set.fast");
                         let fallback_idx = ctx.new_block("class_field_set.fallback");
                         let merge_idx = ctx.new_block("class_field_set.merge");
                         let fast_label = ctx.block_label(fast_idx);
                         let fallback_label = ctx.block_label(fallback_idx);
                         let merge_label = ctx.block_label(merge_idx);
+
+                        // #5094 Phase 3b: gate the direct raw-f64 store with an
+                        // inline, LICM-hoistable shape/layout check plus an
+                        // inline "value is a plain number" check; only a miss
+                        // pays the out-of-line guard call. Restricted to raw-f64
+                        // data fields. On a miss we fall through to today's exact
+                        // guard path, so an inline `false` is never unsafe.
+                        if requires_raw_f64 {
+                            let inline_ok = emit_inline_class_field_guard(
+                                ctx.block(),
+                                &recv_box,
+                                &expected_class_id_str,
+                                &expected_keys,
+                                Some(&val_double),
+                            );
+                            let needguard_idx = ctx.new_block("class_field_set.needguard");
+                            let needguard_label = ctx.block_label(needguard_idx);
+                            ctx.block().cond_br(&inline_ok, &fast_label, &needguard_label);
+                            ctx.current_block = needguard_idx;
+                        }
+                        let guard_ok = ctx.block().call(
+                            I32,
+                            "js_typed_feedback_class_field_set_guard",
+                            &[
+                                (I64, &site_id),
+                                (DOUBLE, &recv_box),
+                                (I32, &expected_class_id_str),
+                                (I64, &expected_keys),
+                                (I64, &key_raw),
+                                (I32, &field_idx_str),
+                                (DOUBLE, &val_double),
+                                (I32, requires_raw_f64_str),
+                            ],
+                        );
+                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
                         ctx.block()
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 

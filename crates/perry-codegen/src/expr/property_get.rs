@@ -31,7 +31,8 @@ use crate::type_analysis::{
     is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::block::LlBlock;
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::property_get_names::{
     is_headers_method_name, is_http_agent_method_name, is_http_client_request_method_name,
@@ -54,6 +55,99 @@ use super::{
     variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
     TypedFeedbackKind,
 };
+
+/// #5094 Phase 3b: emit an inline, mostly loop-invariant "is this the expected
+/// monomorphic class instance with an intact raw-f64 slot?" check, returning the
+/// `i1` SSA name. The caller branches to the direct slot-access block on `true`
+/// and to the full runtime guard call on `false`, so any miss degrades to
+/// today's exact behavior — a `false` is never unsafe, only slower. Emitting the
+/// check inline (instead of an opaque guard call) lets LLVM LICM hoist the
+/// loop-invariant shape/header loads out of hot loops so the per-iteration cost
+/// collapses to the direct load/store (the `method_calls` win).
+///
+/// This is only used for `requires_raw_f64` *data-field* sites — getters/setters
+/// return on earlier lowering paths, so no accessor exists for this field.
+/// `inline_ok == true` implies every condition the runtime guard's success
+/// requires:
+///   - receiver is a `POINTER_TAG` heap object (tag-checked before any deref);
+///   - `GcHeader.obj_type == GC_TYPE_OBJECT (2)` and not forwarded (`!0x80`);
+///   - `ObjectHeader.object_type == OBJECT_TYPE_REGULAR (1)`;
+///   - `class_id` (@+4) and `keys_array` (@+16) match the compile-time class
+///     shape ⇒ `field_index` is in bounds and the key matches by construction;
+///   - `GC_LAYOUT_TYPED_RAW_F64_INTACT (0x1000)` set ⇒ the slot is raw-f64 with
+///     no downgrade (the same bit 3a added; the per-slot mask is derived from the
+///     same `class_typed_layout` that sets `requires_raw_f64`);
+///   - no own descriptor installed (`OBJ_FLAG_HAS_DESCRIPTORS 0x800` clear) — a
+///     prototype accessor is shadowed by the own data slot, so a direct access
+///     stays correct;
+///   - (set only, `value` provided) the value is not a NaN-boxed non-number, so a
+///     raw-f64 store can never publish a pointer/string into a pointer-free slot.
+pub(super) fn emit_inline_class_field_guard(
+    blk: &mut LlBlock,
+    recv_box: &str,
+    expected_class_id: &str,
+    expected_keys: &str,
+    value: Option<&str>,
+) -> String {
+    let recv_bits = blk.bitcast_double_to_i64(recv_box);
+    // Receiver must be a POINTER_TAG NaN-boxed heap object before any deref.
+    let tag = blk.and(
+        I64,
+        &recv_bits,
+        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+    );
+    let is_obj_tag = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
+    let handle = blk.and(I64, &recv_bits, POINTER_MASK_I64);
+    let obj_ptr = blk.inttoptr(I64, &handle);
+    // GcHeader sits 8 bytes below the user pointer: obj_type u8@-8, gc_flags
+    // u8@-7, _reserved u16@-6.
+    let obj_type_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+    let obj_type = blk.load(I8, &obj_type_ptr);
+    let type_ok = blk.icmp_eq(I8, &obj_type, "2"); // GC_TYPE_OBJECT
+    let gcflags_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-7")]);
+    let gcflags = blk.load(I8, &gcflags_ptr);
+    let fwd = blk.and(I8, &gcflags, "-128"); // GC_FLAG_FORWARDED (0x80)
+    let not_fwd = blk.icmp_eq(I8, &fwd, "0");
+    let reserved_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+    let reserved = blk.load(I16, &reserved_ptr);
+    // ObjectHeader.object_type u32@+0
+    let otype = blk.load(I32, &obj_ptr);
+    let otype_ok = blk.icmp_eq(I32, &otype, "1"); // OBJECT_TYPE_REGULAR
+    // class_id u32@+4
+    let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+    let cid = blk.load(I32, &cid_ptr);
+    let cid_ok = blk.icmp_eq(I32, &cid, expected_class_id);
+    // keys_array ptr@+16
+    let keys_ptr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
+    let keys = blk.load(I64, &keys_ptr);
+    let keys_ok = blk.icmp_eq(I64, &keys, expected_keys);
+    // GC_LAYOUT_TYPED_RAW_F64_INTACT (0x1000) and OBJ_FLAG_HAS_DESCRIPTORS (0x800)
+    let intact_bits = blk.and(I16, &reserved, "4096");
+    let intact_ok = blk.icmp_ne(I16, &intact_bits, "0");
+    let has_desc = blk.and(I16, &reserved, "2048");
+    let no_desc = blk.icmp_eq(I16, &has_desc, "0");
+
+    let mut ok = blk.and(I1, &is_obj_tag, &type_ok);
+    ok = blk.and(I1, &ok, &not_fwd);
+    ok = blk.and(I1, &ok, &otype_ok);
+    ok = blk.and(I1, &ok, &cid_ok);
+    ok = blk.and(I1, &ok, &keys_ok);
+    ok = blk.and(I1, &ok, &intact_ok);
+    ok = blk.and(I1, &ok, &no_desc);
+    if let Some(val) = value {
+        // Reject NaN-boxed non-numbers: every non-number tag satisfies
+        // (bits & 0x7FF8_0000_0000_0000) == 0x7FF8_0000_0000_0000, while finite
+        // numbers and ±inf do not (worst case a number-NaN is rejected and falls
+        // to the guard). This never accepts a pointer/string, so a raw-f64 store
+        // cannot publish a heap pointer into a pointer-free slot.
+        let val_bits = blk.bitcast_double_to_i64(val);
+        let qnan = crate::nanbox::i64_literal(0x7FF8_0000_0000_0000);
+        let masked = blk.and(I64, &val_bits, &qnan);
+        let val_num_ok = blk.icmp_ne(I64, &masked, &qnan);
+        ok = blk.and(I1, &ok, &val_num_ok);
+    }
+    ok
+}
 
 fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
@@ -1575,36 +1669,56 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                        let (obj_bits, obj_handle, key_raw, guard_ok) = {
+                        let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
+                        let obj_handle = ctx.block().and(I64, &obj_bits, POINTER_MASK_I64);
+                        let key_raw = {
                             let blk = ctx.block();
-                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-                            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                             let key_box = blk.load(DOUBLE, &key_handle_global);
                             let key_bits = blk.bitcast_double_to_i64(&key_box);
-                            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                            let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
-                            let guard_ok = blk.call(
-                                I32,
-                                "js_typed_feedback_class_field_get_guard",
-                                &[
-                                    (I64, &site_id),
-                                    (DOUBLE, &recv_box),
-                                    (I32, &expected_class_id_str),
-                                    (I64, &expected_keys),
-                                    (I64, &key_raw),
-                                    (I32, &field_idx_str),
-                                    (I32, requires_raw_f64_str),
-                                ],
-                            );
-                            (obj_bits, obj_handle, key_raw, guard_ok)
+                            blk.and(I64, &key_bits, POINTER_MASK_I64)
                         };
-                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+                        let expected_keys =
+                            ctx.block().load(I64, &format!("@{}", keys_global_name));
                         let fast_idx = ctx.new_block("class_field_get.fast");
                         let fallback_idx = ctx.new_block("class_field_get.fallback");
                         let merge_idx = ctx.new_block("class_field_get.merge");
                         let fast_label = ctx.block_label(fast_idx);
                         let fallback_label = ctx.block_label(fallback_idx);
                         let merge_label = ctx.block_label(merge_idx);
+
+                        // #5094 Phase 3b: gate the direct slot load with an
+                        // inline, LICM-hoistable shape/layout check; only a miss
+                        // pays the out-of-line guard call. Restricted to raw-f64
+                        // data fields (the verified pointer-free case). On a miss
+                        // we fall through to today's exact guard path, so an
+                        // inline `false` is never unsafe — only slower.
+                        if requires_raw_f64 {
+                            let inline_ok = emit_inline_class_field_guard(
+                                ctx.block(),
+                                &recv_box,
+                                &expected_class_id_str,
+                                &expected_keys,
+                                None,
+                            );
+                            let needguard_idx = ctx.new_block("class_field_get.needguard");
+                            let needguard_label = ctx.block_label(needguard_idx);
+                            ctx.block().cond_br(&inline_ok, &fast_label, &needguard_label);
+                            ctx.current_block = needguard_idx;
+                        }
+                        let guard_ok = ctx.block().call(
+                            I32,
+                            "js_typed_feedback_class_field_get_guard",
+                            &[
+                                (I64, &site_id),
+                                (DOUBLE, &recv_box),
+                                (I32, &expected_class_id_str),
+                                (I64, &expected_keys),
+                                (I64, &key_raw),
+                                (I32, &field_idx_str),
+                                (I32, requires_raw_f64_str),
+                            ],
+                        );
+                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
                         ctx.block()
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 

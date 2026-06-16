@@ -232,8 +232,23 @@ pub(super) unsafe fn header_from_user_ptr(user_ptr: *const u8) -> *mut GcHeader 
 
 #[inline]
 pub(super) unsafe fn set_layout_state(header: *mut GcHeader, state: u16) {
-    (*header)._reserved =
-        ((*header)._reserved & !GC_LAYOUT_STATE_MASK) | (state & GC_LAYOUT_STATE_MASK);
+    // Any layout-state transition is also a descriptor-lifecycle event: every
+    // downgrade/removal path routes through here, so clearing the
+    // `GC_LAYOUT_TYPED_RAW_F64_INTACT` fast-path bit here keeps it strictly in
+    // lockstep with descriptor presence (#5094). The two install sites re-set
+    // it explicitly *after* their `set_layout_state` call, and `layout_transfer`
+    // re-applies it after moving the descriptor; nothing else sets it.
+    (*header)._reserved = ((*header)._reserved & !(GC_LAYOUT_STATE_MASK | GC_LAYOUT_TYPED_RAW_F64_INTACT))
+        | (state & GC_LAYOUT_STATE_MASK);
+}
+
+#[inline]
+unsafe fn set_typed_raw_f64_intact(header: *mut GcHeader, on: bool) {
+    if on {
+        (*header)._reserved |= GC_LAYOUT_TYPED_RAW_F64_INTACT;
+    } else {
+        (*header)._reserved &= !GC_LAYOUT_TYPED_RAW_F64_INTACT;
+    }
 }
 
 #[inline]
@@ -352,6 +367,13 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
+    // This path (sweep/free/reset) bypasses `set_layout_state`, so clear the
+    // fast-path bit directly to keep it in lockstep with descriptor removal.
+    unsafe {
+        if let Some(header) = layout_header_for_user(user_ptr) {
+            set_typed_raw_f64_intact(header, false);
+        }
+    }
 }
 
 pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
@@ -515,6 +537,7 @@ unsafe fn init_typed_shape_layout(
         }
     }
 
+    let has_raw_f64 = !raw_f64_mask.is_empty();
     let descriptor = TypedLayoutDescriptor {
         slot_count,
         raw_f64_mask,
@@ -534,6 +557,8 @@ unsafe fn init_typed_shape_layout(
             m.borrow_mut().insert(user_ptr, pointer_mask);
         });
     }
+    // Re-set *after* the `set_layout_state` calls above (which clear it).
+    set_typed_raw_f64_intact(header, has_raw_f64);
 }
 
 #[no_mangle]
@@ -619,6 +644,7 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
             }
         }
 
+        let has_raw_f64 = !raw_f64_mask.is_empty();
         let descriptor = TypedLayoutDescriptor {
             slot_count,
             raw_f64_mask,
@@ -638,6 +664,8 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
                 m.borrow_mut().insert(user_ptr, pointer_mask);
             });
         }
+        // Re-set *after* the `set_layout_state` calls above (which clear it).
+        set_typed_raw_f64_intact(header, has_raw_f64);
     }
 }
 
@@ -712,6 +740,9 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
         return;
     };
     let state = (*old_header)._reserved & GC_LAYOUT_STATE_MASK;
+    // Capture the fast-path bit before `set_layout_state(new_header, ...)` clears
+    // it on the destination; re-apply it below once the descriptor has moved.
+    let typed_raw_f64_intact = (*old_header)._reserved & GC_LAYOUT_TYPED_RAW_F64_INTACT != 0;
     set_layout_state(new_header, state);
     if (*old_header).obj_type == GC_TYPE_ARRAY && (*new_header).obj_type == GC_TYPE_ARRAY {
         crate::array::transfer_array_numeric_layout(old_user as usize, new_user as usize);
@@ -732,6 +763,7 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
             masks.insert(new_user as usize, mask);
         }
     });
+    set_typed_raw_f64_intact(new_header, typed_raw_f64_intact);
 }
 
 pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(
@@ -776,6 +808,61 @@ pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: us
             })
             .unwrap_or(false)
     })
+}
+
+#[inline]
+fn verify_layout_fastpath_enabled() -> bool {
+    static FLAG: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    let cached = FLAG.load(std::sync::atomic::Ordering::Relaxed);
+    if cached != 0 {
+        return cached == 2;
+    }
+    let on = std::env::var("PERRY_VERIFY_LAYOUT_FASTPATH")
+        .map(|v| matches!(v.as_str(), "1" | "on" | "true"))
+        .unwrap_or(false);
+    FLAG.store(if on { 2 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
+    on
+}
+
+/// Guard-only fast path for "is this class field a raw-`f64` slot?" (#5094).
+///
+/// PRECONDITION (enforced by every caller): the call site's compile-time
+/// `require_raw_f64` flag is true. By construction in codegen
+/// (`typed_shape::class_typed_layout` / `type_is_raw_f64_candidate`), that flag
+/// is set for exactly the fields the canonical class layout records in the
+/// descriptor's `raw_f64_mask`. So when the object still carries an intact
+/// typed descriptor (`GC_LAYOUT_TYPED_RAW_F64_INTACT`), the answer is "yes" for
+/// any in-bounds slot — resolvable from the GC header + the object's
+/// `field_count` with no thread-local `TYPED_LAYOUTS` lookup. This removes the
+/// per-access `_tlv_get_addr` + hashmap touch that dominates `method_calls`.
+///
+/// On a cleared bit (no descriptor, or downgraded) it falls back to the precise
+/// per-slot predicate, preserving today's behavior byte-for-byte.
+///
+/// `PERRY_VERIFY_LAYOUT_FASTPATH=1` cross-checks the fast answer against the
+/// precise predicate on every fast-path hit and panics on divergence — this is
+/// the empirical guard against any codegen/runtime mask-derivation skew. The
+/// same check runs unconditionally under `debug_assertions`.
+pub(crate) fn layout_guard_field_is_raw_f64(user_ptr: usize, slot_index: usize) -> bool {
+    unsafe {
+        if let Some(header) = layout_header_for_user(user_ptr) {
+            if (*header)._reserved & GC_LAYOUT_TYPED_RAW_F64_INTACT != 0 {
+                let obj = user_ptr as *const crate::object::ObjectHeader;
+                let in_bounds = slot_index < (*obj).field_count as usize;
+                if cfg!(debug_assertions) || verify_layout_fastpath_enabled() {
+                    let precise = layout_typed_raw_f64_slot_for_user(user_ptr, slot_index);
+                    assert_eq!(
+                        in_bounds, precise,
+                        "layout fast-path divergence: GC_LAYOUT_TYPED_RAW_F64_INTACT set but \
+                         slot {slot_index} (field_count {}) disagrees with raw_f64_mask",
+                        (*obj).field_count
+                    );
+                }
+                return in_bounds;
+            }
+        }
+    }
+    layout_typed_raw_f64_slot_for_user(user_ptr, slot_index)
 }
 
 fn layout_typed_raw_f64_slot_count_for_user(user_ptr: usize, slot_count: usize) -> usize {

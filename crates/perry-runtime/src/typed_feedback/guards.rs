@@ -271,7 +271,7 @@ fn class_field_get_contract(
             && plain_array_index_guard(expected_keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
             && (!require_raw_f64
-                || crate::gc::layout_typed_raw_f64_slot_for_user(
+                || crate::gc::layout_guard_field_is_raw_f64(
                     object_addr,
                     expected_field_index as usize,
                 ))
@@ -307,7 +307,7 @@ fn class_field_fast_contract(
             && std::ptr::eq((*obj).keys_array as *const ArrayHeader, expected_keys)
             && expected_field_index < (*obj).field_count
             && (!require_raw_f64
-                || crate::gc::layout_typed_raw_f64_slot_for_user(
+                || crate::gc::layout_guard_field_is_raw_f64(
                     object_addr,
                     expected_field_index as usize,
                 ))
@@ -474,7 +474,7 @@ fn class_field_set_contract(
             && object_key_matches_field(obj, key, expected_field_index)
             && (!require_raw_f64
                 || (is_plain_number_bits(value_bits)
-                    && crate::gc::layout_typed_raw_f64_slot_for_user(
+                    && crate::gc::layout_guard_field_is_raw_f64(
                         object_addr,
                         expected_field_index as usize,
                     )))

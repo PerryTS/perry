@@ -818,6 +818,18 @@ pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
 // `GC_TYPE_OBJECT`. Set-only (clearing a descriptor leaves it set; the slow
 // path is always correct).
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+// #5094: this `GC_TYPE_OBJECT`'s typed-shape layout descriptor is installed and
+// intact (no downgrade observed) AND has at least one raw-`f64` slot. When set,
+// a class-field guard whose compile-time `require_raw_f64` flag is true can
+// trust the accessed slot is raw-`f64` without the per-access thread-local
+// `TYPED_LAYOUTS` hashmap lookup — codegen only emits `require_raw_f64=1` for
+// fields the canonical class layout marks `number`, which are exactly the
+// descriptor's `raw_f64_mask` members. Cleared the instant the descriptor is
+// removed or downgraded (every such transition routes through
+// `set_layout_state`). Bit 12; only meaningful for `GC_TYPE_OBJECT`. The
+// per-slot predicate `layout_typed_raw_f64_slot_for_user` is unchanged; only
+// the guard-only fast path `layout_guard_field_is_raw_f64` consults this bit.
+pub(crate) const GC_LAYOUT_TYPED_RAW_F64_INTACT: u16 = 0x1000;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
