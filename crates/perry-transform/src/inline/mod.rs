@@ -712,6 +712,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
+            is_nested: false,
         }
     }
 
