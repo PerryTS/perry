@@ -775,6 +775,7 @@ mod tests {
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![Expr::LocalGet(2)],
                 type_args: Vec::new(),
+                byte_offset: 0,
             }))],
             captures: Vec::new(),
             mutable_captures: Vec::new(),

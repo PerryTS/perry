@@ -638,6 +638,11 @@ pub fn try_lower_native_method_str_dispatch(
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
+    // #5247: capture this call's source byte offset before any argument
+    // (possibly a nested call that overwrites the shared pending offset) is
+    // lowered, so the dynamic dispatch below can emit `js_set_call_location`
+    // with the OUTER call's location right before the throw-capable dispatch.
+    let call_byte_offset = ctx.strings.pending_call_offset();
     // -------- PropertyGet method dispatch via js_native_call_method --------
     //
     // For `recv.method(args)` where the static dispatch above didn't fire
@@ -788,6 +793,11 @@ pub fn try_lower_native_method_str_dispatch(
                 property,
                 TypedFeedbackContract::method_call(),
             );
+            // #5247: record the source location right before the dynamic
+            // dispatch so a thrown "X is not a function" TypeError carries
+            // `at <file>:<line>`. Args are already lowered above, so a nested
+            // call's location no longer shadows this one.
+            crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
             let blk = ctx.block();
             return Ok(Some(blk.call(
                 DOUBLE,

@@ -76,6 +76,7 @@ fn throw_type_error_const_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -88,6 +89,7 @@ fn throw_restricted_function_property_assignment() -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -100,6 +102,7 @@ fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -547,6 +550,7 @@ fn lower_assignment_target(
                                 }),
                                 args: vec![*value],
                                 type_args: vec![],
+                                byte_offset: 0,
                             });
                         }
                     }

@@ -52,6 +52,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -467,6 +469,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         callee: Box::new(callee),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 
@@ -590,6 +593,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
             }),
             args: vec![int(0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         })),
     ];
 
@@ -673,6 +677,7 @@ fn artifact_records_buffer_read_double_as_f64() {
             }),
             args: vec![int(0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         })),
     ];
 

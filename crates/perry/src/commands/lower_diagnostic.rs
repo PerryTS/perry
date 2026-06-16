@@ -115,8 +115,14 @@ mod tests {
             rendered.contains("error[U006]: Unsupported binding pattern"),
             "missing header: {rendered}"
         );
-        assert!(rendered.contains("t.ts:1:11"), "missing location: {rendered}");
-        assert!(rendered.contains("for (var { a, b }"), "missing snippet: {rendered}");
+        assert!(
+            rendered.contains("t.ts:1:11"),
+            "missing location: {rendered}"
+        );
+        assert!(
+            rendered.contains("for (var { a, b }"),
+            "missing snippet: {rendered}"
+        );
         assert!(rendered.contains('^'), "missing underline: {rendered}");
     }
 

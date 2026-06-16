@@ -84,6 +84,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             }),
             args: call_args,
             type_args: vec![],
+            byte_offset: 0,
         }),
         else_expr: Box::new(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
@@ -92,6 +93,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             }),
             args: method_args,
             type_args: vec![],
+            byte_offset: 0,
         }),
     }
 }

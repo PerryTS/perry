@@ -52,6 +52,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -481,6 +483,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         callee: Box::new(callee),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 
@@ -829,11 +832,13 @@ fn pod_layout_specialization_module() -> Module {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![],
         type_args: vec![Type::Named("Tiny".to_string())],
+        byte_offset: 0,
     }));
     module.init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![],
         type_args: vec![Type::Named("Wide".to_string())],
+        byte_offset: 0,
     }));
     module
 }
@@ -873,11 +878,13 @@ fn native_pod_view_specialization_module() -> Module {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::NativeArenaAlloc(Box::new(int(4096)))],
         type_args: vec![Type::Named("Tiny".to_string())],
+        byte_offset: 0,
     }));
     module.init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::NativeArenaAlloc(Box::new(int(4096)))],
         type_args: vec![Type::Named("Wide".to_string())],
+        byte_offset: 0,
     }));
     module
 }

@@ -135,6 +135,7 @@ fn update_call_sites_in_expr(
             callee,
             args,
             type_args,
+            ..
         } => {
             // First update the callee and args recursively
             update_call_sites_in_expr(callee, ctx, lookup);

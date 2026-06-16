@@ -63,6 +63,7 @@ pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
         }),
         args: Vec::new(),
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 
@@ -196,6 +197,7 @@ pub(crate) fn with_implicit_unset_let(id: LocalId, name: String) -> Stmt {
             }),
             args: vec![],
             type_args: vec![],
+            byte_offset: 0,
         }),
     }
 }
@@ -495,6 +497,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }),
                         args: vec![Expr::LocalGet(id), Expr::String(n.clone())],
                         type_args: vec![],
+                        byte_offset: 0,
                     });
                 }
                 Ok(Expr::LocalGet(id))
@@ -598,6 +601,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }),
                         args: vec![Expr::String(name.clone())],
                         type_args: Vec::new(),
+                        byte_offset: 0,
                     });
                 }
                 if !known_global {
@@ -1051,6 +1055,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             }),
                             args: vec![Expr::String(n.to_string())],
                             type_args: Vec::new(),
+                            byte_offset: 0,
                         })));
                     }
                 }
@@ -1890,6 +1895,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             callee: Box::new(fixed_callee.clone()),
                             args,
                             type_args: Vec::new(),
+                            byte_offset: 0,
                         };
                         // For `foo?.bar?.(args)` the function value (`bar` on the
                         // un-short-circuited receiver) must itself be null-checked
@@ -1952,6 +1958,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             callee: Box::new(callee_expr),
                             args,
                             type_args: Vec::new(),
+                            byte_offset: 0,
                         })
                     };
 
@@ -2120,6 +2127,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 callee: Box::new(callee),
                 args: call_args,
                 type_args: vec![],
+                byte_offset: 0,
             })
         }
         // Class expression used as a value (not in `new` context) —
@@ -2574,5 +2582,6 @@ pub(crate) fn try_desugar_reactive_text(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }))
 }

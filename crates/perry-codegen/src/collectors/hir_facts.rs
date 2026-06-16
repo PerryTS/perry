@@ -652,6 +652,7 @@ mod tests {
             callee: Box::new(Expr::FuncRef(7)),
             args: vec![arg, Expr::Integer(0), Expr::Integer(100)],
             type_args: vec![],
+            byte_offset: 0,
         };
         // let src = undefined; src = obj.value;       (disqualified seed)
         // const xx = clamp3(src, 0, 100);             (clamp-admitted)

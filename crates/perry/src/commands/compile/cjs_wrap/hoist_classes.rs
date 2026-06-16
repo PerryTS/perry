@@ -233,7 +233,21 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
     // `Undefined variable in update expression`. The conservative rule
     // is to leave the class inside the IIFE when *any* of its referenced
     // identifiers would lose their binding to the IIFE-local state.
-    let iife_locals = collect_top_level_let_const_var_names(source);
+    let mut iife_locals = collect_top_level_let_const_var_names(source);
+    // Issue #5251 — the cjs_wrap preamble injects `var exports`, `var module`,
+    // and a `require` function as IIFE-local bindings (see `wrap.rs`'s
+    // `cjs_preamble`). They are NOT declared in the original source, so the
+    // textual top-level scan above never sees them. A class whose body reads
+    // `exports.X` / `module.exports` / `require(...)` must therefore ALSO stay
+    // inside the IIFE — hoisting it out severs the closure over the injected
+    // `var exports`, and `exports` then resolves as an unknown global
+    // (`exports.X` lowers to the numeric `0` sentinel → `(number).test is not a
+    // function` inside class methods/constructors of CJS packages like ajv).
+    for injected in ["exports", "module", "require"] {
+        if !iife_locals.iter().any(|n| n == injected) {
+            iife_locals.push(injected.to_string());
+        }
+    }
 
     let mut i = 0usize;
     while i < bytes.len() {

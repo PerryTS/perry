@@ -78,6 +78,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -238,6 +240,7 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 }),
                 args: vec![Expr::Number(2.0)],
                 type_args: Vec::new(),
+                byte_offset: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 object: Box::new(Expr::LocalGet(1)),
@@ -328,6 +331,7 @@ fn typed_feedback_guards_direct_class_method_specialization() {
             }),
             args: vec![Expr::Number(5.0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         }))],
     ));
 
@@ -377,6 +381,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                 callee: Box::new(Expr::LocalGet(2)),
                 args: vec![Expr::Number(9.0)],
                 type_args: Vec::new(),
+                byte_offset: 0,
             })),
         ],
     ));

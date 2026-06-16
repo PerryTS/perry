@@ -366,6 +366,20 @@ pub struct CompileOptions {
     /// Without this, side-effect-only dynamic-import targets fail at
     /// link with `Undefined symbols: ___perry_ns_<prefix>`.
     pub is_dynamic_import_target: bool,
+
+    /// #5247: emit source-location tracking for the dynamic call-dispatch
+    /// throw path (`X is not a function`). Gated by the CLI `--debug-symbols`
+    /// flag; default `false` so release builds are byte-identical and incur
+    /// no per-call overhead. When `true` (and `module_source` is present),
+    /// each dynamic method-call dispatch is preceded by a
+    /// `js_set_call_location(file, line)` so the thrown TypeError's `.stack`
+    /// shows `at <file>:<line>`.
+    pub debug_locations: bool,
+    /// #5247: this module's original source text, used at codegen to resolve a
+    /// `Call`'s `byte_offset` to a 1-based line number. Only set when
+    /// `debug_locations` is on (avoids cloning source for every module in the
+    /// common build). `None` falls back to the `<anonymous>` frame.
+    pub module_source: Option<String>,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.

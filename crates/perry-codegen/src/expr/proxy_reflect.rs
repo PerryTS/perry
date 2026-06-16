@@ -261,11 +261,13 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
                 callee: a_callee,
                 args: a_args,
                 type_args: a_type_args,
+                ..
             },
             Expr::Call {
                 callee: b_callee,
                 args: b_args,
                 type_args: b_type_args,
+                ..
             },
         ) => {
             a_type_args == b_type_args
