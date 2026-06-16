@@ -443,6 +443,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     _ => {}
@@ -579,6 +580,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     "on"
@@ -2486,6 +2488,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     }),
                     args: vec![*index],
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 });
             }
             Ok(Expr::IndexGet { object, index })

@@ -217,6 +217,7 @@ fn collect_instantiations_in_expr(
             callee,
             args,
             type_args,
+            ..
         } => {
             // First collect in the callee and args
             collect_instantiations_in_expr(callee, ctx, module, idx);

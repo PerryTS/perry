@@ -907,6 +907,7 @@ fn try_rewrite_foreach(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     })
 }
 
@@ -1103,6 +1104,7 @@ fn try_rewrite_navstack(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     })
 }
 

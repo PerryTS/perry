@@ -1075,6 +1075,7 @@ fn promise_reject(value: Expr) -> Expr {
         }),
         args: vec![value],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -1889,6 +1890,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
+        byte_offset: 0,
     };
     let promise_reject = |arg: Expr| Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -1897,6 +1899,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     // Rewrite every Return inside next_body to LabeledBreak(__step_done)
@@ -1957,6 +1960,7 @@ pub fn build_async_step_driver_direct(
                 callee: Box::new(Expr::LocalGet(tid)),
                 args: vec![Expr::LocalGet(value_param_id)],
                 type_args: vec![],
+                byte_offset: 0,
             })]
         } else {
             // No __async_throw closure was constructed (callee passed None).
@@ -2033,6 +2037,7 @@ pub fn build_async_step_driver_direct(
                         callee: Box::new(Expr::LocalGet(step_self_id)),
                         args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
                         type_args: vec![],
+                        byte_offset: 0,
                     })),
                 ],
             }),

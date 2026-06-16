@@ -929,6 +929,7 @@ fn collect_module_one(
             is_dynamic: true,
             is_dynamic_target: false,
             is_deferred_require: false,
+            is_adopted_require: false,
         });
     }
 
@@ -1422,6 +1423,11 @@ fn collect_module_one(
             if is_lazy {
                 import.is_deferred_require = true;
             }
+            // #5257: every import here was synthesized from a `require('S')`,
+            // which under CJS returns the exports object — so a no-`default`
+            // target must route through the namespace machinery (#4872), not
+            // trip the static-ESM default gate. Tag so the gate skips them.
+            import.is_adopted_require = true;
         }
     }
 

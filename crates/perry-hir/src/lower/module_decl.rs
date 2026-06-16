@@ -459,6 +459,7 @@ pub(crate) fn lower_module_decl(
                 is_dynamic: false,
                 is_dynamic_target: false,
                 is_deferred_require: false,
+                is_adopted_require: false,
             });
         }
         ast::ModuleDecl::ExportDecl(export) => {

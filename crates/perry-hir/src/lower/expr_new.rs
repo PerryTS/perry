@@ -88,6 +88,7 @@ fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr 
         }),
         args: Vec::new(),
         type_args: Vec::new(),
+        byte_offset: 0,
     };
 
     if args.is_empty() {
@@ -680,6 +681,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }),
                     args: Vec::new(),
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 });
                 return Ok(Expr::Sequence(exprs));
             }
@@ -953,6 +955,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }),
                     args,
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 });
             }
 

@@ -181,6 +181,7 @@ pub(super) fn try_url_date_weakref_instance(
                         }),
                         args,
                         type_args: vec![],
+                        byte_offset: 0,
                     }));
                 }
                 cached_recv = Some(recv_expr);
@@ -481,6 +482,7 @@ pub(super) fn try_url_date_weakref_instance(
                         }),
                         args,
                         type_args: Vec::new(),
+                        byte_offset: 0,
                     }
                 };
                 if ctx.weakmap_locals.contains(&recv_name) {

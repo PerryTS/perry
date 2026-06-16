@@ -1402,7 +1402,7 @@ mod arrays_finds;
 mod bigint_set;
 mod binary;
 mod call_spread;
-mod calls;
+pub(crate) mod calls;
 mod child_proc;
 mod closure;
 mod compare;
