@@ -29,6 +29,19 @@ pub(super) fn try_local_array_methods(
             let method_name = method_ident.sym.as_ref();
             if let ast::Expr::Ident(arr_ident) = member.obj.as_ref() {
                 let arr_name = arr_ident.sym.to_string();
+                // #5196: a Proxy-wrapped array routes ALL its method calls
+                // through the proxy member-call path (`ProxyGet` +
+                // `js_native_call_method`), so the method's `this` binds to the
+                // proxy and element reads fire its `get` trap. Folding to the
+                // dense `Expr::Array*` fast paths below would dereference the
+                // proxy id as a real `ArrayHeader` and SIGSEGV. `arr.map`/
+                // `.filter`/`.find` already escaped via the `is_class_instance`
+                // gate (a proxy local is typed `Named("Proxy")`), but
+                // `reduce`/`forEach`/`join`/`sort`/`splice`/… did not — guard
+                // them all here, uniformly, by falling through.
+                if ctx.proxy_locals.contains(&arr_name) {
+                    return Ok(Err(args));
+                }
                 // Check that this is NOT a String type (Array, Set, Map are all OK)
                 // When type is unknown, only enter array block for array-only methods
                 // (push, pop, etc.), NOT for methods shared with strings (indexOf,

@@ -53,7 +53,13 @@ pub fn synthesize_class_captures(
             union_captures.insert(id);
         }
     }
-    for member in computed_members.iter().filter(|member| !member.is_static) {
+    // Both instance AND static computed members (`static [k]() {}` and the
+    // static methods next emits as computed members, e.g. `NextResponse.json`)
+    // can reference enclosing-fn locals — and even when they don't, a
+    // `new <Self>(…)` inside them still needs the constructor's capture args
+    // appended at the call site. Collect from all of them so the union (and
+    // thus the decl-site snapshot) is complete. Refs #5199.
+    for member in computed_members.iter() {
         for id in collect_method_captures(&member.function, &outer_scope_ids, &module_level_ids) {
             union_captures.insert(id);
         }
@@ -345,6 +351,47 @@ pub fn synthesize_class_captures(
         prologue.append(&mut sm.body);
         sm.body = prologue;
         append_self_sites(&mut sm.body, &id_map);
+    }
+
+    // 2c. STATIC computed methods (`static [k]() {}`, and the static methods
+    // bundlers emit as computed members — e.g. next's `NextResponse.json` /
+    // `redirect` / `rewrite` / `next`). These get the SAME decl-site snapshot
+    // rebind as the plain static methods in 2b. Previously they were skipped
+    // entirely: a `new <Self>(…)` inside such a method (`return new
+    // NextResponse(response.body, response)`) never had the constructor's
+    // trailing `__perry_cap_*` args appended, so `inline_constructor_param_values`
+    // mis-split the user args into the capture slots and the constructor read
+    // its captures (here the `INTERNALS` symbol) as the uninitialized/garbage
+    // tail — segfaulting when that garbage was a fetch handle keyed into a
+    // property set. Refs #5199 (next/server NextResponse.json SIGSEGV).
+    for member in computed_members
+        .iter_mut()
+        .filter(|member| member.is_static)
+    {
+        let mut id_map: std::collections::HashMap<LocalId, LocalId> =
+            std::collections::HashMap::new();
+        let mut prologue: Vec<Stmt> = Vec::new();
+        for (index, &outer_id) in captures_vec.iter().enumerate() {
+            let new_id = ctx.fresh_local();
+            id_map.insert(outer_id, new_id);
+            prologue.push(Stmt::Let {
+                id: new_id,
+                name: format!("__perry_cap_{}", outer_id),
+                ty: captured_outer_types
+                    .get(&outer_id)
+                    .cloned()
+                    .unwrap_or(Type::Any),
+                mutable: true,
+                init: Some(Expr::ClassCaptureValue {
+                    class_name: name.to_string(),
+                    index: index as u32,
+                }),
+            });
+        }
+        crate::analysis::remap_local_ids_in_stmts(&mut member.function.body, &id_map);
+        prologue.append(&mut member.function.body);
+        member.function.body = prologue;
+        append_self_sites(&mut member.function.body, &id_map);
     }
 
     // 3. Constructor.

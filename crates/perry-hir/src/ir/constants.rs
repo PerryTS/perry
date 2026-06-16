@@ -77,6 +77,18 @@ pub fn clear_compile_packages_override() {
     COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow_mut().clear());
 }
 
+/// Refs #5137: true when the user explicitly opted `pkg` into
+/// `perry.compilePackages` (the package's real npm source is being
+/// compiled). Native-instance registration and native-shim method
+/// lowering must back off for such packages even when a class name
+/// like `Command` / `Big` would otherwise hit a hardcoded
+/// library-name fallback — otherwise `new Command()` from commander's
+/// own source is still routed to the `js_commander_*` shim instead of
+/// the compiled-from-source class.
+pub fn is_compile_package_override(pkg: &str) -> bool {
+    COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow().contains(pkg))
+}
+
 // ---- #5009 build-time `process.env` define substitution ----
 
 /// #5009: a build-time `process.env.<NAME>` substitution value, esbuild

@@ -95,6 +95,68 @@ pub(crate) fn try_lower_proxy_fn_call_apply(
     )))
 }
 
+/// `proxy.method(args)` for a method name other than `call`/`apply` — the
+/// *fused* member-call form whose callee the HIR lowered to
+/// `ProxyGet(p, "method")` (#5196). Reading `.method` off the proxy and then
+/// invoking it must bind `this` to the proxy itself, so `Array.prototype.map`
+/// & friends iterate the proxy through its `get` trap. The plain closure-call
+/// fallthrough loses that receiver (the method runs with `this = undefined`,
+/// throwing `Cannot convert undefined or null to object`). Route the call
+/// through `js_native_call_method`, whose Proxy arm performs the spec
+/// `Get(proxy, "method")` then `Call(method, proxy, args)`. Returns `None`
+/// when the callee isn't a proxy member-call so normal dispatch proceeds.
+pub(crate) fn try_lower_proxy_method_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    let Expr::ProxyGet { proxy, key } = callee else {
+        return Ok(None);
+    };
+    let Expr::String(method_name) = key.as_ref() else {
+        return Ok(None);
+    };
+    // `.call`/`.apply` route through the proxy's [[Call]] (apply trap) and are
+    // handled by `try_lower_proxy_fn_call_apply`, which runs first.
+    if method_name == "call" || method_name == "apply" {
+        return Ok(None);
+    }
+    let recv_box = lower_expr(ctx, proxy)?;
+    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    for a in args {
+        lowered_args.push(lower_expr(ctx, a)?);
+    }
+    let (args_ptr, args_len) = if lowered_args.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let n = lowered_args.len();
+        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+        {
+            let blk = ctx.block();
+            for (i, value) in lowered_args.iter().enumerate() {
+                let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                blk.store(DOUBLE, value, &slot);
+            }
+        }
+        (buf, n.to_string())
+    };
+    let method_idx = ctx.strings.intern(method_name);
+    let entry = ctx.strings.entry(method_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let name_len = entry.byte_len.to_string();
+    Ok(Some(ctx.block().call(
+        DOUBLE,
+        "js_native_call_method",
+        &[
+            (DOUBLE, &recv_box),
+            (PTR, &bytes_global),
+            (I64, &name_len),
+            (PTR, &args_ptr),
+            (I64, &args_len),
+        ],
+    )))
+}
+
 fn put_value_static_property_fast_path(
     ctx: &FnCtx<'_>,
     target: &Expr,

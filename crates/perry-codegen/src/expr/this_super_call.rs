@@ -40,13 +40,13 @@ use super::{
     emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_node_stream_super_init, lower_object_literal,
-    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
-    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
-    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
-    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
-    I18nLowerCtx,
+    lower_array_literal, lower_channel_reduction, lower_event_emitter_subclass_init, lower_expr,
+    lower_expr_as_i32, lower_index_set_fast, lower_js_args_array, lower_node_stream_super_init,
+    lower_object_literal, lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline,
+    nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
+    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
+    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
+    FlatConstInfo, FnCtx, I18nLowerCtx,
 };
 
 /// Built-in constructor names (beyond Error/stream/fetch, which have their own
@@ -442,6 +442,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
                         return Ok(result);
+                    }
+                    // #5137: `class X extends EventEmitter` (node:events) —
+                    // `super()` installs the bare EventEmitter listener/emit
+                    // surface onto `this` (see `lower_event_emitter_subclass_init`).
+                    // `super(opts)` takes an optional options bag in Node; we lower
+                    // the args for side effects but the bare emitter seeds no state.
+                    if parent_name.as_str() == "EventEmitter" {
+                        for a in super_args {
+                            let _ = lower_expr(ctx, a)?;
+                        }
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                        };
+                        lower_event_emitter_subclass_init(ctx, &this_box);
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     // `class X extends Request` / `extends Response`:
                     // `super(input, init)` allocates the underlying native

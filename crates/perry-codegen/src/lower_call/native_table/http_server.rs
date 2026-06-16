@@ -387,18 +387,25 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "pause",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_pause",
+        // #4975: `Readable.pause()` returns `this` — use the self-returning
+        // wrapper + NR_PTR so `res.pause().on(...)` chains instead of
+        // yielding `undefined`/a raw number.
+        runtime: "js_node_http_im_pause_self",
         args: &[],
-        ret: NR_VOID,
+        ret: NR_PTR,
     },
     NativeModSig {
         module: "http",
         has_receiver: true,
         method: "resume",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_resume",
+        // #4975: `Readable.resume()` returns `this` so the canonical
+        // `res.resume().on('end', …)` body-drain chain keeps flowing
+        // (test-http-write-head-2). Was NR_VOID → the chain hit
+        // `(number|undefined).on`.
+        runtime: "js_node_http_im_resume_self",
         args: &[],
-        ret: NR_VOID,
+        ret: NR_PTR,
     },
     NativeModSig {
         module: "http",

@@ -155,8 +155,23 @@ fn parse_source_file_with_typescript_fallback<'a>(
     }
 }
 
+/// Strip the optional import query/hash suffix (`./mod.ts?inline`,
+/// `mod.wasm#section`) from a filename to recover the bare path for extension
+/// detection.
+///
+/// A Windows extended-length ("verbatim") path begins with the literal `\\?\`
+/// prefix — exactly what `std::fs::canonicalize` returns on Windows. The `?` in
+/// that prefix must not be mistaken for the start of a query string, or the
+/// path would be truncated to `\\` and the real `.ts`/`.tsx` extension lost,
+/// making every `.ts` file parse as plain JavaScript (issue #5228). Strip the
+/// verbatim prefix before splitting so only a genuine trailing query is removed.
+fn path_for_extension_check(filename: &str) -> &str {
+    let path = filename.strip_prefix(r"\\?\").unwrap_or(filename);
+    path.split(['?', '#']).next().unwrap_or(path)
+}
+
 fn syntax_for_filename(filename: &str) -> Syntax {
-    let path = filename.split(['?', '#']).next().unwrap_or(filename);
+    let path = path_for_extension_check(filename);
     let lower_path = path.to_ascii_lowercase();
     if lower_path.ends_with(".ts")
         || lower_path.ends_with(".tsx")
@@ -177,7 +192,7 @@ fn syntax_for_filename(filename: &str) -> Syntax {
 }
 
 fn typescript_syntax_for_filename(filename: &str) -> Syntax {
-    let path = filename.split(['?', '#']).next().unwrap_or(filename);
+    let path = path_for_extension_check(filename);
     typescript_syntax_for_path(&path.to_ascii_lowercase())
 }
 
@@ -304,7 +319,7 @@ fn parse_module_or_script(
 }
 
 fn should_parse_as_script(filename: &str, source: &str) -> bool {
-    let path = filename.split(['?', '#']).next().unwrap_or(filename);
+    let path = path_for_extension_check(filename);
     if !(path.ends_with(".js") || path.ends_with(".cjs") || path.ends_with(".jsx")) {
         return false;
     }
@@ -797,6 +812,33 @@ mod tests {
         let source = "const a = 1, b = 2;\nconst c = a / b; const s = \"x\";\nexport default c;\n";
         let module = parse_typescript(source, "math.js").unwrap();
         assert_eq!(module.body.len(), 4);
+    }
+
+    #[test]
+    fn windows_verbatim_path_parses_as_typescript() {
+        // Regression for #5228: on Windows, `std::fs::canonicalize` returns a
+        // verbatim path prefixed with `\\?\`. The `?` must not be treated as the
+        // start of an import query string, or the extension is lost and the file
+        // parses as plain JavaScript — which rejects type annotations whose exact
+        // shape the TS-recovery heuristic doesn't catch (`(x: Uint8Array)`).
+        let cases = [
+            "function f(x: Uint8Array) {}\n",
+            "const f = (x: Uint8Array) => 1;\n",
+            "function f(x: Uint8Array[]) {}\n",
+            "const f = (chunk: Uint8Array | string) => {};\n",
+        ];
+        for src in cases {
+            parse_typescript(src, r"\\?\C:\Users\x\repro.ts")
+                .unwrap_or_else(|e| panic!("verbatim .ts path failed to parse {src:?}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn path_for_extension_check_strips_verbatim_prefix_and_query() {
+        assert_eq!(path_for_extension_check(r"\\?\C:\a\mod.ts"), r"C:\a\mod.ts");
+        assert_eq!(path_for_extension_check("./mod.ts?inline"), "./mod.ts");
+        assert_eq!(path_for_extension_check("mod.wasm#section"), "mod.wasm");
+        assert_eq!(path_for_extension_check("/home/u/mod.ts"), "/home/u/mod.ts");
     }
 
     #[test]

@@ -1337,6 +1337,18 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 found_inherited_ctor = true;
             }
         }
+        // #5137: implicit-ctor `class X extends EventEmitter {}` — install the
+        // emitter surface (the explicit-`super()` arm does this when a ctor is
+        // written). Gated `!has_imported_ctor` so an imported class whose real
+        // ctor lives in another module (commander's `Command`) still reaches
+        // the imported-ctor fallback below and runs its real `super()`.
+        if !found_inherited_ctor
+            && !has_imported_ctor
+            && class.extends_name.as_deref() == Some("EventEmitter")
+        {
+            crate::expr::lower_event_emitter_subclass_init(ctx, &obj_box);
+            found_inherited_ctor = true;
+        }
         // Issue #573: if the parent walk reached an Error-like built-in
         // without finding any user-class constructor, synthesize the JS
         // spec default ctor `constructor(...args) { super(...args); }` —

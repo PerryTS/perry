@@ -18,7 +18,7 @@ use perry_transform::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
@@ -26,8 +26,9 @@ use crate::OutputFormat;
 use super::{
     cached_resolve_import, declaration_sidecar_for_resolved_import, extract_compile_package_dir,
     has_perry_native_library, is_declaration_file, is_in_compile_package,
-    is_in_perry_native_package, is_js_file, parse_cached, parse_native_library_manifest,
-    parse_package_specifier, CompilationContext, JsModule, ParseCache,
+    is_in_perry_native_package, is_js_file, is_recognized_text_asset, parse_cached,
+    parse_native_library_manifest, parse_package_specifier, CompilationContext, JsModule,
+    ParseCache,
 };
 
 mod create_require_transform;
@@ -36,6 +37,7 @@ mod dynamic_glob;
 mod feature_detect;
 mod native_addon;
 mod parse_error;
+mod wasm_asset;
 #[cfg(test)]
 mod tests;
 
@@ -43,6 +45,7 @@ use create_require_transform::transform_create_require_literal_requires;
 use dynamic_glob::expand_dynamic_import_glob;
 use native_addon::refuse_compile_package_native_addon;
 use parse_error::annotate_parse_error;
+use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
@@ -125,11 +128,6 @@ pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &st
         specs.push(cap[1].to_string());
     }
 
-    let parent = match file_path.parent() {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
     let mut out: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     for spec in specs {
@@ -140,23 +138,78 @@ pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &st
         // so the most common case (top-level package brings in submodules)
         // is covered. Inside a package's `node_modules` tree, all
         // sibling imports are relative-path anyway.
-        if !(spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/')) {
+        if !(super::resolve::is_relative_specifier(&spec) || spec.starts_with('/')) {
             continue;
         }
-        let candidate = if spec.starts_with('/') {
-            PathBuf::from(&spec)
+        let resolved_path = if spec.starts_with('/') {
+            super::resolve::resolve_absolute_import_paths(&spec)
         } else {
-            parent.join(&spec)
+            super::resolve::resolve_relative_import_paths(&spec, file_path)
         };
-        if let Some(resolved) = super::resolve::resolve_with_extensions(&candidate) {
-            if let Ok(canon) = resolved.canonicalize() {
-                if seen.insert(canon.clone()) {
-                    out.push(canon);
-                }
+        if let Some(resolved) = resolved_path {
+            if seen.insert(resolved.canonical_path.clone()) {
+                out.push(resolved.source_path);
             }
         }
     }
     out
+}
+
+struct ResolvedImport {
+    canonical_path: PathBuf,
+    source_path: PathBuf,
+    kind: ModuleKind,
+}
+
+fn cached_resolve_import_with_lexical_base(
+    import_source: &str,
+    lexical_importer_path: &Path,
+    canonical_importer_path: &Path,
+    ctx: &mut CompilationContext,
+) -> Option<ResolvedImport> {
+    // Module collection keys and reads use canonical paths, but source text
+    // relative specifiers are written against the importer path the user
+    // compiled. On platforms where /tmp is a symlink, resolving imports from
+    // the canonical /private/tmp path can make a valid "../.." edge point at a
+    // nonexistent sibling and leave imported classes unresolved.
+    let resolved = cached_resolve_import_from_base(import_source, lexical_importer_path, ctx);
+    if resolved.is_some() || lexical_importer_path == canonical_importer_path {
+        return resolved;
+    }
+    cached_resolve_import_from_base(import_source, canonical_importer_path, ctx)
+}
+
+fn cached_resolve_import_from_base(
+    import_source: &str,
+    importer_path: &Path,
+    ctx: &mut CompilationContext,
+) -> Option<ResolvedImport> {
+    let (canonical_path, kind) = cached_resolve_import(import_source, importer_path, ctx)?;
+    let source_path = source_visible_resolved_path(import_source, importer_path, &canonical_path);
+    Some(ResolvedImport {
+        canonical_path,
+        source_path,
+        kind,
+    })
+}
+
+fn source_visible_resolved_path(
+    import_source: &str,
+    importer_path: &Path,
+    canonical_path: &Path,
+) -> PathBuf {
+    let resolved = if import_source.starts_with('/') {
+        super::resolve::resolve_absolute_import_paths(import_source)
+    } else if super::resolve::is_relative_specifier(import_source) {
+        super::resolve::resolve_relative_import_paths(import_source, importer_path)
+    } else {
+        None
+    };
+
+    resolved
+        .filter(|path| path.canonical_path == canonical_path)
+        .map(|path| path.source_path)
+        .unwrap_or_else(|| canonical_path.to_path_buf())
 }
 
 /// Issue #841: Node.js submodules that Perry knows about at the
@@ -327,6 +380,16 @@ fn collect_module_one(
     // Check if this file should be handled by JS runtime instead of native compilation
     // This includes: JS files, declaration files (.d.ts), JSON files, or any file in node_modules when JS runtime is enabled
     let is_json = canonical.extension().and_then(|e| e.to_str()) == Some("json");
+    // #5223: text-asset imports (`import s from "./x.txt"`). A recognized text
+    // extension is read verbatim and synthesized into a native module whose
+    // default export is the file contents as a JS string (see the text branch
+    // below, mirroring the JSON-module path). `.wasm` is out of scope.
+    let is_text_asset = is_recognized_text_asset(&canonical);
+    // #5235: `.wasm` ESM import. The file is binary (not valid UTF-8), so it
+    // must NOT be read as a string. We read the bytes, parse the export section,
+    // and synthesize a throwing-stub module (see the wasm branch below). Real
+    // `.wasm` ESM instantiation is the companion issue #5234.
+    let is_wasm = is_wasm_asset(&canonical);
     let is_in_node_modules = canonical.to_string_lossy().contains("node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
@@ -428,7 +491,7 @@ fn collect_module_one(
         // also walked. Template-literal / variable specifiers can't be
         // resolved statically and are skipped (V8 will surface the
         // resolution failure at runtime, same as today).
-        let transitive_paths = collect_js_module_imports(&canonical, &source);
+        let transitive_paths = collect_js_module_imports(entry_path, &source);
         ctx.js_modules.insert(
             specifier.clone(),
             JsModule {
@@ -461,9 +524,44 @@ fn collect_module_one(
         });
     }
 
-    // It's a TypeScript file to compile natively
-    let raw_source = fs::read_to_string(&canonical)
-        .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+    // #5235: `.wasm` ESM import — defer. Read the BYTES (never as UTF-8; the
+    // file is binary), parse the WebAssembly export section, and synthesize a
+    // TypeScript stub module whose exports are throw-on-call functions. Strict
+    // mode makes it a hard error; the default policy defers it (records the
+    // shared end-of-compile notice and keeps building) so a build with a
+    // peripheral `.wasm` dep compiles + runs its core — the wasm feature throws
+    // only if reached. Real `.wasm` ESM instantiation is the companion #5234.
+    //
+    // The synthesized source flows through the exact same parse/lower/codegen
+    // pipeline as the #5223 text-asset and JSON synthetic modules below — we
+    // just feed `raw_source` from the stub instead of reading the file as text.
+    let raw_source = if is_wasm {
+        let display_name = canonical
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("module.wasm");
+        let loc = canonical.to_string_lossy().to_string();
+        // Strict mode (broad `perry.strict` / `--strict-dynamic-import` /
+        // `perry.dynamicImport = "error"`) turns the deferred `.wasm` import into
+        // a hard compile error. `PERRY_ALLOW_EVAL=1` forces defer (shared AOT
+        // escape hatch), mirroring the dynamic-import deferral (#5230).
+        if ctx.strict_dynamic_import && !perry_hir::eval_classifier::eval_override_enabled() {
+            return Err(anyhow!(
+                ".wasm import {} cannot run in an ahead-of-time compiled binary \
+                 — full .wasm ESM instantiation is tracked in #5234 (strict mode)",
+                loc
+            ));
+        }
+        let bytes = fs::read(&canonical)
+            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+        let stub = synthesize_wasm_stub_module(&bytes, display_name);
+        perry_hir::record_deferred_aot_site(".wasm import", loc);
+        stub.source
+    } else {
+        // It's a TypeScript (or synthetic JSON/text) file to compile natively.
+        fs::read_to_string(&canonical)
+            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
+    };
     // JSON module import: turn the data file into a native ESM module whose
     // default export is the parsed value. JSON is a syntactic subset of a JS
     // expression, so `export default <json>;` parses and lowers like any other
@@ -478,6 +576,21 @@ fn collect_module_one(
             ));
         }
         format!("export default {};\n", raw_source.trim())
+    } else if is_text_asset {
+        // #5223: text-asset import. The file's contents are exposed verbatim as
+        // the module's default export (a JS string). We never TS-parse the raw
+        // text — instead we synthesize `export default "<escaped-contents>";`.
+        // `serde_json::to_string` of a string produces a valid double-quoted JS
+        // string literal with all required escaping (newlines, quotes, control
+        // chars, unicode), so the contents round-trip byte-for-byte.
+        let literal = serde_json::to_string(&raw_source).map_err(|e| {
+            anyhow!(
+                "Failed to encode text asset {} as a string literal: {}",
+                canonical.display(),
+                e
+            )
+        })?;
+        format!("export default {};\n", literal)
     } else {
         raw_source
     };
@@ -652,6 +765,9 @@ fn collect_module_one(
     // inherit the thread-local set on the main thread by `compile.rs`.
     perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
     perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+    // #5206: re-install strict-eval mode on this (possibly rayon-worker)
+    // thread before each lower, mirroring the dynamic-stdlib knob above.
+    perry_hir::set_eval_strict_mode(ctx.strict_eval);
     // #503: stash the module source text so the dynamic-dispatch check
     // can look up `// @perry-allow-dynamic` line annotations adjacent to
     // any violation site without re-reading the file. Cleared right
@@ -744,9 +860,28 @@ fn collect_module_one(
         &module_const_locals,
         &dynamic_param_literals,
     );
-    let mut dynamic_path_sets: Vec<Vec<String>> = Vec::new();
+    // #5230: re-install this module's source (cleared after the lower above) so
+    // `current_module_line_at` can resolve a `file:line` for a deferred dynamic
+    // import's notice/runtime-error message. Cleared again after the fill pass.
+    perry_hir::set_current_module_source(source.clone());
+    // Per-site outcome, aligned 1:1 with the `for_each_dynamic_import`
+    // traversal order so the mutable fill pass below can apply them.
+    // `Resolved(set)` populates `paths`; `Deferred(msg)` (#5230) leaves
+    // `paths` empty and sets `deferred_error` so codegen lowers the site to a
+    // rejected promise that throws `msg` only if reached.
+    enum DynImportOutcome {
+        Resolved(Vec<String>),
+        Deferred(String),
+    }
+    let mut dynamic_path_sets: Vec<DynImportOutcome> = Vec::new();
     perry_hir::for_each_dynamic_import(&hir_module, &mut |expr| {
-        if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
+        if let perry_hir::Expr::DynamicImport {
+            paths,
+            arg,
+            byte_offset,
+            ..
+        } = expr
+        {
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
                 return;
@@ -777,7 +912,7 @@ fn collect_module_one(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    dynamic_path_sets.push(set);
+                    dynamic_path_sets.push(DynImportOutcome::Resolved(set));
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     // #1674 sub-part B: a non-resolvable template specifier with
@@ -812,16 +947,43 @@ fn collect_module_one(
                                     new_dyn_imports.push(p.clone());
                                 }
                             }
-                            dynamic_path_sets.push(matches);
+                            dynamic_path_sets.push(DynImportOutcome::Resolved(matches));
                             return;
                         }
                     }
-                    dyn_errors.push(format!(
-                        "dynamic import() in module {} ({}): {}",
-                        module_name,
-                        canonical.display(),
-                        reason
-                    ));
+                    // #5230: a genuinely runtime-computed specifier. This is the
+                    // analog of #5206's runtime-unknown eval bucket. Strict mode
+                    // (`--strict-dynamic-import` / `perry.dynamicImport = "error"`
+                    // / `perry.strict`) restores the historical hard compile
+                    // error. The default policy *defers* it: compile the site to
+                    // a rejected promise that throws a descriptive Error only if
+                    // reached, record it for the shared end-of-compile notice,
+                    // and keep building so plugin-loader apps compile + run their
+                    // core. `PERRY_ALLOW_EVAL=1` forces defer (shared AOT escape
+                    // hatch).
+                    if ctx.strict_dynamic_import
+                        && !perry_hir::eval_classifier::eval_override_enabled()
+                    {
+                        dyn_errors.push(format!(
+                            "dynamic import() in module {} ({}): {}",
+                            module_name,
+                            canonical.display(),
+                            reason
+                        ));
+                    } else {
+                        let line = perry_hir::current_module_line_at(*byte_offset)
+                            .filter(|&l| l != 0);
+                        let loc = match line {
+                            Some(l) => format!("{}:{}", source_file_path, l),
+                            None => source_file_path.clone(),
+                        };
+                        let msg = format!(
+                            "dynamic import() of a runtime-computed path cannot run in an \
+                             ahead-of-time compiled binary ({loc})"
+                        );
+                        perry_hir::record_deferred_aot_site("import(...)", loc);
+                        dynamic_path_sets.push(DynImportOutcome::Deferred(msg));
+                    }
                 }
             }
         }
@@ -891,14 +1053,22 @@ fn collect_module_one(
     drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {
+        perry_hir::clear_current_module_source();
         return Err(anyhow!("{}", dyn_errors.join("\n")));
     }
     let mut dynamic_path_sets = dynamic_path_sets.into_iter();
     perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
-        if let perry_hir::Expr::DynamicImport { paths, .. } = expr {
-            if paths.is_empty() {
-                if let Some(set) = dynamic_path_sets.next() {
-                    *paths = set;
+        if let perry_hir::Expr::DynamicImport {
+            paths,
+            deferred_error,
+            ..
+        } = expr
+        {
+            if paths.is_empty() && deferred_error.is_none() {
+                match dynamic_path_sets.next() {
+                    Some(DynImportOutcome::Resolved(set)) => *paths = set,
+                    Some(DynImportOutcome::Deferred(msg)) => *deferred_error = Some(msg),
+                    None => {}
                 }
             }
         }
@@ -913,6 +1083,9 @@ fn collect_module_one(
             }
         }
     });
+    // #5230: done with the dynamic-import line resolution; don't leak this
+    // module's source onto unrelated work on this (possibly rayon-worker) thread.
+    perry_hir::clear_current_module_source();
     for source in new_dyn_imports {
         // A dynamic edge to the same source as a static import is folded
         // into the existing static edge: that edge already gives us full
@@ -1118,8 +1291,12 @@ fn collect_module_one(
             continue;
         }
 
-        if let Some((resolved_path, kind)) = cached_resolve_import(&import.source, &canonical, ctx)
+        if let Some(resolved) =
+            cached_resolve_import_with_lexical_base(&import.source, entry_path, &canonical, ctx)
         {
+            let resolved_path = resolved.canonical_path;
+            let source_path = resolved.source_path;
+            let kind = resolved.kind;
             import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
             import.module_kind = kind;
             if let Some(sidecar) =
@@ -1241,7 +1418,7 @@ fn collect_module_one(
                             pkg_dir = dir.parent();
                         }
                     }
-                    pending.push(resolved_path);
+                    pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
                     // Perry native extension packages (ioredis, ethers, ws, mysql2, dotenv)
@@ -1354,7 +1531,7 @@ fn collect_module_one(
                         OutputFormat::Json => {}
                     }
 
-                    pending.push(resolved_path);
+                    pending.push(source_path);
                 }
                 ModuleKind::NativeRust => {
                     // Native Rust modules are handled by stdlib
@@ -1466,9 +1643,12 @@ fn collect_module_one(
                 collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
                 ..Default::default()
             });
-            if let Some((resolved_path, kind)) =
-                cached_resolve_import(src.as_str(), &canonical, ctx)
+            if let Some(resolved) =
+                cached_resolve_import_with_lexical_base(src.as_str(), entry_path, &canonical, ctx)
             {
+                let resolved_path = resolved.canonical_path;
+                let source_path = resolved.source_path;
+                let kind = resolved.kind;
                 if let Some(sidecar) =
                     declaration_sidecar_for_resolved_import(src.as_str(), &resolved_path)
                 {
@@ -1557,7 +1737,7 @@ fn collect_module_one(
                 }
 
                 match kind {
-                    ModuleKind::NativeCompiled => pending.push(resolved_path),
+                    ModuleKind::NativeCompiled => pending.push(source_path),
                     ModuleKind::Interpreted => {
                         // JS runtime (V8) support was removed, so interpreted
                         // node_modules dependencies are not followed. A direct

@@ -122,6 +122,13 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         return Ok(v);
     }
 
+    // #5196: `proxy.method(args)` (e.g. `proxyArray.map(fn)`) — the fused
+    // member-call form. Route through `js_native_call_method` so `this` binds
+    // to the proxy and array methods iterate it through its `get` trap.
+    if let Some(v) = crate::expr::proxy_reflect::try_lower_proxy_method_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+
     // Early-firing branches (#1113 chained native method call, computed
     // `obj[str](...)`, CurrentStepClosure, closure-typed local).
     if let Some(v) = early_branches::try_lower_native_chain_method_call(ctx, callee, args)? {

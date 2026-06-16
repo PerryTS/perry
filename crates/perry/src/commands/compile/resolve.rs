@@ -31,13 +31,14 @@ use anyhow::{anyhow, Result};
 use perry_hir::ModuleKind;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::CompilationContext;
 #[cfg(test)]
 use super::{NativeBackend, NativeLibraryManifest};
 
 mod native_library;
+mod tsconfig_paths;
 pub(crate) use native_library::validate_native_library_manifest_value;
 pub(super) use native_library::{
     has_perry_native_library, has_perry_native_module, parse_native_library_manifest,
@@ -872,6 +873,30 @@ pub(super) fn is_js_file(path: &Path) -> bool {
     }
 }
 
+/// #5223: Recognized text-asset extensions. An import resolving to one of these
+/// is loaded as a string (its raw contents become the module's default export)
+/// rather than TS-parsed. `.wasm` is intentionally excluded (out of scope).
+pub(super) fn is_recognized_text_asset(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "txt"
+                | "sql"
+                | "md"
+                | "html"
+                | "htm"
+                | "css"
+                | "graphql"
+                | "gql"
+                | "glsl"
+                | "vert"
+                | "frag"
+        )
+    } else {
+        false
+    }
+}
+
 /// Determine if a file is a TypeScript declaration file (.d.ts)
 pub(super) fn is_declaration_file(path: &Path) -> bool {
     let path = path.to_string_lossy();
@@ -894,13 +919,76 @@ pub(super) fn resolve_relative_import_path(
     import_source: &str,
     importer_path: &Path,
 ) -> Option<PathBuf> {
+    resolve_relative_import_paths(import_source, importer_path)
+        .map(|resolved| resolved.canonical_path)
+}
+
+pub(super) struct ResolvedPath {
+    pub source_path: PathBuf,
+    pub canonical_path: PathBuf,
+}
+
+pub(super) fn resolve_relative_import_paths(
+    import_source: &str,
+    importer_path: &Path,
+) -> Option<ResolvedPath> {
     if !is_relative_specifier(import_source) {
         return None;
     }
     let parent = importer_path.parent()?;
     let resolved = parent.join(import_source);
-    let path = resolve_with_extensions(&resolved)?;
-    path.canonicalize().ok()
+    // Source import specifiers are resolved against the path as written by the
+    // program. If that path contains a symlinked component such as /tmp, asking
+    // the filesystem about "a/../b" can follow the symlink before applying ".."
+    // and accidentally probe the canonical sibling.
+    let lexical = normalize_path_lexically(&resolved);
+    let source_path = resolve_with_extensions(&lexical).or_else(|| {
+        if lexical == resolved {
+            None
+        } else {
+            resolve_with_extensions(&resolved)
+        }
+    })?;
+    let canonical_path = source_path.canonicalize().ok()?;
+    Some(ResolvedPath {
+        source_path,
+        canonical_path,
+    })
+}
+
+pub(super) fn resolve_absolute_import_paths(import_source: &str) -> Option<ResolvedPath> {
+    if !import_source.starts_with('/') {
+        return None;
+    }
+    let source_path = resolve_with_extensions(&PathBuf::from(import_source))?;
+    let canonical_path = source_path.canonicalize().ok()?;
+    Some(ResolvedPath {
+        source_path,
+        canonical_path,
+    })
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 /// True for ECMAScript relative-import specifiers. Besides the obvious `./x`
@@ -1138,6 +1226,27 @@ pub(super) fn resolve_import(
                 return Some((canonical, kind));
             }
         }
+    }
+
+    // Final additive fallback (#5214): tsconfig `compilerOptions.paths` /
+    // `baseUrl`. Consulted only after relative + package + file: resolution
+    // all failed — i.e. exactly the specifiers that would otherwise be
+    // "Could not resolve import". A specifier matched here resolves to a real
+    // file inside the project, so classify it like a relative/user import:
+    // `.ts`/`.tsx` and any user (non-node_modules) file compile natively; only
+    // genuine node_modules JS stays Interpreted.
+    if let Some(canonical) = tsconfig_paths::resolve_tsconfig_paths(import_source, importer_path) {
+        let in_compile_pkg = is_in_compile_package(&canonical, compile_packages)
+            || compile_package_dirs
+                .values()
+                .any(|dir| canonical.starts_with(dir));
+        let in_node_modules = canonical.to_string_lossy().contains("node_modules");
+        let kind = if is_js_file(&canonical) && !in_compile_pkg && in_node_modules {
+            ModuleKind::Interpreted
+        } else {
+            ModuleKind::NativeCompiled
+        };
+        return Some((canonical, kind));
     }
 
     None

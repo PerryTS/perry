@@ -1445,28 +1445,8 @@ pub(crate) fn get_param_default(ctx: &mut LoweringContext, pat: &ast::Pat) -> Re
     }
 }
 
-/// Built-in Node.js modules that are handled specially by the compiler
-const BUILTIN_MODULES: &[&str] = &["fs", "path", "crypto"];
-
-/// Check if an expression is a require() call for a built-in module.
-/// Returns the module name if it is, None otherwise.
-pub(crate) fn is_require_builtin_module(expr: &ast::Expr) -> Option<String> {
-    if let ast::Expr::Call(call) = expr {
-        if let ast::Callee::Expr(callee_expr) = &call.callee {
-            if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
-                if ident.sym.as_ref() == "require" {
-                    // Check if the first argument is a string literal
-                    if let Some(arg) = call.args.first() {
-                        if let ast::Expr::Lit(ast::Lit::Str(s)) = &*arg.expr {
-                            let module_name = s.value.as_str().unwrap_or("").to_string();
-                            if BUILTIN_MODULES.contains(&module_name.as_str()) {
-                                return Some(module_name);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
+// #5216: `is_require_builtin_module` (fs/path/crypto-only) and its
+// `BUILTIN_MODULES` table were removed — `require("<spec>")` of a resolvable
+// native/Node-builtin module is now handled generically by
+// `destructuring::var_decl_sources::require_resolvable_native_specifier`, which
+// subsumes the old narrow allowlist.

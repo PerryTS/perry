@@ -1190,12 +1190,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // Not fully const-foldable — body is the last argument
                 // (`new Function(p1, p2, body)`); earlier args are param names.
                 let body_arg = args_slice.last().map(|a| a.expr.as_ref());
-                crate::eval_classifier::check_site(
+                match crate::eval_classifier::check_site(
                     crate::eval_classifier::EvalSurface::NewFunction,
                     body_arg,
                     &ctx.source_file_path,
                     new_expr.span,
-                )?;
+                )? {
+                    crate::eval_classifier::EvalDecision::Proceed => {}
+                    // #5206: default (defer) mode — compile to a function value
+                    // that throws a descriptive Error only when invoked.
+                    crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => {
+                        return super::const_fold_fn::synth_deferred_eval_value(
+                            ctx,
+                            crate::eval_classifier::EvalSurface::NewFunction,
+                            &message,
+                            new_expr.span,
+                        );
+                    }
+                }
             }
 
             // #1691: an inline `new Request(...)` / `new Response(...)` / etc.

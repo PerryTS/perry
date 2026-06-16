@@ -23,6 +23,12 @@ use super::*;
 /// The inline bump allocator now handles most object allocation directly;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
+    // #5093: sticky runtime flag (i8, 0 = enabled) gating the codegen-inlined
+    // class-field shape-guard fast path. The inline guard loads this directly
+    // and falls back to the full `js_typed_feedback_class_field_*_guard` call
+    // when it is non-zero (descriptors / typed-feedback in use). Defined in
+    // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
+    module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
     // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.

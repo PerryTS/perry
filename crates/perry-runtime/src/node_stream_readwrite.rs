@@ -1817,6 +1817,36 @@ pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
     ]
 }
 
+/// #5137: the bare `EventEmitter` surface — the same 15 listener/emit
+/// methods that `readable_methods`/`writable_methods` share, minus all the
+/// stream-specific entries. Installed onto `this` by
+/// `js_event_emitter_subclass_init` so a source-compiled `class X extends
+/// EventEmitter` (e.g. commander's `Command`) gets working
+/// `.on`/`.emit`/`.once`/… without routing through the handle-based
+/// `js_event_emitter_*` shim. The closures are the generic
+/// `ns_*` emitter helpers, which key all state off the receiver object, so
+/// they work unchanged on a plain object that never went through a stream
+/// constructor.
+pub(super) fn emitter_methods() -> [(&'static str, StubFn); 15] {
+    [
+        ("on", cast2(ns_on2)),
+        ("once", cast2(ns_once2)),
+        ("prependListener", cast2(ns_prepend_listener2)),
+        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
+        ("off", cast2(ns_off2)),
+        ("addListener", cast2(ns_on2)),
+        ("removeListener", cast2(ns_remove_listener2)),
+        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
+        ("emit", cast2(ns_emit_rest)),
+        ("setMaxListeners", cast1(ns_set_max_listeners)),
+        ("getMaxListeners", cast0(ns_get_max_listeners)),
+        ("eventNames", cast0(ns_event_names)),
+        ("listenerCount", cast1(ns_listener_count)),
+        ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
+    ]
+}
+
 pub(super) fn writable_methods() -> [(&'static str, StubFn); 22] {
     [
         ("on", cast2(ns_on2)),

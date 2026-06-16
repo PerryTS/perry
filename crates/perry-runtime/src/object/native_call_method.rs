@@ -1672,6 +1672,24 @@ pub unsafe extern "C" fn js_native_call_method(
     // through the target's prototype chain) then `Call(method, proxy, args)`
     // with `this` bound to the proxy itself.
     if crate::proxy::js_proxy_is_proxy(object) == 1 {
+        // #5196: a generic, non-mutating `Array.prototype` method on a Proxy
+        // (`proxyArray.map(fn)`). `Array.prototype.map` etc. iterate `this`
+        // through `[[Get]]`/`length`; routing the spec-generic engine over the
+        // proxy fires its `get` trap for `length` and each index. The fused
+        // path below (Get(proxy,"method") → Call) instead resolves the built-in
+        // method value and re-enters this dispatcher by name — recursing until
+        // the depth guard and surfacing the original `Cannot convert undefined
+        // or null to object`. The generic engine is the same one used for
+        // plain array-like objects whose prototype chain holds a real array.
+        let args = refreshed_args();
+        if let Some(result) = crate::array::dispatch_arraylike_read_method(
+            object,
+            method_name,
+            args.as_ptr(),
+            args.len(),
+        ) {
+            return result;
+        }
         let key = crate::string::js_string_from_bytes(
             method_name_ptr as *const u8,
             method_name_len as u32,

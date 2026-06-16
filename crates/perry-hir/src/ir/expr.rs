@@ -2518,6 +2518,20 @@ pub enum Expr {
     DynamicImport {
         paths: Vec<String>,
         arg: Box<Expr>,
+        /// Byte offset (`span.lo.0`) of the `import(...)` call in its module's
+        /// source, captured at lowering time. Used by the driver to resolve a
+        /// `file:line` for the #5230 deferred-site notice (HIR `Expr` carries no
+        /// span otherwise). `0` when unknown.
+        byte_offset: u32,
+        /// #5230: when `Some(msg)`, the path argument was non-resolvable
+        /// (runtime-computed) and this site was *deferred* (the default,
+        /// non-strict policy — the analog of #5206's eval deferral). Codegen
+        /// lowers it to a rejected `Promise` carrying an `Error(msg)`, so
+        /// `await import(spec)` throws a descriptive error *only if reached*
+        /// rather than failing the whole build. `None` is the normal case
+        /// (`paths` resolved to a finite set). In strict mode such a site is a
+        /// compile error instead and never produces a node with this set.
+        deferred_error: Option<String>,
     },
     /// Compile-time-resolved `new Worker(filename, options?)` from
     /// `node:worker_threads`. The filename expression follows the same

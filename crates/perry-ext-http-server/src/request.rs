@@ -480,6 +480,16 @@ pub extern "C" fn js_node_http_im_pause(handle: i64) {
     }
 }
 
+/// Chainable `req.pause()` — Node's `Readable.pause()` returns `this`, so
+/// `res.pause().on(...)` keeps flowing. Returns the receiver handle (boxed
+/// as a pointer via the `NR_PTR` row) instead of `undefined`/a raw number.
+/// Mirrors `js_node_http_res_set_header_self` (#5011/#2129 self-return).
+#[no_mangle]
+pub extern "C" fn js_node_http_im_pause_self(handle: i64) -> i64 {
+    js_node_http_im_pause(handle);
+    handle
+}
+
 /// `req.resume()` — clear the paused flag. If a `'data'` listener was
 /// registered while paused and we still have body bytes to emit,
 /// the event-loop iterator will pick the request up on its next pass.
@@ -521,6 +531,17 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     if should_emit_end {
         emit_end_to_listeners(&end_listeners);
     }
+}
+
+/// Chainable `req.resume()` — Node's `Readable.resume()` returns `this`, so
+/// the canonical `res.resume().on('end', …)` body-drain chain keeps flowing.
+/// Returns the receiver handle (boxed as a pointer via the `NR_PTR` row)
+/// instead of `undefined`/a raw number. Mirrors
+/// `js_node_http_res_set_header_self` (#5011/#2129 self-return).
+#[no_mangle]
+pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
+    js_node_http_im_resume(handle);
+    handle
 }
 
 /// `req.destroy()` — mark destroyed and fire `'close'`.

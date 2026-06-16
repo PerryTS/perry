@@ -18,10 +18,9 @@ pub(super) fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
 pub(super) const STREAM_CTOR_NAMES: [&str; 5] =
     ["Readable", "Writable", "Duplex", "Transform", "PassThrough"];
 
-/// #3663: the string argument of a `require("<literal>")` call, if any. Unlike
-/// `is_require_builtin_module` (whose allowlist is just fs/path/crypto), this
-/// returns the specifier verbatim so the caller can match the module it cares
-/// about (`"stream"`).
+/// #3663: the string argument of a `require("<literal>")` call, if any —
+/// returned verbatim so callers can match the module they care about
+/// (`"stream"`) or resolve it (`require_resolvable_native_specifier`).
 pub(super) fn require_literal_specifier(init: &ast::Expr) -> Option<String> {
     let ast::Expr::Call(call) = init else {
         return None;
@@ -43,6 +42,62 @@ pub(super) fn require_literal_specifier(init: &ast::Expr) -> Option<String> {
         return None;
     };
     s.value.as_str().map(|s| s.to_string())
+}
+
+/// #5216: the `node:`-stripped specifier of a `require("<literal>")` call iff
+/// the module statically resolves to a Perry-supported native/Node-builtin
+/// module. Returns `None` for non-literal args, packages/files Perry can't
+/// resolve as a native module, or anything else — those keep the legacy
+/// compile-time `require(...)` refusal / fall-through. Prioritizes Node
+/// builtins (`readline`, `os`, `path`, `util`, `fs`, …) which real apps hit
+/// via `require(...)`.
+pub(crate) fn require_resolvable_native_specifier(init: &ast::Expr) -> Option<String> {
+    resolvable_native_module_for_spec(&require_literal_specifier(init)?)
+}
+
+/// #5216: the canonical (`node:`-stripped) native module name for a require
+/// specifier `raw`, iff it resolves to a Perry-supported native/Node-builtin
+/// module; otherwise `None`. `node:`-prefixed specifiers must name a real Node
+/// builtin (parity with the ESM import path, which bails on
+/// `node:<not-a-builtin>`).
+pub(crate) fn resolvable_native_module_for_spec(raw: &str) -> Option<String> {
+    let normalized = raw.strip_prefix("node:").unwrap_or(raw).to_string();
+    if raw.starts_with("node:") && !is_node_builtin_module(&normalized) {
+        return None;
+    }
+    if is_native_module(&normalized) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+/// #5216: register a `const <local> = require("<spec>")` binding exactly as the
+/// equivalent `import * as <local> from "<spec>"` namespace import would, so the
+/// require result behaves like a module-namespace value (member dispatch,
+/// `typeof`, etc.) and reuses the existing native-module machinery. `spec` must
+/// already be a resolved native module name (see
+/// `require_resolvable_native_specifier`); the caller emits NO runtime `let`,
+/// matching how namespace imports of native modules bind nothing observable.
+pub(crate) fn register_require_namespace_binding(
+    ctx: &mut LoweringContext,
+    local: &str,
+    spec: &str,
+) {
+    // Mirror `module_decl.rs`'s `ImportSpecifier::Namespace` native branch.
+    let native_source = if spec == "process" {
+        "process.namespace".to_string()
+    } else {
+        spec.to_string()
+    };
+    ctx.register_native_module(local.to_string(), native_source, None);
+    ctx.register_builtin_module_alias(local.to_string(), spec.to_string());
+    // The top-level pre-scan may have already registered `local` as a module
+    // var (it can't know the initializer is a require yet). Drop that local so
+    // a bare `local` / `local.member` read resolves to the native module rather
+    // than an always-`undefined` `LocalGet` — `import * as local` never creates
+    // a local, so this is exact namespace-import parity.
+    ctx.remove_local_binding(local);
 }
 
 /// #3663: resolve the builtin module that a destructuring RHS reads from.
@@ -93,6 +148,48 @@ pub(super) fn register_destructured_stream_ctors(
     let Some(init) = decl.init.as_deref() else {
         return Vec::new();
     };
+
+    // #5216: `const { createInterface } = require("readline")` — when the RHS is
+    // a `require("<native-spec>")` literal, register EVERY destructured member
+    // as a native named member, exactly as `import { createInterface } from
+    // "readline"` does (`register_native_module(binding, module, Some(key))`).
+    // This generalizes the stream/net special-cases below to all resolvable
+    // native/Node-builtin modules. Skip every bound local so call sites route
+    // through the static native table (a runtime local read is `undefined` for
+    // value-unreified exports — exact ESM-named-import parity).
+    if let Some(module) = require_resolvable_native_specifier(init) {
+        // `stream` and `net` retain their tuned allowlist + local-binding
+        // behavior below (stream ctors keep their runtime local); fall through.
+        if module != "stream" && module != "net" {
+            let mut skip_local_bindings = Vec::new();
+            for prop in &obj_pat.props {
+                let (key, binding) = match prop {
+                    ast::ObjectPatProp::Assign(assign) => {
+                        let name = assign.key.sym.to_string();
+                        (name.clone(), name)
+                    }
+                    ast::ObjectPatProp::KeyValue(kv) => {
+                        let key = match &kv.key {
+                            ast::PropName::Ident(i) => i.sym.to_string(),
+                            ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                            _ => continue,
+                        };
+                        let ast::Pat::Ident(binding) = kv.value.as_ref() else {
+                            continue;
+                        };
+                        (key, binding.id.sym.to_string())
+                    }
+                    // Rest (`...rest`) has no static key — leave it on the
+                    // runtime-binding path (it reads the reified module object).
+                    _ => continue,
+                };
+                ctx.register_native_module(binding.clone(), module.clone(), Some(key));
+                skip_local_bindings.push(binding);
+            }
+            return skip_local_bindings;
+        }
+    }
+
     let Some(module) = destructure_builtin_module_source(ctx, init) else {
         return Vec::new();
     };

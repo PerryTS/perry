@@ -2,8 +2,8 @@
 //! Split out of `collect_modules.rs` to keep that file under the file-size gate.
 
 use super::{
-    collect_modules, env_defines_for_lowering, expand_dynamic_import_glob,
-    refuse_compile_package_native_addon,
+    collect_js_module_imports, collect_modules, env_defines_for_lowering,
+    expand_dynamic_import_glob, refuse_compile_package_native_addon,
 };
 use crate::commands::compile::{CompilationContext, DefineValue};
 use crate::commands::progress::VerboseProgress;
@@ -135,6 +135,134 @@ console.log(got);
         entry_debug.contains("424242"),
         "entry HIR should contain the dependency method literal after cross-module inlining:\n{entry_debug}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_entry_resolves_relative_imports_from_lexical_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let real_parent = root.join("real-parent");
+    let alias_parent = root.join("alias-parent");
+    let real_app = real_parent.join("app");
+    let alias_app = alias_parent.join("app");
+    let alias_outside = alias_parent.join("outside");
+    let real_outside = real_parent.join("outside");
+
+    std::fs::create_dir_all(&real_app).expect("mkdir real app");
+    std::fs::create_dir_all(&alias_outside).expect("mkdir alias outside");
+    std::fs::create_dir_all(&real_outside).expect("mkdir real outside");
+    std::os::unix::fs::symlink(&real_app, &alias_app).expect("symlink app");
+
+    let dep = alias_outside.join("dep.ts");
+    let decoy_dep = real_outside.join("dep.ts");
+    let child = alias_app.join("child.ts");
+    let entry = alias_app.join("entry.ts");
+
+    std::fs::write(
+        &dep,
+        r#"
+export class ExternalCtor {
+  value: string;
+  constructor(value: string) {
+    this.value = value;
+  }
+  marker(): string {
+    return this.value;
+  }
+}
+"#,
+    )
+    .expect("write dep");
+    std::fs::write(
+        &decoy_dep,
+        r#"
+export class ExternalCtor {
+  value: string;
+  constructor(value: string) {
+    this.value = "decoy:" + value;
+  }
+  marker(): string {
+    return this.value;
+  }
+}
+"#,
+    )
+    .expect("write decoy dep");
+    std::fs::write(
+        &child,
+        r#"
+import { ExternalCtor } from "../outside/dep";
+
+export function makeValue(): string {
+  const value = new ExternalCtor("ready");
+  return value.marker();
+}
+"#,
+    )
+    .expect("write child");
+    std::fs::write(
+        &entry,
+        r#"
+import { makeValue } from "./child";
+
+console.log(makeValue());
+"#,
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(alias_parent.to_path_buf());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect modules");
+
+    let dep_canonical = dep.canonicalize().expect("canonical dep");
+    let decoy_canonical = decoy_dep.canonicalize().expect("canonical decoy dep");
+    assert!(
+        ctx.native_modules.contains_key(&dep_canonical),
+        "relative imports from a symlinked entry must resolve from the lexical path; collected modules: {:?}",
+        ctx.native_modules.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !ctx.native_modules.contains_key(&decoy_canonical),
+        "source-visible lexical imports must win over the canonical sibling decoy; collected modules: {:?}",
+        ctx.native_modules.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn js_import_scan_follows_bare_dot_and_dotdot_specifiers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let app = root.join("app");
+    std::fs::create_dir_all(&app).expect("mkdir app");
+    std::fs::write(root.join("index.js"), "export const parent = 1;\n").expect("write parent");
+    std::fs::write(app.join("index.js"), "export const current = 1;\n").expect("write current");
+    let child = app.join("child.js");
+    std::fs::write(&child, "import '.';\nexport * from '..';\n").expect("write child");
+
+    let imports = collect_js_module_imports(&child, "import '.';\nexport * from '..';\n");
+    let collected = imports
+        .into_iter()
+        .map(|path| path.canonicalize().expect("canonical import"))
+        .collect::<HashSet<_>>();
+
+    assert!(collected.contains(&app.join("index.js").canonicalize().unwrap()));
+    assert!(collected.contains(&root.join("index.js").canonicalize().unwrap()));
 }
 
 fn write_compile_package_fixture(

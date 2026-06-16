@@ -715,6 +715,20 @@ impl LoweringContext {
         self.locals.iter().rposition(|(n, _, _)| n == name)
     }
 
+    /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a
+    /// module-var the top-level pre-scan registered for `const ns =
+    /// require("<native>")`. After this, a bare read of `name` resolves to its
+    /// native-module / builtin-alias registration instead of an
+    /// always-`undefined` `LocalGet`, matching how `import * as ns` (which
+    /// never creates a local) behaves. Returns the removed `LocalId`.
+    pub(crate) fn remove_local_binding(&mut self, name: &str) -> Option<LocalId> {
+        let idx = self.lookup_local_index(name)?;
+        let (_, id, _) = self.locals.remove(idx);
+        self.pre_registered_module_vars.remove(name);
+        self.pre_registered_module_var_decls.remove(name);
+        Some(id)
+    }
+
     pub(crate) fn push_with_env(&mut self, local_id: LocalId) {
         let local_mark = self.locals.len();
         self.with_env_stack.push(WithEnvFrame {
@@ -1065,6 +1079,19 @@ impl LoweringContext {
         module_name: String,
         class_name: String,
     ) {
+        // #5137: if the user opted this package into `perry.compilePackages`,
+        // its real npm source is being compiled and the binding resolves to
+        // the compiled-from-source class. Registering a native instance here
+        // would re-route the instance's fluent methods (`new Command()` →
+        // `.name()`/`.option()`/`.parse()`) to the `js_commander_*` native
+        // shim that was deliberately kept off the import path — so the call
+        // emits an FFI reference the source-compile build never links (or, in
+        // a shimless build, returns `undefined`). Back off so the source class
+        // is used. `is_native_module` already makes the same back-off for the
+        // import-resolution side (#665).
+        if is_compile_package_override(&module_name) {
+            return;
+        }
         self.native_instances
             .push((local_name, module_name, class_name));
     }

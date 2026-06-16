@@ -391,3 +391,21 @@ pub(crate) fn lower_node_stream_super_init(
 
     Ok(undef_lit)
 }
+
+/// #5137: install the bare EventEmitter listener/emit surface onto `this_box`
+/// for a source-compiled `class X extends EventEmitter` (node:events). Shared
+/// by the explicit-`super()` arm (`expr/this_super_call.rs`) and the
+/// no-own-constructor `new` path (`lower_call/new.rs`). The runtime helper
+/// reuses the generic `ns_*` emitter closures (they key all state off the
+/// receiver), so a plain object that never went through a stream constructor
+/// gets working `.on`/`.emit`/`.once`/…. Reached when an EventEmitter
+/// subclass's real npm source is compiled — e.g. commander's `Command` under
+/// `perry.compilePackages`, where the `new Command()` → `js_commander_*`
+/// native-shim path is intentionally off.
+pub(crate) fn lower_event_emitter_subclass_init(ctx: &mut FnCtx<'_>, this_box: &str) {
+    ctx.block().call(
+        DOUBLE,
+        "js_event_emitter_subclass_init",
+        &[(DOUBLE, this_box)],
+    );
+}

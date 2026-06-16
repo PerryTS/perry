@@ -132,6 +132,13 @@ static STDIN_PAUSED: AtomicBool = AtomicBool::new(false);
 static STDIN_REFED: AtomicBool = AtomicBool::new(true);
 /// Destroyed stdin clears listeners/queues and no longer keeps the loop alive.
 static STDIN_DESTROYED: AtomicBool = AtomicBool::new(false);
+/// Set once a `process.stdin.on('data', …)` listener is registered. The
+/// reader thread is on a different OS thread and can't read the main-thread
+/// `DATA_CALLBACKS` cell, so this atomic mirror tells it to deliver cooked
+/// (non-raw) input as 'data' chunks instead of routing it to the readline
+/// 'line' queue. Without it a 'data' listener attached in cooked mode never
+/// fires (#5227): bytes accumulate into `PENDING_LINES` that nothing drains.
+static STDIN_DATA_FLOWING: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Main-thread-only state — callbacks are dispatched from the main thread
@@ -709,6 +716,20 @@ fn ensure_reader_started() {
                         if let Ok(mut q) = PENDING_DATA.lock() {
                             q.push(vec![byte[0]]);
                         }
+                    } else if STDIN_DATA_FLOWING.load(Ordering::Acquire) {
+                        // Cooked flowing mode (#5227): a `process.stdin.on('data')`
+                        // listener is attached but raw mode is off. Deliver input
+                        // as 'data' chunks (newline INCLUDED, matching Node's
+                        // line-buffered cooked tty / piped-stream chunks) rather
+                        // than routing it to the readline 'line' queue.
+                        line_buf.push(byte[0]);
+                        if byte[0] == b'\n' {
+                            let chunk = std::mem::take(&mut line_buf);
+                            if let Ok(mut q) = PENDING_DATA.lock() {
+                                q.push(chunk);
+                            }
+                            line_buf = Vec::with_capacity(256);
+                        }
                     } else if byte[0] == b'\n' {
                         // Strip trailing CR for Windows CRLF input.
                         if line_buf.last() == Some(&b'\r') {
@@ -724,6 +745,26 @@ fn ensure_reader_started() {
                     }
                 }
                 Err(_) => break,
+            }
+        }
+        // Flush any trailing bytes not terminated by a newline. In cooked
+        // flowing mode this is the last 'data' chunk for input like
+        // `printf "abc"` (no final newline); otherwise it's a final 'line'.
+        if !line_buf.is_empty() && !STDIN_DESTROYED.load(Ordering::Acquire) {
+            if STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                && !RAW_MODE.load(Ordering::Acquire)
+            {
+                if let Ok(mut q) = PENDING_DATA.lock() {
+                    q.push(std::mem::take(&mut line_buf));
+                }
+            } else if !RAW_MODE.load(Ordering::Acquire) {
+                if line_buf.last() == Some(&b'\r') {
+                    line_buf.pop();
+                }
+                let line = String::from_utf8_lossy(&line_buf).into_owned();
+                if let Ok(mut q) = PENDING_LINES.lock() {
+                    q.push(line);
+                }
             }
         }
         EOF_REACHED.store(true, Ordering::Release);
@@ -1140,6 +1181,10 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
     match event.as_str() {
         "data" => {
             DATA_CALLBACKS.with(|cb| cb.borrow_mut().push(callback));
+            // A 'data' listener switches stdin into flowing mode (Node
+            // auto-resumes on the first data listener). Tell the reader to
+            // deliver cooked input as 'data' chunks even without raw mode.
+            STDIN_DATA_FLOWING.store(true, Ordering::Release);
             try_register_pump();
             ensure_reader_started();
         }
@@ -1169,9 +1214,11 @@ pub extern "C" fn js_readline_stdin_remove_listener(
     let event = string_header_to_string(event_ptr);
     match event.as_str() {
         "data" => DATA_CALLBACKS.with(|callbacks| {
-            callbacks
-                .borrow_mut()
-                .retain(|registered| *registered != callback);
+            let mut callbacks = callbacks.borrow_mut();
+            callbacks.retain(|registered| *registered != callback);
+            if callbacks.is_empty() {
+                STDIN_DATA_FLOWING.store(false, Ordering::Release);
+            }
         }),
         "keypress" => KEYPRESS_CALLBACKS.with(|callbacks| {
             callbacks
@@ -1225,6 +1272,7 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
     STDIN_REFED.store(false, Ordering::Release);
     STDIN_PAUSED.store(true, Ordering::Release);
     RAW_MODE.store(false, Ordering::Release);
+    STDIN_DATA_FLOWING.store(false, Ordering::Release);
     EOF_REACHED.store(true, Ordering::Release);
     let _ = termios_impl::disable();
     if let Ok(mut q) = PENDING_DATA.lock() {
@@ -1455,7 +1503,9 @@ pub extern "C" fn js_readline_has_active() -> i32 {
         && !destroyed
         && refed
         && !paused
-        && ((RAW_MODE.load(Ordering::Acquire) && has_stdin_callbacks)
+        && (((RAW_MODE.load(Ordering::Acquire)
+            || STDIN_DATA_FLOWING.load(Ordering::Acquire))
+            && has_stdin_callbacks)
             || has_line_callbacks
             || has_close_cb);
     if !destroyed
@@ -1535,6 +1585,7 @@ mod tests {
         STDIN_DESTROYED.store(false, Ordering::Release);
         CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
         RAW_MODE.store(false, Ordering::Release);
+        STDIN_DATA_FLOWING.store(false, Ordering::Release);
         READLINE_INTERFACES.with(|interfaces| interfaces.borrow_mut().clear());
         NEXT_READLINE_HANDLE.with(|next| *next.borrow_mut() = 2);
         // READER_STARTED stays sticky once set in a test process.
@@ -1610,6 +1661,37 @@ mod tests {
         assert_eq!(js_readline_process_pending(), 1);
         assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
         DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    }
+
+    #[test]
+    fn stdin_data_listener_flows_without_raw_mode() {
+        // #5227: a 'data' listener attached in cooked (non-raw) mode must
+        // switch stdin into flowing mode and keep the loop alive so the
+        // reader can deliver chunks — previously only raw mode did.
+        let _g = reset();
+        READER_STARTED.store(true, Ordering::Release);
+        assert!(!RAW_MODE.load(Ordering::Acquire));
+        assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
+
+        let cb = data_counter_callback();
+        let event = event_name("data");
+        let _ = js_readline_stdin_on(event, cb);
+        assert!(STDIN_DATA_FLOWING.load(Ordering::Acquire));
+        // Cooked-mode data listener keeps the event loop alive. (Clear EOF
+        // first: a real reader thread spawned by an earlier `resume()` test
+        // may have flipped this shared static on the runner's empty stdin.)
+        EOF_REACHED.store(false, Ordering::Release);
+        assert_eq!(js_readline_has_active(), 1);
+
+        // Cooked-mode chunks (delivered by the reader with the newline
+        // included) drain to the 'data' callback.
+        test_inject_chunk(b"hello world\n");
+        assert_eq!(js_readline_process_pending(), 1);
+        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+
+        // Removing the last data listener clears flowing mode.
+        let _ = js_readline_stdin_remove_listener(event, cb);
+        assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
     }
 
     #[test]

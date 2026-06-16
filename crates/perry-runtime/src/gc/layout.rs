@@ -14,6 +14,48 @@ pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 
+// #5093: per-object "typed shape layout intact" flag, stored in a free bit of
+// `GcHeader._reserved` (bit 12; bits 0..11 are object freeze/seal/proto/
+// descriptor flags + the copy survival age, bits 14..15 the layout state). Set
+// whenever a `TypedLayoutDescriptor` is installed for the object — i.e. its
+// canonical raw-f64 / pointer layout is known-valid — and cleared whenever that
+// descriptor is removed. Every downgrade routes through `layout_set_typed_unknown`
+// or the `layout_*` remove helpers below, all of which clear it, so the invariant
+//   intact bit set  ⟹  TYPED_LAYOUTS holds this object's canonical descriptor
+// holds at all times. The descriptor's raw-f64 mask is exactly the compile-time
+// canonical mask codegen emits for the class, so combined with a class_id/
+// keys_array match the codegen-inlined class-field shape guard can conclude
+// "slot K is raw-f64" from this single bit — no cross-crate guard call, no
+// thread-local hashmap probe — for any field K the class declares as a raw-f64
+// candidate. The bit travels with `_reserved` across copying/evacuating GC (the
+// collector copies the whole reserved word), and `layout_transfer` re-syncs it
+// defensively after moving the descriptor.
+pub const GC_OBJ_TYPED_LAYOUT_INTACT: u16 = 0x1000;
+
+#[inline]
+pub(super) unsafe fn header_set_typed_layout_intact(header: *mut GcHeader) {
+    (*header)._reserved |= GC_OBJ_TYPED_LAYOUT_INTACT;
+}
+
+#[inline]
+pub(super) unsafe fn header_clear_typed_layout_intact(header: *mut GcHeader) {
+    (*header)._reserved &= !GC_OBJ_TYPED_LAYOUT_INTACT;
+}
+
+// Clear the intact bit given only a user pointer (looks the header up). Used by
+// the one remove path (`layout_clear_for_ptr`) that doesn't already hold a
+// header. No-op for addresses too low to carry a Gc header.
+#[inline]
+pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return;
+    }
+    unsafe {
+        let header = header_from_user_ptr(user_ptr as *const u8);
+        (*header)._reserved &= !GC_OBJ_TYPED_LAYOUT_INTACT;
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum LayoutSlotMask {
     Inline(u64),
@@ -311,12 +353,14 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().remove(&(user_ptr as usize));
     });
+    header_clear_typed_layout_intact(header);
 }
 
 pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
+    header_clear_typed_layout_intact(header);
     let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
     if state == GC_LAYOUT_UNKNOWN {
         TYPED_LAYOUTS.with(|m| {
@@ -352,6 +396,7 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
+    clear_typed_layout_intact_for_user(user_ptr);
 }
 
 pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
@@ -363,6 +408,7 @@ pub(crate) fn layout_has_typed_descriptor(user_ptr: usize) -> bool {
 
 pub(super) unsafe fn layout_set_typed_unknown(header: *mut GcHeader, user_ptr: usize) {
     set_layout_state(header, GC_LAYOUT_UNKNOWN);
+    header_clear_typed_layout_intact(header);
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
@@ -523,6 +569,7 @@ unsafe fn init_typed_shape_layout(
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().insert(user_ptr, descriptor);
     });
+    header_set_typed_layout_intact(header);
     if pointer_mask.is_empty() {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         LAYOUT_SLOT_MASKS.with(|m| {
@@ -627,6 +674,7 @@ pub extern "C" fn js_gc_init_unboxed_object_layout(
         TYPED_LAYOUTS.with(|m| {
             m.borrow_mut().insert(user_ptr, descriptor);
         });
+        header_set_typed_layout_intact(header);
         if pointer_mask.is_empty() {
             set_layout_state(header, GC_LAYOUT_POINTER_FREE);
             LAYOUT_SLOT_MASKS.with(|m| {
@@ -653,6 +701,9 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
     TYPED_LAYOUTS.with(|m| {
         m.borrow_mut().remove(&(user_ptr as usize));
     });
+    // The rebuild reconstructs only the pointer mask (no raw-f64 layout), so the
+    // object no longer has a canonical typed descriptor: drop the intact bit.
+    header_clear_typed_layout_intact(header);
     if slots.is_null() || slot_count == 0 {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         LAYOUT_SLOT_MASKS.with(|m| {
@@ -718,13 +769,26 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     } else {
         crate::array::clear_array_numeric_layout_ptr(new_user as usize);
     }
-    TYPED_LAYOUTS.with(|m| {
+    let new_has_typed = TYPED_LAYOUTS.with(|m| {
         let mut typed = m.borrow_mut();
         typed.remove(&(new_user as usize));
         if let Some(layout) = typed.remove(&(old_user as usize)) {
             typed.insert(new_user as usize, layout);
+            true
+        } else {
+            false
         }
     });
+    // Keep the intact bit in lock-step with the moved descriptor. Copying GC
+    // normally propagates `_reserved` (so the bit already rode along), but
+    // re-sync defensively for callers that allocate the destination fresh
+    // (e.g. array growth) so a stale/missing bit can never desync from the map.
+    if new_has_typed {
+        header_set_typed_layout_intact(new_header);
+    } else {
+        header_clear_typed_layout_intact(new_header);
+    }
+    header_clear_typed_layout_intact(old_header);
     LAYOUT_SLOT_MASKS.with(|m| {
         let mut masks = m.borrow_mut();
         masks.remove(&(new_user as usize));
@@ -765,6 +829,21 @@ pub(crate) fn layout_visit_pointer_slots_for_user<F: FnMut(usize)>(
     visit: F,
 ) -> bool {
     layout_visit_pointer_slots(user_ptr, slot_count, visit)
+}
+
+/// #5093: read the per-object "typed shape layout intact" bit. This is the same
+/// bit the codegen-inlined class-field shape guard tests; exposed for the
+/// `PERRY_VERIFY_TYPED_INTACT=1` self-check in the typed-feedback fast contract,
+/// which asserts the bit never claims a raw-f64 layout the side table disagrees
+/// with.
+pub(crate) fn layout_typed_intact_for_user(user_ptr: usize) -> bool {
+    if user_ptr < GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    unsafe {
+        let header = header_from_user_ptr(user_ptr as *const u8);
+        (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0
+    }
 }
 
 pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: usize) -> bool {

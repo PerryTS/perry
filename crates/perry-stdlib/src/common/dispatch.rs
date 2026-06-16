@@ -1086,6 +1086,30 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
+    // #4975: client-side response (`http.get`/`ClientRequest` `'response'`
+    // callback) is a *distinct* IncomingMessage handle from the server's, and
+    // is registered as an EventEmitter — so `res.on(...)` already routes
+    // through the EventEmitter arm above. But `Readable.pause()`/`.resume()`
+    // aren't EventEmitter methods, the server-IM check above rejects the
+    // client handle, and they fell through to the unknown-handle catch-all
+    // which returns a NaN (`typeof` number). That broke the canonical
+    // `res.resume().on('end', …)` body-drain chain with
+    // `(number).on is not a function` (test-http-write-head-2). Node's
+    // `Readable.pause()/resume()` return `this`; the buffered body already
+    // drains when an `'end'`/`'data'` listener attaches, so returning the
+    // receiver is the whole fix here.
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_client_incoming_message_is_handle(handle: i64) -> i32;
+        }
+        if matches!(method_name, "pause" | "resume")
+            && unsafe { js_ext_http_client_incoming_message_is_handle(handle) } != 0
+        {
+            return nanbox_handle_value(handle);
+        }
+    }
+
     // External net path (v0.5.581): perry-ext-net registers itself when
     // the well-known flip strips bundled-net. Same dispatch contract,
     // but routes through extern "C" symbols perry-ext-net provides.

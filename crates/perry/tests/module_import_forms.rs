@@ -453,6 +453,75 @@ console.log("star-barrel", version, new DynamicNS.Client("dyn").login(), Dynamic
     );
 }
 
+/// #5216: a string-literal `require("<native>")` of a statically resolvable
+/// Node builtin lowers to the same module-namespace value `import * as ns from
+/// "<native>"` binds — so the namespace, destructured-member, and inline-member
+/// shapes all compile and dispatch through the existing native-module
+/// machinery, identically to the equivalent namespace import.
+#[test]
+fn require_native_builtin_lowers_like_namespace_import() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{ "name": "require-builtins", "type": "module" }"#,
+    )
+    .expect("write package.json");
+
+    let entry = root.join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+import * as rlImport from "readline";
+
+const readline = require("readline");
+const { createInterface } = require("readline");
+
+console.log("ns", typeof readline.createInterface);
+console.log("destructured", typeof createInterface);
+console.log("import-equiv", typeof rlImport.createInterface);
+console.log("inline-eol", typeof require("node:os").EOL);
+console.log("inline-platform", require("node:os").platform() === process.platform);
+"#,
+    )
+    .expect("write entry");
+
+    let output = root.join("main_bin");
+    let compile = Command::new(perry_bin())
+        .current_dir(root)
+        .env("PERRY_NO_AUTO_OPTIMIZE", "1")
+        .env("PERRY_RUNTIME_DIR", runtime_dir())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed (require of a resolvable builtin must NOT refuse)\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "ns function\n\
+         destructured function\n\
+         import-equiv function\n\
+         inline-eol string\n\
+         inline-platform true\n"
+    );
+}
+
 #[test]
 fn create_require_package_specifier_reports_unsupported_interop() {
     let dir = tempfile::tempdir().expect("tempdir");
