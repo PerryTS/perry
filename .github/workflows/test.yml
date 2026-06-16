@@ -301,12 +301,15 @@ jobs:
   # CI gate — a contributor who regressed a single feature got a green build.
   #
   # INFORMATIONAL for now (continue-on-error): the first runs surface which gap
-  # tests currently fail on the Linux CI image (and under node 26) so they can
-  # be triaged into test-parity/known_failures.json. Once curated + reliably
-  # green, drop `continue-on-error` and add `smoke-parity` to the branch-
-  # protection required checks (staged rollout: informational -> required).
-  # Node 26 matches the node-suite baseline oracle (vs the legacy parity job's
-  # node 22), which is the version the regression guard will use too.
+  # tests currently fail on the Linux CI image so they can be triaged into
+  # test-parity/known_failures.json. Once curated + reliably green, drop
+  # `continue-on-error` and add `smoke-parity` to the branch-protection
+  # required checks (staged rollout: informational -> required).
+  # Oracle = node 22, matching the legacy parity job the gap suite is already
+  # green under. Node-version-sensitive output (v8/perf_hooks/process internals)
+  # would otherwise diff against a newer Node and mask real Perry regressions.
+  # (The node-suite regression guard uses node 26 against its frozen baseline —
+  # a different mechanism.)
   # ---------------------------------------------------------------------------
   smoke-parity:
     continue-on-error: true
@@ -314,6 +317,10 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Read-only job (build + test); keep the GITHUB_TOKEN out of the
+          # local git config (least privilege — OWASP / CodeRabbit).
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -326,7 +333,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '26'
+          # Match the legacy parity job the gap suite is already green under;
+          # node 26 introduces version-sensitive diffs that aren't Perry bugs.
+          node-version: '22'
 
       - name: Run gap suite
         run: ./scripts/run_gap_tests.sh
