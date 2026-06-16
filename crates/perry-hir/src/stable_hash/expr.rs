@@ -48,7 +48,11 @@ impl SH for Expr {
             Expr::Unary { op, operand } => { tag(h, 15); op.hash(h); operand.as_ref().hash(h); }
             Expr::Compare { op, left, right } => { tag(h, 16); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             Expr::Logical { op, left, right } => { tag(h, 17); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
-            Expr::Call { callee, args, type_args, } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            // #5247: `byte_offset` is diagnostic-only (source-location metadata
+            // for runtime TypeErrors); deliberately excluded from the stable hash
+            // so source whitespace edits that shift offsets don't bust the object
+            // cache.
+            Expr::Call { callee, args, type_args, .. } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::CallSpread { callee, args, type_args, } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }
@@ -648,7 +652,7 @@ impl SH for Expr {
             Expr::WebAssemblyModuleCustomSections { module, name } => { tag(h, 12054); module.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::WebAssemblyInstantiate(bytes) => { tag(h, 12028); bytes.as_ref().hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
-            Expr::DynamicImport { paths, arg } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); }
+            Expr::DynamicImport { paths, arg, byte_offset, deferred_error } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); byte_offset.hash(h); deferred_error.hash(h); }
             Expr::WorkerNew { paths, filename, options } => {
                 tag(h, 12055);
                 for p in paths { p.hash(h); }

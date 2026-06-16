@@ -93,6 +93,12 @@ pub fn try_lower_property_get_method_call(
     let Expr::PropertyGet { object, property } = callee else {
         return Ok(None);
     };
+    // #5247: capture this call's source byte offset now, before any argument
+    // (which may be a nested call that overwrites the pending offset) is
+    // lowered. The dynamic `js_native_call_method` fallback below emits the
+    // `js_set_call_location` from this captured value, immediately before the
+    // throwing dispatch. `0` (and the default build) → no emission.
+    let call_byte_offset = ctx.strings.pending_call_offset();
     if let Some(value) =
         super::web_storage::try_lower_web_storage_method_call(ctx, object, property, args)?
     {
@@ -1753,6 +1759,12 @@ pub fn try_lower_property_get_method_call(
                 ));
                 (ptr_reg, n.to_string())
             };
+            // #5247: record the source location of this call right before the
+            // dynamic dispatch, so the runtime "X is not a function" /
+            // "(kind).method is not a function" TypeError this fallback may
+            // throw carries `at <file>:<line>`. Args are already lowered, so a
+            // nested-call argument's location no longer shadows this one.
+            crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
             let v_def = ctx.block().call(
                 DOUBLE,
                 "js_native_call_method",

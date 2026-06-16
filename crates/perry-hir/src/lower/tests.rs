@@ -160,6 +160,48 @@ fn test_lower_native_module_registration() {
 }
 
 #[test]
+fn test_native_module_binding_value_named_import() {
+    // #5242: a named builtin import (`import { relative } from 'path'`) used
+    // as a value (e.g. an object-literal shorthand `{ relative }`) must resolve
+    // to the callable builtin — `path.relative` — not be dropped to undefined.
+    let mut ctx = make_ctx();
+    ctx.register_native_module(
+        "relative".to_string(),
+        "path".to_string(),
+        Some("relative".to_string()),
+    );
+    let value = super::lower_expr::native_module_binding_value(&ctx, "relative");
+    match value {
+        crate::ir::Expr::PropertyGet { object, property } => {
+            assert_eq!(property, "relative");
+            assert!(matches!(*object, crate::ir::Expr::NativeModuleRef(ref m) if m == "path"));
+        }
+        other => panic!("expected PropertyGet(path.relative), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_native_module_binding_value_os_eol() {
+    // `import { EOL } from 'os'` resolves to the OsEOL intrinsic value, whether
+    // used directly or as a shorthand property.
+    let mut ctx = make_ctx();
+    ctx.register_native_module("EOL".to_string(), "os".to_string(), Some("EOL".to_string()));
+    let value = super::lower_expr::native_module_binding_value(&ctx, "EOL");
+    assert!(matches!(value, crate::ir::Expr::OsEOL));
+}
+
+#[test]
+fn test_native_module_binding_value_namespace() {
+    // A namespace import of a non-CJS-style native module (method_name None)
+    // resolves to a bare NativeModuleRef — the value used as a shorthand
+    // property must match what the bare identifier reference produces.
+    let mut ctx = make_ctx();
+    ctx.register_native_module("crypto".to_string(), "crypto".to_string(), None);
+    let value = super::lower_expr::native_module_binding_value(&ctx, "crypto");
+    assert!(matches!(value, crate::ir::Expr::NativeModuleRef(ref m) if m == "crypto"));
+}
+
+#[test]
 fn test_lower_type_param_scoping() {
     let mut ctx = make_ctx();
     assert!(!ctx.is_type_param("T"));
@@ -214,4 +256,74 @@ fn test_lower_namespace_var_lookup() {
     assert_eq!(ctx.lookup_namespace_var("Utils", "helper"), Some(local_id));
     assert_eq!(ctx.lookup_namespace_var("Utils", "missing"), None);
     assert_eq!(ctx.lookup_namespace_var("Other", "helper"), None);
+}
+
+/// Run `f` on a thread with the same large (128 MB) stack the real compiler
+/// uses for its collect/lower walk (`perry-main`, see `crates/perry/src/
+/// main.rs`). The default cargo-test harness thread is only ~2 MB, which is
+/// far too small to parse or lower the multi-thousand-node chains these
+/// `#5259` tests build — without this, parsing/lowering them would overflow
+/// the *test* stack before the depth guard ever fires.
+fn run_with_large_stack<F: FnOnce() + Send + 'static>(f: F) {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn large-stack thread")
+        .join()
+        .expect("test body panicked");
+}
+
+/// #5259: deeply-nested expression chains must surface a diagnostic instead
+/// of overflowing the native stack and SIGABRT-ing the whole process. Each
+/// shape (binary `1+1+…`, member `o.a.a.…`, logical `a||a||…`) recurses once
+/// per node in `lower_expr`; past `MAX_EXPR_LOWER_DEPTH` lowering bails with a
+/// "nested too deeply" error rather than recursing further.
+fn assert_too_deep(source: String) {
+    run_with_large_stack(move || {
+        let module =
+            perry_parser::parse_typescript(&source, "deep.ts").expect("source should parse fine");
+        let err = super::lower_module(&module, "deep", "deep.ts")
+            .expect_err("deeply-nested expression must be rejected, not lowered");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("nested too deeply"),
+            "expected a depth diagnostic, got: {msg}"
+        );
+    });
+}
+
+#[test]
+fn test_lower_rejects_deep_binary_chain() {
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    let chain: Vec<&str> = vec!["1"; n];
+    assert_too_deep(format!("var x = {};\n", chain.join("+")));
+}
+
+#[test]
+fn test_lower_rejects_deep_member_chain() {
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    assert_too_deep(format!("var o = {{}};\nvar x = o{};\n", ".a".repeat(n)));
+}
+
+#[test]
+fn test_lower_rejects_deep_logical_chain() {
+    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) * 3;
+    let chain: Vec<&str> = vec!["a"; n];
+    assert_too_deep(format!("var a = 0;\nvar x = {};\n", chain.join("||")));
+}
+
+/// A chain comfortably under the ceiling still lowers cleanly — the guard
+/// must not reject ordinary (if large) expressions.
+#[test]
+fn test_lower_accepts_chain_under_limit() {
+    run_with_large_stack(|| {
+        let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) / 2;
+        let chain: Vec<&str> = vec!["1"; n];
+        let source = format!("var x = {};\n", chain.join("+"));
+        let module = perry_parser::parse_typescript(&source, "ok.ts").expect("parses");
+        assert!(
+            super::lower_module(&module, "ok", "ok.ts").is_ok(),
+            "a chain under the depth ceiling must lower without error"
+        );
+    });
 }

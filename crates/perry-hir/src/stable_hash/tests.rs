@@ -252,6 +252,7 @@ fn module_metadata_affects_hash() {
         is_dynamic: false,
         is_dynamic_target: false,
         is_deferred_require: false,
+        is_adopted_require: false,
     });
     assert_ne!(base_hash, hash_module(&m_imp));
 

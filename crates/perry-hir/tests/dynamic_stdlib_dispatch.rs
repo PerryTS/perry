@@ -176,7 +176,11 @@ fn still_refuses_global_process_pipe_call() {
     let src = r#"
         process.pipe("ok");
     "#;
+    // #5245: the unimplemented-API gate only refuses at compile time in strict
+    // mode; the default now defers `process.pipe` to a throw-on-reach value.
+    perry_hir::set_unimplemented_strict_mode(true);
     let err = try_lower(src, "/tmp/host.ts").expect_err("global process.pipe must stay gated");
+    perry_hir::set_unimplemented_strict_mode(false);
     assert!(
         err.contains("`process.pipe` is not implemented in Perry"),
         "unexpected error: {err}"
@@ -249,6 +253,36 @@ fn global_disable_opts_out() {
     // thread (cargo may run multiple tests serially in this binary).
     set_refuse_dynamic_stdlib_dispatch(true);
     outcome.expect("disabling refusal must allow the call");
+}
+
+/// #5263 — dynamic stdlib member access is allow-by-default (refusal off
+/// unless lockdown / explicit opt-in). graceful-fs (`fs[symbolKey]`) and
+/// fs-extra (`fs[method]`) shapes must lower cleanly with the default config.
+/// Mirrors the compile driver, which leaves `refuse_dynamic_stdlib_dispatch`
+/// false by default. The armed-gate behavior is covered by the `refuses_*`
+/// tests above, which explicitly `set_refuse_dynamic_stdlib_dispatch(true)`.
+#[test]
+fn default_allows_dynamic_stdlib_member_access() {
+    let src = r#"
+        import * as fs from "node:fs";
+        const k: string = "stat" + "Sync";
+        // fs-extra-style dynamic method selection
+        const m = (fs as any)[k];
+        // graceful-fs-style symbol-keyed queue write + read
+        const key = Symbol.for("graceful-fs.queue");
+        (fs as any)[key] = [];
+        const q = (fs as any)[key];
+    "#;
+    let mut cache = SourceCache::new();
+    let parsed = parse_typescript_with_cache(src, "test.ts", &mut cache).unwrap();
+    // Default driver state: refusal OFF (#5263).
+    set_refuse_dynamic_stdlib_dispatch(false);
+    set_current_module_source(src.to_string());
+    let outcome = lower_module(&parsed.module, "test", "/tmp/host.ts");
+    clear_current_module_source();
+    // Re-arm so we don't poison sibling tests on this thread.
+    set_refuse_dynamic_stdlib_dispatch(true);
+    outcome.expect("#5263: dynamic stdlib member access must lower by default");
 }
 
 #[test]

@@ -823,6 +823,7 @@ pub(super) fn try_global_builtins(
                                 }),
                                 args: new_args,
                                 type_args: vec![],
+                                byte_offset: 0,
                             }));
                         }
                     }
@@ -844,6 +845,7 @@ pub(super) fn try_global_builtins(
                                 }),
                                 args: vec![alg_arg, options_arg],
                                 type_args: vec![],
+                                byte_offset: 0,
                             }));
                         }
                     }

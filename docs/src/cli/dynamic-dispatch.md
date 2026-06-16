@@ -1,25 +1,40 @@
-# Dynamic Stdlib Dispatch (`@perry-allow-dynamic`)
+# Dynamic Stdlib Dispatch (`--lockdown`)
 
-Perry refuses compile-time *dynamic dispatch* on Node-core stdlib namespaces.
-A call site like
+Perry can refuse compile-time *dynamic dispatch* on Node-core stdlib
+namespaces. A call site like
 
 ```typescript,no-test
 const m = "exit";
 (process as any)[m](0);
 ```
 
-fails to compile. The check exists to catch the standard string-based
-obfuscation pattern used by malicious npm packages:
-`process["bind" + "ing"]("dns")`, `globalThis[atob("ZXZhbA==")]()`,
+is the standard string-based obfuscation pattern used by malicious npm
+packages: `process["bind" + "ing"]("dns")`, `globalThis[atob("ZXZhbA==")]()`,
 `fs[methodName]()` where `methodName` is computed at runtime.
 
-The pass is purely compile-time — **zero runtime cost** — and is on by
-default. Issue [#503](https://github.com/PerryTS/perry/issues/503) tracks the
-design.
+**Default: allowed.** Since [#5263](https://github.com/PerryTS/perry/issues/5263)
+the refusal is *off* by default. Dynamic `fs[name]` over a namespace Perry has
+already statically linked can only *select among the methods that were linked*
+— it is dynamic selection of a known set, not a way to reach arbitrary code —
+so it is safe to allow, and legitimate packages depend on it (graceful-fs
+stores its retry queue on `fs[Symbol.for('graceful-fs.queue')]`; fs-extra wraps
+the known `fs[method]` functions). Dynamic reads resolve the linked member by
+name; writes the program performs persist and read back — **string** keys via a
+module-keyed override side-table, **symbol** keys on the cached namespace object
+(so graceful-fs's `fs[Symbol.for('graceful-fs.queue')] = queue` round-trips).
 
-## What's checked
+**The refusal is re-armed by [`--lockdown`](./lockdown.md)** — the
+supply-chain gate — and by an explicit opt-out (below). Under those, the
+site below fails to compile with `error[U006]`. The pass is purely
+compile-time (**zero runtime cost**). Issue
+[#503](https://github.com/PerryTS/perry/issues/503) tracks the original design.
 
-Dynamic dispatch is refused when **all** of the following hold:
+## What's checked (when the refusal is armed)
+
+The refusal is armed under `--lockdown` (or `perry.lockdown: true` /
+`PERRY_LOCKDOWN=1`), or by an explicit `perry.allowDynamicStdlibDispatch: false`
+/ `PERRY_ALLOW_DYNAMIC_STDLIB=0`. When armed, dynamic dispatch is refused when
+**all** of the following hold:
 
 1. The receiver resolves to a known Node-core stdlib namespace:
    `process`, `fs`, `crypto`, `child_process`, `net`, `os`, `path`, `http`,
@@ -38,9 +53,10 @@ const k = "greet";
 me[k]("world"); // ✓ user object, not a stdlib namespace
 ```
 
-## Opt-outs
+## Opt-outs (when armed)
 
-The error message lists the available opt-outs in priority order:
+When the refusal is armed and a site is refused, the error message lists the
+available opt-outs in priority order:
 
 ### 1. Replace with a static call
 
@@ -109,14 +125,19 @@ PERRY_ALLOW_DYNAMIC_STDLIB=1 perry build src/main.ts
 CI can enforce the check by setting `PERRY_ALLOW_DYNAMIC_STDLIB=0`,
 which beats any package.json opt-out.
 
-## Why on by default
+## Why allowed by default (and gated under lockdown)
 
-The check is the cheapest possible defense against the
-dispatch-by-string class of supply-chain evasion. The cost to legitimate
-code is essentially zero — static calls and literal-keyed access compile
-unchanged. Code that genuinely needs the indirection has four ways to
-say so explicitly, and the failure mode is a build error rather than a
-silent miss in detection.
+Dynamic member access over a *linked* stdlib namespace can only reach the
+methods Perry already linked statically — it is dynamic *selection* among a
+known set, not a way to construct or reach arbitrary code. The
+dispatch-by-string obfuscation it could otherwise hide is only meaningful when
+paired with the arbitrary-code surfaces that `--lockdown` already forbids
+(`eval`/`Function`, `child_process`, native archives). So the refusal belongs
+with the rest of the lockdown gate, not always-on: default builds allow it (so
+graceful-fs, fs-extra, and similar legitimate patterns compile), while
+security-sensitive builds opt into `--lockdown` and get the refusal back. An
+explicit `perry.allowDynamicStdlibDispatch: false` / `PERRY_ALLOW_DYNAMIC_STDLIB=0`
+re-arms just this check without the rest of lockdown.
 
 See [`#503`](https://github.com/PerryTS/perry/issues/503) for design
 discussion and the broader supply-chain hardening series ([`#495`–`#506`]

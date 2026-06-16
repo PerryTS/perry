@@ -356,6 +356,10 @@ pub(super) fn apply_pkg_and_toml_config(
                     .and_then(|v| v.as_bool())
                 {
                     ctx.strict_eval = strict;
+                    // #5230: the broad `perry.strict` covers dynamic imports too.
+                    ctx.strict_dynamic_import = strict;
+                    // #5245: …and recognized-but-unimplemented APIs.
+                    ctx.strict_unimplemented = strict;
                 }
                 if let Some(mode) = pkg
                     .get("perry")
@@ -365,6 +369,19 @@ pub(super) fn apply_pkg_and_toml_config(
                     match mode {
                         "error" | "strict" => ctx.strict_eval = true,
                         "defer" => ctx.strict_eval = false,
+                        _ => {}
+                    }
+                }
+                // #5230: dedicated `perry.dynamicImport = "defer" | "error"`
+                // overrides the broad `perry.strict` for dynamic-import sites.
+                if let Some(mode) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("dynamicImport"))
+                    .and_then(|v| v.as_str())
+                {
+                    match mode {
+                        "error" | "strict" => ctx.strict_dynamic_import = true,
+                        "defer" => ctx.strict_dynamic_import = false,
                         _ => {}
                     }
                 }
@@ -434,13 +451,10 @@ pub(super) fn apply_pkg_and_toml_config(
         }
         _ => {}
     }
-    // #503: install the resolved configuration into the HIR thread-locals
-    // before any module lowering begins. Re-installed per-thread by
-    // `collect_modules.rs` (rayon workers don't inherit thread-locals),
-    // but this set covers the driver thread's own lowering work and
-    // serves as documentation of the source of truth.
-    perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
-    perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+    // #503/#5263: the resolved configuration is installed into the HIR
+    // thread-locals further below — AFTER lockdown is fully resolved (env +
+    // CLI), because lockdown re-arms the dynamic-dispatch refusal that #5263
+    // turned off by default. See the install just after the lockdown ladder.
 
     // #497: `PERRY_ALLOW_PERRY_FEATURES=1` opts every name into both
     // host allowlists at once — emergency escape hatch for builds
@@ -499,6 +513,24 @@ pub(super) fn apply_pkg_and_toml_config(
         ctx.lockdown = true;
     }
 
+    // #5263: lockdown is the supply-chain gate that re-arms the
+    // dynamic-stdlib-dispatch refusal (#503), which is allow-by-default since
+    // #5263. An explicit `perry.allowDynamicStdlibDispatch: false` /
+    // `PERRY_ALLOW_DYNAMIC_STDLIB=0` already set `refuse_dynamic_stdlib_dispatch`
+    // true above; lockdown forces it on regardless. Computed here, after the
+    // lockdown ladder is fully resolved (package.json → env → CLI).
+    if ctx.lockdown {
+        ctx.refuse_dynamic_stdlib_dispatch = true;
+    }
+
+    // #503/#5263: install the resolved configuration into the HIR
+    // thread-locals before any module lowering begins. Re-installed
+    // per-thread by `collect_modules.rs` (rayon workers don't inherit
+    // thread-locals), but this set covers the driver thread's own lowering
+    // work and serves as documentation of the source of truth.
+    perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
+    perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+
     // #5206 — strict-eval precedence (last wins): package.json
     // `perry.eval`/`perry.strict` (read above) → perry.toml `[perry] eval` /
     // `[perry] strict` → env `PERRY_ALLOW_EVAL=1` (forces OFF, back-compat) →
@@ -523,6 +555,10 @@ pub(super) fn apply_pkg_and_toml_config(
             if let Some(perry_tbl) = table.get("perry").and_then(|v| v.as_table()) {
                 if let Some(strict) = perry_tbl.get("strict").and_then(|v| v.as_bool()) {
                     ctx.strict_eval = strict;
+                    // #5230: broad `perry.strict` covers dynamic imports too.
+                    ctx.strict_dynamic_import = strict;
+                    // #5245: …and recognized-but-unimplemented APIs.
+                    ctx.strict_unimplemented = strict;
                 }
                 if let Some(mode) = perry_tbl.get("eval").and_then(|v| v.as_str()) {
                     match mode {
@@ -531,22 +567,46 @@ pub(super) fn apply_pkg_and_toml_config(
                         _ => {}
                     }
                 }
+                // #5230: dedicated `perry.dynamicImport` overrides for imports.
+                if let Some(mode) = perry_tbl.get("dynamicImport").and_then(|v| v.as_str()) {
+                    match mode {
+                        "error" | "strict" => ctx.strict_dynamic_import = true,
+                        "defer" => ctx.strict_dynamic_import = false,
+                        _ => {}
+                    }
+                }
             }
         }
     }
-    // CLI flag opts in.
+    // CLI flags opt in.
     if args.strict_eval {
         ctx.strict_eval = true;
     }
+    if args.strict_dynamic_import {
+        ctx.strict_dynamic_import = true;
+    }
+    // #5245: `--strict-unimplemented` opts the recognized-but-unimplemented-API
+    // gate back into the historical hard `#463` refusal.
+    if args.strict_unimplemented {
+        ctx.strict_unimplemented = true;
+    }
     // Back-compat: `PERRY_ALLOW_EVAL` forces non-strict for a one-off build,
-    // overriding any strict flag/config.
+    // overriding any strict flag/config — for both eval and dynamic import
+    // (shared AOT escape hatch, #5230).
     if perry_hir::eval_classifier::eval_override_enabled() {
         ctx.strict_eval = false;
+        ctx.strict_dynamic_import = false;
+    }
+    // #5245: `PERRY_ALLOW_UNIMPLEMENTED` is the back-compat escape hatch for the
+    // unimplemented-API gate — forces non-strict (defer) for a one-off build.
+    if perry_hir::eval_classifier::unimplemented_override_enabled() {
+        ctx.strict_unimplemented = false;
     }
     // Install into the HIR thread-local before any lowering begins (re-applied
     // per rayon worker in collect_modules.rs, mirroring the dynamic-stdlib
     // dispatch knob above).
     perry_hir::set_eval_strict_mode(ctx.strict_eval);
+    perry_hir::set_unimplemented_strict_mode(ctx.strict_unimplemented);
 
     // #3527 (blocker #4): materialize `"*"` / `"@scope/*"` wildcard entries
     // in `perry.compilePackages` into concrete installed package names.

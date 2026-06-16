@@ -16,11 +16,29 @@
 
 use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
+
+/// Maximum `lower_expr` recursion depth before lowering bails with a
+/// diagnostic instead of overflowing the native stack (#5259).
+///
+/// Expression lowering is recursive: a left-nested `a+b+c+…` chain, an
+/// `o.a.a.…a` member chain, or an `a||a||…` logical chain each recurses once
+/// per operator/segment. Bundler/minifier output occasionally emits chains
+/// thousands of nodes deep; left unguarded these overflow the stack and
+/// SIGABRT (exit 134) with no diagnostic at all. The compiler runs its
+/// collect/lower walk on a 128 MB stack (`perry-main`, see `crates/perry/
+/// src/main.rs`), and the heaviest shape (member chains) consumes on the
+/// order of ~16 KB of stack per level, so this ceiling keeps worst-case
+/// lowering depth well under ~32 MB — far below the stack limit — while still
+/// sitting far above anything hand-written code or a reasonable build emits.
+/// The only inputs it rejects are the degenerate ones that would otherwise
+/// crash, and they now get a clean "nested too deeply" diagnostic instead.
+pub(crate) const MAX_EXPR_LOWER_DEPTH: u32 = 2000;
 
 fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
     match member.kind {
@@ -63,6 +81,7 @@ pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
         }),
         args: Vec::new(),
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 
@@ -196,6 +215,7 @@ pub(crate) fn with_implicit_unset_let(id: LocalId, name: String) -> Stmt {
             }),
             args: vec![],
             type_args: vec![],
+            byte_offset: 0,
         }),
     }
 }
@@ -398,7 +418,101 @@ pub(crate) fn lower_expr_assignment(
     }
 }
 
+/// Lower a bare identifier that is bound to a native module (via a named or
+/// namespace import — `import { relative } from 'path'`, `import * as os from
+/// 'os'`) to the value-expression it denotes.
+///
+/// Used both from the identifier expression path and from object-literal
+/// shorthand resolution (`{ relative }` — #5242), so a native-module-bound
+/// name produces the same callable/property value whether it appears as a
+/// standalone reference or as a shorthand property. The caller must ensure
+/// `ctx.lookup_native_module(name)` is `Some`.
+pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> Expr {
+    let (module_name, method_name) = match ctx.lookup_native_module(name) {
+        Some(v) => v,
+        None => return Expr::Undefined,
+    };
+    if module_name == "os" || module_name == "node:os" {
+        if let Some(method) = method_name {
+            match method {
+                "EOL" => return Expr::OsEOL,
+                "devNull" => return Expr::OsDevNull,
+                _ => {}
+            }
+        }
+    }
+    if module_name == "buffer" || module_name == "node:buffer" {
+        if let Some(method) = method_name {
+            if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
+                return Expr::PropertyGet {
+                    object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
+                    property: method.to_string(),
+                };
+            }
+        }
+    }
+    // Special handling for worker_threads named imports
+    if module_name == "worker_threads" {
+        if let Some(method) = method_name {
+            if method == "workerData" {
+                return Expr::PropertyGet {
+                    object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
+                    property: "workerData".to_string(),
+                };
+            }
+        }
+    }
+    if let Some(method) = method_name {
+        // #3946: a `node:process` *property* imported by name
+        // (`import { pid, arch } from "node:process"`) must read
+        // the live process value, not a generic native-module
+        // PropertyGet (which resolved to `undefined`). Methods
+        // fall through to the callable native-module ref below.
+        if module_name == "process" {
+            if let Some(e) = expr_member::lower_process_named_property(method) {
+                return e;
+            }
+        }
+        return Expr::PropertyGet {
+            object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+            property: method.to_string(),
+        };
+    }
+    if ctx.lookup_builtin_module_alias(name).is_none()
+        && is_cjs_style_native_default_import(module_name)
+    {
+        return Expr::PropertyGet {
+            object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+            property: "default".to_string(),
+        };
+    }
+    // Native module reference (e.g., mysql from 'mysql2/promise')
+    Expr::NativeModuleRef(module_name.to_string())
+}
+
 pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
+    // #5259: guard the recursive descent. Without this, a pathologically
+    // nested expression (`1+1+…`, `o.a.a.…`, `a||a||…`) overflows the native
+    // stack and SIGABRTs with no diagnostic. The depth counter turns that into
+    // a clean "nested too deeply" error. It is decremented on every exit path,
+    // including the error returns inside `lower_expr_impl`, so a recoverable
+    // lowering error elsewhere doesn't leave the depth permanently inflated.
+    ctx.expr_lower_depth += 1;
+    if ctx.expr_lower_depth > MAX_EXPR_LOWER_DEPTH {
+        ctx.expr_lower_depth -= 1;
+        crate::lower_bail!(
+            expr.span(),
+            "expression nested too deeply (exceeded {} levels); split the \
+             chain across statements or intermediate variables",
+            MAX_EXPR_LOWER_DEPTH
+        );
+    }
+    let result = lower_expr_impl(ctx, expr);
+    ctx.expr_lower_depth -= 1;
+    result
+}
+
+fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
     match expr {
         ast::Expr::Lit(lit) => lower_lit(lit),
         ast::Expr::Ident(ident) => {
@@ -423,70 +537,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }),
                         args: vec![Expr::LocalGet(id), Expr::String(n.clone())],
                         type_args: vec![],
+                        byte_offset: 0,
                     });
                 }
                 Ok(Expr::LocalGet(id))
             } else if let Some(id) = ctx.lookup_func(&name) {
                 Ok(Expr::FuncRef(id))
-            } else if let Some((module_name, method_name)) = ctx.lookup_native_module(&name) {
-                if module_name == "os" || module_name == "node:os" {
-                    if let Some(method) = method_name {
-                        match method {
-                            "EOL" => return Ok(Expr::OsEOL),
-                            "devNull" => return Ok(Expr::OsDevNull),
-                            _ => {}
-                        }
-                    }
-                }
-                if module_name == "buffer" || module_name == "node:buffer" {
-                    if let Some(method) = method_name {
-                        if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
-                            return Ok(Expr::PropertyGet {
-                                object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
-                                property: method.to_string(),
-                            });
-                        }
-                    }
-                }
-                // Special handling for worker_threads named imports
-                if module_name == "worker_threads" {
-                    if let Some(method) = method_name {
-                        if method == "workerData" {
-                            return Ok(Expr::PropertyGet {
-                                object: Box::new(Expr::NativeModuleRef(
-                                    "worker_threads".to_string(),
-                                )),
-                                property: "workerData".to_string(),
-                            });
-                        }
-                    }
-                }
-                if let Some(method) = method_name {
-                    // #3946: a `node:process` *property* imported by name
-                    // (`import { pid, arch } from "node:process"`) must read
-                    // the live process value, not a generic native-module
-                    // PropertyGet (which resolved to `undefined`). Methods
-                    // fall through to the callable native-module ref below.
-                    if module_name == "process" {
-                        if let Some(e) = expr_member::lower_process_named_property(method) {
-                            return Ok(e);
-                        }
-                    }
-                    return Ok(Expr::PropertyGet {
-                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
-                        property: method.to_string(),
-                    });
-                }
-                if ctx.lookup_builtin_module_alias(&name).is_none()
-                    && is_cjs_style_native_default_import(module_name)
-                {
-                    return Ok(Expr::PropertyGet {
-                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
-                        property: "default".to_string(),
-                    });
-                }
-                // Native module reference (e.g., mysql from 'mysql2/promise')
-                Ok(Expr::NativeModuleRef(module_name.to_string()))
+            } else if ctx.lookup_native_module(&name).is_some() {
+                Ok(native_module_binding_value(ctx, &name))
             } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
                 // Imported function - reference by its original exported name
                 // Look up type information if available
@@ -583,6 +641,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }),
                         args: vec![Expr::String(name.clone())],
                         type_args: Vec::new(),
+                        byte_offset: 0,
                     });
                 }
                 if !known_global {
@@ -1036,6 +1095,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             }),
                             args: vec![Expr::String(n.to_string())],
                             type_args: Vec::new(),
+                            byte_offset: 0,
                         })));
                     }
                 }
@@ -1875,6 +1935,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             callee: Box::new(fixed_callee.clone()),
                             args,
                             type_args: Vec::new(),
+                            byte_offset: 0,
                         };
                         // For `foo?.bar?.(args)` the function value (`bar` on the
                         // un-short-circuited receiver) must itself be null-checked
@@ -1937,6 +1998,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             callee: Box::new(callee_expr),
                             args,
                             type_args: Vec::new(),
+                            byte_offset: 0,
                         })
                     };
 
@@ -2105,6 +2167,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 callee: Box::new(callee),
                 args: call_args,
                 type_args: vec![],
+                byte_offset: 0,
             })
         }
         // Class expression used as a value (not in `new` context) —
@@ -2559,5 +2622,6 @@ pub(crate) fn try_desugar_reactive_text(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }))
 }

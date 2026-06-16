@@ -119,9 +119,11 @@ fn default_defer_compiles_prints_notice_and_runs() {
         "default compile must succeed; stderr:\n{stderr}"
     );
 
-    // The visible end-of-compile notice: count + kind + file:line.
+    // The visible end-of-compile notice: count + kind + file:line. #5230
+    // generalized the headline ("ahead-of-time-unsupported site(s)") so eval and
+    // dynamic-import deferrals share one notice.
     assert!(
-        stderr.contains("runtime-eval site"),
+        stderr.contains("ahead-of-time-unsupported site"),
         "expected the deferred-eval notice; stderr:\n{stderr}"
     );
     assert!(
@@ -234,7 +236,7 @@ fn allow_eval_env_overrides_strict_config() {
         "PERRY_ALLOW_EVAL=1 must override a strict config and build; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("runtime-eval site"),
+        stderr.contains("ahead-of-time-unsupported site"),
         "back-compat override must still print the deferred notice; stderr:\n{stderr}"
     );
 }

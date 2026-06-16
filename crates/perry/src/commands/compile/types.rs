@@ -292,6 +292,29 @@ pub struct CompileArgs {
     #[arg(long)]
     pub strict_eval: bool,
 
+    /// #5230 — strict dynamic-import mode. Fail the build at compile time if a
+    /// dynamic `import(...)` has a runtime-computed (non-resolvable) specifier
+    /// (the historical behavior). By default such a site is instead compiled to
+    /// a rejected `Promise` that throws a descriptive `Error` only if reached,
+    /// and is listed in the same end-of-build notice as deferred eval sites.
+    /// Also settable via `"perry": { "dynamicImport": "error" }`; the broad
+    /// `"perry": { "strict": true }` covers it too. `PERRY_ALLOW_EVAL=1` forces
+    /// this off.
+    #[arg(long)]
+    pub strict_dynamic_import: bool,
+
+    /// #5245 — strict-unimplemented mode. Fail the build at compile time if any
+    /// recognized-but-unimplemented node/stdlib API is referenced (the
+    /// historical `#463` behavior). By default such a reference is instead
+    /// compiled to a value that throws a descriptive `Error` only if reached
+    /// (so a `try/catch`-guarded probe — e.g. `safer-buffer`'s
+    /// `process.binding('buffer')` — no longer blocks the build), and is listed
+    /// in the same end-of-build notice as deferred eval / dynamic-import sites.
+    /// Also settable via the broad `"perry": { "strict": true }` in
+    /// package.json or perry.toml. `PERRY_ALLOW_UNIMPLEMENTED=1` forces this off.
+    #[arg(long)]
+    pub strict_unimplemented: bool,
+
     /// Minimum Windows version the compiled executable must run on.
     /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
     /// non-Windows target.
@@ -661,13 +684,18 @@ pub struct CompilationContext {
     /// rebuild without the `bundled-streams` feature. This set lets
     /// the registry drain inject the missing feature directly.
     pub extra_stdlib_features: BTreeSet<&'static str>,
-    /// #503: when true, HIR lowering refuses dynamic-dispatch on known
+    /// #503/#5263: when true, HIR lowering refuses dynamic-dispatch on known
     /// stdlib namespaces (`process[runtimeVar]()` and similar). Default
-    /// true. Sources, last wins: `perry.allowDynamicStdlibDispatch: true`
-    /// in package.json → env `PERRY_ALLOW_DYNAMIC_STDLIB=1` flips this
-    /// off. An array value (`["@scope/pkg", ...]`) keeps refusal on but
-    /// allows the listed packages — captured in
-    /// `allow_dynamic_stdlib_packages`.
+    /// **false** (#5263 — allow): dynamic member access over a *linked*
+    /// namespace can only reach methods perry already statically linked, so it
+    /// is dynamic selection among a known set, not arbitrary code. The refusal
+    /// is re-armed by `--lockdown` (the supply-chain gate, #496), or by an
+    /// explicit opt-in: `perry.allowDynamicStdlibDispatch: false` in
+    /// package.json / env `PERRY_ALLOW_DYNAMIC_STDLIB=0`. `…: true` / `=1`
+    /// keeps the default-allow even under those explicit knobs (last wins). An
+    /// array value (`["@scope/pkg", ...]`) is captured in
+    /// `allow_dynamic_stdlib_packages` and is meaningful only while refusal is
+    /// active (i.e. under lockdown / explicit re-enable).
     pub refuse_dynamic_stdlib_dispatch: bool,
     /// #5206: strict-eval mode. When true, a runtime-unknown `eval(...)` /
     /// `new Function(<dynamic body>)` site is a hard compile-time refusal
@@ -678,6 +706,26 @@ pub struct CompilationContext {
     /// package.json or perry.toml → CLI `--strict-eval`. `PERRY_ALLOW_EVAL=1`
     /// always forces this off (back-compat escape hatch).
     pub strict_eval: bool,
+    /// #5230: strict mode for non-resolvable (runtime-computed) dynamic
+    /// `import(...)` specifiers. When true, such a site is a hard compile error
+    /// (the historical behavior). When false (the default), it is deferred to a
+    /// rejected `Promise` that throws a descriptive `Error` only if reached, and
+    /// recorded in the shared end-of-compile notice. Defaults to `strict_eval`
+    /// so the broad `perry.strict = true` covers both; overridden by the
+    /// dedicated `perry.dynamicImport = "defer" | "error"` config and the
+    /// `--strict-dynamic-import` CLI flag. `PERRY_ALLOW_EVAL=1` forces it off
+    /// (shared AOT escape hatch).
+    pub strict_dynamic_import: bool,
+    /// #5245: strict mode for recognized-but-unimplemented node/stdlib APIs.
+    /// When true, a reference to such an API is a hard compile-time `#463`
+    /// refusal (the historical behavior). When false (the default), it is
+    /// compiled to a value that throws a descriptive `Error` only if reached
+    /// (so a `try/catch`-guarded probe doesn't block the build) and is recorded
+    /// in the shared end-of-compile notice. Defaults to `strict_eval` so the
+    /// broad `perry.strict = true` covers it; the `--strict-unimplemented` CLI
+    /// flag forces it on. `PERRY_ALLOW_UNIMPLEMENTED=1` forces it off (back-compat
+    /// escape hatch).
+    pub strict_unimplemented: bool,
     /// #503: package names whose modules may legitimately use dynamic
     /// stdlib dispatch (`perry.allowDynamicStdlibDispatch: [...]`).
     /// Consulted per-module during HIR lowering; ignored when
@@ -878,8 +926,18 @@ impl CompilationContext {
             windows_subsystem: "auto".to_string(),
             entry_canonical: None,
             extra_stdlib_features: BTreeSet::new(),
-            refuse_dynamic_stdlib_dispatch: true,
+            // #5263: default-allow dynamic stdlib member access. Dynamic
+            // `fs[name]` over the *linked* namespace can only select among
+            // methods perry already statically linked (dynamic selection of a
+            // known set, not arbitrary code), so it is safe by default and is
+            // needed by legitimate packages (graceful-fs's symbol-keyed retry
+            // queue, fs-extra's `fs[method]` wrapping). The refusal is re-armed
+            // under `--lockdown` (the supply-chain gate) or by an explicit
+            // `perry.allowDynamicStdlibDispatch: false` / `PERRY_ALLOW_DYNAMIC_STDLIB=0`.
+            refuse_dynamic_stdlib_dispatch: false,
             strict_eval: false,
+            strict_dynamic_import: false,
+            strict_unimplemented: false,
             allow_dynamic_stdlib_packages: HashSet::new(),
             js_runtime_importers: Vec::new(),
             permissions: std::collections::BTreeMap::new(),

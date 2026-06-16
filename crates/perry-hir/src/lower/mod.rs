@@ -85,6 +85,9 @@ pub(crate) use lowering_context::{
     LoweringContext, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
 };
 
+mod locals;
+pub(crate) use locals::Locals;
+
 mod typed_parse;
 pub(crate) use typed_parse::{extract_typed_parse_source_order, resolve_typed_parse_ty};
 

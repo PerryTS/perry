@@ -71,6 +71,15 @@ pub fn is_date_cell_addr(addr: usize) -> bool {
     // untyped `request.headers.get()` dispatch routed its receiver through
     // `is_date_value` here and segfaulted. `try_read_gc_header` rejects the
     // whole band before the deref, so this is an exact heap-pointer check.
+    // #5226: small typed arrays and `Buffer`s are raw-`alloc`'d off the GC
+    // heap with NO `GcHeader` prefix. `try_read_gc_header` only rejects the
+    // handle band and (on some platforms) low addresses, so on Windows these
+    // pass its magnitude check and the `addr - GC_HEADER_SIZE` back-read below
+    // faults when the block sits at the start of a freshly mapped region.
+    // Reject them via the side tables first — they are never `DateCell`s.
+    if crate::typedarray::is_offheap_sidetable_alloc(addr) {
+        return false;
+    }
     unsafe {
         let header = match crate::value::addr_class::try_read_gc_header(addr) {
             Some(header) => header,

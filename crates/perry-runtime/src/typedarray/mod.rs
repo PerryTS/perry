@@ -175,6 +175,19 @@ pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     TYPED_ARRAY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
+/// True for off-GC-heap, header-less allocations — small typed arrays and
+/// `Buffer`s, both raw-`alloc`'d with NO 8-byte `GcHeader` prefix and tracked
+/// only in side tables. The runtime has many type probes of the form
+/// `*(ptr - GC_HEADER_SIZE)` (Promise/Date/Array obj_type checks); each MUST
+/// skip these allocations before that back-read, because reading the
+/// non-existent header crosses outside the block and segfaults when it sits at
+/// the start of a freshly mapped region (#5226). Detection is via the side
+/// tables only — never dereferences `addr`.
+#[inline]
+pub fn is_offheap_sidetable_alloc(addr: usize) -> bool {
+    lookup_typed_array_kind(addr).is_some() || crate::buffer::is_registered_buffer(addr)
+}
+
 pub(crate) fn mark_typed_array_shared_backing(ptr: *const TypedArrayHeader) {
     TYPED_ARRAY_SHARED_BACKING.with(|r| {
         r.borrow_mut().insert(ptr as usize);

@@ -42,7 +42,7 @@ const FS_PROMISES_EXPORTS: &[&str] = &[
 
 #[test]
 fn known_submodules_have_at_least_one_export() {
-    for s in SUBMODULES {
+    for s in super::ALL_SUBMODULE_SPECS {
         assert!(
             !s.exports.is_empty(),
             "submodule {} has zero exports",

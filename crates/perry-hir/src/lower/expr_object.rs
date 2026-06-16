@@ -666,6 +666,16 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         )
                     } else if ctx.lookup_class(&name).is_some() {
                         (Expr::ClassRef(name.clone()), Type::Any)
+                    } else if ctx.lookup_native_module(&name).is_some() {
+                        // #5242: a native-module-bound name (`import { relative }
+                        // from 'path'`) used as a shorthand property. Resolve it to
+                        // the same value the bare identifier produces, so the
+                        // property is the callable builtin instead of being dropped
+                        // (which left it `undefined` — yargs shim.path.relative).
+                        (
+                            super::lower_expr::native_module_binding_value(ctx, &name),
+                            Type::Any,
+                        )
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                         (value, Type::Any)
                     } else {
@@ -957,6 +967,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             }),
             args,
             type_args: Vec::new(),
+            byte_offset: 0,
         };
         let mut body: Vec<Stmt> = Vec::with_capacity(ops.len() * 4 + 1);
         let mut inner_local_ids = vec![param_id];
@@ -1093,6 +1104,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             callee: Box::new(closure),
             args: vec![Expr::Object(Vec::new())],
             type_args: vec![],
+            byte_offset: 0,
         });
     }
     let mut props = Vec::new();
@@ -1149,6 +1161,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         }
                     } else if ctx.lookup_class(&name).is_some() {
                         Expr::ClassRef(name.clone())
+                    } else if ctx.lookup_native_module(&name).is_some() {
+                        // #5242: native-module-bound shorthand (`{ relative }` from
+                        // `import { relative } from 'path'`). Resolve to the builtin
+                        // value instead of dropping the property.
+                        super::lower_expr::native_module_binding_value(ctx, &name)
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                         value
                     } else {
@@ -1231,6 +1248,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         }),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     };
     for init in computed_post_init {
         match init {
@@ -1293,6 +1311,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     }),
                     args: vec![Expr::LocalGet(param_id), key, closure],
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 }));
             }
         }
@@ -1344,5 +1363,6 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         callee: Box::new(closure),
         args: vec![static_obj],
         type_args: vec![],
+        byte_offset: 0,
     })
 }

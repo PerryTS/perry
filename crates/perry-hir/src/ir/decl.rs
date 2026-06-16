@@ -124,6 +124,17 @@ pub struct Import {
     /// is left `Deferred` unless some other (top-level) edge reaches it; the
     /// require shim triggers the target's `__init` on first `require()` call.
     pub is_deferred_require: bool,
+    /// Issue #5257: this import was synthesized by the CJS→ESM wrap from a
+    /// `require('S')` — i.e. `import _req_N from 'S'` (or an adopted alias /
+    /// `_lazyreq_N`). Under CommonJS, `require('S')` returns the module's
+    /// *exports object* (its namespace), so a default-import shape here must
+    /// NOT be held to Node's static-ESM "does not provide an export named
+    /// 'default'" rule when the target is a named-only / CJS module: the
+    /// default-export gate skips these and codegen routes the local through
+    /// the namespace machinery (member reads resolve per-export, a whole-value
+    /// read materializes the exports object). Genuine user `import X from
+    /// 'pkg'` (this flag `false`) still errors like Node.
+    pub is_adopted_require: bool,
 }
 
 /// Import specifier

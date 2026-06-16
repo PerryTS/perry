@@ -286,7 +286,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let mod_bytes_global =
                                 format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
                             let mod_len_str = module_name.len().to_string();
-                            return Ok(ctx.block().call(
+                            let install_sym = crate::nm_install::nm_install_symbol(module_name);
+                            let blk = ctx.block();
+                            if let Some(s) = install_sym {
+                                blk.call_void(s, &[]);
+                            }
+                            return Ok(blk.call(
                                 DOUBLE,
                                 "js_create_native_module_namespace",
                                 &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],

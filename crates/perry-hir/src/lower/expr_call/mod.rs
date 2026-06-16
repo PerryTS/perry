@@ -633,6 +633,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                     callee,
                     args,
                     type_args,
+                    // #5247: capture the call's source byte offset (same source as
+                    // DynamicImport's `byte_offset` below). Codegen resolves it to a
+                    // `file:line` for the runtime "X is not a function" TypeError.
+                    byte_offset: call.span.lo.0,
                 })
             }
         }
@@ -649,6 +653,8 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             Ok(Expr::DynamicImport {
                 paths: Vec::new(),
                 arg: Box::new(arg),
+                byte_offset: call.span.lo.0,
+                deferred_error: None,
             })
         }
     }

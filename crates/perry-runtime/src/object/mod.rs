@@ -54,6 +54,12 @@ mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;
 mod native_module_dispatch_crypto;
+mod native_module_registry;
+pub(crate) use native_module_registry::js_nm_enable_install_all;
+pub(crate) use native_module_registry::nm_ctor_lookup;
+// Re-exported for submodule installers that delegate to a native module
+// (`fs/promises` → `fs.constants`, `sys` → `util`).
+pub(crate) use native_module_registry::{js_nm_install_fs, js_nm_install_util};
 mod native_module_stream;
 mod native_this_alias;
 mod object_literal_ops;
