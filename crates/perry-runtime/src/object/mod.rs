@@ -55,6 +55,7 @@ mod native_module_crypto_random;
 mod native_module_dispatch;
 mod native_module_dispatch_crypto;
 mod native_module_registry;
+pub(crate) use native_module_registry::js_nm_enable_install_all;
 mod native_module_stream;
 mod native_this_alias;
 mod object_literal_ops;

@@ -3102,6 +3102,17 @@ fn cjs_default_export_value(module_name: &str) -> Option<f64> {
 }
 
 pub(crate) fn native_module_get_builtin_module_value(module_name: &str) -> f64 {
+    // Devirt: this is the runtime-dynamic builtin resolver (`require(spec)`,
+    // `process.getBuiltinModule(spec)`) — `module_name` is only known at runtime,
+    // so codegen could not emit the per-module dispatch install. Run the
+    // install-all hook so a dynamically-resolved namespace can dispatch methods.
+    // The hook is an INDIRECT pointer (null unless codegen emitted
+    // `js_nm_enable_install_all()` because the program actually uses dynamic
+    // require/getBuiltinModule) — so this resolver, which is linked into every
+    // program via the always-present `process.getBuiltinModule` method table,
+    // does NOT statically reference `js_nm_install_all` and therefore does not
+    // pin every bucket. Static imports keep their precise per-module installs.
+    super::native_module_registry::nm_run_install_all_hook();
     cjs_default_export_value(module_name).unwrap_or_else(|| {
         js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
     })

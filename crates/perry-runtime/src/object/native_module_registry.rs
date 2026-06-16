@@ -190,3 +190,40 @@ pub extern "C" fn js_nm_install_all() {
     js_nm_install_wasi();
     js_nm_install_zlib();
 }
+
+// ── Dynamic-require install-all hook ───────────────────────────────────────
+// `js_nm_install_all` names every bucket, so it must NOT be statically reachable
+// from any always-linked function (the runtime builtin resolver is linked into
+// every program via `process.getBuiltinModule`). Instead it is reached only
+// through this indirect pointer, set by `js_nm_enable_install_all()` which
+// codegen emits ONLY when the program uses dynamic `require`/`getBuiltinModule`.
+// Programs without dynamic builtin require never reference the setter → both it
+// and `js_nm_install_all` dead-strip, preserving precise per-module stripping.
+static NM_INSTALL_ALL_HOOK: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Arm the install-all fallback. Sole static reference to `js_nm_install_all`.
+/// Emitted by codegen at dynamic require / getBuiltinModule lowering sites.
+#[no_mangle]
+pub extern "C" fn js_nm_enable_install_all() {
+    // `black_box` hides that the stored value is `js_nm_install_all`. Without it,
+    // whole-program optimization proves this is the only value ever written to
+    // the single-pointer NM_INSTALL_ALL_HOOK and speculatively DEVIRTUALIZES the
+    // indirect call in `nm_run_install_all_hook` into a direct `js_nm_install_all`
+    // reference — re-pinning every bucket in programs that merely LINK the
+    // resolver (every program, via the process method table). The opaque pointer
+    // keeps the call genuinely indirect, so `js_nm_install_all` is reachable only
+    // through THIS setter, which only getBuiltinModule/require callers emit.
+    // (The per-bucket NM_DISPATCH_REGISTRY array is immune — its loads are indexed
+    // by a runtime bucket id, so the optimizer can't pin a specific slot's fn.)
+    let f = std::hint::black_box(js_nm_install_all as extern "C" fn());
+    NM_INSTALL_ALL_HOOK.store(f as *mut (), Ordering::Relaxed);
+}
+
+/// Run the install-all fallback if armed. References only the pointer — never
+/// `js_nm_install_all` directly — so it pins nothing on its own.
+pub(crate) fn nm_run_install_all_hook() {
+    let p = NM_INSTALL_ALL_HOOK.load(Ordering::Relaxed);
+    if !p.is_null() {
+        unsafe { std::mem::transmute::<*mut (), extern "C" fn()>(p)() };
+    }
+}
