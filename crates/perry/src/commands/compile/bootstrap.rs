@@ -383,6 +383,12 @@ pub(super) fn enforce_package_default_exports(ctx: &mut CompilationContext) -> R
                 if import.type_only
                     || import.is_dynamic
                     || import.is_native
+                    // Issue #5257: an adopted `require('S')` (CJS wrap synthesized
+                    // `import _req_N from 'S'`) is NOT a static-ESM default import —
+                    // `require()` hands back the exports object, so a named-only / CJS
+                    // target is valid and must route through the namespace machinery
+                    // instead of failing Node's "no default export" rule.
+                    || import.is_adopted_require
                     || import.module_kind != perry_hir::ModuleKind::NativeCompiled
                     || !is_bare_package_specifier(&import.source)
                 {
@@ -506,6 +512,7 @@ mod js_runtime_gate_tests {
             is_dynamic: false,
             is_dynamic_target: false,
             is_deferred_require: false,
+            is_adopted_require: false,
         });
 
         let mut package = empty_module("pkg");
