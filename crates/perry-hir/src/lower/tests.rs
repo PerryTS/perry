@@ -160,6 +160,48 @@ fn test_lower_native_module_registration() {
 }
 
 #[test]
+fn test_native_module_binding_value_named_import() {
+    // #5242: a named builtin import (`import { relative } from 'path'`) used
+    // as a value (e.g. an object-literal shorthand `{ relative }`) must resolve
+    // to the callable builtin — `path.relative` — not be dropped to undefined.
+    let mut ctx = make_ctx();
+    ctx.register_native_module(
+        "relative".to_string(),
+        "path".to_string(),
+        Some("relative".to_string()),
+    );
+    let value = super::lower_expr::native_module_binding_value(&ctx, "relative");
+    match value {
+        crate::ir::Expr::PropertyGet { object, property } => {
+            assert_eq!(property, "relative");
+            assert!(matches!(*object, crate::ir::Expr::NativeModuleRef(ref m) if m == "path"));
+        }
+        other => panic!("expected PropertyGet(path.relative), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_native_module_binding_value_os_eol() {
+    // `import { EOL } from 'os'` resolves to the OsEOL intrinsic value, whether
+    // used directly or as a shorthand property.
+    let mut ctx = make_ctx();
+    ctx.register_native_module("EOL".to_string(), "os".to_string(), Some("EOL".to_string()));
+    let value = super::lower_expr::native_module_binding_value(&ctx, "EOL");
+    assert!(matches!(value, crate::ir::Expr::OsEOL));
+}
+
+#[test]
+fn test_native_module_binding_value_namespace() {
+    // A namespace import of a non-CJS-style native module (method_name None)
+    // resolves to a bare NativeModuleRef — the value used as a shorthand
+    // property must match what the bare identifier reference produces.
+    let mut ctx = make_ctx();
+    ctx.register_native_module("crypto".to_string(), "crypto".to_string(), None);
+    let value = super::lower_expr::native_module_binding_value(&ctx, "crypto");
+    assert!(matches!(value, crate::ir::Expr::NativeModuleRef(ref m) if m == "crypto"));
+}
+
+#[test]
 fn test_lower_type_param_scoping() {
     let mut ctx = make_ctx();
     assert!(!ctx.is_type_param("T"));
