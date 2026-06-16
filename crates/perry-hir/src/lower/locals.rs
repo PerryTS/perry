@@ -26,7 +26,7 @@
 use std::ops::{Deref, DerefMut};
 
 use perry_types::{LocalId, Type};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Ordered stack of scope-local bindings with a name→positions index.
 #[derive(Debug, Clone, Default)]
@@ -36,6 +36,17 @@ pub(crate) struct Locals {
     /// name -> ascending positions into `entries`. The last entry of each
     /// list is the innermost (most-recent) binding for that name.
     index: HashMap<String, Vec<usize>>,
+    /// Set of the `LocalId`s currently present in `entries`. Maintained in
+    /// lockstep with `entries` by every mutating method, so closure-capture
+    /// analysis can do O(1) "is this id an enclosing local?" membership tests
+    /// against the *current* scope without rebuilding a `HashSet` from the
+    /// `entries` slice on every closure. Each binding gets a fresh monotonic
+    /// `LocalId` (`fresh_local`), so ids are unique within `entries` and a
+    /// plain set (no refcount) stays in sync. See `compute_closure_captures`
+    /// and `nested_fn_decl` — both formerly rebuilt this set per closure,
+    /// making capture analysis O(scope) per closure = O(n²) over a scope of
+    /// n sibling closures.
+    id_set: HashSet<LocalId>,
 }
 
 impl Locals {
@@ -47,7 +58,15 @@ impl Locals {
     pub(crate) fn push(&mut self, entry: (String, LocalId, Type)) {
         let pos = self.entries.len();
         self.index.entry(entry.0.clone()).or_default().push(pos);
+        self.id_set.insert(entry.1);
         self.entries.push(entry);
+    }
+
+    /// The set of `LocalId`s currently in scope. O(1). Used by closure-capture
+    /// analysis as the "enclosing locals" membership view, replacing a
+    /// per-closure rebuild from the `entries` slice (#5267 follow-up).
+    pub(crate) fn id_set(&self) -> &HashSet<LocalId> {
+        &self.id_set
     }
 
     /// Position of the innermost binding named `name`, if any. O(1).
@@ -132,6 +151,9 @@ impl Locals {
                 self.index.remove(name);
             }
         }
+        for (_, id, _) in &drained {
+            self.id_set.remove(id);
+        }
         drained
     }
 
@@ -151,11 +173,13 @@ impl Locals {
         removed
     }
 
-    /// Rebuild the whole name→positions index from `entries`.
+    /// Rebuild the whole name→positions index and the id set from `entries`.
     fn reindex(&mut self) {
         self.index.clear();
-        for (pos, (name, _, _)) in self.entries.iter().enumerate() {
+        self.id_set.clear();
+        for (pos, (name, id, _)) in self.entries.iter().enumerate() {
             self.index.entry(name.clone()).or_default().push(pos);
+            self.id_set.insert(*id);
         }
     }
 }

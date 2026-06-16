@@ -38,13 +38,6 @@ pub(super) fn lower_nested_fn_decl(
 
     let scope_mark = ctx.enter_scope();
 
-    // Track outer locals for capture detection
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
-
     // Lower parameters. Skip the TypeScript `this:` annotation —
     // it has no runtime existence (see the sibling site above for
     // the full rationale).
@@ -170,8 +163,13 @@ pub(super) fn lower_nested_fn_decl(
         collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
     }
 
-    let outer_local_ids: std::collections::HashSet<LocalId> =
-        outer_locals.iter().map(|(_, id)| *id).collect();
+    // The function's own scope has been popped (`exit_scope` above), so the
+    // live `ctx.locals.id_set()` is exactly the enclosing scope's locals — the
+    // membership view capture detection needs. Previously this was rebuilt into
+    // a fresh `HashSet` from a per-closure cloned snapshot of `ctx.locals`,
+    // which made capture analysis O(scope) per nested function = O(n²) over a
+    // scope of n sibling functions (the perf bug behind this change).
+    let outer_local_ids = ctx.locals.id_set();
     let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
 
     // dayjs (issue: format() returned `292278994-08`): local
