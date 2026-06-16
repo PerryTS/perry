@@ -609,4 +609,10 @@ pub struct LoweringContext {
     /// object literals, counters). Built once per module in
     /// `lower_module_full`; consumed by `const_fold_fn`.
     pub(crate) fn_ctor_env: super::fn_ctor_env::FnCtorEnv,
+    /// Current recursion depth of `lower_expr` (#5259). Incremented on entry,
+    /// decremented on exit. Once it exceeds `MAX_EXPR_LOWER_DEPTH`, lowering
+    /// bails with a clean "nested too deeply" diagnostic instead of letting a
+    /// pathologically-nested expression chain (bundler/minifier output like
+    /// `1+1+…+1` or `o.a.a.…a`) overflow the native stack and SIGABRT.
+    pub(crate) expr_lower_depth: u32,
 }

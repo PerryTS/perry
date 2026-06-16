@@ -16,11 +16,29 @@
 
 use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
+
+/// Maximum `lower_expr` recursion depth before lowering bails with a
+/// diagnostic instead of overflowing the native stack (#5259).
+///
+/// Expression lowering is recursive: a left-nested `a+b+c+…` chain, an
+/// `o.a.a.…a` member chain, or an `a||a||…` logical chain each recurses once
+/// per operator/segment. Bundler/minifier output occasionally emits chains
+/// thousands of nodes deep; left unguarded these overflow the stack and
+/// SIGABRT (exit 134) with no diagnostic at all. The compiler runs its
+/// collect/lower walk on a 128 MB stack (`perry-main`, see `crates/perry/
+/// src/main.rs`), and the heaviest shape (member chains) consumes on the
+/// order of ~16 KB of stack per level, so this ceiling keeps worst-case
+/// lowering depth well under ~32 MB — far below the stack limit — while still
+/// sitting far above anything hand-written code or a reasonable build emits.
+/// The only inputs it rejects are the degenerate ones that would otherwise
+/// crash, and they now get a clean "nested too deeply" diagnostic instead.
+pub(crate) const MAX_EXPR_LOWER_DEPTH: u32 = 2000;
 
 fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
     match member.kind {
@@ -473,6 +491,28 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
 }
 
 pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
+    // #5259: guard the recursive descent. Without this, a pathologically
+    // nested expression (`1+1+…`, `o.a.a.…`, `a||a||…`) overflows the native
+    // stack and SIGABRTs with no diagnostic. The depth counter turns that into
+    // a clean "nested too deeply" error. It is decremented on every exit path,
+    // including the error returns inside `lower_expr_impl`, so a recoverable
+    // lowering error elsewhere doesn't leave the depth permanently inflated.
+    ctx.expr_lower_depth += 1;
+    if ctx.expr_lower_depth > MAX_EXPR_LOWER_DEPTH {
+        ctx.expr_lower_depth -= 1;
+        crate::lower_bail!(
+            expr.span(),
+            "expression nested too deeply (exceeded {} levels); split the \
+             chain across statements or intermediate variables",
+            MAX_EXPR_LOWER_DEPTH
+        );
+    }
+    let result = lower_expr_impl(ctx, expr);
+    ctx.expr_lower_depth -= 1;
+    result
+}
+
+fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
     match expr {
         ast::Expr::Lit(lit) => lower_lit(lit),
         ast::Expr::Ident(ident) => {

@@ -782,3 +782,50 @@ fn standalone_inheritance_preserves_chain() {
     assert!(derived.extends.is_some());
     assert!(derived.fields.iter().any(|f| f.name == "d"));
 }
+
+/// Regression for #5258: lowering a deeply-nested object literal must be
+/// LINEAR in nesting depth. `infer_type_from_expr` is re-run on the *current*
+/// value at every nesting level during lowering, and its `Object` arm used to
+/// recurse into the entire remaining subtree — making the whole pass O(n²) (an
+/// 8000-deep literal stalled `check-lower` for ~24s; a 13 MB minified bundle
+/// never finished). The recursion-depth cap in `infer_type_from_expr` bounds
+/// the per-level cost, restoring linear scaling.
+///
+/// The wall-clock bound is intentionally generous (the fixed path lowers this
+/// in well under a second; the pre-fix O(n²) path took double-digit seconds at
+/// this depth) so the test stays robust on loaded CI while still failing loudly
+/// if quadratic behavior is reintroduced.
+#[test]
+fn nested_object_literal_lowers_in_linear_time() {
+    const DEPTH: usize = 6000;
+    let src = format!("var x = {}0{};\n", "{a:".repeat(DEPTH), "}".repeat(DEPTH));
+
+    // Lower on a generously-sized stack — deeply-nested lowering is recursive.
+    let src_owned = src.clone();
+    let start = std::time::Instant::now();
+    let module = std::thread::Builder::new()
+        .stack_size(128 * 1024 * 1024)
+        .spawn(move || {
+            let mut cache = SourceCache::new();
+            let parsed = parse_typescript_with_cache(&src_owned, "test.ts", &mut cache)
+                .expect("parse should succeed");
+            lower_module(&parsed.module, "test", "test.ts").expect("lower should succeed")
+        })
+        .expect("spawn lower thread")
+        .join()
+        .expect("lower thread panicked");
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed.as_secs() < 5,
+        "lowering a {DEPTH}-deep object literal took {elapsed:?}; expected linear (<5s). \
+         A regression likely reintroduced O(n²) subtree work in expression-type inference.",
+    );
+
+    // The outermost binding's type tag is still inferred as an object (the
+    // cap only degrades types *past* the depth limit to Any).
+    assert!(
+        matches!(find_local_type(&module, "x"), Type::Object(_)),
+        "outermost nested-object binding should infer Type::Object",
+    );
+}
