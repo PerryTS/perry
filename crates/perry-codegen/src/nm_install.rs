@@ -9,7 +9,7 @@
 pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
     let name = name.strip_prefix("node:").unwrap_or(name);
     match name {
-        "assert" => Some("js_nm_install_assert"),
+        "assert" | "assert/strict" => Some("js_nm_install_assert"),
         "async_hooks" => Some("js_nm_install_async_hooks"),
         "bigint" => Some("js_nm_install_bigint"),
         "buffer" | "buffer.Buffer" => Some("js_nm_install_buffer"),
@@ -23,7 +23,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "domain" => Some("js_nm_install_domain"),
         "events" => Some("js_nm_install_events"),
         "fs" => Some("js_nm_install_fs"),
-        "http" => Some("js_nm_install_http"),
+        "http" | "http2" | "https" => Some("js_nm_install_http"),
         "inspector" | "inspector.Network" | "inspector/promises" => Some("js_nm_install_inspector"),
         "module" => Some("js_nm_install_module"),
         "net" => Some("js_nm_install_net"),
@@ -33,7 +33,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
             Some("js_nm_install_perf")
         }
         "process" => Some("js_nm_install_process"),
-        "punycode" | "punycode.ucs2" => Some("js_nm_install_punycode"),
+        "punycode" | "punycode.ucs2" | "punycode.default" => Some("js_nm_install_punycode"),
         "querystring" => Some("js_nm_install_querystring"),
         "readline" => Some("js_nm_install_readline"),
         "repl" => Some("js_nm_install_repl"),
@@ -45,8 +45,14 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "tty" => Some("js_nm_install_tty"),
         "url" => Some("js_nm_install_url"),
         "util" | "util.types" | "util/types" => Some("js_nm_install_util"),
-        "v8" | "v8.Deserializer" | "v8.GCProfiler" | "v8.Serializer" | "v8.promiseHooks"
-        | "v8.startupSnapshot" => Some("js_nm_install_v8"),
+        "v8"
+        | "v8.Deserializer"
+        | "v8.GCProfiler"
+        | "v8.Serializer"
+        | "v8.promiseHooks"
+        | "v8.startupSnapshot"
+        | "v8.DefaultSerializer"
+        | "v8.DefaultDeserializer" => Some("js_nm_install_v8"),
         "vm" => Some("js_nm_install_vm"),
         "wasi" => Some("js_nm_install_wasi"),
         "zlib" => Some("js_nm_install_zlib"),

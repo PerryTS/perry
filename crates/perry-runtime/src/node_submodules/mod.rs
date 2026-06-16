@@ -854,6 +854,8 @@ pub extern "C" fn js_node_submod_install_timers_promises() {
 }
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_fs_promises() {
+    // `fs/promises` exposes `constants` backed by the native `fs` module.
+    crate::object::js_nm_install_fs();
     SUBMOD_REGISTRY[SubmodBucket::FsPromises as usize].store(
         &SUBMOD_FS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
         Ordering::Relaxed,
@@ -903,6 +905,8 @@ pub extern "C" fn js_node_submod_install_hono_jsx_streaming() {
 }
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_sys() {
+    // `node:sys` is a deprecated alias that delegates to the native `util` module.
+    crate::object::js_nm_install_util();
     SUBMOD_REGISTRY[SubmodBucket::Sys as usize].store(
         &SUBMOD_SYS as *const SubmoduleSpec as *mut SubmoduleSpec,
         Ordering::Relaxed,

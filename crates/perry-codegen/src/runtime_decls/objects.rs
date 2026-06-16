@@ -211,6 +211,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_tty", VOID, &[]);
     module.declare_function("js_nm_install_url", VOID, &[]);
     module.declare_function("js_nm_install_util", VOID, &[]);
+    module.declare_function("js_nm_install_v8", VOID, &[]);
     module.declare_function("js_nm_install_vm", VOID, &[]);
     module.declare_function("js_nm_install_wasi", VOID, &[]);
     module.declare_function("js_nm_install_zlib", VOID, &[]);

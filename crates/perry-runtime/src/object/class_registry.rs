@@ -1631,7 +1631,6 @@ pub extern "C" fn js_new_target_value() -> f64 {
 /// f64 array of length `args_len`. Falls back to a class_id=0
 /// empty-object allocation when the function value isn't a closure
 /// (preserves the pre-fix baseline for misuse).
-#[no_mangle]
 // ── Per-module constructor buckets (devirt phase 2) ────────────────────────
 // `new <namespace>.<Ctor>()` for node-module-namespaced constructors that the
 // old monolithic `js_new_function_construct` dispatched with a direct call to
@@ -1789,6 +1788,7 @@ pub(crate) unsafe fn nm_ctor_stream(
     None
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn js_new_function_construct(
     func_value: f64,
     args_ptr: *const f64,

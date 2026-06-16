@@ -68,7 +68,7 @@ static NM_DISPATCH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
 /// no bucket fn, so it pins nothing.
 fn nm_module_index(name: &str) -> Option<NmBucket> {
     match name {
-        "assert" => Some(NmBucket::Assert),
+        "assert" | "assert/strict" => Some(NmBucket::Assert),
         "async_hooks" => Some(NmBucket::AsyncHooks),
         "bigint" => Some(NmBucket::Bigint),
         "buffer" | "buffer.Buffer" => Some(NmBucket::Buffer),
@@ -82,7 +82,7 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "domain" => Some(NmBucket::Domain),
         "events" => Some(NmBucket::Events),
         "fs" => Some(NmBucket::Fs),
-        "http" => Some(NmBucket::Http),
+        "http" | "http2" | "https" => Some(NmBucket::Http),
         "inspector" | "inspector.Network" | "inspector/promises" => Some(NmBucket::Inspector),
         "module" => Some(NmBucket::Module),
         "net" => Some(NmBucket::Net),
@@ -92,7 +92,7 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
             Some(NmBucket::Perf)
         }
         "process" => Some(NmBucket::Process),
-        "punycode" | "punycode.ucs2" => Some(NmBucket::Punycode),
+        "punycode" | "punycode.ucs2" | "punycode.default" => Some(NmBucket::Punycode),
         "querystring" => Some(NmBucket::Querystring),
         "readline" => Some(NmBucket::Readline),
         "repl" => Some(NmBucket::Repl),
@@ -104,8 +104,14 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "tty" => Some(NmBucket::Tty),
         "url" => Some(NmBucket::Url),
         "util" | "util.types" | "util/types" => Some(NmBucket::Util),
-        "v8" | "v8.Deserializer" | "v8.GCProfiler" | "v8.Serializer" | "v8.promiseHooks"
-        | "v8.startupSnapshot" => Some(NmBucket::V8),
+        "v8"
+        | "v8.Deserializer"
+        | "v8.GCProfiler"
+        | "v8.Serializer"
+        | "v8.promiseHooks"
+        | "v8.startupSnapshot"
+        | "v8.DefaultSerializer"
+        | "v8.DefaultDeserializer" => Some(NmBucket::V8),
         "vm" => Some(NmBucket::Vm),
         "wasi" => Some(NmBucket::Wasi),
         "zlib" => Some(NmBucket::Zlib),
