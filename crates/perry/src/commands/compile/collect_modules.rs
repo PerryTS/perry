@@ -833,7 +833,24 @@ fn collect_module_one(
             ctx.deferred_refusals.push(d);
         }
     }
-    let (mut hir_module, new_next_class_id) = lower_result?;
+    // #5249: a lowering error carries a file-relative span but no file
+    // identity, and only this module's `source` text is in scope here — so
+    // resolve the span into a `file:line:col` + snippet diagnostic now,
+    // matching what `perry check` prints, instead of letting the bare
+    // locationless message propagate to the top-level error sink.
+    let (mut hir_module, new_next_class_id) = match lower_result {
+        Ok(v) => v,
+        Err(e) => {
+            if let Some(rendered) = crate::commands::lower_diagnostic::render_compile_lower_error(
+                &e,
+                &source_file_path,
+                &source,
+            ) {
+                return Err(anyhow!("{}", rendered));
+            }
+            return Err(e);
+        }
+    };
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #2309 Stage 2: fold build-time `process.env` branches BEFORE dynamic
