@@ -443,19 +443,32 @@ pub(super) fn try_native_module_methods(
                             return Ok(Ok(Expr::ProcessHrtime(prior)));
                         }
                         _ => {
-                            let allow_unimplemented =
-                                std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
-                            if !allow_unimplemented {
-                                let hint = unimpl_hints::module_member_hint("process", method_name)
-                                    .map(|h| format!(" {h}"))
-                                    .unwrap_or_default();
-                                let msg = format!(
-                                    "`process.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
-                                     or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
-                                    method_name, hint,
-                                );
-                                if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
+                            let hint = unimpl_hints::module_member_hint("process", method_name)
+                                .map(|h| format!(" {h}"))
+                                .unwrap_or_default();
+                            let msg = format!(
+                                "`process.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
+                                 or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
+                                method_name, hint,
+                            );
+                            // #5245: default → throw-on-reach + notice; strict
+                            // (`perry.strict` / `--strict-unimplemented`) → hard
+                            // #463 refusal. Tree-shake deferral handled inside.
+                            let api = format!("process.{method_name}");
+                            let location = crate::eval_classifier::location_string(
+                                &ctx.source_file_path,
+                                member.span.lo.0,
+                            );
+                            match crate::check_unimplemented_api(&msg, &api, &location, member.span.lo.0) {
+                                crate::UnimplementedDecision::Refuse => {
                                     crate::lower_bail!(member.span, "{}", msg);
+                                }
+                                crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                    return Ok(Ok(super::super::const_fold_fn::synth_deferred_throw_value(
+                                        ctx,
+                                        &runtime_msg,
+                                        member.span,
+                                    )?));
                                 }
                             }
                         }
@@ -1508,12 +1521,9 @@ pub(super) fn try_native_module_methods(
                         // wording, different escape hatch, harder for users to
                         // recognize as the same class of mistake. Mirrors the
                         // 3-deep gate above for `mod.X.Y()`.
-                        let allow_unimplemented =
-                            std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
                         let manifest_entry =
                             perry_api_manifest::module_has_symbol(module_name, &method_name);
-                        if !allow_unimplemented
-                            && perry_api_manifest::module_has_any_entries(module_name)
+                        if perry_api_manifest::module_has_any_entries(module_name)
                             && manifest_entry.is_none()
                         {
                             // #925: this is the gate that fires
@@ -1529,10 +1539,24 @@ pub(super) fn try_native_module_methods(
                                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
                                 module_name, method_name, hint,
                             );
-                            // #2309: defer under tree-shaking; re-raised only
-                            // if the module survives pruning.
-                            if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
-                                crate::lower_bail!(member.span, "{}", msg);
+                            // #5245: default → throw-on-reach + notice; strict →
+                            // hard #463 refusal. #2309 tree-shake handled inside.
+                            let api = format!("{module_name}.{method_name}");
+                            let location = crate::eval_classifier::location_string(
+                                &ctx.source_file_path,
+                                member.span.lo.0,
+                            );
+                            match crate::check_unimplemented_api(&msg, &api, &location, member.span.lo.0) {
+                                crate::UnimplementedDecision::Refuse => {
+                                    crate::lower_bail!(member.span, "{}", msg);
+                                }
+                                crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                    return Ok(Ok(super::super::const_fold_fn::synth_deferred_throw_value(
+                                        ctx,
+                                        &runtime_msg,
+                                        member.span,
+                                    )?));
+                                }
                             }
                         }
                         if let Some(entry) = manifest_entry {

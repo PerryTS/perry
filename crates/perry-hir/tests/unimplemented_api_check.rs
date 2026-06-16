@@ -9,14 +9,34 @@ use perry_hir::lower_module;
 use perry_parser::parse_typescript_with_cache;
 
 fn lower_result(src: &str) -> Result<perry_hir::Module, String> {
+    lower_result_mode(src, false)
+}
+
+/// As of #5245 the default (non-strict) mode *defers* a recognized-but-
+/// unimplemented API to a throw-on-reach runtime error rather than failing the
+/// build — so the historical "must error" assertions run in strict mode, which
+/// restores the hard `#463` refusal.
+fn lower_result_strict(src: &str) -> Result<perry_hir::Module, String> {
+    lower_result_mode(src, true)
+}
+
+fn lower_result_mode(src: &str, strict_unimplemented: bool) -> Result<perry_hir::Module, String> {
     let src = src.to_string();
     std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
         .spawn(move || {
+            // Thread-local: set on this lower thread so it doesn't race the
+            // other tests' (default-mode) lowers in the same binary.
+            perry_hir::set_unimplemented_strict_mode(strict_unimplemented);
             let mut cache = SourceCache::new();
             let parsed = parse_typescript_with_cache(&src, "test.ts", &mut cache)
                 .expect("parse should succeed");
-            lower_module(&parsed.module, "test", "test.ts").map_err(|e| e.to_string())
+            let result =
+                lower_module(&parsed.module, "test", "test.ts").map_err(|e| e.to_string());
+            // Drain any notice sites this lower recorded so they don't leak
+            // into the process-global sink another test might inspect.
+            let _ = perry_hir::take_deferred_eval_sites();
+            result
         })
         .expect("spawn lower thread")
         .join()
@@ -181,7 +201,7 @@ fn crypto_unknown_method_is_rejected() {
         read.is_ok(),
         "crypto.foobar value read should resolve to undefined (#3896), got {read:?}"
     );
-    let call = lower_result(
+    let call = lower_result_strict(
         r#"
         import * as crypto from "crypto";
         crypto.foobar();
@@ -189,7 +209,50 @@ fn crypto_unknown_method_is_rejected() {
     );
     assert!(
         call.is_err(),
-        "crypto.foobar() call should still error as unimplemented"
+        "crypto.foobar() call should still error as unimplemented (strict)"
+    );
+}
+
+/// #5245: the default (non-strict) mode defers a recognized-but-unimplemented
+/// API call to a throw-on-reach runtime error instead of failing the build,
+/// rather than the historical hard `#463` refusal. `process.binding('buffer')`
+/// (the `safer-buffer` probe) is the motivating case. (The notice-recording
+/// side is covered by the deterministic `check_unimplemented_api` unit test in
+/// `crates/perry-hir/src/eval_classifier.rs`, which avoids the process-global
+/// sink races inherent to a parallel integration-test binary.)
+#[test]
+fn unimplemented_api_defers_by_default() {
+    let result = lower_result(
+        r#"
+        let max: any;
+        try { max = (process as any).binding("buffer").kStringMaxLength; } catch {}
+        console.log("ok", typeof max);
+    "#,
+    );
+    assert!(
+        result.is_ok(),
+        "process.binding(...) must compile by default (#5245): {result:?}"
+    );
+}
+
+/// #5245: strict-unimplemented mode restores the hard `#463` refusal for the
+/// same `process.binding` probe.
+#[test]
+fn unimplemented_api_refuses_in_strict_mode() {
+    // PERRY_ALLOW_UNIMPLEMENTED would force defer; only assert when unset.
+    if perry_hir::eval_classifier::unimplemented_override_enabled() {
+        return;
+    }
+    let result = lower_result_strict(
+        r#"
+        let max: any;
+        try { max = (process as any).binding("buffer"); } catch {}
+    "#,
+    );
+    let err = result.expect_err("strict mode must refuse process.binding (#463)");
+    assert!(
+        err.contains("process.binding") && err.contains("#463"),
+        "expected the #463 refusal naming process.binding, got: {err}"
     );
 }
 
@@ -246,7 +309,7 @@ fn os_eol_and_path_sep_compile() {
 /// entries fails CI before the PR ships.
 #[test]
 fn supported_module_with_unknown_member_is_rejected() {
-    let result = lower_result(
+    let result = lower_result_strict(
         r#"
         import axios from "axios";
         const x = axios.foo;
@@ -304,7 +367,8 @@ fn every_supported_module_rejects_bogus_member() {
         "#
         );
         let is_core = perry_api_manifest::is_node_core_module(module);
-        match lower_result(&src) {
+        // #5245: the gate only refuses at compile time in strict mode.
+        match lower_result_strict(&src) {
             Ok(_) => {
                 // #3896: a bogus member *value read* on a Node-core module
                 // namespace is an ordinary property miss → undefined (matching
@@ -372,7 +436,8 @@ fn every_supported_module_rejects_bogus_call() {
             m.__perry_known_bogus_member_525__();
         "#
         );
-        match lower_result(&src) {
+        // #5245: the gate only refuses at compile time in strict mode.
+        match lower_result_strict(&src) {
             Ok(_) => {
                 failures.push(format!(
                     "{module}: bogus call did not error (strict mode not engaged)"

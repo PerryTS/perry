@@ -89,10 +89,7 @@ pub(super) fn try_module_class_static(
                         // `NativeMethodCall` without recursing through
                         // lower_member. Without this, `crypto.subtle.encrypt(...)`
                         // built cleanly and silently returned undefined.
-                        let allow_unimplemented =
-                            std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
                         if !is_sub_namespace
-                            && !allow_unimplemented
                             && perry_api_manifest::module_has_any_entries(module_name)
                             && perry_api_manifest::module_has_symbol(module_name, &class_name)
                                 .is_none()
@@ -110,10 +107,24 @@ pub(super) fn try_module_class_static(
                                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
                                 module_name, class_name, hint,
                             );
-                            // #2309: defer under tree-shaking; re-raised only
-                            // if the module survives pruning.
-                            if !crate::try_defer_refusal(msg.clone(), outer_member.span.lo.0) {
-                                crate::lower_bail!(outer_member.span, "{}", msg);
+                            // #5245: default → throw-on-reach + notice; strict →
+                            // hard #463 refusal. #2309 tree-shake handled inside.
+                            let api = format!("{module_name}.{class_name}");
+                            let location = crate::eval_classifier::location_string(
+                                &ctx.source_file_path,
+                                outer_member.span.lo.0,
+                            );
+                            match crate::check_unimplemented_api(&msg, &api, &location, outer_member.span.lo.0) {
+                                crate::UnimplementedDecision::Refuse => {
+                                    crate::lower_bail!(outer_member.span, "{}", msg);
+                                }
+                                crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                    return Ok(Ok(super::super::const_fold_fn::synth_deferred_throw_value(
+                                        ctx,
+                                        &runtime_msg,
+                                        outer_member.span,
+                                    )?));
+                                }
                             }
                         }
                         if !is_sub_namespace {
