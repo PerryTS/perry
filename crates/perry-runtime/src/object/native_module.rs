@@ -3145,7 +3145,6 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             // tag+name holders (all real dispatch keys off the module name, not
             // object state), so caching only affects object identity.
             | "fs"
-            | "fs.default"
             | "dns.default"
             | "dns/promises.default"
             | "child_process.default"

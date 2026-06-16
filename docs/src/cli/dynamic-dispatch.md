@@ -19,8 +19,9 @@ already statically linked can only *select among the methods that were linked*
 so it is safe to allow, and legitimate packages depend on it (graceful-fs
 stores its retry queue on `fs[Symbol.for('graceful-fs.queue')]`; fs-extra wraps
 the known `fs[method]` functions). Dynamic reads resolve the linked member by
-name; symbol/string writes the program performs are stored on the namespace
-(graceful-fs's `fs[symbol] = queue` then reads it back).
+name; writes the program performs persist and read back — **string** keys via a
+module-keyed override side-table, **symbol** keys on the cached namespace object
+(so graceful-fs's `fs[Symbol.for('graceful-fs.queue')] = queue` round-trips).
 
 **The refusal is re-armed by [`--lockdown`](./lockdown.md)** — the
 supply-chain gate — and by an explicit opt-out (below). Under those, the
