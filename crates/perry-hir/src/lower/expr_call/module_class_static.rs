@@ -114,16 +114,23 @@ pub(super) fn try_module_class_static(
                                 &ctx.source_file_path,
                                 outer_member.span.lo.0,
                             );
-                            match crate::check_unimplemented_api(&msg, &api, &location, outer_member.span.lo.0) {
+                            match crate::check_unimplemented_api(
+                                &msg,
+                                &api,
+                                &location,
+                                outer_member.span.lo.0,
+                            ) {
                                 crate::UnimplementedDecision::Refuse => {
                                     crate::lower_bail!(outer_member.span, "{}", msg);
                                 }
                                 crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
-                                    return Ok(Ok(super::super::const_fold_fn::synth_deferred_throw_value(
-                                        ctx,
-                                        &runtime_msg,
-                                        outer_member.span,
-                                    )?));
+                                    return Ok(Ok(
+                                        super::super::const_fold_fn::synth_deferred_throw_value(
+                                            ctx,
+                                            &runtime_msg,
+                                            outer_member.span,
+                                        )?,
+                                    ));
                                 }
                             }
                         }

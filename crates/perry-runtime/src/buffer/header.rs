@@ -559,8 +559,7 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
     // runtime's `*(ptr - GC_HEADER_SIZE)` obj_type probes read a mapped `0`
     // (matching no `GC_TYPE_*`) instead of faulting at a region boundary.
     let inner = buffer_layout(capacity as usize);
-    let layout =
-        Layout::from_size_align(crate::gc::GC_HEADER_SIZE + inner.size(), 8).unwrap();
+    let layout = Layout::from_size_align(crate::gc::GC_HEADER_SIZE + inner.size(), 8).unwrap();
     unsafe {
         let raw = alloc(layout);
         if raw.is_null() {

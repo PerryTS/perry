@@ -37,9 +37,9 @@ mod dynamic_glob;
 mod feature_detect;
 mod native_addon;
 mod parse_error;
-mod wasm_asset;
 #[cfg(test)]
 mod tests;
+mod wasm_asset;
 
 use create_require_transform::transform_create_require_literal_requires;
 use dynamic_glob::expand_dynamic_import_glob;
@@ -990,8 +990,8 @@ fn collect_module_one(
                             reason
                         ));
                     } else {
-                        let line = perry_hir::current_module_line_at(*byte_offset)
-                            .filter(|&l| l != 0);
+                        let line =
+                            perry_hir::current_module_line_at(*byte_offset).filter(|&l| l != 0);
                         let loc = match line {
                             Some(l) => format!("{}:{}", source_file_path, l),
                             None => source_file_path.clone(),
