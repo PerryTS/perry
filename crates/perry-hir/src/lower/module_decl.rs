@@ -1211,6 +1211,64 @@ pub(crate) fn lower_module_decl(
                                     module.exported_objects.push(name.clone());
                                 }
                             }
+                        } else {
+                            // `export var X;` / `export let X;` with NO
+                            // initializer. The canonical TypeScript-emitted
+                            // enum/namespace IIFE pattern relies on this:
+                            //
+                            //   export var Color;
+                            //   (function (Color) { Color["RED"]="red"; … })
+                            //       (Color || (Color = {}));
+                            //
+                            // declares the binding uninitialized, then a
+                            // following module-scope statement assigns it
+                            // (`Color = {}` plus member writes). Pre-fix this
+                            // arm did nothing: no `Stmt::Let` (so no backing
+                            // module global / value-getter), no `Export` entry,
+                            // and no `exported_objects` entry. The binding then
+                            // wasn't in any consumer's `imported_vars`, so a
+                            // consumer reading `Color` as a value fell through
+                            // to the closure-wrapper path and referenced an
+                            // undefined `__perry_wrap_perry_fn_<src>__Color`
+                            // symbol → "Undefined symbols … Linking failed"
+                            // (#5239). This pattern appears in nearly every
+                            // TypeScript-compiled JS package, so it broadly
+                            // gated native compilation of real npm trees.
+                            //
+                            // Fix: treat it like a hoisted `var` declared
+                            // `undefined` — emit a `Stmt::Let { init: None }`
+                            // backed by the (already pre-registered) local id,
+                            // and register the export. The later module-scope
+                            // assignments (`Color = {}`, `Color["RED"]="red"`)
+                            // already lower to `LocalSet`/`PutValueSet` on the
+                            // same id, so they flow into the exported binding
+                            // and importers observe the populated object.
+                            let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                ctx.pre_registered_module_var_decls.remove(&name);
+                                let id = ctx.lookup_local(&name).unwrap();
+                                if let Some((_, _, existing_ty)) =
+                                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                                {
+                                    *existing_ty = ty.clone();
+                                }
+                                id
+                            } else if let Some(id) = ctx.lookup_local(&name) {
+                                id
+                            } else {
+                                ctx.define_local(name.clone(), ty.clone())
+                            };
+                            module.init.push(Stmt::Let {
+                                id,
+                                name: name.clone(),
+                                ty,
+                                mutable: true,
+                                init: None,
+                            });
+                            module.exports.push(Export::Named {
+                                local: name.clone(),
+                                exported: name.clone(),
+                            });
+                            module.exported_objects.push(name.clone());
                         }
                     }
                 }
