@@ -26,6 +26,22 @@ fn path_submodule_name(module_name: &str) -> Option<&'static str> {
     }
 }
 
+fn is_cluster_default_event_emitter_method(method_name: &str) -> bool {
+    matches!(
+        method_name,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "emit"
+            | "eventNames"
+            | "listenerCount"
+            | "removeListener"
+            | "off"
+            | "removeAllListeners"
+    )
+}
+
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
@@ -1479,6 +1495,18 @@ pub(super) fn try_native_module_methods(
                         }
                         let normalized_module =
                             module_name.strip_prefix("node:").unwrap_or(module_name);
+                        if normalized_module == "cluster"
+                            && matches!(imported_method, Some("default"))
+                            && is_cluster_default_event_emitter_method(&method_name)
+                        {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: module_name.to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
                         if method_name == "call" {
                             if normalized_module == "stream"
                                 && matches!(imported_method, None | Some("Stream"))
