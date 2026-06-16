@@ -1865,6 +1865,49 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     return Ok(result);
                 }
             }
+            // Next.js / webpack require pattern: `var i = n[e] = {exports:{}}`.
+            // A chained member-assignment whose RHS is an object literal
+            // miscompiles in the full-bundle context: the constructed object's
+            // own field reads back as 0 when the construction flows directly
+            // into both the member store and the binding (the nested webpack
+            // bundle's `exports` then reads 0 → `exports.Fragment = …` throws).
+            // A directly-bound object literal (`var x = {exports:{}}`) is fine,
+            // so hoist the construction to its own `Let` and feed the member-set
+            // and the binding from that temp — mirroring the working form.
+            let init = match init {
+                Some(Expr::PutValueSet {
+                    target,
+                    key,
+                    value,
+                    receiver,
+                    strict,
+                }) if matches!(value.as_ref(), Expr::New { .. } | Expr::Object(_)) => {
+                    let tmp_id = ctx.define_local("__nx_member_init".to_string(), Type::Any);
+                    result.push(Stmt::Let {
+                        id: tmp_id,
+                        name: "__nx_member_init".to_string(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(*value),
+                    });
+                    result.push(Stmt::Expr(Expr::PutValueSet {
+                        target,
+                        key,
+                        value: Box::new(Expr::LocalGet(tmp_id)),
+                        receiver,
+                        strict,
+                    }));
+                    result.push(Stmt::Let {
+                        id,
+                        name,
+                        ty,
+                        mutable,
+                        init: Some(Expr::LocalGet(tmp_id)),
+                    });
+                    return Ok(result);
+                }
+                other => other,
+            };
             result.push(Stmt::Let {
                 id,
                 name,
