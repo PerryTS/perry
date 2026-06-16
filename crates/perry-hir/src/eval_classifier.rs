@@ -307,6 +307,16 @@ pub fn eval_override_enabled() -> bool {
     env_flag("PERRY_ALLOW_EVAL")
 }
 
+/// Whether `PERRY_ALLOW_UNIMPLEMENTED` is set — forces non-strict (defer) mode
+/// for recognized-but-unimplemented node/stdlib APIs (#5245), overriding any
+/// strict flag/config for a one-off build. This is the back-compat alias of the
+/// pre-#5245 `#463` escape hatch: it used to skip the gate entirely (silent
+/// fall-through); it now force-defers the site to a throw-on-reach runtime error
+/// AND records it in the end-of-compile notice, like the default path.
+pub fn unimplemented_override_enabled() -> bool {
+    std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some()
+}
+
 thread_local! {
     /// `true` when strict-eval mode is active for the current compile: a
     /// runtime-unknown (`bucket-3`) site is a hard compile-time refusal.
@@ -314,6 +324,14 @@ thread_local! {
     /// Set once at compile entry (and re-applied per rayon worker) via
     /// [`set_eval_strict_mode`].
     static EVAL_STRICT_MODE: RefCell<bool> = const { RefCell::new(false) };
+
+    /// `true` when strict-unimplemented mode is active for the current compile
+    /// (#5245): a reference to a recognized-but-unimplemented node/stdlib API is
+    /// a hard compile-time refusal (the historical `#463` behavior). `false`
+    /// (the default) defers it to a throw-on-reach runtime error and records the
+    /// site for the end-of-compile notice. Set once at compile entry (and
+    /// re-applied per rayon worker) via [`set_unimplemented_strict_mode`].
+    static UNIMPL_STRICT_MODE: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Sites that were deferred to a runtime error during this compile (#5206).
@@ -350,6 +368,95 @@ pub fn set_eval_strict_mode(strict: bool) {
 /// Whether strict-eval mode is active for the current compile.
 pub fn eval_strict_mode() -> bool {
     EVAL_STRICT_MODE.with(|s| *s.borrow())
+}
+
+/// Set strict-unimplemented mode for the current compile thread (#5245).
+/// `true` restores the historical hard `#463` compile-time refusal of a
+/// recognized-but-unimplemented node/stdlib API; `false` (the default) defers
+/// it to a throw-on-reach runtime error. Called once at compile entry.
+/// `PERRY_ALLOW_UNIMPLEMENTED` always wins (forces `false`).
+pub fn set_unimplemented_strict_mode(strict: bool) {
+    UNIMPL_STRICT_MODE.with(|s| *s.borrow_mut() = strict && !unimplemented_override_enabled());
+}
+
+/// Whether strict-unimplemented mode is active for the current compile.
+pub fn unimplemented_strict_mode() -> bool {
+    UNIMPL_STRICT_MODE.with(|s| *s.borrow())
+}
+
+/// `kind` tag used for unimplemented-API sites in the shared end-of-compile
+/// notice (#5245). Kept as a constant so the notice and any tests agree.
+pub const UNIMPLEMENTED_API_KIND: &str = "unimplemented API";
+
+/// What a lowering site should do with a recognized-but-unimplemented
+/// node/stdlib API reference (#5245). Mirrors [`EvalDecision`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnimplementedDecision {
+    /// Strict-unimplemented mode: fail the build with the `#463` refusal.
+    Refuse,
+    /// Default (defer) mode, the `PERRY_ALLOW_UNIMPLEMENTED` override, or a
+    /// tree-shake deferral: compile the reference to a value that throws this
+    /// descriptive message only if it is actually reached.
+    DeferToRuntimeError(String),
+}
+
+/// Resolve a `file:line` location from a source path + byte offset, the same
+/// way [`EvalClassification::location`] does (line omitted when unknown). Used
+/// by the unimplemented-API gate sites (#5245), which don't build a full
+/// [`EvalClassification`].
+pub fn location_string(source_file_path: &str, byte_offset: u32) -> String {
+    match crate::ir::current_module_line_at(byte_offset) {
+        Some(line) if line != 0 => format!("{source_file_path}:{line}"),
+        _ => source_file_path.to_string(),
+    }
+}
+
+/// Build the descriptive message a *deferred* unimplemented-API site throws at
+/// runtime when it is actually reached (#5245). `api` is the dotted display
+/// label (e.g. `process.binding`); `location` is `file:line`.
+pub fn unimplemented_runtime_error_message(api: &str, location: &str) -> String {
+    format!("{api} is not implemented in Perry (ahead-of-time) ({location})")
+}
+
+/// The single decision point every unimplemented-API gate (#463 sites in
+/// `expr_member` / `expr_call`) funnels through (#5245).
+///
+/// - **strict-unimplemented** mode → [`UnimplementedDecision::Refuse`]: the
+///   caller raises the historical `#463` compile-time error.
+/// - **default** (defer) mode, the `PERRY_ALLOW_UNIMPLEMENTED` override, or an
+///   armed tree-shake deferral sink → records the site for the end-of-compile
+///   notice (except the tree-shake path, which records its own deferral) and
+///   returns [`UnimplementedDecision::DeferToRuntimeError`] with the message the
+///   caller should compile to a throw-on-reach value.
+///
+/// `refusal_message` is the full `#463` message (used for the strict error and
+/// the tree-shake deferral sink). `api` is the dotted API label and `location`
+/// is `file:line` — both feed the deferred runtime message and the notice.
+/// `byte_offset` is the site's `span.lo.0` (for the tree-shake sink).
+pub fn check_unimplemented_api(
+    refusal_message: &str,
+    api: &str,
+    location: &str,
+    byte_offset: u32,
+) -> UnimplementedDecision {
+    let runtime_msg = unimplemented_runtime_error_message(api, location);
+
+    // Tree-shake deferral (mirrors `check_site`): when the sink is armed for a
+    // node_modules module lowered under tree-shaking, record the refusal and
+    // compile to the throw-on-reach value — the module may be pruned. The
+    // driver re-raises a surviving deferral (strict) or surfaces it (defer).
+    if crate::deferral::try_defer_refusal(refusal_message.to_string(), byte_offset) {
+        return UnimplementedDecision::DeferToRuntimeError(runtime_msg);
+    }
+
+    if unimplemented_strict_mode() {
+        return UnimplementedDecision::Refuse;
+    }
+
+    // Default (defer) mode or the `PERRY_ALLOW_UNIMPLEMENTED` override: record
+    // the site for the visible end-of-compile notice and defer.
+    record_deferred_aot_site(UNIMPLEMENTED_API_KIND, location);
+    UnimplementedDecision::DeferToRuntimeError(runtime_msg)
 }
 
 /// Record a deferred ahead-of-time-unsupported site for the end-of-compile
@@ -690,6 +797,67 @@ mod tests {
         assert!(
             !eval_strict_mode(),
             "PERRY_ALLOW_EVAL must force non-strict"
+        );
+    }
+
+    // ---- #5245: unimplemented-API gate decision ----
+
+    /// Default (non-strict) mode: an unimplemented-API site defers to a
+    /// throw-on-reach value AND is recorded for the end-of-compile notice with
+    /// the `"unimplemented API"` kind.
+    #[test]
+    fn unimplemented_defers_by_default_and_records_site() {
+        // PERRY_ALLOW_UNIMPLEMENTED forces defer regardless — fine for this
+        // (defer) assertion either way, so no skip needed.
+        set_unimplemented_strict_mode(false);
+        // Unique location so this test's recorded site is identifiable even if
+        // sibling tests push to the process-global sink concurrently.
+        let loc = "/app/unimpl_defers_fixture.ts:42";
+        let decision =
+            check_unimplemented_api("`process.binding` is not implemented (#463)", "process.binding", loc, 0);
+        match decision {
+            UnimplementedDecision::DeferToRuntimeError(msg) => {
+                assert!(msg.contains("process.binding"), "msg: {msg}");
+                assert!(msg.contains("ahead-of-time"), "msg: {msg}");
+                assert!(msg.contains(loc), "msg: {msg}");
+            }
+            other => panic!("expected defer, got {other:?}"),
+        }
+        let sites = take_deferred_eval_sites();
+        let mine: Vec<_> = sites.iter().filter(|s| s.location == loc).collect();
+        assert_eq!(mine.len(), 1, "exactly one recorded site for {loc}");
+        assert_eq!(mine[0].kind, UNIMPLEMENTED_API_KIND);
+    }
+
+    /// Strict-unimplemented mode: an unimplemented-API site is refused (the
+    /// caller raises the hard `#463` error) and records no notice site.
+    #[test]
+    fn unimplemented_refuses_in_strict_mode() {
+        // PERRY_ALLOW_UNIMPLEMENTED would force defer; only assert when unset.
+        if unimplemented_override_enabled() {
+            return;
+        }
+        set_unimplemented_strict_mode(true);
+        let loc = "/app/unimpl_strict_fixture.ts:7";
+        let decision = check_unimplemented_api("refusal", "fs.bogus", loc, 0);
+        assert_eq!(decision, UnimplementedDecision::Refuse);
+        assert!(
+            !take_deferred_eval_sites().iter().any(|s| s.location == loc),
+            "strict mode must not record a notice site"
+        );
+        set_unimplemented_strict_mode(false); // restore for sibling tests
+    }
+
+    /// `PERRY_ALLOW_UNIMPLEMENTED` forces non-strict even when strict is set.
+    #[test]
+    fn allow_unimplemented_env_forces_non_strict() {
+        if !unimplemented_override_enabled() {
+            return;
+        }
+        set_unimplemented_strict_mode(true);
+        assert!(
+            !unimplemented_strict_mode(),
+            "PERRY_ALLOW_UNIMPLEMENTED must force non-strict"
         );
     }
 }

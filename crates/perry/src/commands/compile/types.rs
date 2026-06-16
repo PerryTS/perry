@@ -303,6 +303,18 @@ pub struct CompileArgs {
     #[arg(long)]
     pub strict_dynamic_import: bool,
 
+    /// #5245 — strict-unimplemented mode. Fail the build at compile time if any
+    /// recognized-but-unimplemented node/stdlib API is referenced (the
+    /// historical `#463` behavior). By default such a reference is instead
+    /// compiled to a value that throws a descriptive `Error` only if reached
+    /// (so a `try/catch`-guarded probe — e.g. `safer-buffer`'s
+    /// `process.binding('buffer')` — no longer blocks the build), and is listed
+    /// in the same end-of-build notice as deferred eval / dynamic-import sites.
+    /// Also settable via the broad `"perry": { "strict": true }` in
+    /// package.json or perry.toml. `PERRY_ALLOW_UNIMPLEMENTED=1` forces this off.
+    #[arg(long)]
+    pub strict_unimplemented: bool,
+
     /// Minimum Windows version the compiled executable must run on.
     /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
     /// non-Windows target.
@@ -693,6 +705,16 @@ pub struct CompilationContext {
     /// `--strict-dynamic-import` CLI flag. `PERRY_ALLOW_EVAL=1` forces it off
     /// (shared AOT escape hatch).
     pub strict_dynamic_import: bool,
+    /// #5245: strict mode for recognized-but-unimplemented node/stdlib APIs.
+    /// When true, a reference to such an API is a hard compile-time `#463`
+    /// refusal (the historical behavior). When false (the default), it is
+    /// compiled to a value that throws a descriptive `Error` only if reached
+    /// (so a `try/catch`-guarded probe doesn't block the build) and is recorded
+    /// in the shared end-of-compile notice. Defaults to `strict_eval` so the
+    /// broad `perry.strict = true` covers it; the `--strict-unimplemented` CLI
+    /// flag forces it on. `PERRY_ALLOW_UNIMPLEMENTED=1` forces it off (back-compat
+    /// escape hatch).
+    pub strict_unimplemented: bool,
     /// #503: package names whose modules may legitimately use dynamic
     /// stdlib dispatch (`perry.allowDynamicStdlibDispatch: [...]`).
     /// Consulted per-module during HIR lowering; ignored when
@@ -895,6 +917,7 @@ impl CompilationContext {
             refuse_dynamic_stdlib_dispatch: true,
             strict_eval: false,
             strict_dynamic_import: false,
+            strict_unimplemented: false,
             allow_dynamic_stdlib_packages: HashSet::new(),
             js_runtime_importers: Vec::new(),
             permissions: std::collections::BTreeMap::new(),

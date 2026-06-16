@@ -398,6 +398,78 @@ pub(crate) fn lower_expr_assignment(
     }
 }
 
+/// Lower a bare identifier that is bound to a native module (via a named or
+/// namespace import — `import { relative } from 'path'`, `import * as os from
+/// 'os'`) to the value-expression it denotes.
+///
+/// Used both from the identifier expression path and from object-literal
+/// shorthand resolution (`{ relative }` — #5242), so a native-module-bound
+/// name produces the same callable/property value whether it appears as a
+/// standalone reference or as a shorthand property. The caller must ensure
+/// `ctx.lookup_native_module(name)` is `Some`.
+pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> Expr {
+    let (module_name, method_name) = match ctx.lookup_native_module(name) {
+        Some(v) => v,
+        None => return Expr::Undefined,
+    };
+    if module_name == "os" || module_name == "node:os" {
+        if let Some(method) = method_name {
+            match method {
+                "EOL" => return Expr::OsEOL,
+                "devNull" => return Expr::OsDevNull,
+                _ => {}
+            }
+        }
+    }
+    if module_name == "buffer" || module_name == "node:buffer" {
+        if let Some(method) = method_name {
+            if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
+                return Expr::PropertyGet {
+                    object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
+                    property: method.to_string(),
+                };
+            }
+        }
+    }
+    // Special handling for worker_threads named imports
+    if module_name == "worker_threads" {
+        if let Some(method) = method_name {
+            if method == "workerData" {
+                return Expr::PropertyGet {
+                    object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
+                    property: "workerData".to_string(),
+                };
+            }
+        }
+    }
+    if let Some(method) = method_name {
+        // #3946: a `node:process` *property* imported by name
+        // (`import { pid, arch } from "node:process"`) must read
+        // the live process value, not a generic native-module
+        // PropertyGet (which resolved to `undefined`). Methods
+        // fall through to the callable native-module ref below.
+        if module_name == "process" {
+            if let Some(e) = expr_member::lower_process_named_property(method) {
+                return e;
+            }
+        }
+        return Expr::PropertyGet {
+            object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+            property: method.to_string(),
+        };
+    }
+    if ctx.lookup_builtin_module_alias(name).is_none()
+        && is_cjs_style_native_default_import(module_name)
+    {
+        return Expr::PropertyGet {
+            object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+            property: "default".to_string(),
+        };
+    }
+    // Native module reference (e.g., mysql from 'mysql2/promise')
+    Expr::NativeModuleRef(module_name.to_string())
+}
+
 pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
     match expr {
         ast::Expr::Lit(lit) => lower_lit(lit),
@@ -428,65 +500,8 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 Ok(Expr::LocalGet(id))
             } else if let Some(id) = ctx.lookup_func(&name) {
                 Ok(Expr::FuncRef(id))
-            } else if let Some((module_name, method_name)) = ctx.lookup_native_module(&name) {
-                if module_name == "os" || module_name == "node:os" {
-                    if let Some(method) = method_name {
-                        match method {
-                            "EOL" => return Ok(Expr::OsEOL),
-                            "devNull" => return Ok(Expr::OsDevNull),
-                            _ => {}
-                        }
-                    }
-                }
-                if module_name == "buffer" || module_name == "node:buffer" {
-                    if let Some(method) = method_name {
-                        if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
-                            return Ok(Expr::PropertyGet {
-                                object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
-                                property: method.to_string(),
-                            });
-                        }
-                    }
-                }
-                // Special handling for worker_threads named imports
-                if module_name == "worker_threads" {
-                    if let Some(method) = method_name {
-                        if method == "workerData" {
-                            return Ok(Expr::PropertyGet {
-                                object: Box::new(Expr::NativeModuleRef(
-                                    "worker_threads".to_string(),
-                                )),
-                                property: "workerData".to_string(),
-                            });
-                        }
-                    }
-                }
-                if let Some(method) = method_name {
-                    // #3946: a `node:process` *property* imported by name
-                    // (`import { pid, arch } from "node:process"`) must read
-                    // the live process value, not a generic native-module
-                    // PropertyGet (which resolved to `undefined`). Methods
-                    // fall through to the callable native-module ref below.
-                    if module_name == "process" {
-                        if let Some(e) = expr_member::lower_process_named_property(method) {
-                            return Ok(e);
-                        }
-                    }
-                    return Ok(Expr::PropertyGet {
-                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
-                        property: method.to_string(),
-                    });
-                }
-                if ctx.lookup_builtin_module_alias(&name).is_none()
-                    && is_cjs_style_native_default_import(module_name)
-                {
-                    return Ok(Expr::PropertyGet {
-                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
-                        property: "default".to_string(),
-                    });
-                }
-                // Native module reference (e.g., mysql from 'mysql2/promise')
-                Ok(Expr::NativeModuleRef(module_name.to_string()))
+            } else if ctx.lookup_native_module(&name).is_some() {
+                Ok(native_module_binding_value(ctx, &name))
             } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
                 // Imported function - reference by its original exported name
                 // Look up type information if available

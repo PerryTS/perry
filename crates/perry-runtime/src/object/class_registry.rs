@@ -4730,6 +4730,14 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
     if crate::value::addr_class::is_handle_band(ptr as usize) {
         return false;
     }
+    // #5226: small typed arrays and `Buffer`s (incl. `new Uint8Array(n)`, which
+    // lowers to a slab-allocated Buffer) are off-GC-heap with no GcHeader, so
+    // the `ptr - GC_HEADER_SIZE` back-read below faults when the block sits at
+    // the start of a freshly mapped region. They are never class objects —
+    // reject via the side tables first (no back-read).
+    if crate::typedarray::is_offheap_sidetable_alloc(ptr as usize) {
+        return false;
+    }
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT

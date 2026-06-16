@@ -84,7 +84,7 @@ pub(super) fn try_process_memory_usage_rss(
 /// generic mod.X.Y() arm so the strict-API gate (#463) doesn't
 /// reject `subtle` (which is a sub-namespace, not a class).
 pub(super) fn try_web_crypto_subtle(
-    ctx: &LoweringContext,
+    ctx: &mut LoweringContext,
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
@@ -262,20 +262,37 @@ pub(super) fn try_web_crypto_subtle(
                                         // (RSA-PSS / ECDSA / RSA-OAEP),
                                         // deriveKey are still out of
                                         // scope per the issue.
-                                        let allow_unimplemented =
-                                            std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
-                                        if !allow_unimplemented {
-                                            let msg = format!(
-                                                "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt, generateKey, wrapKey, unwrapKey (HMAC + SHA-1/256/384/512; encrypt/decrypt/generateKey/wrapKey currently AES-GCM/AES-KW only). \
-                                                 See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
-                                                method,
-                                            );
-                                            // #2309: defer under tree-shaking.
-                                            if !crate::try_defer_refusal(
-                                                msg.clone(),
-                                                outer_member.span.lo.0,
-                                            ) {
+                                        let msg = format!(
+                                            "`crypto.subtle.{}` is not implemented in Perry — supported subtle methods are digest, importKey, sign, verify, encrypt, decrypt, generateKey, wrapKey, unwrapKey (HMAC + SHA-1/256/384/512; encrypt/decrypt/generateKey/wrapKey currently AES-GCM/AES-KW only). \
+                                             See `perry --print-api-manifest` and #561, or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore.",
+                                            method,
+                                        );
+                                        // #5245: default → throw-on-reach + notice;
+                                        // strict → hard refusal. #2309 inside.
+                                        let api = format!("crypto.subtle.{method}");
+                                        let location = crate::eval_classifier::location_string(
+                                            &ctx.source_file_path,
+                                            outer_member.span.lo.0,
+                                        );
+                                        match crate::check_unimplemented_api(
+                                            &msg,
+                                            &api,
+                                            &location,
+                                            outer_member.span.lo.0,
+                                        ) {
+                                            crate::UnimplementedDecision::Refuse => {
                                                 crate::lower_bail!(outer_member.span, "{}", msg);
+                                            }
+                                            crate::UnimplementedDecision::DeferToRuntimeError(
+                                                runtime_msg,
+                                            ) => {
+                                                return Ok(Ok(
+                                                    super::super::const_fold_fn::synth_deferred_throw_value(
+                                                        ctx,
+                                                        &runtime_msg,
+                                                        outer_member.span,
+                                                    )?,
+                                                ));
                                             }
                                         }
                                     }
@@ -297,7 +314,7 @@ pub(super) fn try_web_crypto_subtle(
 /// only need the canonical module name; `util.types` remains a runtime object
 /// property, not a second API-manifest module.
 pub(super) fn try_util_types_namespace(
-    ctx: &LoweringContext,
+    ctx: &mut LoweringContext,
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
@@ -317,20 +334,39 @@ pub(super) fn try_util_types_namespace(
                     {
                         if namespace.sym.as_ref() == "types" {
                             let method_name = method.sym.as_ref();
-                            let allow_unimplemented =
-                                std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
-                            if !allow_unimplemented
-                                && perry_api_manifest::module_has_symbol("util/types", method_name)
-                                    .is_none()
+                            if perry_api_manifest::module_has_symbol("util/types", method_name)
+                                .is_none()
                             {
                                 let msg = format!(
                                     "`util.types.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
                                      or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463)",
                                     method_name,
                                 );
-                                // #2309: defer under tree-shaking.
-                                if !crate::try_defer_refusal(msg.clone(), outer_member.span.lo.0) {
-                                    crate::lower_bail!(outer_member.span, "{}", msg);
+                                // #5245: default → throw-on-reach + notice; strict
+                                // → hard #463 refusal. #2309 tree-shake inside.
+                                let api = format!("util.types.{method_name}");
+                                let location = crate::eval_classifier::location_string(
+                                    &ctx.source_file_path,
+                                    outer_member.span.lo.0,
+                                );
+                                match crate::check_unimplemented_api(
+                                    &msg,
+                                    &api,
+                                    &location,
+                                    outer_member.span.lo.0,
+                                ) {
+                                    crate::UnimplementedDecision::Refuse => {
+                                        crate::lower_bail!(outer_member.span, "{}", msg);
+                                    }
+                                    crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                        return Ok(Ok(
+                                            super::super::const_fold_fn::synth_deferred_throw_value(
+                                                ctx,
+                                                &runtime_msg,
+                                                outer_member.span,
+                                            )?,
+                                        ));
+                                    }
                                 }
                             }
                             return Ok(Ok(Expr::NativeMethodCall {

@@ -176,7 +176,11 @@ fn still_refuses_global_process_pipe_call() {
     let src = r#"
         process.pipe("ok");
     "#;
+    // #5245: the unimplemented-API gate only refuses at compile time in strict
+    // mode; the default now defers `process.pipe` to a throw-on-reach value.
+    perry_hir::set_unimplemented_strict_mode(true);
     let err = try_lower(src, "/tmp/host.ts").expect_err("global process.pipe must stay gated");
+    perry_hir::set_unimplemented_strict_mode(false);
     assert!(
         err.contains("`process.pipe` is not implemented in Perry"),
         "unexpected error: {err}"

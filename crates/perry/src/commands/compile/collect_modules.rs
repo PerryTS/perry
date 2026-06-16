@@ -768,6 +768,8 @@ fn collect_module_one(
     // #5206: re-install strict-eval mode on this (possibly rayon-worker)
     // thread before each lower, mirroring the dynamic-stdlib knob above.
     perry_hir::set_eval_strict_mode(ctx.strict_eval);
+    // #5245: likewise re-install strict-unimplemented mode per worker thread.
+    perry_hir::set_unimplemented_strict_mode(ctx.strict_unimplemented);
     // #503: stash the module source text so the dynamic-dispatch check
     // can look up `// @perry-allow-dynamic` line annotations adjacent to
     // any violation site without re-reading the file. Cleared right

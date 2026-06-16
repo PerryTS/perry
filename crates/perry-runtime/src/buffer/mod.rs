@@ -170,6 +170,29 @@ mod tests {
         }
     }
 
+    // #5226: every off-heap buffer (incl. `new Uint8Array(n)`, which lowers to
+    // a slab Buffer) must reserve a zeroed 8-byte sentinel before its pointer,
+    // so the runtime's many `*(ptr - GC_HEADER_SIZE)` type probes read a mapped
+    // `0` (matching no GC_TYPE) instead of crossing into the unmapped page
+    // before a freshly mapped slab/block and segfaulting. The sentinel must be
+    // `0`, never a real type tag.
+    #[test]
+    fn small_buffer_reserves_zeroed_header_sentinel() {
+        for cap in [0u32, 1, 3, 16, 255] {
+            let buf = buffer_alloc(cap);
+            assert!(is_registered_buffer(buf as usize), "cap={cap}");
+            unsafe {
+                let sentinel = *(buf as *const u8).sub(crate::gc::GC_HEADER_SIZE);
+                assert_eq!(sentinel, 0, "cap={cap}: header sentinel must be zero");
+            }
+            // The header-probing classifiers must read the sentinel and answer
+            // "not my type" without faulting.
+            let v = crate::value::js_nanbox_pointer(buf as i64);
+            assert_eq!(crate::promise::js_value_is_promise(v), 0, "cap={cap}");
+            assert!(!crate::date::is_date_cell_addr(buf as usize), "cap={cap}");
+        }
+    }
+
     #[test]
     fn test_buffer_symbol_iterator_uses_values_iterator() {
         let buf = buffer_alloc(3);

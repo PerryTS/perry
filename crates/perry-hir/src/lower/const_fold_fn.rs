@@ -85,6 +85,23 @@ fn synth_throwing_iife(
     lowered
 }
 
+/// #5245: synthesize a throw-on-reach value for a recognized-but-unimplemented
+/// node/stdlib API reference under the default (defer) mode. The whole gated
+/// expression (the member read `process.binding`, or the call callee) is
+/// replaced by a throwing IIFE: the descriptive `Error` is thrown the moment
+/// control reaches the reference — which a guarding `try/catch` then swallows,
+/// exactly as a real package (e.g. `safer-buffer`) expects. `message` is
+/// [`crate::eval_classifier::unimplemented_runtime_error_message`].
+pub(crate) fn synth_deferred_throw_value(
+    ctx: &mut LoweringContext,
+    message: &str,
+    span: swc_common::Span,
+) -> Result<Expr> {
+    let lit = json_string_literal(message);
+    let throw_stmt = format!("throw new Error({lit});");
+    synth_throwing_iife(ctx, &throw_stmt, span)
+}
+
 /// #5206: synthesize the throw-on-reach value for a runtime-unknown `eval`
 /// / `Function` / `new Function` site under the default (defer) mode. The
 /// `message` is the descriptive

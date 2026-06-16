@@ -666,6 +666,16 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         )
                     } else if ctx.lookup_class(&name).is_some() {
                         (Expr::ClassRef(name.clone()), Type::Any)
+                    } else if ctx.lookup_native_module(&name).is_some() {
+                        // #5242: a native-module-bound name (`import { relative }
+                        // from 'path'`) used as a shorthand property. Resolve it to
+                        // the same value the bare identifier produces, so the
+                        // property is the callable builtin instead of being dropped
+                        // (which left it `undefined` — yargs shim.path.relative).
+                        (
+                            super::lower_expr::native_module_binding_value(ctx, &name),
+                            Type::Any,
+                        )
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                         (value, Type::Any)
                     } else {
@@ -1149,6 +1159,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         }
                     } else if ctx.lookup_class(&name).is_some() {
                         Expr::ClassRef(name.clone())
+                    } else if ctx.lookup_native_module(&name).is_some() {
+                        // #5242: native-module-bound shorthand (`{ relative }` from
+                        // `import { relative } from 'path'`). Resolve to the builtin
+                        // value instead of dropping the property.
+                        super::lower_expr::native_module_binding_value(ctx, &name)
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                         value
                     } else {
