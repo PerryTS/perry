@@ -674,6 +674,7 @@ pub(super) fn try_native_module_methods(
                                     }),
                                     args: vec![b],
                                     type_args: vec![],
+                                    byte_offset: 0,
                                 }));
                             }
                         }
@@ -1452,6 +1453,7 @@ pub(super) fn try_native_module_methods(
                                 }),
                                 args: Vec::new(),
                                 type_args: Vec::new(),
+                                byte_offset: 0,
                             });
                             return Ok(Ok(Expr::Sequence(exprs)));
                         }
@@ -1496,6 +1498,7 @@ pub(super) fn try_native_module_methods(
                                     }),
                                     args: call_args,
                                     type_args: Vec::new(),
+                                    byte_offset: 0,
                                 }));
                             }
                         }

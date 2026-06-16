@@ -77,6 +77,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -337,6 +339,7 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
                 }),
                 args: vec![Expr::String("0".to_string())],
                 type_args: vec![],
+                byte_offset: 0,
             })),
         ],
         Vec::new(),

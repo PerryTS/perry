@@ -131,6 +131,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // becomes part of every emitted global so multi-module programs
     // don't collide on `.str.0.handle`.
     let mut strings = StringPool::with_prefix(module_prefix.clone());
+    // #5247: install per-module source-location context for the dynamic
+    // call-dispatch throw path, but only under `--debug-symbols` (which sets
+    // `opts.debug_locations` + `opts.module_source`). Off by default — no
+    // source clone, no per-call emission.
+    if opts.debug_locations {
+        if let Some(src) = opts.module_source.clone() {
+            strings.set_debug_location_ctx(Some((hir.name.clone(), src)));
+        }
+    }
 
     // Class lookup table for `Expr::New`. Indexed by class name —
     // the HIR has unique names per module.

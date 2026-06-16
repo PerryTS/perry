@@ -1084,6 +1084,7 @@ pub fn lower_stmts_using_aware(
                         }),
                         args: vec![Expr::Bool(is_async)],
                         type_args: Vec::new(),
+                        byte_offset: 0,
                     };
                     result.push(Stmt::If {
                         condition: Expr::Logical {
@@ -1163,6 +1164,7 @@ pub fn lower_stmts_using_aware(
                     }),
                     args: Vec::new(),
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 };
                 if is_async {
                     call_expr = Expr::Await(Box::new(call_expr));

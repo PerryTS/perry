@@ -554,6 +554,7 @@ fn lower_named_fn_expr(
         }),
         args: Vec::new(),
         type_args: Vec::new(),
+        byte_offset: 0,
     })
 }
 

@@ -89,6 +89,7 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
         }),
         args: vec![type_expr, props_expr],
         type_args: Vec::new(),
+        byte_offset: 0,
     })
 }
 
@@ -121,6 +122,7 @@ fn react_create_element_call(
         }),
         args: vec![type_expr, props_expr.clone()],
         type_args: Vec::new(),
+        byte_offset: 0,
     })
 }
 
@@ -189,6 +191,7 @@ pub(crate) fn lower_jsx_fragment(
         // `type === "__Fragment"` to detect fragment elements.
         args: vec![Expr::String("__Fragment".to_string()), props_expr],
         type_args: Vec::new(),
+        byte_offset: 0,
     })
 }
 
