@@ -43,14 +43,40 @@ evaluated; a `new Function(...)` returns a function that throws when called),
 and prints a single end-of-compile notice listing every degraded site:
 
 ```text
-notice: 2 runtime-eval site(s) compiled to a deferred runtime error (throws only if reached):
-  - new Function(...)   src/cli/cmd/debug/agent.handler.ts:41
+notice: 3 ahead-of-time-unsupported site(s) compiled to a deferred runtime error (throws only if reached):
   - eval(...)           src/foo.ts:12
-  Pass --strict-eval (or set perry.eval = "error") to make these a compile-time error instead.
+  - import(...)          src/plugins/loader.ts:88
+  - new Function(...)    src/cli/cmd/debug/agent.handler.ts:41
+  Pass --strict-eval/--strict-dynamic-import (or set perry.strict = true) to make these a compile-time error instead.
 ```
 
 This lets a single such call in a cold path ship without aborting the whole
 build, while still failing loudly (and catchably) if that path runs.
+
+### Dynamic `import()` with a runtime-computed specifier (#5230)
+
+A dynamic `import(spec)` whose `spec` is only known at runtime (a plugin loader
+building a path from a variable) is subject to the **same defer/notice/strict
+policy** as `eval`. By default it compiles to a rejected `Promise` carrying a
+descriptive `Error` (so `await import(spec)` throws *only if reached*), is
+listed in the shared notice above under the `import(...)` kind, and does **not**
+abort the build. This lets an app with a plugin-loader path compile and run its
+core, with only the plugin-load path throwing if exercised.
+
+Resolvable specifiers are unaffected and still compile + load: string literals
+(`import("./mod.js")`), ternaries of resolvable arms, template literals over
+`const` locals (`` import(`./${KIND}.js`) ``), finite string-literal-union
+parameters, and directory globs.
+
+```ts
+// Resolvable → compiled + loaded as today.
+const real = await import("./real.js");
+
+// Runtime-computed → deferred (default): throws only if this line runs.
+async function loadPlugin(name: string) {
+  return await import(name + ".js");
+}
+```
 
 ### Strict mode: refuse at compile time
 
@@ -66,6 +92,14 @@ strict-eval mode by any of:
 package.json/perry.toml config → `--strict-eval` (opts in). The legacy
 `PERRY_ALLOW_EVAL=1` environment variable still works: it forces non-strict
 (defer) mode for a one-off build, overriding any strict flag/config.
+
+The same strict controls apply to runtime-computed dynamic `import()` (#5230).
+The broad `perry.strict = true` covers both eval and dynamic import. For a knob
+scoped to dynamic imports only, use `--strict-dynamic-import` or
+`"perry": { "dynamicImport": "error" }` (accepts `"defer"` (default) or
+`"error"`); the dedicated knob overrides the broad `perry.strict` for import
+sites. `PERRY_ALLOW_EVAL=1` is the shared AOT escape hatch — it forces defer for
+both eval and dynamic import.
 
 Test262 rows that only observe parsing or executing a code string remain
 intentional AOT exclusions, not runtime dynamic-code work. This includes the

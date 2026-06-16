@@ -649,6 +649,8 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             Ok(Expr::DynamicImport {
                 paths: Vec::new(),
                 arg: Box::new(arg),
+                byte_offset: call.span.lo.0,
+                deferred_error: None,
             })
         }
     }

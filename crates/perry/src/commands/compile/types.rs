@@ -292,6 +292,17 @@ pub struct CompileArgs {
     #[arg(long)]
     pub strict_eval: bool,
 
+    /// #5230 — strict dynamic-import mode. Fail the build at compile time if a
+    /// dynamic `import(...)` has a runtime-computed (non-resolvable) specifier
+    /// (the historical behavior). By default such a site is instead compiled to
+    /// a rejected `Promise` that throws a descriptive `Error` only if reached,
+    /// and is listed in the same end-of-build notice as deferred eval sites.
+    /// Also settable via `"perry": { "dynamicImport": "error" }`; the broad
+    /// `"perry": { "strict": true }` covers it too. `PERRY_ALLOW_EVAL=1` forces
+    /// this off.
+    #[arg(long)]
+    pub strict_dynamic_import: bool,
+
     /// Minimum Windows version the compiled executable must run on.
     /// Accepted values: `7`, `8`, `10` (default `10`). Ignored on every
     /// non-Windows target.
@@ -672,6 +683,16 @@ pub struct CompilationContext {
     /// package.json or perry.toml → CLI `--strict-eval`. `PERRY_ALLOW_EVAL=1`
     /// always forces this off (back-compat escape hatch).
     pub strict_eval: bool,
+    /// #5230: strict mode for non-resolvable (runtime-computed) dynamic
+    /// `import(...)` specifiers. When true, such a site is a hard compile error
+    /// (the historical behavior). When false (the default), it is deferred to a
+    /// rejected `Promise` that throws a descriptive `Error` only if reached, and
+    /// recorded in the shared end-of-compile notice. Defaults to `strict_eval`
+    /// so the broad `perry.strict = true` covers both; overridden by the
+    /// dedicated `perry.dynamicImport = "defer" | "error"` config and the
+    /// `--strict-dynamic-import` CLI flag. `PERRY_ALLOW_EVAL=1` forces it off
+    /// (shared AOT escape hatch).
+    pub strict_dynamic_import: bool,
     /// #503: package names whose modules may legitimately use dynamic
     /// stdlib dispatch (`perry.allowDynamicStdlibDispatch: [...]`).
     /// Consulted per-module during HIR lowering; ignored when
@@ -873,6 +894,7 @@ impl CompilationContext {
             extra_stdlib_features: BTreeSet::new(),
             refuse_dynamic_stdlib_dispatch: true,
             strict_eval: false,
+            strict_dynamic_import: false,
             allow_dynamic_stdlib_packages: HashSet::new(),
             js_runtime_importers: Vec::new(),
             permissions: std::collections::BTreeMap::new(),

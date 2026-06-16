@@ -237,6 +237,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         emit_sandbox: false,
         lockdown: false,
         strict_eval: false,
+        strict_dynamic_import: false,
         min_windows_version: "10".to_string(),
         windows_subsystem: "auto".to_string(),
         // Phase 2 v7: harmonyos signing flags. `perry run` is for local

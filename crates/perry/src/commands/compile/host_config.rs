@@ -356,6 +356,8 @@ pub(super) fn apply_pkg_and_toml_config(
                     .and_then(|v| v.as_bool())
                 {
                     ctx.strict_eval = strict;
+                    // #5230: the broad `perry.strict` covers dynamic imports too.
+                    ctx.strict_dynamic_import = strict;
                 }
                 if let Some(mode) = pkg
                     .get("perry")
@@ -365,6 +367,19 @@ pub(super) fn apply_pkg_and_toml_config(
                     match mode {
                         "error" | "strict" => ctx.strict_eval = true,
                         "defer" => ctx.strict_eval = false,
+                        _ => {}
+                    }
+                }
+                // #5230: dedicated `perry.dynamicImport = "defer" | "error"`
+                // overrides the broad `perry.strict` for dynamic-import sites.
+                if let Some(mode) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("dynamicImport"))
+                    .and_then(|v| v.as_str())
+                {
+                    match mode {
+                        "error" | "strict" => ctx.strict_dynamic_import = true,
+                        "defer" => ctx.strict_dynamic_import = false,
                         _ => {}
                     }
                 }
@@ -523,6 +538,8 @@ pub(super) fn apply_pkg_and_toml_config(
             if let Some(perry_tbl) = table.get("perry").and_then(|v| v.as_table()) {
                 if let Some(strict) = perry_tbl.get("strict").and_then(|v| v.as_bool()) {
                     ctx.strict_eval = strict;
+                    // #5230: broad `perry.strict` covers dynamic imports too.
+                    ctx.strict_dynamic_import = strict;
                 }
                 if let Some(mode) = perry_tbl.get("eval").and_then(|v| v.as_str()) {
                     match mode {
@@ -531,17 +548,30 @@ pub(super) fn apply_pkg_and_toml_config(
                         _ => {}
                     }
                 }
+                // #5230: dedicated `perry.dynamicImport` overrides for imports.
+                if let Some(mode) = perry_tbl.get("dynamicImport").and_then(|v| v.as_str()) {
+                    match mode {
+                        "error" | "strict" => ctx.strict_dynamic_import = true,
+                        "defer" => ctx.strict_dynamic_import = false,
+                        _ => {}
+                    }
+                }
             }
         }
     }
-    // CLI flag opts in.
+    // CLI flags opt in.
     if args.strict_eval {
         ctx.strict_eval = true;
     }
+    if args.strict_dynamic_import {
+        ctx.strict_dynamic_import = true;
+    }
     // Back-compat: `PERRY_ALLOW_EVAL` forces non-strict for a one-off build,
-    // overriding any strict flag/config.
+    // overriding any strict flag/config — for both eval and dynamic import
+    // (shared AOT escape hatch, #5230).
     if perry_hir::eval_classifier::eval_override_enabled() {
         ctx.strict_eval = false;
+        ctx.strict_dynamic_import = false;
     }
     // Install into the HIR thread-local before any lowering begins (re-applied
     // per rayon worker in collect_modules.rs, mirroring the dynamic-stdlib

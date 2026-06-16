@@ -818,9 +818,28 @@ fn collect_module_one(
         &module_const_locals,
         &dynamic_param_literals,
     );
-    let mut dynamic_path_sets: Vec<Vec<String>> = Vec::new();
+    // #5230: re-install this module's source (cleared after the lower above) so
+    // `current_module_line_at` can resolve a `file:line` for a deferred dynamic
+    // import's notice/runtime-error message. Cleared again after the fill pass.
+    perry_hir::set_current_module_source(source.clone());
+    // Per-site outcome, aligned 1:1 with the `for_each_dynamic_import`
+    // traversal order so the mutable fill pass below can apply them.
+    // `Resolved(set)` populates `paths`; `Deferred(msg)` (#5230) leaves
+    // `paths` empty and sets `deferred_error` so codegen lowers the site to a
+    // rejected promise that throws `msg` only if reached.
+    enum DynImportOutcome {
+        Resolved(Vec<String>),
+        Deferred(String),
+    }
+    let mut dynamic_path_sets: Vec<DynImportOutcome> = Vec::new();
     perry_hir::for_each_dynamic_import(&hir_module, &mut |expr| {
-        if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
+        if let perry_hir::Expr::DynamicImport {
+            paths,
+            arg,
+            byte_offset,
+            ..
+        } = expr
+        {
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
                 return;
@@ -851,7 +870,7 @@ fn collect_module_one(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    dynamic_path_sets.push(set);
+                    dynamic_path_sets.push(DynImportOutcome::Resolved(set));
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     // #1674 sub-part B: a non-resolvable template specifier with
@@ -886,16 +905,43 @@ fn collect_module_one(
                                     new_dyn_imports.push(p.clone());
                                 }
                             }
-                            dynamic_path_sets.push(matches);
+                            dynamic_path_sets.push(DynImportOutcome::Resolved(matches));
                             return;
                         }
                     }
-                    dyn_errors.push(format!(
-                        "dynamic import() in module {} ({}): {}",
-                        module_name,
-                        canonical.display(),
-                        reason
-                    ));
+                    // #5230: a genuinely runtime-computed specifier. This is the
+                    // analog of #5206's runtime-unknown eval bucket. Strict mode
+                    // (`--strict-dynamic-import` / `perry.dynamicImport = "error"`
+                    // / `perry.strict`) restores the historical hard compile
+                    // error. The default policy *defers* it: compile the site to
+                    // a rejected promise that throws a descriptive Error only if
+                    // reached, record it for the shared end-of-compile notice,
+                    // and keep building so plugin-loader apps compile + run their
+                    // core. `PERRY_ALLOW_EVAL=1` forces defer (shared AOT escape
+                    // hatch).
+                    if ctx.strict_dynamic_import
+                        && !perry_hir::eval_classifier::eval_override_enabled()
+                    {
+                        dyn_errors.push(format!(
+                            "dynamic import() in module {} ({}): {}",
+                            module_name,
+                            canonical.display(),
+                            reason
+                        ));
+                    } else {
+                        let line = perry_hir::current_module_line_at(*byte_offset)
+                            .filter(|&l| l != 0);
+                        let loc = match line {
+                            Some(l) => format!("{}:{}", source_file_path, l),
+                            None => source_file_path.clone(),
+                        };
+                        let msg = format!(
+                            "dynamic import() of a runtime-computed path cannot run in an \
+                             ahead-of-time compiled binary ({loc})"
+                        );
+                        perry_hir::record_deferred_aot_site("import(...)", loc);
+                        dynamic_path_sets.push(DynImportOutcome::Deferred(msg));
+                    }
                 }
             }
         }
@@ -965,14 +1011,22 @@ fn collect_module_one(
     drop(dynamic_local_literals);
     drop(module_const_locals);
     if !dyn_errors.is_empty() {
+        perry_hir::clear_current_module_source();
         return Err(anyhow!("{}", dyn_errors.join("\n")));
     }
     let mut dynamic_path_sets = dynamic_path_sets.into_iter();
     perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
-        if let perry_hir::Expr::DynamicImport { paths, .. } = expr {
-            if paths.is_empty() {
-                if let Some(set) = dynamic_path_sets.next() {
-                    *paths = set;
+        if let perry_hir::Expr::DynamicImport {
+            paths,
+            deferred_error,
+            ..
+        } = expr
+        {
+            if paths.is_empty() && deferred_error.is_none() {
+                match dynamic_path_sets.next() {
+                    Some(DynImportOutcome::Resolved(set)) => *paths = set,
+                    Some(DynImportOutcome::Deferred(msg)) => *deferred_error = Some(msg),
+                    None => {}
                 }
             }
         }
@@ -987,6 +1041,9 @@ fn collect_module_one(
             }
         }
     });
+    // #5230: done with the dynamic-import line resolution; don't leak this
+    // module's source onto unrelated work on this (possibly rayon-worker) thread.
+    perry_hir::clear_current_module_source();
     for source in new_dyn_imports {
         // A dynamic edge to the same source as a static import is folded
         // into the existing static edge: that edge already gives us full

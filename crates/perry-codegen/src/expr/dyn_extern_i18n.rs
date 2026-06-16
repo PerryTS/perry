@@ -113,7 +113,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(I64, &entry_ptr), (DOUBLE, &options_val)],
             ))
         }
-        Expr::DynamicImport { paths, arg } => {
+        Expr::DynamicImport {
+            paths,
+            arg,
+            deferred_error,
+            ..
+        } => {
+            // #5230: a non-resolvable (runtime-computed) specifier was
+            // *deferred* (the default, non-strict policy — analog of #5206's
+            // eval deferral). Evaluate the arg for its side effects, then
+            // reject the promise with a descriptive `Error` so
+            // `await import(spec)` throws only if this site is actually
+            // reached, instead of failing the whole build.
+            if let Some(msg) = deferred_error {
+                let _ = lower_expr(ctx, arg)?;
+                // Build the `Error(msg)` value the same way `new Error(<str>)`
+                // does (see `Expr::ErrorNew`): intern the message as a string
+                // literal handle, then `js_error_new_from_value`.
+                let msg_val = lower_expr(ctx, &Expr::String(msg.clone()))?;
+                let blk = ctx.block();
+                let err_ptr = blk.call(I64, "js_error_new_from_value", &[(DOUBLE, &msg_val)]);
+                let err_box = nanbox_pointer_inline(blk, &err_ptr);
+                let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &err_box)]);
+                return Ok(nanbox_pointer_inline(blk, &p));
+            }
+
             // Defensive: an empty `paths` list means the resolver pass
             // failed to populate this node, which `collect_modules`
             // should have raised as a compile error. Fall through to a

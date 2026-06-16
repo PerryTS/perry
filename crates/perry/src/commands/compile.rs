@@ -5761,12 +5761,14 @@ pub fn run_with_parse_cache(
 
     cleanup_intermediates(args.keep_intermediates, &obj_cleanup_paths);
 
-    // #5206: visible end-of-compile notice listing every runtime-eval site
-    // (`eval(...)` / `new Function(<dynamic body>)`) that was compiled to a
-    // deferred runtime error instead of blocking the build. Strict-eval mode
-    // (`--strict-eval` / `perry.eval = "error"`) never reaches here for such
-    // a site — it fails the build earlier. Text format only (JSON consumers
-    // get a clean machine-readable result on stdout).
+    // #5206 / #5230: visible end-of-compile notice listing every
+    // ahead-of-time-unsupported site that was compiled to a deferred runtime
+    // error instead of blocking the build — runtime-unknown `eval(...)` /
+    // `new Function(<dynamic body>)` and non-resolvable dynamic `import(...)`.
+    // Strict mode (`--strict-eval` / `--strict-dynamic-import` / `perry.eval =
+    // "error"` / `perry.dynamicImport = "error"` / `perry.strict`) never reaches
+    // here for a covered site — it fails the build earlier. Text format only
+    // (JSON consumers get a clean machine-readable result on stdout).
     print_deferred_eval_notice(format);
 
     let final_output_path = result_app_dir.unwrap_or(exe_path);
@@ -5783,10 +5785,12 @@ pub fn run_with_parse_cache(
     })
 }
 
-/// #5206: print the end-of-compile notice for runtime-eval sites that were
-/// compiled to deferred runtime errors. Drains the process-global sink (so
-/// re-running a compile in the same process starts fresh) and prints a single
-/// stand-out block. No-op when there are no such sites or for JSON output.
+/// #5206 / #5230: print the end-of-compile notice for ahead-of-time-unsupported
+/// sites (runtime-unknown `eval(...)` / `new Function(...)`, and non-resolvable
+/// dynamic `import(...)`) that were compiled to deferred runtime errors. Drains
+/// the shared process-global sink (so re-running a compile in the same process
+/// starts fresh) and prints a single stand-out block. No-op when there are no
+/// such sites or for JSON output.
 fn print_deferred_eval_notice(format: OutputFormat) {
     let sites = perry_hir::take_deferred_eval_sites();
     if sites.is_empty() || !matches!(format, OutputFormat::Text) {
@@ -5807,7 +5811,7 @@ fn print_deferred_eval_notice(format: OutputFormat) {
     };
     eprintln!();
     eprintln!(
-        "{y}{b}notice:{r}{y} {n} runtime-eval {plural} compiled to a deferred runtime error (throws only if reached):{r}"
+        "{y}{b}notice:{r}{y} {n} ahead-of-time-unsupported {plural} compiled to a deferred runtime error (throws only if reached):{r}"
     );
     // Align the locations into a column for readability.
     let kind_width = sites.iter().map(|s| s.kind.len()).max().unwrap_or(0);
@@ -5820,7 +5824,7 @@ fn print_deferred_eval_notice(format: OutputFormat) {
         );
     }
     eprintln!(
-        "  Pass {b}--strict-eval{r} (or set {b}perry.eval = \"error\"{r}) to make these a compile-time error instead."
+        "  Pass {b}--strict-eval{r}/{b}--strict-dynamic-import{r} (or set {b}perry.strict = true{r}) to make these a compile-time error instead."
     );
     eprintln!();
 }

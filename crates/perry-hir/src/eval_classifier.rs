@@ -323,11 +323,17 @@ thread_local! {
 /// module lowered more than once isn't counted twice.
 static EVAL_DEFERRED_SITES: Mutex<Vec<DeferredEvalSite>> = Mutex::new(Vec::new());
 
-/// A bucket-3 site that was compiled to a deferred runtime error. Reported in
-/// the end-of-compile notice (#5206).
+/// A site that was compiled to a deferred throw-on-reach runtime error
+/// instead of failing the build. Reported in the end-of-compile notice.
+///
+/// #5206 introduced this for runtime-unknown `eval(...)` / `new Function(...)`
+/// sites; #5230 generalized it to any ahead-of-time-unsupported surface
+/// (currently also a non-resolvable dynamic `import(...)`). The `kind` string
+/// distinguishes the surface (`eval(...)`, `new Function(...)`, `import(...)`)
+/// so a single notice can list every degraded site of every kind together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredEvalSite {
-    /// Display label of the call shape, e.g. `new Function(...)`.
+    /// Display label of the surface, e.g. `new Function(...)` or `import(...)`.
     pub kind: String,
     /// `file:line` of the site.
     pub location: String,
@@ -346,18 +352,31 @@ pub fn eval_strict_mode() -> bool {
     EVAL_STRICT_MODE.with(|s| *s.borrow())
 }
 
-/// Record a deferred bucket-3 site for the end-of-compile notice. Idempotent
-/// per `(kind, location)`.
-fn record_deferred_site(classification: &EvalClassification) {
+/// Record a deferred ahead-of-time-unsupported site for the end-of-compile
+/// notice. Shared sink for every degraded surface (#5206 eval / `new Function`,
+/// #5230 dynamic `import(...)`). Idempotent per `(kind, location)` so the same
+/// site lowered more than once (rayon re-lower, two passes) isn't double-counted.
+///
+/// `kind` is the display label of the surface (e.g. `import(...)`); `location`
+/// is `file:line`.
+pub fn record_deferred_aot_site(kind: impl Into<String>, location: impl Into<String>) {
     let site = DeferredEvalSite {
-        kind: classification.surface.label().to_string(),
-        location: classification.location(),
+        kind: kind.into(),
+        location: location.into(),
     };
     if let Ok(mut v) = EVAL_DEFERRED_SITES.lock() {
         if !v.contains(&site) {
             v.push(site);
         }
     }
+}
+
+/// Record a deferred bucket-3 eval/Function site for the end-of-compile notice.
+fn record_deferred_site(classification: &EvalClassification) {
+    record_deferred_aot_site(
+        classification.surface.label().to_string(),
+        classification.location(),
+    );
 }
 
 /// Drain and return every deferred bucket-3 site recorded so far this
