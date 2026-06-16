@@ -2964,18 +2964,28 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     // `'prototype' in C.prototype.m === false`). (Test262 definition method/accessor
     // prop-desc.)
     //
-    // #4973 / #3527 exception: bound NATIVE-MODULE *class* exports
-    // (`http.Server`, `http.IncomingMessage`, `http.ServerResponse`, …) are
+    // #4973 / #3527 / #5268 exception: bound NATIVE-MODULE *class* exports
+    // (`http.Server`, `fs.ReadStream`, `events.EventEmitter`, …) are
     // constructors in Node, and the util.inherits / `Object.create(Ctor.
-    // prototype)` subclass pattern reads their `.prototype` as a
-    // setPrototypeOf / Object.create operand. Returning None here made that
-    // read `undefined`, and `Object.create(undefined)` /
-    // `Object.setPrototypeOf(x, undefined)` then threw "Object prototype may
-    // only be an Object or null" — the exact blocker hit at Express init
-    // (`express/lib/request.js`: `Object.create(http.IncomingMessage.
-    // prototype)`). These exports are cached singleton closures
-    // (NATIVE_CALLABLE_EXPORTS), so the synthetic-class path below gives them
-    // a stable prototype object.
+    // prototype)` / `Object.setPrototypeOf(x, Ctor.prototype)` subclass
+    // pattern reads their `.prototype` as a setPrototypeOf / Object.create
+    // operand. Returning None here made that read `undefined`, and
+    // `Object.create(undefined)` / `Object.setPrototypeOf(x, undefined)` then
+    // threw "Object prototype may only be an Object or null" — the blocker hit
+    // at Express init (`express/lib/request.js`:
+    // `Object.create(http.IncomingMessage.prototype)`), graceful-fs's
+    // `ReadStream.prototype = Object.create(fs$ReadStream.prototype)`, and
+    // pino's `Object.setPrototypeOf(prototype, EventEmitter.prototype)`.
+    //
+    // A bound-native export is a constructor class when its method name uses
+    // Node's constructor-cased convention (a leading uppercase ASCII letter,
+    // e.g. `ReadStream`/`EventEmitter`/`Server`) AND it isn't explicitly
+    // marked non-constructable (built-in prototype methods like
+    // `String.prototype.charAt` carry that flag). Such exports are cached
+    // singleton closures (NATIVE_CALLABLE_EXPORTS), so the synthetic-class
+    // path below gives them a stable `.prototype` object. Non-constructor
+    // bound methods (`fs.readFile`, `path.join`, …) keep `prototype ===
+    // undefined`, matching Node's built-in non-constructor functions.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
         if jv.is_pointer() {
@@ -2984,24 +2994,17 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
                 && is_valid_obj_ptr(cptr as *const u8)
                 && crate::closure::closure_is_bound_method(cptr)
             {
+                if super::native_module::builtin_closure_is_non_constructable_value(func_value) {
+                    return None;
+                }
                 let is_native_class_export = unsafe {
                     super::native_module::bound_native_callable_module_and_method(func_value)
                 }
-                .map(|(module, method)| {
-                    matches!(
-                        (module.as_str(), method.as_str()),
-                        // Shared http/https constructor classes.
-                        ("http" | "https", "Server" | "Agent")
-                            // http-only request/response constructor classes
-                            // that userland subclasses (Express, util.inherits).
-                            | (
-                                "http",
-                                "IncomingMessage"
-                                    | "ServerResponse"
-                                    | "OutgoingMessage"
-                                    | "ClientRequest"
-                            )
-                    )
+                .map(|(_module, method)| {
+                    method
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|b| b.is_ascii_uppercase())
                 })
                 .unwrap_or(false);
                 if !is_native_class_export {

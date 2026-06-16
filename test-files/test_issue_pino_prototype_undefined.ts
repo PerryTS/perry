@@ -75,9 +75,9 @@ const eeKind = typeof (EventEmitter as any);
 console.log("ee_truthy:", eeKind !== "undefined");
 
 // 2. Reading `.prototype` on the destructured EventEmitter must not
-//    throw. Returning `undefined` here is acceptable (Perry doesn't
-//    materialize a real EventEmitter.prototype object yet); the
-//    contract is just "doesn't trip the TypeError".
+//    throw. As of #5268 Perry materializes a real EventEmitter.prototype
+//    object (constructor-cased bound-native exports get a synthesized
+//    `.prototype`); the contract is just "doesn't trip the TypeError".
 const proto = (EventEmitter as any).prototype;
 console.log("proto_read_ok:", proto !== "__threw__");
 
