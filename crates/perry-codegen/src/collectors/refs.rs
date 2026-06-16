@@ -473,7 +473,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         // soft fallback (returns 0.0) and `js_new_function_construct`
         // saw a NaN-zero callee, allocating a class_id=0 empty object
         // with no prototype-method dispatch.
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             walk(callee, out);
             for a in args {
                 walk(a, out);

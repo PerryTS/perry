@@ -698,6 +698,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 class_name,
                 args,
                 type_args: Vec::new(),
+                byte_offset: 0,
             });
         }
     }

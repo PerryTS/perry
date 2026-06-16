@@ -43,6 +43,7 @@ mod expr_member;
 pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE};
 mod expr_misc;
 mod expr_new;
+mod expr_new_builtins;
 mod expr_object;
 mod unimpl_hints;
 pub(crate) use context::*;

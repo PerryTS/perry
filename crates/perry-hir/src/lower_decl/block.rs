@@ -1188,6 +1188,7 @@ pub fn lower_stmts_using_aware(
                                     ),
                                 ],
                                 type_args: Vec::new(),
+                                byte_offset: 0,
                             }),
                         ))],
                         else_branch: Some(vec![

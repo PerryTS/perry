@@ -641,7 +641,9 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                         }),
                         args: vec![Expr::String(name.clone())],
                         type_args: Vec::new(),
-                        byte_offset: 0,
+                        // #5253: localize the `X is not defined` ReferenceError to
+                        // this identifier's source position (winston `module`).
+                        byte_offset: ident.span.lo.0,
                     });
                 }
                 if !known_global {

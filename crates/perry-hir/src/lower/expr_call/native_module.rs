@@ -1172,6 +1172,7 @@ pub(super) fn try_native_module_methods(
                                                 class_name: cls_name,
                                                 args: new_args,
                                                 type_args: vec![],
+                                                byte_offset: 0,
                                             }));
                                         }
                                     }
