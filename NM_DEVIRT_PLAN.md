@@ -57,9 +57,11 @@ sound graceful degradation (install_all), semantics never change with a build fl
 [x] CODEGEN: emit js_nm_install_<b>() at all 5 js_create_native_module_namespace sites (nm_install.rs nm_install_symbol; externs declared in runtime_decls/objects.rs). perry builds green.
 [x] CORRECTNESS verified byte-identical to node: hello-world, import os, import path, global process (cwd/pid/argv), util.format/inspect/types, querystring, assert.
 [x] **MEASURED: hello-world __text 4,667,824 → 4,058,936 = −608,888 B (−13%); binary 5.4MB → 4.7MB.** (baseline = pristine origin/main perry.)
-[ ] FOLLOW-UPS:
-    - install_all NOT yet emitted for truly-dynamic `import(runtimeVar)` of a native module → that path's method dispatch would return undefined. Wire js_nm_install_all() at the dynamic-import codegen site (the await-import-of-literal path IS covered). Rare; static imports + global process all work.
-    - node_v8/perf_hooks/cluster internal creators: covered because reachable only when their module is imported (→ codegen install ran). Verify with a v8-serializer / perf_hooks test.
+[x] FOLLOW-UP #1 DONE — dynamic getBuiltinModule/require fallback via indirect install-all hook:
+    - native_module_get_builtin_module_value → nm_run_install_all_hook() (opaque ptr, names no bucket)
+    - js_nm_enable_install_all() (black_box'd, sole ref to js_nm_install_all) armed by js_process_get_builtin_module_devirt (codegen getBuiltinModule table target)
+    - black_box REQUIRED: else whole-program opt devirtualizes the single-ptr indirect call → re-pins all (per-bucket array is immune, runtime-indexed).
+    - Verified: getBuiltinModule(dynamic+literal), require(literal), global process, static import — all byte-identical to node; hello-world __text 4,058,968 (install_all absent). RESIDUAL EDGE: require(runtimeVar) of builtin (module_require.rs:121, not armed) — narrow, likely deferred anyway.
 [ ] constructor-dispatcher (js_new_function_construct, class_registry.rs) — phase 2 (residual child_process/cluster/readline syms still pinned by it; another chunk of __text).
 
 ## Generators (in /tmp, re-runnable from git HEAD)
