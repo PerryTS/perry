@@ -78,3 +78,32 @@ sound graceful degradation (install_all), semantics never change with a build fl
 ## Generators (in /tmp, re-runnable from git HEAD)
 /tmp/nm_generate.py (dispatch file), /tmp/nm_gen_registry.py (registry). Both read
 pristine source via `git show HEAD:...` so re-running is idempotent.
+
+## Phase 3 (submodule devirt) — DONE (commit 9e37185ce)
+SUBMODULES static table → per-submodule statics + SUBMOD_REGISTRY; find_submodule via
+registry; js_node_submod_install_<key>() emitted at all 6 codegen submodule-resolution
+sites; black_box'd install-all hook for dynamic require/getBuiltinModule. hello-world
+__text 3,971,424 → 3,716,980 (−254KB). CUMULATIVE baseline 4,667,824 → 3,716,980 =
+−950,844 (−20.4%), ~5.4MB → ~4.3MB. 9/9 correctness sweep + fs/promises (named import
+and fs.promises via native) byte-identical to node.
+
+## console.trace — DONE (commit a5c14dbbf)
+Coarse `at <anonymous>` frame instead of std::backtrace::force_capture (consistent with
+Error.stack; prereq for any future panic-symbolizer strip). No size change alone (the
+143KB gimli is pulled by std's panic runtime, not console.trace).
+
+## Panic-symbolizer strip (~220KB) — ATTEMPTED, REVERTED (toolchain-fragile)
+build-std + panic_immediate_abort to drop std's default panic hook + DWARF symbolizer.
+Blockers found on current nightly:
+  1. panic_immediate_abort is now a real STRATEGY: needs `-Cpanic=immediate-abort`
+     (+ -Zunstable-options) + -Zbuild-std, NOT the old `-Zbuild-std-features=panic_immediate_abort`.
+  2. Native build (host==target) → host build-scripts/proc-macros use the PRECOMPILED host
+     core (default panic), but the rustflag forces immediate-abort on them → "core compiled
+     with incompatible panic strategy" (proc-macro2 build script fails).
+  3. Fix requires explicit `--target <host-triple>` to separate host (precompiled) from
+     target (build-std immediate-abort) — which then breaks the auto-opt output-path
+     resolution (libs move to target/<triple>/release/). 3 fragile, nightly-version-specific
+     pieces → defer to a focused effort with proper --target + path handling.
+The PERRY_MIN_SIZE=1 opt-in wiring was reverted (kept the tree clean). console.trace prereq
+stays. Other no-tradeoff levers remain: json (47KB, event-loop pump), js_native_call_method
+monolith (34KB devirt), feature-gating url/intl/bigint (160KB, other branch's mechanism).
