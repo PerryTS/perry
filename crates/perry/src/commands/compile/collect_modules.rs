@@ -37,6 +37,7 @@ mod dynamic_glob;
 mod feature_detect;
 mod native_addon;
 mod parse_error;
+mod wasm_asset;
 #[cfg(test)]
 mod tests;
 
@@ -44,6 +45,7 @@ use create_require_transform::transform_create_require_literal_requires;
 use dynamic_glob::expand_dynamic_import_glob;
 use native_addon::refuse_compile_package_native_addon;
 use parse_error::annotate_parse_error;
+use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
@@ -383,6 +385,11 @@ fn collect_module_one(
     // default export is the file contents as a JS string (see the text branch
     // below, mirroring the JSON-module path). `.wasm` is out of scope.
     let is_text_asset = is_recognized_text_asset(&canonical);
+    // #5235: `.wasm` ESM import. The file is binary (not valid UTF-8), so it
+    // must NOT be read as a string. We read the bytes, parse the export section,
+    // and synthesize a throwing-stub module (see the wasm branch below). Real
+    // `.wasm` ESM instantiation is the companion issue #5234.
+    let is_wasm = is_wasm_asset(&canonical);
     let is_in_node_modules = canonical.to_string_lossy().contains("node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
@@ -517,9 +524,44 @@ fn collect_module_one(
         });
     }
 
-    // It's a TypeScript file to compile natively
-    let raw_source = fs::read_to_string(&canonical)
-        .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+    // #5235: `.wasm` ESM import — defer. Read the BYTES (never as UTF-8; the
+    // file is binary), parse the WebAssembly export section, and synthesize a
+    // TypeScript stub module whose exports are throw-on-call functions. Strict
+    // mode makes it a hard error; the default policy defers it (records the
+    // shared end-of-compile notice and keeps building) so a build with a
+    // peripheral `.wasm` dep compiles + runs its core — the wasm feature throws
+    // only if reached. Real `.wasm` ESM instantiation is the companion #5234.
+    //
+    // The synthesized source flows through the exact same parse/lower/codegen
+    // pipeline as the #5223 text-asset and JSON synthetic modules below — we
+    // just feed `raw_source` from the stub instead of reading the file as text.
+    let raw_source = if is_wasm {
+        let display_name = canonical
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("module.wasm");
+        let loc = canonical.to_string_lossy().to_string();
+        // Strict mode (broad `perry.strict` / `--strict-dynamic-import` /
+        // `perry.dynamicImport = "error"`) turns the deferred `.wasm` import into
+        // a hard compile error. `PERRY_ALLOW_EVAL=1` forces defer (shared AOT
+        // escape hatch), mirroring the dynamic-import deferral (#5230).
+        if ctx.strict_dynamic_import && !perry_hir::eval_classifier::eval_override_enabled() {
+            return Err(anyhow!(
+                ".wasm import {} cannot run in an ahead-of-time compiled binary \
+                 — full .wasm ESM instantiation is tracked in #5234 (strict mode)",
+                loc
+            ));
+        }
+        let bytes = fs::read(&canonical)
+            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+        let stub = synthesize_wasm_stub_module(&bytes, display_name);
+        perry_hir::record_deferred_aot_site(".wasm import", loc);
+        stub.source
+    } else {
+        // It's a TypeScript (or synthetic JSON/text) file to compile natively.
+        fs::read_to_string(&canonical)
+            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
+    };
     // JSON module import: turn the data file into a native ESM module whose
     // default export is the parsed value. JSON is a syntactic subset of a JS
     // expression, so `export default <json>;` parses and lowers like any other
