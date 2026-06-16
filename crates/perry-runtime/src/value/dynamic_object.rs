@@ -341,7 +341,12 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // work). Call-form `p.then(cb)` is lowered separately by codegen; this
     // covers the value-read path the generic getter previously dropped to
     // `undefined`.
-    {
+    //
+    // #5226: skip for off-GC-heap header-less allocations (small typed arrays
+    // — buffers were already handled above): they have no `GcHeader`, so the
+    // `ptr - GC_HEADER_SIZE` back-read faults at region boundaries. They are
+    // never Promises; fall through to the normal property handling.
+    if !crate::typedarray::is_offheap_sidetable_alloc(ptr as usize) {
         let gc_header = (ptr as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         // Typed arrays are `std::alloc`-backed with no GcHeader, so the byte at
         // `ptr - 8` can read as `GC_TYPE_PROMISE` (5) by coincidence; exclude

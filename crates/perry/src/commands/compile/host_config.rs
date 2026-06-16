@@ -358,6 +358,8 @@ pub(super) fn apply_pkg_and_toml_config(
                     ctx.strict_eval = strict;
                     // #5230: the broad `perry.strict` covers dynamic imports too.
                     ctx.strict_dynamic_import = strict;
+                    // #5245: …and recognized-but-unimplemented APIs.
+                    ctx.strict_unimplemented = strict;
                 }
                 if let Some(mode) = pkg
                     .get("perry")
@@ -540,6 +542,8 @@ pub(super) fn apply_pkg_and_toml_config(
                     ctx.strict_eval = strict;
                     // #5230: broad `perry.strict` covers dynamic imports too.
                     ctx.strict_dynamic_import = strict;
+                    // #5245: …and recognized-but-unimplemented APIs.
+                    ctx.strict_unimplemented = strict;
                 }
                 if let Some(mode) = perry_tbl.get("eval").and_then(|v| v.as_str()) {
                     match mode {
@@ -566,6 +570,11 @@ pub(super) fn apply_pkg_and_toml_config(
     if args.strict_dynamic_import {
         ctx.strict_dynamic_import = true;
     }
+    // #5245: `--strict-unimplemented` opts the recognized-but-unimplemented-API
+    // gate back into the historical hard `#463` refusal.
+    if args.strict_unimplemented {
+        ctx.strict_unimplemented = true;
+    }
     // Back-compat: `PERRY_ALLOW_EVAL` forces non-strict for a one-off build,
     // overriding any strict flag/config — for both eval and dynamic import
     // (shared AOT escape hatch, #5230).
@@ -573,10 +582,16 @@ pub(super) fn apply_pkg_and_toml_config(
         ctx.strict_eval = false;
         ctx.strict_dynamic_import = false;
     }
+    // #5245: `PERRY_ALLOW_UNIMPLEMENTED` is the back-compat escape hatch for the
+    // unimplemented-API gate — forces non-strict (defer) for a one-off build.
+    if perry_hir::eval_classifier::unimplemented_override_enabled() {
+        ctx.strict_unimplemented = false;
+    }
     // Install into the HIR thread-local before any lowering begins (re-applied
     // per rayon worker in collect_modules.rs, mirroring the dynamic-stdlib
     // dispatch knob above).
     perry_hir::set_eval_strict_mode(ctx.strict_eval);
+    perry_hir::set_unimplemented_strict_mode(ctx.strict_unimplemented);
 
     // #3527 (blocker #4): materialize `"*"` / `"@scope/*"` wildcard entries
     // in `perry.compilePackages` into concrete installed package names.

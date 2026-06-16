@@ -204,6 +204,11 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     if crate::value::addr_class::is_handle_band(ptr_usize) {
         return 0;
     }
+    // Off-GC-heap header-less allocations (small typed arrays / buffers) are
+    // never Promises and must not be header-probed (#5226).
+    if crate::typedarray::is_offheap_sidetable_alloc(ptr_usize) {
+        return 0;
+    }
     unsafe {
         let gc_header =
             (ptr_usize as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -720,6 +725,11 @@ fn is_native_array_value(value: f64) -> bool {
     if crate::value::addr_class::is_handle_band(ptr) {
         return false;
     }
+    // Off-GC-heap header-less typed arrays / buffers are not Arrays and must
+    // not be header-probed (#5226).
+    if crate::typedarray::is_offheap_sidetable_alloc(ptr) {
+        return false;
+    }
     unsafe {
         let header = (ptr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         matches!(
@@ -1222,7 +1232,11 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     }
 
     // Side-table-tracked heap types don't have ClassVTable entries; skip.
-    if crate::buffer::is_registered_buffer(raw_ptr)
+    // Off-GC-heap header-less allocations (small typed arrays / buffers) come
+    // first: they have no GcHeader, so they must be excluded before any probe
+    // that back-reads `raw_ptr - GC_HEADER_SIZE` — including the
+    // `is_date_cell_addr` call in this very chain (#5226).
+    if crate::typedarray::is_offheap_sidetable_alloc(raw_ptr)
         || crate::set::is_registered_set(raw_ptr)
         || crate::map::is_registered_map(raw_ptr)
         || crate::symbol::is_registered_symbol(raw_ptr)
@@ -1708,6 +1722,43 @@ mod tests {
     fn promise_probe_rejects_pointer_tagged_native_handles() {
         let fetch_family_handle = js_nanbox_pointer(0x40001);
         assert_eq!(js_value_is_promise(fetch_family_handle), 0);
+    }
+
+    // #5226: small typed arrays / buffers are system-`alloc`'d off the GC heap
+    // with NO 8-byte GcHeader prefix and are tracked only in side tables. The
+    // type-dispatch probes (`js_value_is_promise`, `is_date_cell_addr`, …) must
+    // recognize them via the side table and must NOT back-read
+    // `ptr - GC_HEADER_SIZE` — a read on a block at the start of a freshly
+    // mapped region crosses into the (unmapped) preceding page and segfaults.
+    // Reproduce that worst case with a guarded mapping: without the side-table
+    // skip these probes SIGSEGV; with it, they classify the block correctly.
+    #[cfg(unix)]
+    #[test]
+    fn type_probes_skip_offheap_typed_array_with_unmapped_preceding_page() {
+        unsafe {
+            let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+            let total = page * 2;
+            let base = libc::mmap(
+                std::ptr::null_mut(),
+                total,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(base, libc::MAP_FAILED);
+            // Guard the first page so any `ptr - GC_HEADER_SIZE` back-read faults.
+            assert_eq!(libc::mprotect(base, page, libc::PROT_NONE), 0);
+            let ta = (base as *mut u8).add(page) as *const crate::typedarray::TypedArrayHeader;
+            crate::typedarray::register_typed_array(ta, 0);
+
+            let value = js_nanbox_pointer(ta as i64);
+            assert_eq!(js_value_is_promise(value), 0);
+            assert!(!crate::date::is_date_cell_addr(ta as usize));
+
+            crate::typedarray::unregister_typed_array(ta);
+            assert_eq!(libc::munmap(base, total), 0);
+        }
     }
 
     extern "C" fn test_thenable_resolve_twice(

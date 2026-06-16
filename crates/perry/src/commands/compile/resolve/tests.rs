@@ -1788,4 +1788,121 @@ mod exports_candidates_tests {
             vec!["./esm/foo.js".to_string(), "./cjs/foo.cjs".to_string()]
         );
     }
+
+    /// #5237 — a Node "exports" *fallback array* (an ordered list of targets,
+    /// here a conditions-object followed by a plain string) must expand to its
+    /// inner targets. Before the fix the array form produced no candidates at
+    /// all, so the resolver fell through to the legacy `"module"` field.
+    #[test]
+    fn array_form_candidates_expand() {
+        let exports: serde_json::Value = serde_json::json!({
+            ".": [
+                { "import": "./index.mjs", "require": "./build/index.cjs" },
+                "./build/index.cjs"
+            ]
+        });
+        let candidates = resolve_exports_candidates(&exports, ".");
+        assert_eq!(
+            candidates,
+            vec!["./index.mjs".to_string(), "./build/index.cjs".to_string()]
+        );
+    }
+}
+
+/// #5237 — `"exports"`, when it covers the requested specifier, takes
+/// precedence over the legacy `"module"`/`"main"` fields (matching Node's
+/// resolution algorithm). The live regression was `y18n` (a `yargs` dep):
+/// perry picked its `"module": "./build/lib/index.js"` (a named-export-only
+/// file with no `default`) instead of the `exports.import` target
+/// `./index.mjs`, breaking `import y18n from "y18n"`.
+mod exports_over_module_precedence_tests {
+    use super::super::resolve_package_entry;
+
+    /// Lay out a package mirroring the #5237 minimal repro: `module` points at
+    /// a built `build/lib/index.js`, but an array-form `exports` points its
+    /// `import` condition at `./index.mjs`.
+    fn write_y18n_like_package(root: &std::path::Path) -> std::path::PathBuf {
+        let pkg = root.join("node_modules/y18n-like");
+        std::fs::create_dir_all(pkg.join("build/lib")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{
+                "name": "y18n-like",
+                "version": "1.0.0",
+                "type": "module",
+                "main": "./build/index.cjs",
+                "module": "./build/lib/index.js",
+                "exports": {
+                    ".": [
+                        { "import": "./index.mjs", "require": "./build/index.cjs" },
+                        "./build/index.cjs"
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("index.mjs"), "export default 1;\n").unwrap();
+        std::fs::write(pkg.join("build/lib/index.js"), "export function x(){}\n").unwrap();
+        std::fs::write(pkg.join("build/index.cjs"), "module.exports = 1;\n").unwrap();
+        pkg
+    }
+
+    #[test]
+    fn exports_import_wins_over_module_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = write_y18n_like_package(dir.path());
+
+        let resolved = resolve_package_entry(&pkg, None).expect("resolve entry");
+        assert_eq!(
+            resolved,
+            pkg.join("index.mjs"),
+            "exports.import (./index.mjs) must win over module (./build/lib/index.js)"
+        );
+    }
+
+    /// Regression: a package with `module` but NO `exports` still resolves via
+    /// the `module` field (and `main`), exactly as before.
+    #[test]
+    fn module_field_still_resolves_without_exports() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = dir.path().join("node_modules/legacy-mod");
+        std::fs::create_dir_all(pkg.join("dist")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{
+                "name": "legacy-mod",
+                "type": "module",
+                "main": "./dist/index.cjs",
+                "module": "./dist/index.mjs"
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("dist/index.mjs"), "export default 1;\n").unwrap();
+        std::fs::write(pkg.join("dist/index.cjs"), "module.exports = 1;\n").unwrap();
+
+        let resolved = resolve_package_entry(&pkg, None).expect("resolve entry");
+        assert_eq!(resolved, pkg.join("dist/index.mjs"));
+    }
+
+    /// Regression: a normal object-form `exports`-only package (no `module`)
+    /// resolves through `exports` unchanged.
+    #[test]
+    fn plain_object_exports_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = dir.path().join("node_modules/modern-pkg");
+        std::fs::create_dir_all(pkg.join("dist")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{
+                "name": "modern-pkg",
+                "type": "module",
+                "exports": { ".": { "import": "./dist/index.js" } }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("dist/index.js"), "export default 1;\n").unwrap();
+
+        let resolved = resolve_package_entry(&pkg, None).expect("resolve entry");
+        assert_eq!(resolved, pkg.join("dist/index.js"));
+    }
 }
