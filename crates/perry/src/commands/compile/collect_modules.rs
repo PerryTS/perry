@@ -27,8 +27,8 @@ use super::{
     cached_resolve_import, declaration_sidecar_for_resolved_import, extract_compile_package_dir,
     has_perry_native_library, is_declaration_file, is_in_compile_package,
     is_in_perry_native_package, is_js_file, is_recognized_text_asset, parse_cached,
-    parse_native_library_manifest,
-    parse_package_specifier, CompilationContext, JsModule, ParseCache,
+    parse_native_library_manifest, parse_package_specifier, CompilationContext, JsModule,
+    ParseCache,
 };
 
 mod create_require_transform;

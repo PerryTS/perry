@@ -880,7 +880,8 @@ pub(super) fn is_recognized_text_asset(path: &Path) -> bool {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         matches!(
             ext.to_ascii_lowercase().as_str(),
-            "txt" | "sql"
+            "txt"
+                | "sql"
                 | "md"
                 | "html"
                 | "htm"
