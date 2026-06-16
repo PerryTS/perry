@@ -518,6 +518,21 @@ impl LoweringContext {
         }
     }
 
+    /// Pre-seed class accessor names with cross-module class info collected
+    /// from already-lowered dependencies. This lets constructor-field
+    /// inference avoid creating data slots for inherited imported accessors.
+    pub fn seed_imported_class_accessors(
+        &mut self,
+        seeds: &std::collections::HashMap<String, Vec<String>>,
+    ) {
+        for (name, accessors) in seeds {
+            if !self.class_accessor_names.iter().any(|(n, _)| n == name) {
+                self.class_accessor_names
+                    .push((name.clone(), accessors.clone()));
+            }
+        }
+    }
+
     /// Issue #302: look up the declared type of a single instance field on a
     /// class. Returns `None` if the class isn't registered or the field
     /// name doesn't appear in the class's declared field list.

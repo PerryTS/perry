@@ -79,6 +79,34 @@ pub(crate) fn class_field_global_index(
     fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
         fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
     }
+    fn accessor_in_chain(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
+        let mut current = Some(class_name.to_string());
+        let mut seen_class_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut depth = 0usize;
+        while let Some(name) = current {
+            depth += 1;
+            if depth > 64 || !seen_class_names.insert(name.clone()) {
+                return true;
+            }
+            let Some(class) = ctx.classes.get(&name) else {
+                return true;
+            };
+            if class.getters.iter().any(|(n, _)| n == property)
+                || class.setters.iter().any(|(n, _)| n == property)
+            {
+                return true;
+            }
+            current = class.extends_name.clone();
+        }
+        false
+    }
+    // A getter/setter anywhere on the prototype chain owns this property name
+    // for normal JS semantics. Do not emit direct packed-field access even if
+    // HIR inferred a same-named field on a subclass assignment.
+    if accessor_in_chain(ctx, class_name, property) {
+        return None;
+    }
     fn walk(
         ctx: &FnCtx<'_>,
         class_name: &str,
@@ -96,13 +124,6 @@ pub(crate) fn class_field_global_index(
             return None;
         }
         let class = ctx.classes.get(class_name)?;
-        // Bail if a getter/setter shadows the field — those need real
-        // method dispatch, not a direct memory access.
-        if class.getters.iter().any(|(n, _)| n == property)
-            || class.setters.iter().any(|(n, _)| n == property)
-        {
-            return None;
-        }
         // Compute the byte-offset contribution from this class's parent.
         let parent_count = if let Some(parent_name) = class.extends_name.as_deref() {
             let mut p_count = 0u32;

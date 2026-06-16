@@ -461,7 +461,7 @@ pub fn lower_class_decl(
                 // call-site lookup via has_static_method() succeeds.
                 static_method_names.push(format!("#{}", method.key.name));
             }
-            ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            ast::ClassMember::ClassProp(prop) if prop.is_static && !prop.declare => {
                 if let ast::PropName::Ident(ident) = &prop.key {
                     static_field_names.push(ident.sym.to_string());
                 }
@@ -815,6 +815,9 @@ pub fn lower_class_decl(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
+                if prop.declare {
+                    continue;
+                }
                 // Computed-key fields (`[Symbol.for("k")] = init`) flow through
                 // here for both instance AND static positions.
                 // `lower_class_prop` captures the key expression in
@@ -1390,7 +1393,7 @@ pub fn lower_class_from_ast(
             {
                 static_method_names.push(format!("#{}", method.key.name));
             }
-            ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            ast::ClassMember::ClassProp(prop) if prop.is_static && !prop.declare => {
                 if let ast::PropName::Ident(ident) = &prop.key {
                     static_field_names.push(ident.sym.to_string());
                 }
@@ -1513,6 +1516,9 @@ pub fn lower_class_from_ast(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
+                if prop.declare {
+                    continue;
+                }
                 // Computed-key fields (`[Symbol.for("k")] = init`) flow through
                 // here for both instance AND static positions.
                 // `lower_class_prop` captures the key expression in

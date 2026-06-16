@@ -164,6 +164,8 @@ pub(super) fn rerun_collect_with_class_field_types(
         return Ok(());
     }
     let mut field_map: HashMap<String, Vec<(String, perry_types::Type)>> = HashMap::new();
+    let mut accessor_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut parent_map: HashMap<String, String> = HashMap::new();
     for hir_module in ctx.native_modules.values() {
         for class in &hir_module.classes {
             let fields: Vec<(String, perry_types::Type)> = class
@@ -172,12 +174,48 @@ pub(super) fn rerun_collect_with_class_field_types(
                 .map(|f| (f.name.clone(), f.ty.clone()))
                 .collect();
             field_map.entry(class.name.clone()).or_insert(fields);
+            let mut accessors = Vec::new();
+            let mut seen = HashSet::new();
+            for name in class
+                .getters
+                .iter()
+                .map(|(n, _)| n)
+                .chain(class.setters.iter().map(|(n, _)| n))
+            {
+                if seen.insert(name.clone()) {
+                    accessors.push(name.clone());
+                }
+            }
+            accessor_map.entry(class.name.clone()).or_insert(accessors);
+            if let Some(parent_name) = &class.extends_name {
+                parent_map
+                    .entry(class.name.clone())
+                    .or_insert_with(|| parent_name.clone());
+            }
         }
     }
-    if field_map.is_empty() {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (class_name, parent_name) in parent_map.clone() {
+            let parent_accessors = accessor_map.get(&parent_name).cloned().unwrap_or_default();
+            if parent_accessors.is_empty() {
+                continue;
+            }
+            let entry = accessor_map.entry(class_name).or_default();
+            for accessor in parent_accessors {
+                if !entry.contains(&accessor) {
+                    entry.push(accessor);
+                    changed = true;
+                }
+            }
+        }
+    }
+    if field_map.is_empty() && accessor_map.is_empty() {
         return Ok(());
     }
     ctx.cross_module_class_field_types = field_map;
+    ctx.cross_module_class_accessors = accessor_map;
     ctx.native_modules.clear();
     visited.clear();
     *next_class_id = 1;

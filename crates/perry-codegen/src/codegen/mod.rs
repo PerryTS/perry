@@ -298,9 +298,50 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             class_ids.insert(ic.name.clone(), class_id);
         }
 
+        let imported_getters: Vec<perry_hir::Function> = ic
+            .getter_names
+            .iter()
+            .map(|prop| perry_hir::Function {
+                id: 0,
+                name: format!("get_{}", prop),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: perry_types::Type::Any,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            })
+            .collect();
+        let imported_setters: Vec<perry_hir::Function> = ic
+            .setter_names
+            .iter()
+            .map(|prop| perry_hir::Function {
+                id: 0,
+                name: format!("set_{}", prop),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: perry_types::Type::Any,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            })
+            .collect();
+
         // Build a stub Class with the minimum fields the codegen needs.
-        // Most fields are empty — only name, extends_name, and methods
-        // are consulted by dispatch.
+        // Imported accessor bodies execute from the source module; carrying
+        // their names here keeps dispatch and field inference conservative.
         let stub = perry_hir::Class {
             id: 0, // imported — no local ClassId
             name: effective_name.to_string(),
@@ -353,8 +394,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     decorators: Vec::new(),
                 })
                 .collect(),
-            getters: Vec::new(),
-            setters: Vec::new(),
+            getters: ic
+                .getter_names
+                .iter()
+                .cloned()
+                .zip(imported_getters)
+                .collect(),
+            setters: ic
+                .setter_names
+                .iter()
+                .cloned()
+                .zip(imported_setters)
+                .collect(),
             static_accessor_names: Vec::new(),
             static_accessor_fn_ids: Vec::new(),
             static_fields: Vec::new(),

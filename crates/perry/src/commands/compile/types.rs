@@ -620,6 +620,11 @@ pub struct CompilationContext {
     /// type is unknown and the `SetValues`/`MapEntries` wrap is skipped at
     /// `lower_decl.rs:3737-3747`. See ECS demo-simple repro / #412.
     pub cross_module_class_field_types: HashMap<String, Vec<(String, perry_types::Type)>>,
+    /// Cross-module class accessor names collected alongside field types.
+    /// HIR lowering uses this to avoid inferring subclass `this.x = ...`
+    /// constructor writes as data fields when `x` is an inherited accessor
+    /// from an imported superclass.
+    pub cross_module_class_accessors: HashMap<String, Vec<String>>,
     /// Minimum Windows version for `--target windows` builds. One of `"7"`,
     /// `"8"`, `"10"`. `"10"` (default) means "no subsystem version suffix";
     /// `"7"` and `"8"` emit `,5.1` / `,6.02` on the linker `/SUBSYSTEM:` flag
@@ -867,6 +872,7 @@ impl CompilationContext {
             uses_dgram: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
+            cross_module_class_accessors: HashMap::new(),
             min_windows_version: "10".to_string(),
             windows_subsystem: "auto".to_string(),
             entry_canonical: None,
