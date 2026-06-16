@@ -54,6 +54,7 @@ mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;
 mod native_module_dispatch_crypto;
+mod native_module_registry;
 mod native_module_stream;
 mod native_this_alias;
 mod object_literal_ops;
