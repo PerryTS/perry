@@ -38,6 +38,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Read-only job (build + test); don't leave the GITHUB_TOKEN in the
+          # local git config (least privilege — OWASP / CodeRabbit).
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
