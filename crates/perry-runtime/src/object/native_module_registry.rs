@@ -98,7 +98,7 @@ pub extern "C" fn js_nm_install_domain() { NM_DISPATCH_REGISTRY[NmBucket::Domain
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() { NM_DISPATCH_REGISTRY[NmBucket::Events as usize].store(nm_dispatch_events as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_fs() { NM_DISPATCH_REGISTRY[NmBucket::Fs as usize].store(nm_dispatch_fs as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_fs() { NM_DISPATCH_REGISTRY[NmBucket::Fs as usize].store(nm_dispatch_fs as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Fs, nm_ctor_fs); }
 #[no_mangle]
 pub extern "C" fn js_nm_install_http() { NM_DISPATCH_REGISTRY[NmBucket::Http as usize].store(nm_dispatch_http as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
@@ -120,21 +120,21 @@ pub extern "C" fn js_nm_install_punycode() { NM_DISPATCH_REGISTRY[NmBucket::Puny
 #[no_mangle]
 pub extern "C" fn js_nm_install_querystring() { NM_DISPATCH_REGISTRY[NmBucket::Querystring as usize].store(nm_dispatch_querystring as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_readline() { NM_DISPATCH_REGISTRY[NmBucket::Readline as usize].store(nm_dispatch_readline as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_readline() { NM_DISPATCH_REGISTRY[NmBucket::Readline as usize].store(nm_dispatch_readline as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Readline, nm_ctor_readline); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_repl() { NM_DISPATCH_REGISTRY[NmBucket::Repl as usize].store(nm_dispatch_repl as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_repl() { NM_DISPATCH_REGISTRY[NmBucket::Repl as usize].store(nm_dispatch_repl as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Repl, nm_ctor_repl); }
 #[no_mangle]
 pub extern "C" fn js_nm_install_sea() { NM_DISPATCH_REGISTRY[NmBucket::Sea as usize].store(nm_dispatch_sea as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
 pub extern "C" fn js_nm_install_sqlite() { NM_DISPATCH_REGISTRY[NmBucket::Sqlite as usize].store(nm_dispatch_sqlite as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_stream() { NM_DISPATCH_REGISTRY[NmBucket::Stream as usize].store(nm_dispatch_stream as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_stream() { NM_DISPATCH_REGISTRY[NmBucket::Stream as usize].store(nm_dispatch_stream as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Stream, nm_ctor_stream); }
 #[no_mangle]
 pub extern "C" fn js_nm_install_timers() { NM_DISPATCH_REGISTRY[NmBucket::Timers as usize].store(nm_dispatch_timers as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_tls() { NM_DISPATCH_REGISTRY[NmBucket::Tls as usize].store(nm_dispatch_tls as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_tls() { NM_DISPATCH_REGISTRY[NmBucket::Tls as usize].store(nm_dispatch_tls as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Tls, nm_ctor_tls); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_tty() { NM_DISPATCH_REGISTRY[NmBucket::Tty as usize].store(nm_dispatch_tty as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_tty() { NM_DISPATCH_REGISTRY[NmBucket::Tty as usize].store(nm_dispatch_tty as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Tty, nm_ctor_tty); }
 #[no_mangle]
 pub extern "C" fn js_nm_install_url() { NM_DISPATCH_REGISTRY[NmBucket::Url as usize].store(nm_dispatch_url as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
@@ -142,9 +142,9 @@ pub extern "C" fn js_nm_install_util() { NM_DISPATCH_REGISTRY[NmBucket::Util as 
 #[no_mangle]
 pub extern "C" fn js_nm_install_v8() { NM_DISPATCH_REGISTRY[NmBucket::V8 as usize].store(nm_dispatch_v8 as NmDispatchFn as *mut (), Ordering::Relaxed); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_vm() { NM_DISPATCH_REGISTRY[NmBucket::Vm as usize].store(nm_dispatch_vm as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_vm() { NM_DISPATCH_REGISTRY[NmBucket::Vm as usize].store(nm_dispatch_vm as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Vm, nm_ctor_vm); }
 #[no_mangle]
-pub extern "C" fn js_nm_install_wasi() { NM_DISPATCH_REGISTRY[NmBucket::Wasi as usize].store(nm_dispatch_wasi as NmDispatchFn as *mut (), Ordering::Relaxed); }
+pub extern "C" fn js_nm_install_wasi() { NM_DISPATCH_REGISTRY[NmBucket::Wasi as usize].store(nm_dispatch_wasi as NmDispatchFn as *mut (), Ordering::Relaxed); nm_register_ctor(NmBucket::Wasi, nm_ctor_wasi); }
 #[no_mangle]
 pub extern "C" fn js_nm_install_zlib() { NM_DISPATCH_REGISTRY[NmBucket::Zlib as usize].store(nm_dispatch_zlib as NmDispatchFn as *mut (), Ordering::Relaxed); }
 
@@ -226,4 +226,40 @@ pub(crate) fn nm_run_install_all_hook() {
     if !p.is_null() {
         unsafe { std::mem::transmute::<*mut (), extern "C" fn()>(p)() };
     }
+}
+
+// ── Per-module constructor registry (devirt phase 2) ───────────────────────
+// `new <namespace>.<Ctor>()` for node-module-namespaced constructors. Mirrors
+// the method-dispatch registry: populated by `js_nm_install_<module>()` (only
+// the 8 ctor-owning buckets register a fn), looked up by `js_new_function_construct`.
+use super::class_registry::{
+    nm_ctor_fs, nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty,
+    nm_ctor_vm, nm_ctor_wasi,
+};
+
+type NmCtorFn = unsafe fn(&str, &str, *const f64, usize) -> Option<f64>;
+
+static NM_CTOR_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
+    [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
+
+/// Look up the installed per-module constructor fn for `module`. `None` if the
+/// module owns no namespaced constructors or its install was never emitted.
+pub(crate) fn nm_ctor_lookup(module: &str) -> Option<NmCtorFn> {
+    // `readline/promises` (and friends) bucket on the first path segment.
+    let b = nm_module_index(module)
+        .or_else(|| nm_module_index(module.split('/').next().unwrap_or(module)))?;
+    let p = NM_CTOR_REGISTRY[b as usize].load(Ordering::Relaxed);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), NmCtorFn>(p) })
+    }
+}
+
+/// Register a bucket's constructor fn. Called from the relevant
+/// `js_nm_install_<module>()` so a ctor is reachable only when its module is
+/// imported. `black_box` is unnecessary here (array slot indexed by a runtime
+/// bucket id, like NM_DISPATCH_REGISTRY — not speculatively devirtualizable).
+fn nm_register_ctor(b: NmBucket, f: NmCtorFn) {
+    NM_CTOR_REGISTRY[b as usize].store(f as *mut (), Ordering::Relaxed);
 }

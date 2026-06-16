@@ -1632,6 +1632,161 @@ pub extern "C" fn js_new_target_value() -> f64 {
 /// empty-object allocation when the function value isn't a closure
 /// (preserves the pre-fix baseline for misuse).
 #[no_mangle]
+// ── Per-module constructor buckets (devirt phase 2) ────────────────────────
+// `new <namespace>.<Ctor>()` for node-module-namespaced constructors that the
+// old monolithic `js_new_function_construct` dispatched with a direct call to
+// the subsystem's `*_new` — statically pinning tty/fs/vm/tls/wasi/repl/stream/
+// readline handlers into every binary. Each is now a per-module fn reached only
+// through NM_CTOR_REGISTRY, registered by the same `js_nm_install_<module>()`
+// that codegen emits when the module is imported. `None` ⇒ not a ctor this
+// module owns; caller falls through (e.g. to the http/events/zlib dynamic
+// dispatchers, which already strip on their own). Helper to read arg N.
+#[inline]
+unsafe fn nm_ctor_arg(args_ptr: *const f64, args_len: usize, n: usize) -> f64 {
+    if !args_ptr.is_null() && args_len > n {
+        *args_ptr.add(n)
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+}
+
+pub(crate) unsafe fn nm_ctor_tty(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if matches!(method, "ReadStream" | "WriteStream") {
+        let fd = nm_ctor_arg(args_ptr, args_len, 0);
+        return Some(if method == "ReadStream" {
+            crate::tty::js_tty_read_stream_new(fd)
+        } else {
+            crate::tty::js_tty_write_stream_new(fd)
+        });
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_fs(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "Utf8Stream" {
+        return Some(crate::fs::js_fs_utf8_stream_new(nm_ctor_arg(args_ptr, args_len, 0)));
+    }
+    if matches!(
+        method,
+        "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+    ) {
+        let path = nm_ctor_arg(args_ptr, args_len, 0);
+        let options = nm_ctor_arg(args_ptr, args_len, 1);
+        return Some(if matches!(method, "ReadStream" | "FileReadStream") {
+            crate::fs::js_fs_create_read_stream(path, options)
+        } else {
+            crate::fs::js_fs_create_write_stream(path, options)
+        });
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_vm(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "Script" {
+        let code = nm_ctor_arg(args_ptr, args_len, 0);
+        let options = nm_ctor_arg(args_ptr, args_len, 1);
+        return Some(crate::node_vm::js_vm_script_new(code, options));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_tls(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "SecureContext" {
+        return Some(crate::tls::js_tls_secure_context_new(nm_ctor_arg(
+            args_ptr, args_len, 0,
+        )));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_wasi(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "WASI" {
+        return Some(crate::wasi::js_wasi_new(nm_ctor_arg(args_ptr, args_len, 0)));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_readline(
+    module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if module == "readline/promises" && method == "Readline" {
+        let output = nm_ctor_arg(args_ptr, args_len, 0);
+        let options = nm_ctor_arg(args_ptr, args_len, 1);
+        return Some(crate::node_submodules::js_readline_promises_readline_new(
+            output, options,
+        ));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_repl(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if matches!(method, "Recoverable" | "REPLServer") {
+        let first = nm_ctor_arg(args_ptr, args_len, 0);
+        return Some(if method == "Recoverable" {
+            crate::node_repl::js_repl_recoverable_new(first)
+        } else {
+            crate::node_repl::js_repl_repl_server_new(first)
+        });
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_stream(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if matches!(
+        method,
+        "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+    ) {
+        let opts = nm_ctor_arg(args_ptr, args_len, 0);
+        return Some(match method {
+            "Readable" => crate::node_stream::js_node_stream_readable_new(opts),
+            "Writable" => crate::node_stream::js_node_stream_writable_new(opts),
+            "Duplex" => crate::node_stream::js_node_stream_duplex_new(opts),
+            "Transform" => crate::node_stream::js_node_stream_transform_new(opts),
+            "PassThrough" => crate::node_stream::js_node_stream_passthrough_new(opts),
+            _ => unreachable!(),
+        });
+    }
+    None
+}
+
 pub unsafe extern "C" fn js_new_function_construct(
     func_value: f64,
     args_ptr: *const f64,
@@ -1704,131 +1859,16 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return dispatch(method.as_ptr(), method.len(), args_ptr, args_len, 1);
             }
         }
-        if module == "tty" && matches!(method.as_str(), "ReadStream" | "WriteStream") {
-            let fd = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return if method == "ReadStream" {
-                crate::tty::js_tty_read_stream_new(fd)
-            } else {
-                crate::tty::js_tty_write_stream_new(fd)
-            };
-        }
-        if module == "fs" && method == "Utf8Stream" {
-            let options = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::fs::js_fs_utf8_stream_new(options);
-        }
-        if module == "vm" && method == "Script" {
-            let code = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            let options = if !args_ptr.is_null() && args_len > 1 {
-                *args_ptr.add(1)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::node_vm::js_vm_script_new(code, options);
-        }
-        if module == "fs"
-            && matches!(
-                method.as_str(),
-                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
-            )
-        {
-            let path = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            let options = if !args_ptr.is_null() && args_len > 1 {
-                *args_ptr.add(1)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return if matches!(method.as_str(), "ReadStream" | "FileReadStream") {
-                crate::fs::js_fs_create_read_stream(path, options)
-            } else {
-                crate::fs::js_fs_create_write_stream(path, options)
-            };
-        }
-        if module == "tls" && method == "SecureContext" {
-            let options = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::tls::js_tls_secure_context_new(options);
-        }
-        if module == "wasi" && method == "WASI" {
-            let options = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::wasi::js_wasi_new(options);
-        }
-        if module == "readline/promises" && method == "Readline" {
-            let output = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            let options = if !args_ptr.is_null() && args_len > 1 {
-                *args_ptr.add(1)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::node_submodules::js_readline_promises_readline_new(output, options);
-        }
-        if module == "repl" && matches!(method.as_str(), "Recoverable" | "REPLServer") {
-            let first = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return if method == "Recoverable" {
-                crate::node_repl::js_repl_recoverable_new(first)
-            } else {
-                crate::node_repl::js_repl_repl_server_new(first)
-            };
-        }
-        // #3663: `new Readable(opts)` (and Writable/Duplex/Transform/PassThrough)
-        // where the constructor binding came through any aliasing path the
-        // compiler can't resolve to a bare `Expr::New` — `const { Readable } =
-        // require('stream')`, `const s = require('stream'); new s.Readable()`,
-        // or `const R = stream.Readable; new R()`. In each case the callee
-        // value is the `stream.<Ctor>` bound-method closure, so dispatch to the
-        // same runtime constructors the named-import path uses. Without this the
-        // call falls through to the empty-object baseline and the resulting
-        // object has no EventEmitter/Writable methods, so `.on()`/`.write()`/
-        // `.pipe()` throw "is not a function".
-        if module == "stream"
-            && matches!(
-                method.as_str(),
-                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
-            )
-        {
-            let opts = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return match method.as_str() {
-                "Readable" => crate::node_stream::js_node_stream_readable_new(opts),
-                "Writable" => crate::node_stream::js_node_stream_writable_new(opts),
-                "Duplex" => crate::node_stream::js_node_stream_duplex_new(opts),
-                "Transform" => crate::node_stream::js_node_stream_transform_new(opts),
-                "PassThrough" => crate::node_stream::js_node_stream_passthrough_new(opts),
-                _ => unreachable!(),
-            };
+        // Devirt phase 2: node-module-namespaced constructors (tty/fs/vm/tls/
+        // wasi/readline/repl/stream) dispatch through the per-module ctor
+        // registry, populated by `js_nm_install_<module>()` at import. Each
+        // unimported module's constructors are referenced only via that install
+        // symbol, so they dead-strip. `None` falls through to the dynamic-
+        // dispatch ctors below (http/events/zlib) and the global-name match.
+        if let Some(ctor) = crate::object::nm_ctor_lookup(&module) {
+            if let Some(result) = ctor(&module, &method, args_ptr, args_len) {
+                return result;
+            }
         }
         // #4904: `new http.Agent(opts)` / `new http.ClientRequest(opts)` /
         // `new http.IncomingMessage(socket)` / `new http.ServerResponse(req)`
