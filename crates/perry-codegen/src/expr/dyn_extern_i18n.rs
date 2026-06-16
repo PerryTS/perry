@@ -199,6 +199,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let mod_label = emit_string_literal_global(ctx, &name);
                         let mod_len = name.len();
                         let blk = ctx.block();
+                        if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
+                            blk.call_void(s, &[]);
+                        }
                         let ns_val = blk.call(
                             DOUBLE,
                             "js_create_native_module_namespace",
@@ -320,7 +323,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let name = name.to_string();
                     let mod_label = emit_string_literal_global(ctx, &name);
                     let mod_len = name.len();
-                    ctx.block().call(
+                    let blk = ctx.block();
+                    if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
+                        blk.call_void(s, &[]);
+                    }
+                    blk.call(
                         DOUBLE,
                         "js_create_native_module_namespace",
                         &[(PTR, &mod_label), (I64, &mod_len.to_string())],
@@ -627,6 +634,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let module_label = emit_string_literal_global(ctx, &bare);
                     let module_len = bare.len();
                     let blk = ctx.block();
+                    if let Some(s) = crate::nm_install::nm_install_symbol(&bare) {
+                        blk.call_void(s, &[]);
+                    }
                     return Ok(blk.call(
                         DOUBLE,
                         "js_create_native_module_namespace",

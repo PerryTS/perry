@@ -746,6 +746,7 @@ pub(crate) unsafe fn nm_dispatch_dgram(ctx: &NmCtx, module_name: &str, method_na
     let _ = (obj, args_ptr, args_len, assert_skip_prototype);
     nm_general_closures!(obj, args_ptr, args_len, arg, i32_arg, bool_to_f64, str_to_f64, pack_args, pack_args_from, bool_tag, ptr_addr, optional_ptr_addr, _arg_event_ptr, arg_bits, _arg_closure_ptr, ptr_to_f64, typed_kind);
     match (module_name, method_name) {
+        #[cfg(feature = "mod-dgram")]
         ("dgram", "createSocket") | ("dgram", "Socket") => {
             crate::dgram::js_dgram_create_socket(pack_args())
         }
@@ -1645,7 +1646,6 @@ pub(crate) unsafe fn nm_dispatch_punycode(ctx: &NmCtx, module_name: &str, method
         // `module: "dgram"` usage), so this arm — and the `js_dgram_*` externs
         // it calls — are absent otherwise. Unreachable when off (a dgram
         // namespace can't exist without the import that enables the feature).
-        #[cfg(feature = "mod-dgram")]
         _ => f64::from_bits(JSValue::undefined().bits()),
     }
 }
