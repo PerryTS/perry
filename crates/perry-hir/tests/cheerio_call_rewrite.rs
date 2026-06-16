@@ -120,7 +120,7 @@ fn non_native_fluent_chains_are_walked_linearly() {
                 return_type: Type::Any,
             }],
             type_args: Vec::new(),
-        byte_offset: 0,
+            byte_offset: 0,
         };
     }
 
