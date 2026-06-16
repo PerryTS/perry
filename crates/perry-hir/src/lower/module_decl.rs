@@ -486,7 +486,7 @@ pub(crate) fn lower_module_decl(
                     if let Some((module, class)) =
                         native_instance_from_return_type(&func.return_type)
                     {
-                        ctx.func_return_native_instances.push((
+                        ctx.push_func_return_native_instance((
                             func_name.clone(),
                             module.to_string(),
                             class.to_string(),
@@ -784,7 +784,7 @@ pub(crate) fn lower_module_decl(
                                                         // Without this, pool = mysql.createPool() at module top level loses
                                                         // its native tracking when function scopes are entered/exited,
                                                         // causing pool.query() inside functions to miss the Pool dispatch.
-                                                        ctx.module_native_instances.push((
+                                                        ctx.push_module_native_instance((
                                                             name.clone(),
                                                             class_module,
                                                             class_name.to_string(),
@@ -868,7 +868,7 @@ pub(crate) fn lower_module_decl(
                                                 module.clone(),
                                                 class_name.to_string(),
                                             );
-                                            ctx.module_native_instances.push((
+                                            ctx.push_module_native_instance((
                                                 name.clone(),
                                                 module,
                                                 class_name.to_string(),
@@ -969,7 +969,7 @@ pub(crate) fn lower_module_decl(
                                                 module_name.clone(),
                                                 class_name_str.to_string(),
                                             );
-                                            ctx.module_native_instances.push((
+                                            ctx.push_module_native_instance((
                                                 name.clone(),
                                                 module_name,
                                                 class_name_str.to_string(),
@@ -1011,7 +1011,7 @@ pub(crate) fn lower_module_decl(
                                                     module_name.clone(),
                                                     class_name_str.to_string(),
                                                 );
-                                                ctx.module_native_instances.push((
+                                                ctx.push_module_native_instance((
                                                     name.clone(),
                                                     module_name,
                                                     class_name_str.to_string(),
@@ -1141,7 +1141,7 @@ pub(crate) fn lower_module_decl(
                                             }
                                         };
                                         if let Some((module, class)) = module_info {
-                                            ctx.func_return_native_instances.push((
+                                            ctx.push_func_return_native_instance((
                                                 name.clone(),
                                                 module.to_string(),
                                                 class.to_string(),
@@ -1699,7 +1699,7 @@ pub(crate) fn lower_module_decl(
                             if let Some((mod_name, class)) =
                                 native_instance_from_return_type(&func.return_type)
                             {
-                                ctx.func_return_native_instances.push((
+                                ctx.push_func_return_native_instance((
                                     func_name.clone(),
                                     mod_name.to_string(),
                                     class.to_string(),
@@ -2234,7 +2234,7 @@ pub(crate) fn lower_namespace_as_class(
                         if let Some((module, class)) =
                             native_instance_from_return_type(&func.return_type)
                         {
-                            ctx.func_return_native_instances.push((
+                            ctx.push_func_return_native_instance((
                                 func.name.clone(),
                                 module.to_string(),
                                 class.to_string(),

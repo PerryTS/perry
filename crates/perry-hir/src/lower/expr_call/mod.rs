@@ -143,7 +143,7 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     // are likewise out of scope once we unwind past their owning
     // call). `truncate` is a no-op when nothing was added.
     if ctx.native_instances.len() > ni_mark {
-        ctx.native_instances.truncate(ni_mark);
+        ctx.truncate_native_instances(ni_mark);
     }
     result
 }
