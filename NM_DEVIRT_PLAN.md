@@ -54,10 +54,13 @@ sound graceful degradation (install_all), semantics never change with a build fl
 [x] generated: NmCtx + nm_general_closures! macro + thin router + 37 nm_dispatch_<b> fns (native_module_dispatch.rs)
 [x] registry: NmBucket + NM_DISPATCH_REGISTRY + nm_module_index + 37 js_nm_install_<b>() + js_nm_install_all() (native_module_registry.rs)
 [x] **perry-runtime compiles GREEN** (cargo build -p perry-runtime, 0 errors)
-[ ] CODEGEN: emit js_nm_install_<b>() at each js_create_native_module_namespace site (8 sites, main static_field_meta.rs:572); install_all on dynamic; declare externs in runtime_decls. REQUIRED for correctness — until wired, native-module method dispatch returns undefined (registry empty).
-[ ] internal creators node_v8/perf_hooks call js_nm_install_v8()/perf()
-[ ] full perry build + correctness test (import os/process) + measure hello-world delta
-[ ] constructor-dispatcher (js_new_function_construct) — phase 2
+[x] CODEGEN: emit js_nm_install_<b>() at all 5 js_create_native_module_namespace sites (nm_install.rs nm_install_symbol; externs declared in runtime_decls/objects.rs). perry builds green.
+[x] CORRECTNESS verified byte-identical to node: hello-world, import os, import path, global process (cwd/pid/argv), util.format/inspect/types, querystring, assert.
+[x] **MEASURED: hello-world __text 4,667,824 → 4,058,936 = −608,888 B (−13%); binary 5.4MB → 4.7MB.** (baseline = pristine origin/main perry.)
+[ ] FOLLOW-UPS:
+    - install_all NOT yet emitted for truly-dynamic `import(runtimeVar)` of a native module → that path's method dispatch would return undefined. Wire js_nm_install_all() at the dynamic-import codegen site (the await-import-of-literal path IS covered). Rare; static imports + global process all work.
+    - node_v8/perf_hooks/cluster internal creators: covered because reachable only when their module is imported (→ codegen install ran). Verify with a v8-serializer / perf_hooks test.
+[ ] constructor-dispatcher (js_new_function_construct, class_registry.rs) — phase 2 (residual child_process/cluster/readline syms still pinned by it; another chunk of __text).
 
 ## Generators (in /tmp, re-runnable from git HEAD)
 /tmp/nm_generate.py (dispatch file), /tmp/nm_gen_registry.py (registry). Both read
