@@ -1,13 +1,3 @@
-## v0.5.1176 — fix(compile): bind node-builtin named imports used as values inside compiled packages (#5242)
-
-A named import of a node builtin (`import { relative, join } from 'path'`) used as a **value** — e.g. an object-literal shorthand `{ path: { relative, join } }` — inside a natively-compiled package (`perry.compilePackages`) resolved to `undefined`, so `shim.path.relative(...)` threw `TypeError: relative is not a function`. yargs's `.mjs` hit this.
-
-**Root cause:** Object-literal lowering (`crates/perry-hir/src/lower/expr_object.rs`) resolves a shorthand property name through `lookup_local` / `lookup_func` / `lookup_imported_func` / `lookup_class` / `builtin_global_value_expr`, but had **no** `lookup_native_module` arm. A builtin named import is registered via `register_native_module` (local `relative` → module `path`, method `relative`), so the shorthand fell through and was silently dropped — the closed-shape path `bail`ed and the legacy path `continue`d, leaving the object property unset. This was not package-specific: top-level user code `const o = { relative }` had the same gap; it only surfaced via compiled packages because yargs uses the shim pattern. Direct calls (`relative(...)`) and member access (`path.sep`) already worked because those go through dedicated call/member lowering, not the shorthand-value path.
-
-**Fix:** Extracted the bare-identifier native-module-binding-to-value logic from `lower_expr.rs` (the `lookup_native_module` arm — os.EOL/devNull, buffer constants, worker_threads.workerData, process named props, cjs-style `.default`, else `NativeModuleRef`) into a reusable `native_module_binding_value(ctx, name)` helper, and call it from both object-literal shorthand handlers (closed-shape + legacy) before they bail/drop. This mirrors exactly what the bare identifier reference produces, so `{ relative }` and `relative` resolve to the same callable.
-
-Tests: `crates/perry-hir/src/lower/tests.rs` — `native_module_binding_value` for a named `path.relative` import (→ `PropertyGet(NativeModuleRef("path"), "relative")`), `os.EOL` (→ `OsEOL`), and a non-cjs namespace import (→ `NativeModuleRef`). End-to-end: the #5242 yargs-shaped repro now prints `function` + `../c` (matching Node), and `import { EOL } from 'os'` / `import { existsSync } from 'fs'` used inside a compiled package bind correctly; default/namespace package imports and top-level user builtin imports unaffected.
-
 ## v0.5.1175 — fix(http): `IncomingMessage.resume()`/`.pause()` return `this` so `res.resume().on('end', …)` chains (#4975)
 
 Part of the node:http/https behavioral-parity tail (#4975). `Readable.pause()`
