@@ -170,7 +170,10 @@ impl StringPool {
             return None;
         }
         // 1-based line = 1 + count of newlines before the offset.
-        let line = 1 + src.as_bytes()[..offset].iter().filter(|&&b| b == b'\n').count();
+        let line = 1 + src.as_bytes()[..offset]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
         Some((file.as_str(), line as u32))
     }
 

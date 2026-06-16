@@ -751,9 +751,7 @@ fn ensure_reader_started() {
         // flowing mode this is the last 'data' chunk for input like
         // `printf "abc"` (no final newline); otherwise it's a final 'line'.
         if !line_buf.is_empty() && !STDIN_DESTROYED.load(Ordering::Acquire) {
-            if STDIN_DATA_FLOWING.load(Ordering::Acquire)
-                && !RAW_MODE.load(Ordering::Acquire)
-            {
+            if STDIN_DATA_FLOWING.load(Ordering::Acquire) && !RAW_MODE.load(Ordering::Acquire) {
                 if let Ok(mut q) = PENDING_DATA.lock() {
                     q.push(std::mem::take(&mut line_buf));
                 }
@@ -1503,8 +1501,7 @@ pub extern "C" fn js_readline_has_active() -> i32 {
         && !destroyed
         && refed
         && !paused
-        && (((RAW_MODE.load(Ordering::Acquire)
-            || STDIN_DATA_FLOWING.load(Ordering::Acquire))
+        && (((RAW_MODE.load(Ordering::Acquire) || STDIN_DATA_FLOWING.load(Ordering::Acquire))
             && has_stdin_callbacks)
             || has_line_callbacks
             || has_close_cb);
