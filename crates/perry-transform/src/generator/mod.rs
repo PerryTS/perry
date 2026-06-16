@@ -27,7 +27,9 @@ pub(crate) use break_continue::{
     body_contains_yield, collect_hoisted_vars, collect_vars_recursive,
     fix_break_continue_sentinels, fix_break_continue_sentinels_in_catches,
     fix_break_continue_sentinels_in_stmt, fix_break_continue_sentinels_in_stmts,
+    fix_label_sentinels, fix_label_sentinels_in_catches, fix_label_sentinels_in_stmts,
     fix_placeholder_state, rewrite_break_continue_in_stmt, rewrite_break_continue_in_stmts,
+    rewrite_labeled_break_continue_in_vec,
 };
 pub(crate) use helpers::{
     alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmt, rewrite_hoisted_lets_in_stmts,

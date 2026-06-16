@@ -9,6 +9,17 @@ thread_local! {
     /// thread-local avoids threading a bool through ~14 recursive call sites).
     /// Read by the `yield*` arms to pick the async vs sync delegation protocol.
     static LINEARIZE_IS_ASYNC_GEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// Per-label sentinel index for the labeled loop whose linearization is
+    /// about to begin. The labeled arm sets this right before recursing into
+    /// `linearize_body` with the wrapped loop; the directly-wrapped For/While
+    /// arm reads-and-clears it (via `take_pending_label_index`) at its very
+    /// start, so that after computing its target states it can also fix that
+    /// label's per-label break/continue sentinels. A monotonically-increasing
+    /// counter assigns indices so distinct labels in the same function never
+    /// collide (reset per function via `reset_label_sentinel_indices`).
+    static PENDING_LABEL_INDEX: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    static NEXT_LABEL_INDEX: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn set_linearize_async_generator(v: bool) {
@@ -17,6 +28,35 @@ pub(crate) fn set_linearize_async_generator(v: bool) {
 
 fn linearize_async_generator() -> bool {
     LINEARIZE_IS_ASYNC_GEN.with(|c| c.get())
+}
+
+/// Reset the per-label sentinel index counter at the start of each generator
+/// function's linearization.
+pub(crate) fn reset_label_sentinel_indices() {
+    NEXT_LABEL_INDEX.with(|c| c.set(0));
+    PENDING_LABEL_INDEX.with(|c| c.set(None));
+}
+
+/// Allocate the next per-label sentinel index. Returns the index.
+fn alloc_label_index() -> u32 {
+    NEXT_LABEL_INDEX.with(|c| {
+        let v = c.get();
+        c.set(v + 1);
+        v
+    })
+}
+
+/// Set the pending label index that the next-linearized For/While arm should
+/// claim (the loop directly wrapped by the labeled arm).
+fn set_pending_label_index(idx: u32) {
+    PENDING_LABEL_INDEX.with(|c| c.set(Some(idx)));
+}
+
+/// Read-and-clear the pending label index. Called at the very start of each
+/// For/While arm; returns `Some(idx)` only if this loop is the one directly
+/// wrapped by a labeled statement.
+fn take_pending_label_index() -> Option<u32> {
+    PENDING_LABEL_INDEX.with(|c| c.take())
 }
 
 /// Resolve a `yield*` operand into its iterator. An async generator delegates
@@ -440,6 +480,11 @@ pub fn linearize_body(
                 update,
                 body,
             } if body_contains_yield(body) => {
+                // If this for-loop is the body of a labeled statement, claim its
+                // per-label sentinel index so we can fix `break <label>` /
+                // `continue <label>` (including from nested loops) once our target
+                // states are known.
+                let pending_label_index = take_pending_label_index();
                 // State N: pre-loop code + init, goto condition check
                 let init_state = *state_num;
                 *state_num += 1;
@@ -600,6 +645,33 @@ pub fn linearize_body(
                     after_loop_state,
                     update_state,
                 );
+                // If this for-loop carries a label, fix that label's per-label
+                // break/continue sentinels too — `break <label>` exits the loop
+                // (after_loop_state), `continue <label>` runs the update then
+                // re-checks (update_state) — matching the loop's own targets.
+                if let Some(label_index) = pending_label_index {
+                    fix_label_sentinels(
+                        &mut states[body_states_before..],
+                        state_id,
+                        label_index,
+                        after_loop_state,
+                        update_state,
+                    );
+                    fix_label_sentinels_in_stmts(
+                        &mut current[body_current_before..],
+                        state_id,
+                        label_index,
+                        after_loop_state,
+                        update_state,
+                    );
+                    fix_label_sentinels_in_catches(
+                        &mut catches[body_catches_before..],
+                        state_id,
+                        label_index,
+                        after_loop_state,
+                        update_state,
+                    );
+                }
             }
 
             // While-loop containing yield(s) - similar to for-loop
@@ -607,6 +679,9 @@ pub fn linearize_body(
                 condition,
                 body: while_body,
             } if body_contains_yield(while_body) => {
+                // Claim a pending label index (if this while-loop is the body of
+                // a labeled statement) — see the For-loop arm.
+                let pending_label_index = take_pending_label_index();
                 // Pre-loop code gets its own state (if non-empty)
                 let pre_body = std::mem::take(current);
                 if !pre_body.is_empty() {
@@ -706,6 +781,32 @@ pub fn linearize_body(
                     after_loop,
                     cond_state,
                 );
+                // If this while-loop carries a label, fix that label's per-label
+                // break/continue sentinels — `break <label>` exits (after_loop),
+                // `continue <label>` re-checks the condition (cond_state).
+                if let Some(label_index) = pending_label_index {
+                    fix_label_sentinels(
+                        &mut states[while_states_before..],
+                        state_id,
+                        label_index,
+                        after_loop,
+                        cond_state,
+                    );
+                    fix_label_sentinels_in_stmts(
+                        &mut current[while_current_before..],
+                        state_id,
+                        label_index,
+                        after_loop,
+                        cond_state,
+                    );
+                    fix_label_sentinels_in_catches(
+                        &mut catches[while_catches_before..],
+                        state_id,
+                        label_index,
+                        after_loop,
+                        cond_state,
+                    );
+                }
             }
 
             // Try-catch/finally containing yield(s) — linearize the try body and
@@ -1180,19 +1281,41 @@ pub fn linearize_body(
             // so the embedded yield is split into resume states (#1824 —
             // previously the whole labeled statement fell through to the
             // catch-all and was emitted unsplit). `break label` / `continue
-            // label` that target this loop from its own body level are first
-            // rewritten to plain break/continue, which the loop's own
-            // linearization then maps to its state targets. (Labeled
-            // break/continue from a *nested* loop is left unconverted — the
-            // single-sentinel scheme can't yet distinguish targets; this was
-            // already unsupported before this arm existed, so no regression.)
+            // label` that target this loop — whether at the loop's own body
+            // level OR nested inside an inner loop / switch / try-catch — are
+            // rewritten to a PER-LABEL dispatch sentinel (see
+            // `rewrite_labeled_break_continue_in_vec`); the directly-wrapped
+            // For/While arm fixes those sentinels to the loop's real state
+            // targets once they're known. (Previously the nested case was left
+            // unconverted and crashed codegen with `labeled break outside any
+            // loop` when it landed in an async `.throw()` catch route.)
             Stmt::Labeled { label, body } if body_contains_yield(std::slice::from_ref(&**body)) => {
                 let mut inner = (**body).clone();
+                // Only a labeled LOOP can be the target of `break`/`continue`.
+                // For those, assign this label a per-label sentinel index and
+                // rewrite every `break <label>` / `continue <label>` in the loop
+                // BODY — INCLUDING those nested inside inner loops / switches /
+                // try-catches — into a per-label dispatch sentinel. The index is
+                // handed to the directly-wrapped For/While arm (via
+                // `set_pending_label_index`), which fixes those sentinels to the
+                // labeled loop's real target states once they're known. This
+                // covers the previously-unsupported case of `break <label>` from
+                // a NESTED loop (the inner loop's own break/continue fixup uses a
+                // different sentinel and so leaves these alone). A labeled
+                // non-loop (`label: {…}`) can't be a break/continue target, so we
+                // skip all of this and never leave a stale pending index behind.
                 match &mut inner {
                     Stmt::For { body, .. }
                     | Stmt::While { body, .. }
                     | Stmt::DoWhile { body, .. } => {
-                        rewrite_labeled_bc_in_stmts(body, label);
+                        let label_index = alloc_label_index();
+                        rewrite_labeled_break_continue_in_vec(
+                            body,
+                            label,
+                            label_index,
+                            state_id,
+                        );
+                        set_pending_label_index(label_index);
                     }
                     _ => {}
                 }
@@ -1217,44 +1340,3 @@ pub fn linearize_body(
     }
 }
 
-/// Within a labeled loop's body, rewrite `break label` / `continue label`
-/// that target THIS label into plain `break` / `continue`, so the loop's own
-/// For/While linearization (which only knows about plain break/continue) maps
-/// them to the loop's state targets. Descends only through `if` / `try`
-/// (which don't capture break/continue), mirroring the scoping of
-/// `rewrite_break_continue_in_stmt`. Stops at nested loops and `switch` —
-/// a `break label` from inside one of those still targets this loop, but the
-/// current single-sentinel scheme can't express that, so those are left
-/// as-is (pre-existing limitation).
-fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
-    for s in stmts.iter_mut() {
-        match s {
-            Stmt::LabeledBreak(l) if l == label => *s = Stmt::Break,
-            Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                rewrite_labeled_bc_in_stmts(then_branch, label);
-                if let Some(eb) = else_branch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(eb, label);
-                }
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                rewrite_labeled_bc_in_stmts(body, label);
-                if let Some(c) = catch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(&mut c.body, label);
-                }
-                if let Some(f) = finally.as_mut() {
-                    rewrite_labeled_bc_in_stmts(f, label);
-                }
-            }
-            _ => {}
-        }
-    }
-}

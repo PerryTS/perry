@@ -241,6 +241,7 @@ pub fn transform_generator_function_with_extra_captures(
     // async-iterator protocol (await each delegated `next()`); see the `yield*`
     // arms in `linearize.rs`.
     super::linearize::set_linearize_async_generator(is_async_generator);
+    super::linearize::reset_label_sentinel_indices();
     linearize_body(
         &func.body,
         &mut states,
