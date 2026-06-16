@@ -5873,6 +5873,7 @@ dependencies = [
  "perry-ui-model",
  "serde",
  "serde_json",
+ "stacker",
  "swc_common",
  "swc_ecma_ast",
  "thiserror 1.0.69",

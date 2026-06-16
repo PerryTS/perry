@@ -275,9 +275,9 @@ fn run_with_large_stack<F: FnOnce() + Send + 'static>(f: F) {
 
 /// #5259: deeply-nested expression chains must surface a diagnostic instead
 /// of overflowing the native stack and SIGABRT-ing the whole process. Each
-/// shape (binary `1+1+…`, member `o.a.a.…`, logical `a||a||…`) recurses once
-/// per node in `lower_expr`; past `MAX_EXPR_LOWER_DEPTH` lowering bails with a
-/// "nested too deeply" error rather than recursing further.
+/// shape (binary `1+1+...`, member `o.a.a....`, logical `a||a||...`) recurses
+/// once per node in `lower_expr`; past `MAX_EXPR_CHAIN_LOWER_DEPTH` lowering
+/// bails with a "nested too deeply" error rather than recursing further.
 fn assert_too_deep(source: String) {
     run_with_large_stack(move || {
         let module =
@@ -294,20 +294,20 @@ fn assert_too_deep(source: String) {
 
 #[test]
 fn test_lower_rejects_deep_binary_chain() {
-    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) + 1;
+    let n = (super::lower_expr::MAX_EXPR_CHAIN_LOWER_DEPTH as usize) + 2;
     let chain: Vec<&str> = vec!["1"; n];
     assert_too_deep(format!("var x = {};\n", chain.join("+")));
 }
 
 #[test]
 fn test_lower_rejects_deep_member_chain() {
-    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) + 1;
+    let n = (super::lower_expr::MAX_EXPR_CHAIN_LOWER_DEPTH as usize) + 1;
     assert_too_deep(format!("var o = {{}};\nvar x = o{};\n", ".a".repeat(n)));
 }
 
 #[test]
 fn test_lower_rejects_deep_logical_chain() {
-    let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) + 1;
+    let n = (super::lower_expr::MAX_EXPR_CHAIN_LOWER_DEPTH as usize) + 2;
     let chain: Vec<&str> = vec!["a"; n];
     assert_too_deep(format!("var a = 0;\nvar x = {};\n", chain.join("||")));
 }
@@ -317,7 +317,7 @@ fn test_lower_rejects_deep_logical_chain() {
 #[test]
 fn test_lower_accepts_chain_under_limit() {
     run_with_large_stack(|| {
-        let n = (super::lower_expr::MAX_EXPR_LOWER_DEPTH as usize) / 2;
+        let n = (super::lower_expr::MAX_EXPR_CHAIN_LOWER_DEPTH as usize) / 2;
         let chain: Vec<&str> = vec!["1"; n];
         let source = format!("var x = {};\n", chain.join("+"));
         let module = perry_parser::parse_typescript(&source, "ok.ts").expect("parses");
