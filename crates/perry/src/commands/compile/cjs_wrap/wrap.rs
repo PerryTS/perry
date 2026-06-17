@@ -316,8 +316,26 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     // react/index.js — which has zero `exports.X =` patterns of its own —
     // produces zero named exports and downstream `import { useState } from
     // "react"` link-fails.
+    //
+    // CRUCIAL: only specs THIS module actually re-exports
+    // (`module.exports = require('SPEC')`) qualify. A module that merely
+    // `require()`s a sibling for its own internal use — e.g. semver's
+    // `classes/comparator.js` doing `const { safeRe: re, t } =
+    // require('../internal/re')` and then defining a class that reads
+    // `re[t.COMPARATOR]` — is NOT a re-export wrapper of `../internal/re`.
+    // Forwarding the target's names here emitted spurious module-scope
+    // `export const t = _cjs.t;` (and `re`, `src`, `safeRe`) declarations
+    // that (a) shadowed the module's own same-named bindings and (b)
+    // resolved to `undefined` because those names are not on THIS module's
+    // `exports` — the `Cannot read properties of undefined (reading
+    // 'COMPARATOR')` root for semver/pino/bluebird.
+    let reexport_specs = module_reexport_specs(source);
     for spec in &require_specs {
         if !spec.starts_with("./") && !spec.starts_with("../") {
+            continue;
+        }
+        // Only forward exports of specs this module genuinely re-exports.
+        if !reexport_specs.iter().any(|s| s == spec) {
             continue;
         }
         // #4872: specs re-exported via `__exportStar` surface through the

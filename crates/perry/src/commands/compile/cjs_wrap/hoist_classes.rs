@@ -432,6 +432,149 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
 /// We accept the same anchor rule as the class scan: declarations at the
 /// start of a line (after only whitespace), brace-depth-aware so we
 /// ignore decls inside functions / classes / object literals.
+/// Walk a brace/bracket-balanced binding pattern starting at `start`
+/// (which must point at the opening `{` or `[`) and push every bound
+/// identifier into `names`. Returns the byte index just past the
+/// matching closing delimiter.
+///
+/// Object patterns bind the *target* of each `key: target` pair (the
+/// shorthand `key` when no `: target` is present); array patterns bind
+/// each element. Defaults (`= expr`) and computed/literal keys are
+/// skipped over so they don't contribute spurious names, and a rest
+/// element (`...rest`) binds `rest`. Nested patterns recurse. This is a
+/// conservative textual walk (no SWC parse) matching the rest of the
+/// cjs_wrap layer; over-collecting a name is harmless here (it only
+/// makes the #2310 hoist guard *more* conservative), so the goal is to
+/// never MISS a real binding.
+fn collect_pattern_binding_names(bytes: &[u8], start: usize, names: &mut Vec<String>) -> usize {
+    let open = bytes[start];
+    let (close, is_object) = if open == b'{' {
+        (b'}', true)
+    } else {
+        (b']', false)
+    };
+    let mut i = start + 1;
+    // In an object pattern, after a `:` the following identifier is the
+    // binding target (not a key); track that so `{ key: target }` records
+    // `target`, while a bare `{ key }` records `key`.
+    let mut after_colon = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' | b'[' => {
+                i = collect_pattern_binding_names(bytes, i, names);
+                after_colon = false;
+                continue;
+            }
+            c if c == close => {
+                i += 1;
+                break;
+            }
+            // Skip string / template keys.
+            b'"' | b'\'' => {
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'`' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            // A default initializer (`= expr`) — skip to the next top-level
+            // comma or the pattern's closing delimiter, brace/paren aware so
+            // a default object/array/call doesn't confuse the element split.
+            b'=' if i + 1 >= bytes.len() || bytes[i + 1] != b'=' => {
+                i += 1;
+                let mut inner: i32 = 0;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'(' | b'[' | b'{' => inner += 1,
+                        b')' | b']' | b'}' if inner > 0 => inner -= 1,
+                        c if c == close && inner == 0 => break,
+                        b',' if inner == 0 => break,
+                        b'"' | b'\'' => {
+                            let q = bytes[i];
+                            i += 1;
+                            while i < bytes.len() && bytes[i] != q {
+                                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                                    i += 2;
+                                    continue;
+                                }
+                                i += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                after_colon = false;
+            }
+            b':' => {
+                after_colon = true;
+                i += 1;
+            }
+            b',' => {
+                after_colon = false;
+                i += 1;
+            }
+            // A computed object key `[expr]:` — skip the bracketed expression
+            // (only meaningful in object patterns; array patterns never hit
+            // this because their `[` is consumed by the nested-pattern arm).
+            b'[' => {
+                // Unreachable in practice (handled above), kept for clarity.
+                i += 1;
+            }
+            c if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' => {
+                // Identifier (or `...rest` after the dots). Read it.
+                let name_start = i;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric()
+                        || bytes[i] == b'_'
+                        || bytes[i] == b'$'
+                        || bytes[i] == b'.')
+                {
+                    i += 1;
+                }
+                let raw = std::str::from_utf8(&bytes[name_start..i]).unwrap_or("");
+                // Strip a leading `...` (rest element).
+                let ident = raw.trim_start_matches('.');
+                // In an object pattern, a bare identifier followed (after
+                // whitespace) by `:` is a KEY, not a binding — defer to the
+                // post-colon identifier. Peek ahead past whitespace.
+                let mut j = i;
+                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                    j += 1;
+                }
+                let is_key = is_object && !after_colon && j < bytes.len() && bytes[j] == b':';
+                if !is_key && !ident.is_empty() && !ident.contains('.') {
+                    let n = ident.to_string();
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+                after_colon = false;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    i
+}
+
 fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
     let bytes = source.as_bytes();
     let mut names: Vec<String> = Vec::new();
@@ -526,18 +669,32 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
             while q < bytes.len() && (bytes[q] == b' ' || bytes[q] == b'\t') {
                 q += 1;
             }
-            let name_start = q;
-            while q < bytes.len()
-                && (bytes[q].is_ascii_alphanumeric() || bytes[q] == b'_' || bytes[q] == b'$')
-            {
-                q += 1;
-            }
-            if q > name_start {
-                let n = std::str::from_utf8(&bytes[name_start..q])
-                    .unwrap_or("")
-                    .to_string();
-                if !n.is_empty() && !names.contains(&n) {
-                    names.push(n);
+            // Issue: a destructuring declarator (`const { tbl } = require(...)`,
+            // `const [a, b] = ...`) binds names INSIDE a `{…}`/`[…]` pattern,
+            // not as a bare identifier. The plain identifier scan below skips
+            // straight past the `{`/`[` and captures nothing, so a class whose
+            // body references `tbl` looks free of IIFE-locals → gets hoisted →
+            // severs its closure over `tbl` → `tbl` resolves to the `_cjs.tbl`
+            // export read-back, which is `undefined` (semver's `const { t } =
+            // require('./re')` read from a class method is exactly this). Walk
+            // the brace/bracket-balanced pattern and collect every bound name.
+            if q < bytes.len() && (bytes[q] == b'{' || bytes[q] == b'[') {
+                let pat_end = collect_pattern_binding_names(bytes, q, &mut names);
+                q = pat_end;
+            } else {
+                let name_start = q;
+                while q < bytes.len()
+                    && (bytes[q].is_ascii_alphanumeric() || bytes[q] == b'_' || bytes[q] == b'$')
+                {
+                    q += 1;
+                }
+                if q > name_start {
+                    let n = std::str::from_utf8(&bytes[name_start..q])
+                        .unwrap_or("")
+                        .to_string();
+                    if !n.is_empty() && !names.contains(&n) {
+                        names.push(n);
+                    }
                 }
             }
             // Skip ahead past an `=` initializer (brace/paren/bracket-aware so a

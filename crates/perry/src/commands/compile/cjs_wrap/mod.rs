@@ -47,6 +47,7 @@ pub(self) use detect::is_js_reserved_word;
 pub(self) use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
+    module_reexport_specs,
 };
 pub(self) use extract_requires::{
     extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
@@ -67,6 +68,7 @@ mod tests {
     use super::extract_exports::{
         extract_exports_from_source, extract_named_exports_from_require,
         extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
+        module_reexport_specs,
     };
     use super::extract_requires::{
         extract_require_aliases_with_ranges, extract_require_specifiers,
@@ -1512,5 +1514,94 @@ module.exports = SafeBuffer;"#;
             "self-contained class must still hoist above the IIFE; got:\n{}",
             wrapped
         );
+    }
+
+    /// `module_reexport_specs` recognizes the trivial re-export wrapper
+    /// shape (`module.exports = require('./X')`, incl. conditional / bare
+    /// `exports =`) and ONLY that shape — a module that requires a sibling
+    /// for its own use must not be treated as a re-export of it.
+    #[test]
+    fn module_reexport_specs_only_for_true_reexports() {
+        // Trivial re-export wrappers.
+        assert_eq!(
+            module_reexport_specs("module.exports = require('./lib/index');"),
+            vec!["./lib/index".to_string()]
+        );
+        assert_eq!(
+            module_reexport_specs(
+                "if (process.env.NODE_ENV === 'production') { module.exports = require('./prod'); } else { module.exports = require('./dev'); }"
+            ),
+            vec!["./prod".to_string(), "./dev".to_string()]
+        );
+        assert_eq!(
+            module_reexport_specs("exports = require('./x');"),
+            vec!["./x".to_string()]
+        );
+
+        // NOT re-export wrappers — semver's comparator.js shape: require a
+        // sibling for internal use, then export a class. Forwarding ./re's
+        // names here is exactly the `reading 'COMPARATOR'` bug.
+        assert!(module_reexport_specs(
+            "const { safeRe: re, t } = require('../internal/re');\nclass Comparator { parse() { return re[t.COMPARATOR]; } }\nmodule.exports = Comparator;"
+        )
+        .is_empty());
+        // Member access / object-spread on the require result are not pure
+        // re-exports either.
+        assert!(module_reexport_specs("module.exports = require('./x').foo;").is_empty());
+        assert!(module_reexport_specs("module.exports = { ...require('./x') };").is_empty());
+    }
+
+    /// Regression for the semver `Cannot read properties of undefined
+    /// (reading 'COMPARATOR')` root: a module that requires a sibling for
+    /// internal use (NOT a re-export wrapper) must not get the sibling's
+    /// export names forwarded as spurious `export const X = _cjs.X;`
+    /// declarations. Those both shadow the module's own destructured
+    /// bindings and resolve to `undefined`.
+    #[test]
+    fn internal_require_does_not_forward_sibling_exports() {
+        let dir =
+            std::env::temp_dir().join(format!("perry_cjs_reexport_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        // The required sibling exposes a `t` table (semver internal/re.js shape).
+        fs::write(
+            dir.join("re.js"),
+            "module.exports = { t: { COMPARATOR: 0 } };",
+        )
+        .unwrap();
+        let consumer = "const { t } = require('./re');\nclass Comparator { constructor() { this.r = t.COMPARATOR; } }\nmodule.exports = Comparator;\n";
+        let wrapped = wrap_commonjs(consumer, &dir.join("comparator.js"));
+        assert!(
+            !wrapped.contains("export const t = _cjs.t;"),
+            "internal require('./re') must NOT forward re.js's `t` export, got:\n{}",
+            wrapped
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `collect_top_level_let_const_var_names` (via the #2310 hoist guard)
+    /// must recognize destructured top-level bindings so a class closing
+    /// over them is not hoisted out of the IIFE (which would sever the
+    /// closure). Indirectly asserted through the wrap: a class referencing
+    /// a destructured IIFE-local stays inside the IIFE.
+    #[test]
+    fn destructured_iife_local_keeps_class_in_iife() {
+        // `module.exports = { C }` (object aggregator, not a single-class
+        // default) so the flat-emit path is NOT taken — exercising the
+        // hoist-guard path specifically.
+        let src = "const { tbl } = require('./re');\n\
+                   class C { method() { return tbl.X; } }\n\
+                   module.exports = { C };\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/cmp.js"));
+        // The class must NOT be hoisted above the IIFE — it closes over the
+        // destructured `tbl`.
+        if let Some(iife_open) = wrapped.find("const _cjs = (function()") {
+            if let Some(class_pos) = wrapped.find("class C ") {
+                assert!(
+                    class_pos > iife_open,
+                    "class closing over destructured IIFE-local `tbl` must stay inside the IIFE; got:\n{}",
+                    wrapped
+                );
+            }
+        }
     }
 }
