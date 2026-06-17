@@ -220,9 +220,30 @@ pub fn rewrite_module_exports_class_expression(source: &str) -> Option<String> {
 /// already a duplicate of a previously-seen class (defensive).
 pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, String) {
     let bytes = source.as_bytes();
-    let mut hoisted_blocks: Vec<&str> = Vec::new();
-    let mut hoisted_names: Vec<String> = Vec::new();
-    let mut elided: Vec<(usize, usize)> = Vec::new();
+
+    // A top-level `class` candidate discovered by the brace-balanced scan.
+    // We collect every candidate first, then decide hoist-vs-keep in a
+    // chain-aware fixpoint pass below — deciding per class independently
+    // (the original single forward pass) splits an inheritance chain across
+    // the IIFE boundary: a parent KEPT inside the IIFE (because it refs an
+    // IIFE-local) becomes invisible to a child HOISTED to top level, so the
+    // child's `extends <Parent>` throws `ReferenceError: <Parent> is not
+    // defined` (ajv `class AssignOp extends Assign` / `new Assign(...)`).
+    struct ClassCand<'a> {
+        name: String,
+        block_text: &'a str,
+        // `extends <Parent>` parent identifier (first ident after `extends`),
+        // if this class extends a bare same-module name (not a member access
+        // like `_x.default` — those resolve via a different path).
+        extends_parent: Option<String>,
+        line_start: usize,
+        end: usize,
+        // True iff the class body / extends-head textually references an
+        // IIFE-local binding (#2310 / #5251). Such a class genuinely cannot
+        // be hoisted out of the IIFE.
+        references_iife_local: bool,
+    }
+    let mut candidates: Vec<ClassCand> = Vec::new();
 
     // Issue #2310 — collect the names of top-level `let`/`const`/`var`
     // declarations in this CJS source so we can REFUSE to hoist a class
@@ -383,10 +404,16 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
                         let references_iife_local =
                             class_body_references_any(body_text, &iife_locals)
                                 || class_body_references_any(extends_head, &iife_locals);
-                        if !hoisted_names.contains(&class_name) && !references_iife_local {
-                            hoisted_blocks.push(block_text);
-                            hoisted_names.push(class_name);
-                            elided.push((line_start, r));
+                        let extends_parent = parse_extends_parent(extends_head);
+                        if !candidates.iter().any(|c| c.name == class_name) {
+                            candidates.push(ClassCand {
+                                name: class_name,
+                                block_text,
+                                extends_parent,
+                                line_start,
+                                end: r,
+                                references_iife_local,
+                            });
                         }
                         i = r;
                         continue;
@@ -399,6 +426,55 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
             i += 1;
         }
         i += 1;
+    }
+
+    // Chain-aware keep decision. Start by keeping every class that directly
+    // references an IIFE-local; then iterate to a fixpoint, additionally
+    // keeping any class whose `extends` parent is a same-module sibling that
+    // is itself kept. A kept parent cannot be hoisted (it's an IIFE-local),
+    // so a hoisted child would lose visibility of it — keep the child too.
+    // Parents resolved via member access / require alias are handled by the
+    // #2310/#5251 textual checks already and are not in `candidates`, so they
+    // never force-keep here.
+    let cand_names: std::collections::HashSet<&str> =
+        candidates.iter().map(|c| c.name.as_str()).collect();
+    let mut kept: Vec<bool> = candidates.iter().map(|c| c.references_iife_local).collect();
+    loop {
+        let mut changed = false;
+        for idx in 0..candidates.len() {
+            if kept[idx] {
+                continue;
+            }
+            if let Some(parent) = &candidates[idx].extends_parent {
+                // Only same-module sibling parents matter.
+                if cand_names.contains(parent.as_str()) {
+                    let parent_kept = candidates
+                        .iter()
+                        .position(|c| &c.name == parent)
+                        .map(|pidx| kept[pidx])
+                        .unwrap_or(false);
+                    if parent_kept {
+                        kept[idx] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut hoisted_blocks: Vec<&str> = Vec::new();
+    let mut hoisted_names: Vec<String> = Vec::new();
+    let mut elided: Vec<(usize, usize)> = Vec::new();
+    for (idx, cand) in candidates.iter().enumerate() {
+        if kept[idx] {
+            continue;
+        }
+        hoisted_blocks.push(cand.block_text);
+        hoisted_names.push(cand.name.clone());
+        elided.push((cand.line_start, cand.end));
     }
 
     let mut out_source = source.to_string();
@@ -895,6 +971,42 @@ pub fn source_has_top_level_return(source: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Parse the `extends` parent identifier out of a class head's extends-clause
+/// text (the slice between the class name and the body's opening `{`, e.g.
+/// ` extends Assign `). Returns the bare parent identifier ONLY when the
+/// extends target is a simple same-module name — `Some("Assign")`. Returns
+/// `None` for an absent `extends`, or for a member-access / call-expression
+/// parent (`extends _code.default`, `extends mixin(Base)`) since those
+/// resolve via the require-alias path, not as a sibling top-level class.
+fn parse_extends_parent(extends_head: &str) -> Option<String> {
+    let trimmed = extends_head.trim_start();
+    let rest = trimmed.strip_prefix("extends")?;
+    // `extends` must be followed by whitespace (not `extendsX`).
+    let after = rest.strip_prefix(|c: char| c.is_ascii_whitespace())?;
+    let after = after.trim_start();
+    let bytes = after.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if i == 0 {
+        return None;
+    }
+    let ident = &after[..i];
+    // Anything after the identifier other than whitespace (`.`, `(`, `<`)
+    // means it's a member access / call / generic — not a bare sibling.
+    let tail = after[i..].trim_start();
+    if !tail.is_empty() {
+        return None;
+    }
+    Some(ident.to_string())
 }
 
 /// Issue #2310 — true if `class_body` contains any of the given names as a

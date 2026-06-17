@@ -73,7 +73,9 @@ mod tests {
     use super::extract_requires::{
         extract_require_aliases_with_ranges, extract_require_specifiers,
     };
-    use super::hoist_classes::{source_has_top_level_return, top_level_class_names};
+    use super::hoist_classes::{
+        extract_top_level_class_decls, source_has_top_level_return, top_level_class_names,
+    };
     use super::wrap::{wrap_commonjs, wrap_commonjs_for_target, wrap_commonjs_with_body_offset};
     use std::fs;
     use std::path::PathBuf;
@@ -1631,5 +1633,39 @@ module.exports = SafeBuffer;"#;
                 );
             }
         }
+    }
+
+    /// Chain-aware hoist: a class that does NOT itself reference an IIFE-local
+    /// but `extends` a sibling class that IS kept in the IIFE must ALSO stay in
+    /// the IIFE — hoisting only the child out would leave its `extends <Parent>`
+    /// unable to see the IIFE-local parent (ajv `codegen/index.js`'s
+    /// `class AssignOp extends Assign` where `Assign` refs `code_1`). Asserts
+    /// `extract_top_level_class_decls` hoists NEITHER class.
+    #[test]
+    fn hoist_keeps_inheritance_chain_with_iife_local_parent_together() {
+        let src = "const code_1 = require('./code');\n\
+                   class Node { kind() { return code_1.tag; } }\n\
+                   class Assign extends Node { render() { return code_1.name; } }\n\
+                   class AssignOp extends Assign {}\n\
+                   module.exports = { AssignOp };\n";
+        let (_blocks, hoisted_names, _rest) = extract_top_level_class_decls(src);
+        // `Node`/`Assign` ref `code_1` (kept); `AssignOp` extends the kept
+        // `Assign` so it must be kept too — none should be hoisted.
+        assert!(
+            hoisted_names.is_empty(),
+            "no class should be hoisted (chain anchored to IIFE-local `code_1`); hoisted: {:?}",
+            hoisted_names
+        );
+        // Control: a self-contained class with no IIFE-local refs and no kept
+        // parent IS still hoistable.
+        let src2 = "const code_1 = require('./code');\n\
+                    class Plain {}\n\
+                    module.exports = { Plain };\n";
+        let (_b2, hoisted2, _r2) = extract_top_level_class_decls(src2);
+        assert!(
+            hoisted2.contains(&"Plain".to_string()),
+            "a class with no IIFE-local ref and no kept parent should still hoist; hoisted: {:?}",
+            hoisted2
+        );
     }
 }
