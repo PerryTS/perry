@@ -790,8 +790,7 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
             }
         } else if in_class
             && chars[i] == '-'
-            && (out_ends_with_class_shorthand(&result)
-                || next_is_class_shorthand(&chars, i + 1))
+            && (out_ends_with_class_shorthand(&result) || next_is_class_shorthand(&chars, i + 1))
         {
             // Inside a class, a `-` adjacent to a shorthand class (`\d`, `\w`,
             // `\s`, …, or a `\p{…}` property) is a *literal* hyphen in JS — a
