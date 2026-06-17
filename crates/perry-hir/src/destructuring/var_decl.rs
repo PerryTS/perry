@@ -30,6 +30,23 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 );
             }
 
+            // A fresh binding of `name` must not inherit a stale
+            // native-instance tag that an UNRELATED earlier binding of the
+            // same name registered (e.g. a minified webpack bundle that
+            // `new FormData()`-binds a local `i` in one factory and reuses
+            // `var i = { exports: {} }` as the require-cache object in
+            // another). `native_instances` is module-global + last-match-wins,
+            // so push a tombstone to shadow the old tag here, BEFORE the
+            // native-instance registration checks below — if THIS init is
+            // itself a native instance, it re-registers after the tombstone
+            // and last-match-wins keeps the correct tag. Without this, a plain
+            // `i.exports` read mis-routes through the stale module's native
+            // method dispatch and folds to 0 (Next.js app-page-turbo `require`
+            // → React's `exports.Fragment = …` "read only property" throw).
+            if ctx.lookup_native_instance(&name).is_some() {
+                ctx.shadow_native_instance(name.clone());
+            }
+
             // #809: tag locals provably bound to a plain object (an object
             // literal or `Object.create(...)`). `static_receiver_class`
             // consults this so `x.toJSON()` / `.toString()` / `.valueOf()`

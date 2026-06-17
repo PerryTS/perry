@@ -1092,6 +1092,20 @@ impl LoweringContext {
             .push((local_name, module_name, class_name));
     }
 
+    /// Shadow any prior native-instance tag for `local_name` by pushing a
+    /// tombstone (empty module). `native_instances` is module-global and
+    /// last-match-wins, so without this a fresh binding of a name that an
+    /// unrelated `new FormData()`/`new Response()`/etc. earlier registered
+    /// (e.g. a minified bundle reusing the local `i`) would inherit the stale
+    /// native tag — routing a plain `i.exports` read through FormData's native
+    /// method dispatch (→ 0) instead of an ordinary property read. A real
+    /// native binding re-registers AFTER this tombstone, so last-match-wins
+    /// keeps the correct tag. (Next.js app-page-turbo `require` fix.)
+    pub(crate) fn shadow_native_instance(&mut self, local_name: String) {
+        self.native_instances
+            .push((local_name, String::new(), String::new()));
+    }
+
     /// #1483: resolve a parameter's declared type name to a perry/ui widget
     /// class that uses handle-based instance dispatch (Canvas, State, ...).
     /// Returns the canonical widget name (e.g. "Canvas") when `type_name`
@@ -1118,6 +1132,22 @@ impl LoweringContext {
             // Rewriting those reads as native receiver methods makes them
             // miss the object's actual properties.
             matches!((module, class), ("module", "Module") | ("repl", _))
+        }
+
+        // Tombstone shadowing (see `shadow_native_instance`): if the most
+        // recent `native_instances` entry for `name` is a tombstone (empty
+        // module), this binding deliberately shadows any older native tag of
+        // the same name — resolve to no native instance so the read/call
+        // lowers as an ordinary property access.
+        if let Some((_, module, _)) = self
+            .native_instances
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == name)
+        {
+            if module.is_empty() {
+                return None;
+            }
         }
 
         // Issue #1132 — walk the scoped instances back-to-front so a
