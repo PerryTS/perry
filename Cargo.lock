@@ -5901,6 +5901,7 @@ dependencies = [
  "fancy-regex",
  "hickory-proto",
  "hostname",
+ "icu_locale_core",
  "idna",
  "itoa",
  "lazy_static",

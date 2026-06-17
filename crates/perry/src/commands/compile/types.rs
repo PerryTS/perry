@@ -612,6 +612,12 @@ pub struct CompilationContext {
     /// `perry-runtime/intl-segmenter` (`unicode-segmentation`, ~73 KB of UAX #29
     /// grapheme/word/sentence tables). Other `Intl.*` APIs don't need it.
     pub uses_intl_segmenter: bool,
+    /// Whether any TS module canonicalizes a locale tag via
+    /// `Intl.getCanonicalLocales` or `Intl.*.supportedLocalesOf`. Gates
+    /// `perry-runtime/intl-locale` (`icu_locale_core`'s data-free BCP-47 / UTS #35
+    /// structural parser). A program that never canonicalizes a locale links a
+    /// lighter hand-rolled fallback instead.
+    pub uses_intl_locale: bool,
     /// Whether any TS module uses a heap-snapshot API (`v8.getHeapSnapshot` /
     /// `v8.writeHeapSnapshot`) or `process.report`. Gates
     /// `perry-runtime/diagnostics` (the cold-path JSON serializers + the
@@ -917,6 +923,7 @@ impl CompilationContext {
             uses_url: false,
             uses_string_normalize: false,
             uses_intl_segmenter: false,
+            uses_intl_locale: false,
             uses_diagnostics: false,
             uses_dgram: false,
             needs_thread: false,

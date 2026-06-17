@@ -17,10 +17,16 @@ use crate::StringHeader;
 #[cfg(feature = "intl-segmenter")]
 use unicode_segmentation::UnicodeSegmentation;
 
+mod locales;
+use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
+
 const KIND_NUMBER: &str = "NumberFormat";
 const KIND_DATE_TIME: &str = "DateTimeFormat";
 const KIND_COLLATOR: &str = "Collator";
 const KIND_SEGMENTER: &str = "Segmenter";
+const KIND_LIST_FORMAT: &str = "ListFormat";
+const KIND_PLURAL_RULES: &str = "PluralRules";
+const KIND_RELATIVE_TIME: &str = "RelativeTimeFormat";
 
 const KEY_KIND: &str = "__intlKind";
 const KEY_LOCALE: &str = "__intlLocale";
@@ -30,6 +36,16 @@ const KEY_MAX_FRACTION_DIGITS: &str = "__intlMaxFractionDigits";
 const KEY_DATE_STYLE: &str = "__intlDateStyle";
 const KEY_TIME_ZONE: &str = "__intlTimeZone";
 const KEY_GRANULARITY: &str = "__intlGranularity";
+const KEY_TYPE: &str = "__intlType";
+const KEY_LF_STYLE: &str = "__intlListStyle";
+const KEY_NUMERIC: &str = "__intlNumeric";
+const KEY_RTF_STYLE: &str = "__intlRtfStyle";
+const KEY_PR_MIN_INT: &str = "__intlMinInt";
+const KEY_PR_MIN_FRAC: &str = "__intlMinFrac";
+const KEY_PR_MAX_FRAC: &str = "__intlMaxFrac";
+const KEY_PR_MIN_SIG: &str = "__intlMinSig";
+const KEY_PR_MAX_SIG: &str = "__intlMaxSig";
+const KEY_PR_USE_SIG: &str = "__intlUseSig";
 
 fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -209,6 +225,31 @@ fn canonical_locale(tag: &str) -> Option<String> {
     Some(out)
 }
 
+/// CanonicalizeLanguageTag (ECMA-402): structural validity check + UTS #35
+/// canonicalization. Returns `None` when the tag is not a structurally valid
+/// `unicode_locale_id` (the caller raises `RangeError`).
+///
+/// With the `intl-locale` feature this delegates to `icu_locale_core`'s data-free
+/// structural parser, which gives correct case normalization, variant ordering,
+/// extension well-formedness, and UTS #35 rejection of extlang / grandfathered /
+/// duplicate-singleton tags. (Deep CLDR alias replacement —
+/// grandfathered→preferred, complex subtag replacement, unicode-extension value
+/// aliases — needs `icu_locale` + its CLDR data and is out of scope.) The
+/// fallback path uses the lighter hand-rolled `canonical_locale`.
+fn canonicalize_language_tag(tag: &str) -> Option<String> {
+    #[cfg(feature = "intl-locale")]
+    {
+        match icu_locale_core::Locale::normalize(tag) {
+            Ok(canonical) => Some(canonical.into_owned()),
+            Err(_) => None,
+        }
+    }
+    #[cfg(not(feature = "intl-locale"))]
+    {
+        canonical_locale(tag)
+    }
+}
+
 fn locales_from_value(locales: f64) -> Vec<String> {
     let js = JSValue::from_bits(locales.to_bits());
     if js.is_undefined() || js.is_null() {
@@ -319,29 +360,114 @@ fn format_number_parts(
     out
 }
 
-fn format_number_instance(obj: *const ObjectHeader, value: f64) -> String {
+/// Split an already-formatted numeric string (e.g. `-1,234.50`, `Infinity`,
+/// `NaN`) into typed `formatToParts` segments under `locale`. The concatenation
+/// of the segment values reproduces the input string exactly, so `format()` and
+/// `formatToParts()` stay byte-consistent (the invariant the spec's own
+/// `formatToParts` main test asserts: `format(x) === parts.map(p=>p.value).join('')`).
+fn split_numeric_parts(s: &str, locale: &str, parts: &mut Vec<(&'static str, String)>) {
+    let de_style = locale.eq_ignore_ascii_case("de") || locale.starts_with("de-");
+    let group_sep = if de_style { '.' } else { ',' };
+    let decimal_sep = if de_style { ',' } else { '.' };
+
+    let mut rest = s;
+    if let Some(stripped) = rest.strip_prefix('-') {
+        parts.push(("minusSign", "-".to_string()));
+        rest = stripped;
+    }
+    if rest == "Infinity" {
+        parts.push(("infinity", rest.to_string()));
+        return;
+    }
+    if rest == "NaN" {
+        parts.push(("nan", rest.to_string()));
+        return;
+    }
+
+    let (int_part, frac_part) = match rest.split_once(decimal_sep) {
+        Some((i, f)) => (i, Some(f)),
+        None => (rest, None),
+    };
+    let mut cur = String::new();
+    for ch in int_part.chars() {
+        if ch == group_sep {
+            if !cur.is_empty() {
+                parts.push(("integer", std::mem::take(&mut cur)));
+            }
+            parts.push(("group", ch.to_string()));
+        } else {
+            cur.push(ch);
+        }
+    }
+    if !cur.is_empty() {
+        parts.push(("integer", cur));
+    }
+    if let Some(frac) = frac_part {
+        parts.push(("decimal", decimal_sep.to_string()));
+        parts.push(("fraction", frac.to_string()));
+    }
+}
+
+/// Build the typed `formatToParts` segment list for a NumberFormat instance.
+/// `format()` is defined as the concatenation of these segments' values.
+fn number_instance_parts(obj: *const ObjectHeader, value: f64) -> Vec<(&'static str, String)> {
     let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
     let style = get_string_field(obj, KEY_STYLE).unwrap_or_else(|| "decimal".to_string());
-    let currency = get_string_field(obj, KEY_CURRENCY);
+    let mut parts: Vec<(&'static str, String)> = Vec::new();
     if style == "currency" {
-        let mut formatted = format_number_parts(value, &locale, Some(2), None);
+        let digits = format_number_parts(value, &locale, Some(2), None);
+        let currency = get_string_field(obj, KEY_CURRENCY);
+        let mut numeric: Vec<(&'static str, String)> = Vec::new();
+        split_numeric_parts(&digits, &locale, &mut numeric);
         match currency.as_deref() {
-            Some("EUR") if locale.starts_with("de") => formatted.push_str("\u{00a0}\u{20ac}"),
-            Some("EUR") => formatted = format!("\u{20ac}{formatted}"),
-            Some("USD") => formatted = format!("${formatted}"),
-            Some(code) => {
-                formatted.push(' ');
-                formatted.push_str(code);
+            Some("EUR") if locale.starts_with("de") => {
+                parts = numeric;
+                parts.push(("literal", "\u{00a0}".to_string()));
+                parts.push(("currency", "\u{20ac}".to_string()));
             }
-            None => {}
+            Some("EUR") => {
+                parts.push(("currency", "\u{20ac}".to_string()));
+                parts.extend(numeric);
+            }
+            Some("USD") => {
+                parts.push(("currency", "$".to_string()));
+                parts.extend(numeric);
+            }
+            Some(code) => {
+                parts = numeric;
+                parts.push(("literal", " ".to_string()));
+                parts.push(("currency", code.to_string()));
+            }
+            None => parts = numeric,
         }
-        formatted
     } else {
         let max_digits = get_number_field(obj, KEY_MAX_FRACTION_DIGITS)
             .filter(|n| *n >= 0.0)
             .map(|n| n as usize);
-        format_number_parts(value, &locale, None, max_digits)
+        let digits = format_number_parts(value, &locale, None, max_digits);
+        split_numeric_parts(&digits, &locale, &mut parts);
     }
+    parts
+}
+
+fn format_number_instance(obj: *const ObjectHeader, value: f64) -> String {
+    number_instance_parts(obj, value)
+        .iter()
+        .map(|(_, v)| v.as_str())
+        .collect()
+}
+
+/// Convert a typed-parts list into a JS array of `{ type, value }` objects —
+/// the `Intl.*.prototype.formatToParts` return shape.
+fn parts_to_js_array(parts: &[(&'static str, String)]) -> f64 {
+    let mut arr = js_array_alloc(parts.len() as u32);
+    for (ty, val) in parts {
+        let obj = js_object_alloc(0, 2);
+        set_field(obj, "type", string_value(ty));
+        set_field(obj, "value", string_value(val));
+        arr = js_array_push_f64(arr, js_nanbox_pointer(obj as i64));
+    }
+    js_nanbox_pointer(arr as i64)
 }
 
 fn this_intl_object(method: &str, expected_kind: &str) -> *mut ObjectHeader {
@@ -398,6 +524,18 @@ extern "C" fn number_format_bound_resolved_options_thunk(closure: *const Closure
     number_format_resolved_options_object(obj)
 }
 
+extern "C" fn number_format_to_parts_thunk(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = this_intl_object("formatToParts", KIND_NUMBER);
+    let number = JSValue::from_bits(value.to_bits()).to_number();
+    parts_to_js_array(&number_instance_parts(obj, number))
+}
+
+extern "C" fn number_format_bound_to_parts_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = captured_intl_object(closure, "formatToParts", KIND_NUMBER);
+    let number = JSValue::from_bits(value.to_bits()).to_number();
+    parts_to_js_array(&number_instance_parts(obj, number))
+}
+
 fn number_format_resolved_options_object(obj: *const ObjectHeader) -> f64 {
     let out = js_object_alloc(0, 6);
     set_field(
@@ -439,6 +577,38 @@ extern "C" fn date_time_format_bound_format_thunk(
 
 fn date_time_format_format_value(value: f64) -> f64 {
     string_value(&date_short_utc(value))
+}
+
+/// Typed `formatToParts` segments for the default short DateTimeFormat. The
+/// concatenation reproduces `date_short_utc` (`M/D/YY`), keeping `format()` and
+/// `formatToParts()` consistent.
+fn date_instance_parts(value: f64) -> Vec<(&'static str, String)> {
+    let timestamp = crate::date::date_cell_timestamp(value);
+    if timestamp.is_nan() {
+        return vec![("literal", "Invalid Date".to_string())];
+    }
+    let secs = (timestamp as i64).div_euclid(1000);
+    let (year, month, day, _, _, _) = crate::date::timestamp_to_components(secs);
+    vec![
+        ("month", month.to_string()),
+        ("literal", "/".to_string()),
+        ("day", day.to_string()),
+        ("literal", "/".to_string()),
+        ("year", format!("{:02}", year.rem_euclid(100))),
+    ]
+}
+
+extern "C" fn date_time_format_to_parts_thunk(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let _obj = this_intl_object("formatToParts", KIND_DATE_TIME);
+    parts_to_js_array(&date_instance_parts(value))
+}
+
+extern "C" fn date_time_format_bound_to_parts_thunk(
+    closure: *const ClosureHeader,
+    value: f64,
+) -> f64 {
+    let _obj = captured_intl_object(closure, "formatToParts", KIND_DATE_TIME);
+    parts_to_js_array(&date_instance_parts(value))
 }
 
 extern "C" fn date_time_format_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
@@ -700,6 +870,436 @@ fn segmenter_resolved_options_object(obj: *const ObjectHeader) -> f64 {
     js_nanbox_pointer(out as i64)
 }
 
+/// GetOption with an enumerated value set: coerce `options[key]` to a string and
+/// require it to be one of `allowed`, else `RangeError`. Absent/`undefined`
+/// yields `default`.
+fn enum_option(options: f64, key: &str, allowed: &[&str], default: &str) -> String {
+    match get_option_string(options, key) {
+        None => default.to_string(),
+        Some(value) => {
+            if allowed.contains(&value.as_str()) {
+                value
+            } else {
+                throw_range_error(&format!(
+                    "Value {value} out of range for Intl options property {key}"
+                ))
+            }
+        }
+    }
+}
+
+/// Drain any JS iterable into a `Vec<String>`, throwing `TypeError` if an
+/// element is not a String (the ECMA-402 StringListFromIterable contract).
+fn collect_string_list(value: f64) -> Vec<String> {
+    use crate::collection_iter::{classify_init, InitIter};
+    let arr_ptr = match classify_init(value) {
+        InitIter::Empty => return Vec::new(),
+        InitIter::Values(p) => p as *const crate::ArrayHeader,
+    };
+    if arr_ptr.is_null() {
+        return Vec::new();
+    }
+    let len = js_array_length(arr_ptr);
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let element = js_array_get_f64(arr_ptr, i);
+        if !JSValue::from_bits(element.to_bits()).is_any_string() {
+            throw_type_error("Iterable yielded a non-string value for Intl.ListFormat");
+        }
+        out.push(string_from_string_value(element).unwrap_or_default());
+    }
+    out
+}
+
+/// en-US `listPattern` connectors as `(pair, middle, last)` separators, where
+/// `pair` joins a 2-element list, `middle` joins all but the final boundary of a
+/// 3+-element list, and `last` joins the final boundary.
+fn list_separators(list_type: &str, style: &str) -> (&'static str, &'static str, &'static str) {
+    match list_type {
+        "unit" => {
+            if style == "narrow" {
+                (" ", " ", " ")
+            } else {
+                (", ", ", ", ", ")
+            }
+        }
+        "disjunction" => (" or ", ", ", ", or "),
+        // conjunction (default)
+        _ => match style {
+            "short" => (" & ", ", ", ", & "),
+            "narrow" => (", ", ", ", ", "),
+            _ => (" and ", ", ", ", and "),
+        },
+    }
+}
+
+fn list_format_parts(
+    items: &[String],
+    list_type: &str,
+    style: &str,
+) -> Vec<(&'static str, String)> {
+    let (pair, middle, last) = list_separators(list_type, style);
+    let mut parts: Vec<(&'static str, String)> = Vec::new();
+    let n = items.len();
+    if n == 0 {
+        return parts;
+    }
+    if n == 1 {
+        parts.push(("element", items[0].clone()));
+        return parts;
+    }
+    if n == 2 {
+        parts.push(("element", items[0].clone()));
+        parts.push(("literal", pair.to_string()));
+        parts.push(("element", items[1].clone()));
+        return parts;
+    }
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            let sep = if i == n - 1 { last } else { middle };
+            parts.push(("literal", sep.to_string()));
+        }
+        parts.push(("element", item.clone()));
+    }
+    parts
+}
+
+fn list_format_instance_parts(obj: *const ObjectHeader, value: f64) -> Vec<(&'static str, String)> {
+    let items = collect_string_list(value);
+    let list_type = get_string_field(obj, KEY_TYPE).unwrap_or_else(|| "conjunction".to_string());
+    let style = get_string_field(obj, KEY_LF_STYLE).unwrap_or_else(|| "long".to_string());
+    list_format_parts(&items, &list_type, &style)
+}
+
+extern "C" fn list_format_format_thunk(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = this_intl_object("format", KIND_LIST_FORMAT);
+    string_value(
+        &list_format_instance_parts(obj, value)
+            .iter()
+            .map(|(_, v)| v.as_str())
+            .collect::<String>(),
+    )
+}
+
+extern "C" fn list_format_bound_format_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = captured_intl_object(closure, "format", KIND_LIST_FORMAT);
+    string_value(
+        &list_format_instance_parts(obj, value)
+            .iter()
+            .map(|(_, v)| v.as_str())
+            .collect::<String>(),
+    )
+}
+
+extern "C" fn list_format_to_parts_thunk(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = this_intl_object("formatToParts", KIND_LIST_FORMAT);
+    parts_to_js_array(&list_format_instance_parts(obj, value))
+}
+
+extern "C" fn list_format_bound_to_parts_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = captured_intl_object(closure, "formatToParts", KIND_LIST_FORMAT);
+    parts_to_js_array(&list_format_instance_parts(obj, value))
+}
+
+fn list_format_resolved_options_object(obj: *const ObjectHeader) -> f64 {
+    let out = js_object_alloc(0, 3);
+    set_field(
+        out,
+        "locale",
+        string_value(&get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string())),
+    );
+    set_field(
+        out,
+        "type",
+        string_value(&get_string_field(obj, KEY_TYPE).unwrap_or_else(|| "conjunction".to_string())),
+    );
+    set_field(
+        out,
+        "style",
+        string_value(&get_string_field(obj, KEY_LF_STYLE).unwrap_or_else(|| "long".to_string())),
+    );
+    js_nanbox_pointer(out as i64)
+}
+
+extern "C" fn list_format_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+    let obj = this_intl_object("resolvedOptions", KIND_LIST_FORMAT);
+    list_format_resolved_options_object(obj)
+}
+
+extern "C" fn list_format_bound_resolved_options_thunk(closure: *const ClosureHeader) -> f64 {
+    let obj = captured_intl_object(closure, "resolvedOptions", KIND_LIST_FORMAT);
+    list_format_resolved_options_object(obj)
+}
+
+// ---- Intl.RelativeTimeFormat ----------------------------------------------
+
+const RTF_SINGULAR_UNITS: &[&str] = &[
+    "second", "minute", "hour", "day", "week", "month", "quarter", "year",
+];
+
+/// Normalize a RelativeTimeFormat unit argument (singular or plural) to its
+/// singular sanctioned form, or `None` if unrecognized (caller raises RangeError).
+fn rtf_singular_unit(unit: &str) -> Option<&'static str> {
+    let lower = unit.to_ascii_lowercase();
+    let candidate = lower.strip_suffix('s').unwrap_or(&lower);
+    RTF_SINGULAR_UNITS.iter().copied().find(|u| *u == candidate)
+}
+
+/// Build the long-form, `numeric: "always"` en-US relative-time parts for
+/// `value` in `unit`. (`short`/`narrow` abbreviations and the `numeric: "auto"`
+/// special words — "tomorrow"/"yesterday" — need CLDR data and fall back to the
+/// long numeric form here.) Returns `(leading, number, trailing)` literal/number
+/// fragments so `format` and `formatToParts` stay consistent.
+fn rtf_parts(value: f64, unit: &str) -> Vec<(&'static str, String)> {
+    let abs = value.abs();
+    let num_str = format_number_parts(abs, "en-US", None, None);
+    let unit_display = if abs == 1.0 {
+        unit.to_string()
+    } else {
+        format!("{unit}s")
+    };
+    let past = value.is_sign_negative();
+    let mut parts: Vec<(&'static str, String)> = Vec::new();
+    if past {
+        split_numeric_parts(&num_str, "en-US", &mut parts);
+        parts.push(("literal", format!(" {unit_display} ago")));
+    } else {
+        parts.push(("literal", "in ".to_string()));
+        split_numeric_parts(&num_str, "en-US", &mut parts);
+        parts.push(("literal", format!(" {unit_display}")));
+    }
+    parts
+}
+
+fn rtf_instance_parts(value: f64, unit_arg: f64) -> Vec<(&'static str, String)> {
+    let number = JSValue::from_bits(value.to_bits()).to_number();
+    if !number.is_finite() {
+        throw_range_error("Value need to be finite number for Intl.RelativeTimeFormat.format()");
+    }
+    let unit_str = value_to_string(unit_arg);
+    let Some(unit) = rtf_singular_unit(&unit_str) else {
+        throw_range_error(&format!(
+            "Value {unit_str} out of range for Intl.RelativeTimeFormat.format() unit"
+        ));
+    };
+    rtf_parts(number, unit)
+}
+
+extern "C" fn rtf_format_thunk(_closure: *const ClosureHeader, value: f64, unit: f64) -> f64 {
+    let _obj = this_intl_object("format", KIND_RELATIVE_TIME);
+    string_value(
+        &rtf_instance_parts(value, unit)
+            .iter()
+            .map(|(_, v)| v.as_str())
+            .collect::<String>(),
+    )
+}
+
+extern "C" fn rtf_bound_format_thunk(closure: *const ClosureHeader, value: f64, unit: f64) -> f64 {
+    let _obj = captured_intl_object(closure, "format", KIND_RELATIVE_TIME);
+    string_value(
+        &rtf_instance_parts(value, unit)
+            .iter()
+            .map(|(_, v)| v.as_str())
+            .collect::<String>(),
+    )
+}
+
+extern "C" fn rtf_to_parts_thunk(_closure: *const ClosureHeader, value: f64, unit: f64) -> f64 {
+    let _obj = this_intl_object("formatToParts", KIND_RELATIVE_TIME);
+    parts_to_js_array(&rtf_instance_parts(value, unit))
+}
+
+extern "C" fn rtf_bound_to_parts_thunk(
+    closure: *const ClosureHeader,
+    value: f64,
+    unit: f64,
+) -> f64 {
+    let _obj = captured_intl_object(closure, "formatToParts", KIND_RELATIVE_TIME);
+    parts_to_js_array(&rtf_instance_parts(value, unit))
+}
+
+fn rtf_resolved_options_object(obj: *const ObjectHeader) -> f64 {
+    let out = js_object_alloc(0, 4);
+    set_field(
+        out,
+        "locale",
+        string_value(&get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string())),
+    );
+    set_field(
+        out,
+        "style",
+        string_value(&get_string_field(obj, KEY_RTF_STYLE).unwrap_or_else(|| "long".to_string())),
+    );
+    set_field(
+        out,
+        "numeric",
+        string_value(&get_string_field(obj, KEY_NUMERIC).unwrap_or_else(|| "always".to_string())),
+    );
+    set_field(out, "numberingSystem", string_value("latn"));
+    js_nanbox_pointer(out as i64)
+}
+
+extern "C" fn rtf_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+    let obj = this_intl_object("resolvedOptions", KIND_RELATIVE_TIME);
+    rtf_resolved_options_object(obj)
+}
+
+extern "C" fn rtf_bound_resolved_options_thunk(closure: *const ClosureHeader) -> f64 {
+    let obj = captured_intl_object(closure, "resolvedOptions", KIND_RELATIVE_TIME);
+    rtf_resolved_options_object(obj)
+}
+
+// ---- Intl.PluralRules ------------------------------------------------------
+
+/// en plural-category selection. Cardinal: `i == 1 && v == 0` → "one". Ordinal
+/// (UTS #35 en ordinal rules): 1st→"one", 2nd→"two", 3rd→"few", else "other".
+fn plural_select_en(n: f64, is_ordinal: bool) -> &'static str {
+    if !n.is_finite() {
+        return "other";
+    }
+    let abs = n.abs();
+    if !is_ordinal {
+        return if abs == 1.0 { "one" } else { "other" };
+    }
+    if abs.fract() != 0.0 {
+        return "other";
+    }
+    let i = abs as u64;
+    let m10 = i % 10;
+    let m100 = i % 100;
+    if m10 == 1 && m100 != 11 {
+        "one"
+    } else if m10 == 2 && m100 != 12 {
+        "two"
+    } else if m10 == 3 && m100 != 13 {
+        "few"
+    } else {
+        "other"
+    }
+}
+
+fn plural_categories(is_ordinal: bool) -> &'static [&'static str] {
+    if is_ordinal {
+        &["one", "two", "few", "other"]
+    } else {
+        &["one", "other"]
+    }
+}
+
+fn plural_rules_select(obj: *const ObjectHeader, value: f64) -> f64 {
+    let n = JSValue::from_bits(value.to_bits()).to_number();
+    let is_ordinal = get_string_field(obj, KEY_TYPE).as_deref() == Some("ordinal");
+    string_value(plural_select_en(n, is_ordinal))
+}
+
+extern "C" fn plural_rules_select_thunk(_closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = this_intl_object("select", KIND_PLURAL_RULES);
+    plural_rules_select(obj, value)
+}
+
+extern "C" fn plural_rules_bound_select_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
+    let obj = captured_intl_object(closure, "select", KIND_PLURAL_RULES);
+    plural_rules_select(obj, value)
+}
+
+extern "C" fn plural_rules_select_range_thunk(
+    _closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let _obj = this_intl_object("selectRange", KIND_PLURAL_RULES);
+    plural_select_range(start, end)
+}
+
+extern "C" fn plural_rules_bound_select_range_thunk(
+    closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let _obj = captured_intl_object(closure, "selectRange", KIND_PLURAL_RULES);
+    plural_select_range(start, end)
+}
+
+fn plural_select_range(start: f64, end: f64) -> f64 {
+    let s = JSValue::from_bits(start.to_bits()).to_number();
+    let e = JSValue::from_bits(end.to_bits()).to_number();
+    if s.is_nan() || e.is_nan() {
+        throw_range_error("Invalid values for Intl.PluralRules.selectRange()");
+    }
+    // en range plural is "other" for all but trivial cases; report "other".
+    string_value("other")
+}
+
+fn plural_rules_resolved_options_object(obj: *const ObjectHeader) -> f64 {
+    let out = js_object_alloc(0, 11);
+    set_field(
+        out,
+        "locale",
+        string_value(&get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string())),
+    );
+    let is_ordinal = get_string_field(obj, KEY_TYPE).as_deref() == Some("ordinal");
+    set_field(
+        out,
+        "type",
+        string_value(if is_ordinal { "ordinal" } else { "cardinal" }),
+    );
+    set_field(out, "notation", string_value("standard"));
+    set_field(
+        out,
+        "minimumIntegerDigits",
+        get_number_field(obj, KEY_PR_MIN_INT).unwrap_or(1.0),
+    );
+    let use_sig = get_field(obj, KEY_PR_USE_SIG).to_bits() == crate::value::TAG_TRUE;
+    if use_sig {
+        set_field(
+            out,
+            "minimumSignificantDigits",
+            get_number_field(obj, KEY_PR_MIN_SIG).unwrap_or(1.0),
+        );
+        set_field(
+            out,
+            "maximumSignificantDigits",
+            get_number_field(obj, KEY_PR_MAX_SIG).unwrap_or(21.0),
+        );
+    } else {
+        set_field(
+            out,
+            "minimumFractionDigits",
+            get_number_field(obj, KEY_PR_MIN_FRAC).unwrap_or(0.0),
+        );
+        set_field(
+            out,
+            "maximumFractionDigits",
+            get_number_field(obj, KEY_PR_MAX_FRAC).unwrap_or(3.0),
+        );
+    }
+    let mut categories = js_array_alloc(0);
+    for cat in plural_categories(is_ordinal) {
+        categories = js_array_push_f64(categories, string_value(cat));
+    }
+    set_field(
+        out,
+        "pluralCategories",
+        js_nanbox_pointer(categories as i64),
+    );
+    set_field(out, "roundingIncrement", 1.0);
+    set_field(out, "roundingMode", string_value("halfExpand"));
+    set_field(out, "roundingPriority", string_value("auto"));
+    set_field(out, "trailingZeroDisplay", string_value("auto"));
+    js_nanbox_pointer(out as i64)
+}
+
+extern "C" fn plural_rules_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+    let obj = this_intl_object("resolvedOptions", KIND_PLURAL_RULES);
+    plural_rules_resolved_options_object(obj)
+}
+
+extern "C" fn plural_rules_bound_resolved_options_thunk(closure: *const ClosureHeader) -> f64 {
+    let obj = captured_intl_object(closure, "resolvedOptions", KIND_PLURAL_RULES);
+    plural_rules_resolved_options_object(obj)
+}
+
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
     let locale = locale_or_default(locales);
     let obj = js_object_alloc(0, 8);
@@ -729,6 +1329,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
             install_bound_instance_function(
                 obj,
+                "formatToParts",
+                number_format_bound_to_parts_thunk as *const u8,
+                1,
+            );
+            install_bound_instance_function(
+                obj,
                 "resolvedOptions",
                 number_format_bound_resolved_options_thunk as *const u8,
                 0,
@@ -745,6 +1351,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 obj,
                 "format",
                 date_time_format_bound_format_thunk as *const u8,
+                1,
+            );
+            install_bound_instance_function(
+                obj,
+                "formatToParts",
+                date_time_format_bound_to_parts_thunk as *const u8,
                 1,
             );
             install_bound_instance_function(
@@ -781,6 +1393,92 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 obj,
                 "resolvedOptions",
                 segmenter_bound_resolved_options_thunk as *const u8,
+                0,
+            );
+        }
+        KIND_LIST_FORMAT => {
+            let list_type = enum_option(
+                options,
+                "type",
+                &["conjunction", "disjunction", "unit"],
+                "conjunction",
+            );
+            let style = enum_option(options, "style", &["long", "short", "narrow"], "long");
+            set_internal_field(obj, KEY_TYPE, string_value(&list_type));
+            set_internal_field(obj, KEY_LF_STYLE, string_value(&style));
+            install_bound_instance_function(
+                obj,
+                "format",
+                list_format_bound_format_thunk as *const u8,
+                1,
+            );
+            install_bound_instance_function(
+                obj,
+                "formatToParts",
+                list_format_bound_to_parts_thunk as *const u8,
+                1,
+            );
+            install_bound_instance_function(
+                obj,
+                "resolvedOptions",
+                list_format_bound_resolved_options_thunk as *const u8,
+                0,
+            );
+        }
+        KIND_RELATIVE_TIME => {
+            let style = enum_option(options, "style", &["long", "short", "narrow"], "long");
+            let numeric = enum_option(options, "numeric", &["always", "auto"], "always");
+            set_internal_field(obj, KEY_RTF_STYLE, string_value(&style));
+            set_internal_field(obj, KEY_NUMERIC, string_value(&numeric));
+            install_bound_instance_function(obj, "format", rtf_bound_format_thunk as *const u8, 2);
+            install_bound_instance_function(
+                obj,
+                "formatToParts",
+                rtf_bound_to_parts_thunk as *const u8,
+                2,
+            );
+            install_bound_instance_function(
+                obj,
+                "resolvedOptions",
+                rtf_bound_resolved_options_thunk as *const u8,
+                0,
+            );
+        }
+        KIND_PLURAL_RULES => {
+            let pr_type = enum_option(options, "type", &["cardinal", "ordinal"], "cardinal");
+            set_internal_field(obj, KEY_TYPE, string_value(&pr_type));
+            let min_int = get_option_number(options, "minimumIntegerDigits").unwrap_or(1.0);
+            set_internal_field(obj, KEY_PR_MIN_INT, min_int);
+            let min_sig = get_option_number(options, "minimumSignificantDigits");
+            let max_sig = get_option_number(options, "maximumSignificantDigits");
+            if min_sig.is_some() || max_sig.is_some() {
+                set_internal_field(obj, KEY_PR_USE_SIG, bool_value(true));
+                set_internal_field(obj, KEY_PR_MIN_SIG, min_sig.unwrap_or(1.0));
+                set_internal_field(obj, KEY_PR_MAX_SIG, max_sig.unwrap_or(21.0));
+            } else {
+                set_internal_field(obj, KEY_PR_USE_SIG, bool_value(false));
+                let min_frac = get_option_number(options, "minimumFractionDigits").unwrap_or(0.0);
+                let max_frac = get_option_number(options, "maximumFractionDigits")
+                    .unwrap_or_else(|| min_frac.max(3.0));
+                set_internal_field(obj, KEY_PR_MIN_FRAC, min_frac);
+                set_internal_field(obj, KEY_PR_MAX_FRAC, max_frac);
+            }
+            install_bound_instance_function(
+                obj,
+                "select",
+                plural_rules_bound_select_thunk as *const u8,
+                1,
+            );
+            install_bound_instance_function(
+                obj,
+                "selectRange",
+                plural_rules_bound_select_range_thunk as *const u8,
+                2,
+            );
+            install_bound_instance_function(
+                obj,
+                "resolvedOptions",
+                plural_rules_bound_resolved_options_thunk as *const u8,
                 0,
             );
         }
@@ -848,6 +1546,36 @@ extern "C" fn segmenter_constructor_thunk(closure: *const ClosureHeader, rest: f
     )
 }
 
+extern "C" fn list_format_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    make_instance(
+        closure,
+        KIND_LIST_FORMAT,
+        rest_arg(rest, 0),
+        rest_arg(rest, 1),
+    )
+}
+
+extern "C" fn relative_time_format_constructor_thunk(
+    closure: *const ClosureHeader,
+    rest: f64,
+) -> f64 {
+    make_instance(
+        closure,
+        KIND_RELATIVE_TIME,
+        rest_arg(rest, 0),
+        rest_arg(rest, 1),
+    )
+}
+
+extern "C" fn plural_rules_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    make_instance(
+        closure,
+        KIND_PLURAL_RULES,
+        rest_arg(rest, 0),
+        rest_arg(rest, 1),
+    )
+}
+
 fn supported_locales_array(locales: f64) -> f64 {
     let locales = locales_from_value(locales);
     let mut arr = js_array_alloc(locales.len() as u32);
@@ -896,6 +1624,29 @@ fn install_function(
     value
 }
 
+/// Set `proto[Symbol.toStringTag]` to `tag` (non-writable, non-enumerable,
+/// configurable) so `Object.prototype.toString.call(instance)` yields
+/// `[object <tag>]` — the ECMA-402 default for every `Intl.*` prototype.
+fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
+    let sym = crate::symbol::well_known_symbol("toStringTag");
+    if sym.is_null() {
+        return;
+    }
+    let tag_str = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            js_nanbox_pointer(proto as i64),
+            f64::from_bits(JSValue::pointer(sym as *const u8).bits()),
+            f64::from_bits(crate::js_nanbox_string(tag_str as i64).to_bits()),
+        );
+    }
+    crate::symbol::set_symbol_property_attrs(
+        proto as usize,
+        sym as usize,
+        PropertyAttrs::new(false, false, true),
+    );
+}
+
 fn install_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
@@ -927,6 +1678,7 @@ fn install_constructor(
     for (method, ptr, arity) in methods.iter().copied() {
         install_function(proto, method, ptr, arity, arity, false);
     }
+    set_proto_to_string_tag(proto, &format!("Intl.{name}"));
     let proto_value = js_nanbox_pointer(proto as i64);
     crate::closure::closure_set_dynamic_prop(ctor as usize, "prototype", proto_value);
     crate::object::set_builtin_property_attrs(
@@ -953,12 +1705,35 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
     }
+    // `Intl.getCanonicalLocales` / `Intl.supportedValuesOf` — plain namespace
+    // functions (length 1 each).
+    install_function(
+        ns_obj,
+        "getCanonicalLocales",
+        get_canonical_locales_thunk as *const u8,
+        1,
+        1,
+        false,
+    );
+    install_function(
+        ns_obj,
+        "supportedValuesOf",
+        supported_values_of_thunk as *const u8,
+        1,
+        1,
+        false,
+    );
     install_constructor(
         ns_obj,
         "NumberFormat",
         number_format_constructor_thunk as *const u8,
         &[
             ("format", number_format_format_thunk as *const u8, 1),
+            (
+                "formatToParts",
+                number_format_to_parts_thunk as *const u8,
+                1,
+            ),
             (
                 "resolvedOptions",
                 number_format_resolved_options_thunk as *const u8,
@@ -972,6 +1747,11 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         date_time_format_constructor_thunk as *const u8,
         &[
             ("format", date_time_format_format_thunk as *const u8, 1),
+            (
+                "formatToParts",
+                date_time_format_to_parts_thunk as *const u8,
+                1,
+            ),
             (
                 "resolvedOptions",
                 date_time_format_resolved_options_thunk as *const u8,
@@ -1001,6 +1781,52 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
             (
                 "resolvedOptions",
                 segmenter_resolved_options_thunk as *const u8,
+                0,
+            ),
+        ],
+    );
+    install_constructor(
+        ns_obj,
+        "ListFormat",
+        list_format_constructor_thunk as *const u8,
+        &[
+            ("format", list_format_format_thunk as *const u8, 1),
+            ("formatToParts", list_format_to_parts_thunk as *const u8, 1),
+            (
+                "resolvedOptions",
+                list_format_resolved_options_thunk as *const u8,
+                0,
+            ),
+        ],
+    );
+    install_constructor(
+        ns_obj,
+        "RelativeTimeFormat",
+        relative_time_format_constructor_thunk as *const u8,
+        &[
+            ("format", rtf_format_thunk as *const u8, 2),
+            ("formatToParts", rtf_to_parts_thunk as *const u8, 2),
+            (
+                "resolvedOptions",
+                rtf_resolved_options_thunk as *const u8,
+                0,
+            ),
+        ],
+    );
+    install_constructor(
+        ns_obj,
+        "PluralRules",
+        plural_rules_constructor_thunk as *const u8,
+        &[
+            ("select", plural_rules_select_thunk as *const u8, 1),
+            (
+                "selectRange",
+                plural_rules_select_range_thunk as *const u8,
+                2,
+            ),
+            (
+                "resolvedOptions",
+                plural_rules_resolved_options_thunk as *const u8,
                 0,
             ),
         ],
