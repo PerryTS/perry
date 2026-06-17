@@ -248,6 +248,8 @@ def block_counter_summary(body: str) -> dict[str, Any]:
     calls = count_calls_by_name(body)
     load_i8 = len(re.findall(r"\bload (?:i8|<\d+ x i8>), ptr\b", body))
     store_i8 = len(re.findall(r"\bstore (?:i8\b|<\d+ x i8>)", body))
+    load_f64 = len(re.findall(r"\bload double, ptr\b", body))
+    store_f64 = len(re.findall(r"\bstore double\b", body))
     return {
         "runtime_calls": {
             name: count
@@ -260,6 +262,8 @@ def block_counter_summary(body: str) -> dict[str, Any]:
         "ptrtoint": body.count(" ptrtoint "),
         "load_i8": load_i8,
         "store_i8": store_i8,
+        "load_f64": load_f64,
+        "store_f64": store_f64,
         "fmul": body.count(" fmul "),
         "fadd": body.count(" fadd "),
         "mul_i32": body.count(" mul i32 "),
@@ -279,6 +283,8 @@ def merge_region_counters(
         "ptrtoint": 0,
         "load_i8": 0,
         "store_i8": 0,
+        "load_f64": 0,
+        "store_f64": 0,
         "fmul": 0,
         "fadd": 0,
         "mul_i32": 0,
@@ -294,6 +300,8 @@ def merge_region_counters(
             "ptrtoint",
             "load_i8",
             "store_i8",
+            "load_f64",
+            "store_f64",
             "fmul",
             "fadd",
             "mul_i32",
@@ -401,13 +409,24 @@ def runtime_counter_summary(
     gc_collections = 0
     traced_allocations = 0
     traced_write_barriers = 0
+    gc_trace_enabled: bool | None = None
     if benchmark is not None:
+        if isinstance(benchmark.get("gc_trace_enabled"), bool):
+            gc_trace_enabled = bool(benchmark["gc_trace_enabled"])
         for row in benchmark.get("runs", []):
+            if isinstance(row.get("gc_trace_enabled"), bool):
+                row_trace_enabled = bool(row["gc_trace_enabled"])
+                gc_trace_enabled = (
+                    row_trace_enabled
+                    if gc_trace_enabled is None
+                    else gc_trace_enabled and row_trace_enabled
+                )
             trace = row.get("gc_trace_summary", {})
             gc_collections += int(trace.get("gc_events", 0) or 0)
             traced_allocations += int(trace.get("malloc_kind_allocations", 0) or 0)
             traced_write_barriers += int(trace.get("write_barrier_calls", 0) or 0)
     return {
+        "gc_trace_enabled": gc_trace_enabled,
         "runtime_calls_static": sum(int(v) for v in runtime_calls.values()),
         "runtime_call_names_static": runtime_calls,
         "allocations_traced": traced_allocations,
@@ -519,10 +538,13 @@ def run_benchmark(
                 "stderr_path": str(stderr_path),
                 "stdout_first": result.stdout[:240],
                 "stdout_last": result.stdout[-240:],
+                "gc_trace_enabled": bool(enable_gc_trace),
                 "gc_trace_summary": summarize_gc_trace(result.stderr),
             }
         )
-    return benchmark_summary(rows, benchmark_mode)
+    summary = benchmark_summary(rows, benchmark_mode)
+    summary["gc_trace_enabled"] = bool(enable_gc_trace)
+    return summary
 
 
 def run_perf_stat(binary: Path, *, out_dir: Path, timeout: int) -> dict[str, Any]:

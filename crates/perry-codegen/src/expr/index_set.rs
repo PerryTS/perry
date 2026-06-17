@@ -35,7 +35,7 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    array_store_needs_layout_note, array_store_needs_write_barrier,
+    array_kind_fact, array_store_needs_layout_note, array_store_needs_write_barrier,
     buffer_access_materialization_reason, buffer_alias_metadata_suffix,
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_layout_note_slot_on_block, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
@@ -51,8 +51,8 @@ use super::{
     nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
     raw_f64_layout_fact, try_flat_const_2d_int, try_lower_flat_const_index_get,
     try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
-    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, PackedF64LoopFact,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn canonicalize_raw_f64_numeric_store_value(
@@ -103,26 +103,164 @@ fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     )
 }
 
-fn numeric_index_needs_runtime_key(index: &Expr) -> bool {
-    // Only a LITERAL numeric key that is not a clean array index in
-    // `0..=i32::MAX` needs the runtime key helper: out-of-range/negative
-    // integers (`a[2**32-1]`, `a[-1]`), non-integer floats (`a[1.5]`), and
-    // non-finite values (`a[NaN]`/`a[Infinity]`). These become string-keyed
-    // properties and must reach `js_array_*_index_or_string`.
-    //
-    // Computed/dynamic numeric indices are deliberately NOT rerouted here:
-    // they keep flowing through the typed-feedback numeric-array guard path,
-    // which already carries its own out-of-range/non-integer fallback. Sending
-    // them to the runtime key helper would defeat the native numeric-array hot
-    // path and drop the index guard (regressing the native-region proof and
-    // the typed-feedback hot-path tests). (#4557/#4543)
+fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index: &Expr) -> bool {
     match index {
-        Expr::Integer(i) => *i < 0 || *i > i32::MAX as i64,
-        Expr::Number(n) => {
-            !(n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64)
+        Expr::Integer(i) => (0..=i32::MAX as i64).contains(i),
+        Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64,
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::BitAnd) => {
+            bitand_has_nonnegative_i32_mask(left, right)
+        }
+        Expr::LocalGet(id) => {
+            ctx.integer_locals.contains(id)
+                && ctx.i32_counter_slots.contains_key(id)
+                && (ctx.nonnegative_integer_locals.contains(id)
+                    || ctx
+                        .int_range_facts
+                        .iter()
+                        .any(|fact| fact.local_id == *id && fact.range.min >= 0))
         }
         _ => false,
     }
+}
+
+fn bitand_has_nonnegative_i32_mask(left: &Expr, right: &Expr) -> bool {
+    fn mask(expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Integer(i) => Some(*i),
+            Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
+            _ => None,
+        }
+    }
+    mask(left)
+        .or_else(|| mask(right))
+        .is_some_and(|mask| (0..=i32::MAX as i64).contains(&mask))
+}
+
+fn packed_f64_loop_fact(ctx: &FnCtx<'_>, arr_id: u32, idx_id: u32) -> Option<PackedF64LoopFact> {
+    ctx.packed_f64_loop_facts
+        .iter()
+        .find(|fact| fact.array_local_id == arr_id && fact.index_local_id == idx_id)
+        .cloned()
+}
+
+fn numeric_index_has_loop_array_index_proof(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
+    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object, index) else {
+        return false;
+    };
+    ctx.i32_counter_slots.contains_key(idx_id)
+        && (packed_f64_loop_fact(ctx, *arr_id, *idx_id).is_some()
+            || ctx
+                .bounded_index_pairs
+                .iter()
+                .any(|fact| fact.array_local_id == *arr_id && fact.index_local_id == *idx_id))
+}
+
+fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
+    // The inline array fast paths take an i32 index, so the conversion is only
+    // sound after proving JS array-index semantics. A dynamic numeric value like
+    // `let k = 1.5; arr[k] = v` must reach the runtime key helper and write the
+    // property "1.5" instead of truncating to element 1 before a guard can see it.
+    is_numeric_expr(ctx, index)
+        && !numeric_index_has_integer_array_index_proof(ctx, index)
+        && !numeric_index_has_loop_array_index_proof(ctx, object, index)
+}
+
+fn lower_array_index_set_via_runtime_key(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+    value: &Expr,
+    source_label: &str,
+) -> Result<String> {
+    let arr_box = lower_expr(ctx, object)?;
+    let idx_double = lower_expr(ctx, index)?;
+    let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
+    let (val_double, val_bits) = lower_value_for_optional_barrier(ctx, value, value_needs_barrier)?;
+    let arr_handle = {
+        let blk = ctx.block();
+        unbox_to_i64(blk, &arr_box)
+    };
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        source_label,
+        TypedFeedbackContract::array_set_index(),
+    );
+    let new_handle = ctx.block().call(
+        I64,
+        "js_typed_feedback_array_set_index_or_string",
+        &[
+            (I64, &site_id),
+            (I64, &arr_handle),
+            (DOUBLE, &idx_double),
+            (DOUBLE, &val_double),
+        ],
+    );
+    if let Expr::LocalGet(id) = object {
+        if let Some(slot) = ctx.locals.get(id).cloned() {
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+            ctx.block().store(DOUBLE, &new_box, &slot);
+        } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+            let g_ref = format!("@{}", global_name);
+            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+        }
+    }
+    if value_needs_barrier {
+        let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
+        let val_bits = val_bits.unwrap_or_else(|| ctx.block().bitcast_double_to_i64(&val_double));
+        emit_write_barrier(ctx, &arr_bits, &val_bits);
+    }
+    Ok(val_double)
+}
+
+fn lower_packed_f64_loop_index_set(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    arr_box: &str,
+    idx_i32: &str,
+    val_double: &str,
+    guard_id: &str,
+) {
+    {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+        let idx_i64 = blk.zext(I32, idx_i32, I64);
+        let byte_offset = blk.shl(I64, &idx_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        blk.store(DOUBLE, val_double, &element_ptr);
+    }
+    let stored = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::F64,
+        llvm_ty: DOUBLE,
+        value: val_double.to_string(),
+    };
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "PackedF64LoopStore",
+        Some(arr_id),
+        "packed_f64_loop_store",
+        &stored,
+        Some(BoundsState::Guarded {
+            guard_id: guard_id.to_string(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        vec![
+            array_kind_fact(Some(arr_id), "consumed", "packed_f64", None),
+            raw_f64_layout_fact(Some(arr_id), "consumed", guard_id, None),
+        ],
+        Vec::new(),
+        false,
+        false,
+        Vec::new(),
+    );
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -310,37 +448,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(val_double);
             }
-            if is_array_expr(ctx, object) && numeric_index_needs_runtime_key(index) {
-                let arr_box = lower_expr(ctx, object)?;
-                let idx_double = lower_expr(ctx, index)?;
-                let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
-                let val_double = lower_expr(ctx, value)?;
-                let arr_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &arr_box)
-                };
-                let site_id = emit_typed_feedback_register_site(
+            if is_array_expr(ctx, object)
+                && numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
+            {
+                return lower_array_index_set_via_runtime_key(
                     ctx,
-                    TypedFeedbackKind::ArrayElement,
-                    "array[boundary_index]",
-                    TypedFeedbackContract::array_set_index(),
+                    object.as_ref(),
+                    index.as_ref(),
+                    value.as_ref(),
+                    "array[dynamic_numeric_index]",
                 );
-                ctx.block().call(
-                    I64,
-                    "js_typed_feedback_array_set_index_or_string",
-                    &[
-                        (I64, &site_id),
-                        (I64, &arr_handle),
-                        (DOUBLE, &idx_double),
-                        (DOUBLE, &val_double),
-                    ],
-                );
-                if value_needs_barrier {
-                    let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                    let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
-                    emit_write_barrier(ctx, &arr_bits, &val_bits);
-                }
-                return Ok(val_double);
             }
             // Same dispatch tree as IndexGet: known array → fast inline,
             // string key on dynamic receiver → object field set, otherwise
@@ -358,9 +475,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
                     (object.as_ref(), index.as_ref())
                 {
+                    if let Some(fact) = packed_f64_loop_fact(ctx, *arr_id, *idx_id) {
+                        if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+                            let arr_box = lower_expr(ctx, object)?;
+                            let idx_i32 = ctx.block().load(I32, &i32_slot);
+                            let val_double = lower_expr(ctx, value)?;
+                            lower_packed_f64_loop_index_set(
+                                ctx,
+                                *arr_id,
+                                &arr_box,
+                                &idx_i32,
+                                &val_double,
+                                &fact.guard_id,
+                            );
+                            return Ok(val_double);
+                        }
+                    }
                     if ctx.bounded_index_pairs.iter().any(|fact| {
                         fact.index_local_id == *idx_id && fact.array_local_id == *arr_id
                     }) {
+                        let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() else {
+                            return lower_array_index_set_via_runtime_key(
+                                ctx,
+                                object.as_ref(),
+                                index.as_ref(),
+                                value.as_ref(),
+                                "array[dynamic_numeric_index]",
+                            );
+                        };
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
                         let write_barrier_needed = array_store_needs_write_barrier(ctx, value);
                         let value_is_numeric = is_numeric_expr(ctx, value);
@@ -368,13 +510,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             && expr_has_numeric_pointer_free_array_layout(ctx, object);
                         let arr_box = lower_expr(ctx, object)?;
                         let idx_double = lower_expr(ctx, index)?;
-                        // Grab i32 slot name before mutably borrowing ctx for block().
-                        let i32_slot_opt = ctx.i32_counter_slots.get(idx_id).cloned();
-                        let idx_i32 = if let Some(ref i32_slot) = i32_slot_opt {
-                            ctx.block().load(I32, i32_slot)
-                        } else {
-                            ctx.block().fptosi(DOUBLE, &idx_double, I32)
-                        };
+                        let idx_i32 = ctx.block().load(I32, &i32_slot);
                         let val_double = lower_expr(ctx, value)?;
                         if require_numeric_layout {
                             let feedback_site_id = emit_typed_feedback_register_site(

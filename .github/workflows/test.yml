@@ -468,6 +468,16 @@ jobs:
             --perf-counters off \
             --print-summary
 
+      - name: Gate native-ABI proof compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py suite \
+            --suite native-abi-proof \
+            --perry target/debug/perry \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --print-summary
+
       - name: Gate positive vectorization compiler output
         run: |
           python3 scripts/compiler_output_regression.py capture \

@@ -239,6 +239,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, DOUBLE, DOUBLE, I32, I32],
     );
     module.declare_function(
+        "js_typed_feedback_packed_f64_array_loop_guard",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
         "js_typed_feedback_array_index_get_fallback_boxed",
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],

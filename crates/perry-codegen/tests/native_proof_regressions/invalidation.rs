@@ -289,6 +289,26 @@ fn negative_loop_counter_does_not_use_local_length_bound_fact() {
 }
 
 #[test]
+fn body_mutation_of_local_bound_does_not_use_local_length_bound_fact() {
+    let body = vec![
+        number_let(1, "n", true, int(1)),
+        buffer_let(2, "buf", local(1)),
+        for_loop(
+            3,
+            local(1),
+            vec![
+                Stmt::Expr(Expr::LocalSet(1, Box::new(int(16)))),
+                buffer_set(2, local(3)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("body_mutates_local_bound.ts", body);
+    assert_buffer_store_uses_dynamic_fallback(&ir);
+}
+
+#[test]
 fn negative_loop_counter_does_not_use_min_length_bound_fact() {
     let body = vec![
         buffer_let(1, "src", int(8)),

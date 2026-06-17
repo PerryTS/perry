@@ -210,6 +210,16 @@ def raw_f64_layout_fact(state):
     }
 
 
+def array_kind_fact(state="consumed", reason=None):
+    return {
+        "fact_id": f"native_region.array_kind.test.{state}",
+        "kind": "array_kind",
+        "local_id": None,
+        "state": state,
+        "reason": reason,
+    }
+
+
 def attach_raw_f64_layout_facts(records):
     for record in records:
         if record.get("access_mode") == "checked_native":
@@ -394,6 +404,24 @@ def loop_data_dependent_native_records():
 
 def numeric_array_native_records():
     return attach_raw_f64_layout_facts([
+        native_record(
+            block="apush.numeric_merge.6",
+            rep="js_value",
+            expr_kind="PackedF64LoopGuard",
+            consumer="packed_f64_loop_guard",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "packed_f64_array_loop_guard"}},
+            consumed_facts=[array_kind_fact()],
+        ),
+        native_record(
+            block="for.packed_f64_fast.body.15",
+            rep="f64",
+            expr_kind="PackedF64LoopLoad",
+            consumer="packed_f64_loop_load",
+            access_mode="checked_native",
+            bounds_state={"guarded": {"guard_id": "packed_f64_array_loop_guard"}},
+            consumed_facts=[array_kind_fact()],
+        ),
         native_record(
             rep="f64",
             expr_kind="NumericArrayPush",
@@ -713,53 +741,7 @@ idxset.bounded_numeric_merge.5:
   ret i32 0
 }
 """
-        records = attach_raw_f64_layout_facts([
-            native_record(
-                rep="f64",
-                expr_kind="NumericArrayPush",
-                consumer="js_array_numeric_push_f64_unboxed",
-                access_mode="checked_native",
-                bounds_state={"guarded": {"guard_id": "numeric_array_push_guard"}},
-            ),
-            native_record(
-                rep="js_value",
-                expr_kind="NumericArrayPush",
-                consumer="js_array_push_f64",
-                access_mode="dynamic_fallback",
-                bounds_state="unknown",
-                materialization_reason="runtime_api",
-            ),
-            native_record(
-                rep="f64",
-                expr_kind="NumericArrayIndexGet",
-                consumer="js_array_numeric_get_f64_unboxed",
-                access_mode="checked_native",
-                bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
-            ),
-            native_record(
-                rep="js_value",
-                expr_kind="NumericArrayIndexGet",
-                consumer="js_typed_feedback_array_index_get_fallback_boxed",
-                access_mode="dynamic_fallback",
-                bounds_state="unknown",
-                materialization_reason="runtime_api",
-            ),
-            native_record(
-                rep="f64",
-                expr_kind="NumericArrayIndexSet",
-                consumer="js_array_numeric_set_f64_unboxed",
-                access_mode="checked_native",
-                bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
-            ),
-            native_record(
-                rep="js_value",
-                expr_kind="NumericArrayIndexSet",
-                consumer="js_typed_feedback_array_index_set_fallback_boxed",
-                access_mode="dynamic_fallback",
-                bounds_state="unknown",
-                materialization_reason="runtime_api",
-            ),
-        ])
+        records = numeric_array_native_records()
         for record in records:
             if record.get("access_mode") == "dynamic_fallback":
                 record["materialization_reason"] = None
@@ -923,6 +905,61 @@ idxset.bounded_numeric_merge.5:
             self.assertIn("numeric_arrays_checksum", report)
             self.assertIn("no benchmark stdout captured", report)
 
+    def test_verify_existing_loads_all_native_rep_shards(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ir = numeric_arrays_inline_ir()
+            records = numeric_array_native_records()
+            (root / "llvm-before-opt.ll").write_text(ir, encoding="utf-8")
+            (root / "llvm-after-opt.analysis.ll").write_text(ir, encoding="utf-8")
+            (root / "object-disassembly.s").write_text(GOOD_ASM, encoding="utf-8")
+            (root / "native-reps.json").write_text(
+                json.dumps({"records": records[:2]}),
+                encoding="utf-8",
+            )
+            (root / "native-reps-0.json").write_text(
+                json.dumps({"records": records[:4]}),
+                encoding="utf-8",
+            )
+            (root / "native-reps-1.json").write_text(
+                json.dumps({"records": records[4:]}),
+                encoding="utf-8",
+            )
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "benchmark": {
+                            "gc_trace_enabled": True,
+                            "runs": [
+                                {
+                                    "run": 1,
+                                    "exit_code": 0,
+                                    "stdout_first": "25\n",
+                                    "gc_trace_enabled": True,
+                                    "gc_trace_summary": {},
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "artifact_dir": str(root),
+                    "workload": "numeric_arrays",
+                    "gate": True,
+                    "print_summary": False,
+                    "target": None,
+                    "clang_arg": None,
+                    "fp_contract": None,
+                    "expect_fma": "auto",
+                },
+            )()
+            self.assertEqual(HARNESS.verify_existing(args), 0)
+
     def test_explicit_perry_path_is_repo_relative(self):
         resolved = HARNESS.resolve_perry("target/debug/perry")
         self.assertEqual(resolved, [str(REPO_ROOT / "target/debug/perry")])
@@ -932,6 +969,10 @@ idxset.bounded_numeric_merge.5:
         self.assertIn("image_convolution", spec["workloads"])
         self.assertIn("fma_contract", spec["workloads"])
         self.assertIn("numeric_arrays", spec["workloads"])
+        self.assertIn("packed_f64_loop_versioning", spec["workloads"])
+        self.assertIn("packed_f64_loop_versioning_negative", spec["workloads"])
+        self.assertIn("dynamic_fractional_array_index", spec["workloads"])
+        self.assertIn("loop_bound_semantics", spec["workloads"])
         self.assertIn("raw_numeric_object_fields", spec["workloads"])
         self.assertIn("scalar_replacement_literals", spec["workloads"])
         self.assertIn("native_pod_layout_constants", spec["workloads"])
@@ -989,12 +1030,21 @@ idxset.bounded_numeric_merge.5:
         suite = SUITES["native-abi-proof"]
         packet_typed_index = suite.index("native_abi_packet_typed")
         for workload in (
+            "width_aware_buffer_kernels",
+            "native_owned_typed_views",
             "native_pod_layout_constants",
             "native_memory_bulk_fill",
             "native_memory_fixture",
         ):
             self.assertIn(workload, suite)
             self.assertLess(suite.index(workload), packet_typed_index)
+
+    def test_ci_wires_native_abi_proof_suite(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Gate native-ABI proof compiler output", workflow)
+        self.assertIn("--suite native-abi-proof", workflow)
 
     def test_workload_spec_rejects_missing_required_fields(self):
         with self.assertRaises(HARNESS.HarnessError):
@@ -1075,6 +1125,40 @@ idxset.bounded_numeric_merge.5:
         self.assertEqual(summary["allocations_traced"], 4)
         self.assertEqual(summary["write_barriers_traced"], 3)
         self.assertEqual(summary["boxed_number_allocations_static"], 1)
+
+    def test_trace_runtime_budgets_fail_when_gc_trace_disabled(self):
+        benchmark = {
+            "gc_trace_enabled": False,
+            "runs": [
+                {
+                    "run": 1,
+                    "exit_code": 0,
+                    "gc_trace_enabled": False,
+                    "gc_trace_summary": {},
+                }
+            ],
+        }
+        counters = HARNESS.structural_counters(GOOD_IR, GOOD_IR, GOOD_ASM)
+        report = HARNESS.verify_artifacts(
+            workload="image_convolution",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=benchmark,
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            counters=counters,
+            runtime_summary=HARNESS.runtime_counter_summary(benchmark, counters),
+            native_reps=[{"records": image_native_records()}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("runtime_budget_gc_trace_enabled" in error for error in report["errors"]),
+            report["errors"],
+        )
 
     def test_vectorization_unexpected_reason_fails_gate(self):
         report = HARNESS.verify_artifacts(
@@ -1244,53 +1328,7 @@ idxset.bounded_numeric_merge.5:
   ret i32 0
 }
 """
-        records = attach_raw_f64_layout_facts([
-            native_record(
-                rep="f64",
-                expr_kind="NumericArrayPush",
-                consumer="js_array_numeric_push_f64_unboxed",
-                access_mode="checked_native",
-                bounds_state={"guarded": {"guard_id": "numeric_array_push_guard"}},
-            ),
-            native_record(
-                rep="js_value",
-                expr_kind="NumericArrayPush",
-                consumer="js_array_push_f64",
-                access_mode="dynamic_fallback",
-                bounds_state="unknown",
-                materialization_reason="runtime_api",
-            ),
-            native_record(
-                rep="f64",
-                expr_kind="NumericArrayIndexGet",
-                consumer="js_array_numeric_get_f64_unboxed",
-                access_mode="checked_native",
-                bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
-            ),
-            native_record(
-                rep="js_value",
-                expr_kind="NumericArrayIndexGet",
-                consumer="js_typed_feedback_array_index_get_fallback_boxed",
-                access_mode="dynamic_fallback",
-                bounds_state="unknown",
-                materialization_reason="runtime_api",
-            ),
-            native_record(
-                rep="f64",
-                expr_kind="NumericArrayIndexSet",
-                consumer="js_array_numeric_set_f64_unboxed",
-                access_mode="checked_native",
-                bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
-            ),
-            native_record(
-                rep="js_value",
-                expr_kind="NumericArrayIndexSet",
-                consumer="js_typed_feedback_array_index_set_fallback_boxed",
-                access_mode="dynamic_fallback",
-                bounds_state="unknown",
-                materialization_reason="runtime_api",
-            ),
-        ])
+        records = numeric_array_native_records()
         report = HARNESS.verify_artifacts(
             workload="numeric_arrays",
             ir_before=ir,

@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -42,6 +43,10 @@ SUITES: dict[str, list[str]] = {
         "image_convolution",
         "loop_data_dependent",
         "numeric_arrays",
+        "packed_f64_loop_versioning",
+        "packed_f64_loop_versioning_negative",
+        "dynamic_fractional_array_index",
+        "loop_bound_semantics",
         "raw_numeric_object_fields",
         "scalar_replacement_literals",
     ],
@@ -517,6 +522,52 @@ def capture_suite(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _resolve_artifact_path(root: Path, value: Any) -> Path | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
+def _native_rep_sort_key(path: Path) -> tuple[int, int | str]:
+    match = re.fullmatch(r"native-reps-(\d+)\.json", path.name)
+    if match:
+        return (0, int(match.group(1)))
+    return (1, path.name)
+
+
+def _native_rep_artifact_paths(root: Path, manifest: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else {}
+    retained = artifacts.get("native_reps", []) if isinstance(artifacts, dict) else []
+    if isinstance(retained, list):
+        for row in retained:
+            if not isinstance(row, dict):
+                continue
+            path = _resolve_artifact_path(root, row.get("native_reps_artifact"))
+            if path and path.exists():
+                paths.append(path)
+    if not paths:
+        paths.extend(sorted(root.glob("native-reps-*.json"), key=_native_rep_sort_key))
+    alias = root / "native-reps.json"
+    if alias.exists() and not paths:
+        paths.append(alias)
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(path)
+    return deduped
+
+
+def _load_native_rep_artifacts(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    return [read_json(path) for path in _native_rep_artifact_paths(root, manifest)]
+
+
 def verify_existing(args: argparse.Namespace) -> int:
     root = Path(args.artifact_dir)
     before = root / "llvm-before-opt.ll"
@@ -564,11 +615,7 @@ def verify_existing(args: argparse.Namespace) -> int:
         target=str(target),
         clang_args=clang_args,
         expect_fma=args.expect_fma,
-        native_reps=(
-            [read_json(root / "native-reps.json")]
-            if (root / "native-reps.json").exists()
-            else []
-        ),
+        native_reps=_load_native_rep_artifacts(root, manifest),
     )
     output = root / "structural-report.json"
     write_text(output, json.dumps(report, indent=2, sort_keys=True) + "\n")

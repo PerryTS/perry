@@ -1122,6 +1122,28 @@ fn numeric_array_index_set_guard(
         && crate::array::js_array_is_numeric_f64_layout(arr) != 0
 }
 
+fn packed_f64_array_loop_guard(arr: *const ArrayHeader) -> bool {
+    if !plain_array_index_guard(arr, 0, false) {
+        return false;
+    }
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+    let Some(header) = gc_header_for_user_addr(raw_addr) else {
+        return false;
+    };
+    unsafe {
+        let flags = (*header)._reserved;
+        if flags
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND)
+            != 0
+        {
+            return false;
+        }
+    }
+    crate::array::js_array_is_numeric_f64_layout(raw_addr as *const ArrayHeader) != 0
+}
+
 fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let Some(header) = gc_header_for_user_addr(raw_addr) else {
@@ -1329,6 +1351,39 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
         TypedFeedbackSiteKind::ArrayElement,
         observation,
         contract_valid,
+    );
+    if pass {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_packed_f64_array_loop_guard(
+    site_id: u64,
+    receiver: f64,
+) -> i32 {
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return packed_f64_array_loop_guard(raw_addr as *const ArrayHeader) as i32;
+    }
+    let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
+    let observation = Observation {
+        source: ObservationSource::Array,
+        object_addr: 0,
+        shape_addr: 0,
+        key_hash: 0,
+        class_id,
+        heap_type,
+        aux,
+        value_tag: element_kind,
+    };
+    let pass = guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::ArrayElement,
+        observation,
+        packed_f64_array_loop_guard(raw_addr as *const ArrayHeader),
     );
     if pass {
         1

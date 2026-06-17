@@ -17,6 +17,13 @@ from .common import (
 from .spec import WORKLOADS
 
 
+TRACE_RUNTIME_BUDGET_FIELDS = {
+    "allocations_traced",
+    "gc_collections_traced",
+    "write_barriers_traced",
+}
+
+
 def target_supports_fma(target: str, clang_args: list[str]) -> bool:
     normalized_target = target.lower()
     normalized_args = " ".join(clang_args).lower()
@@ -97,6 +104,20 @@ def runtime_budget_results(
         return []
     budgets = workloads.get(workload, {}).get("runtime_budgets", {})
     results = []
+    trace_budget_fields = sorted(set(budgets).intersection(TRACE_RUNTIME_BUDGET_FIELDS))
+    if trace_budget_fields and runtime_summary.get("gc_trace_enabled") is False:
+        results.append(
+            {
+                "field": "gc_trace_enabled",
+                "actual": 0,
+                "maximum": 1,
+                "passed": False,
+                "detail": (
+                    "PERRY_GC_TRACE was disabled; trace-backed runtime budgets "
+                    f"require GC trace data for {trace_budget_fields}"
+                ),
+            }
+        )
     for field, maximum in sorted(budgets.items()):
         actual = int(runtime_summary.get(field, 0) or 0)
         results.append(
@@ -150,17 +171,20 @@ def named_region_contract_results(
             if not counters.get("labels"):
                 continue
         if region_spec.get("no_runtime_calls"):
+            region_allowed_runtime_calls = set(
+                region_spec.get("allowed_runtime_calls", allowed_runtime_calls)
+            )
             calls = counters.get("runtime_calls", {})
             unexpected_calls = {
                 name: count
                 for name, count in calls.items()
-                if name not in allowed_runtime_calls
+                if name not in region_allowed_runtime_calls
             }
             add(
                 f"named_region_{name}_no_runtime_calls",
                 not unexpected_calls,
                 f"{name} runtime_calls={json.dumps(calls, sort_keys=True)}"
-                + f"; allowed={json.dumps(sorted(allowed_runtime_calls))}",
+                + f"; allowed={json.dumps(sorted(region_allowed_runtime_calls))}",
             )
         if region_spec.get("no_conversions"):
             conversions = {
@@ -1251,13 +1275,14 @@ def verify_artifacts(
             )
 
     for budget in runtime_budget_results(workload, runtime_summary, workloads):
+        detail = budget.get("detail") or (
+            f"{budget['field']} actual={budget['actual']} "
+            f"maximum={budget['maximum']}"
+        )
         add(
             f"runtime_budget_{budget['field']}",
             bool(budget["passed"]),
-            (
-                f"{budget['field']} actual={budget['actual']} "
-                f"maximum={budget['maximum']}"
-            ),
+            detail,
         )
 
     for result in named_region_contract_results(workload, named_regions, workloads):

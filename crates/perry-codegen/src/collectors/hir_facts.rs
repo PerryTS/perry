@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TypeFacts {
     pub representation: RepresentationFacts,
+    pub arrays: ArrayFacts,
     pub integer_range: IntegerRangeFacts,
     pub bounds: BoundsFacts,
     pub alias_noalias: AliasNoAliasFacts,
@@ -33,6 +34,19 @@ pub(crate) type NativeRegionFactGraph = TypeFacts;
 pub(crate) struct RepresentationFacts {
     pub integer_locals: HashSet<u32>,
     pub unsigned_i32_locals: HashSet<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArrayKindFact {
+    PackedF64,
+    PackedValue,
+    HoleyValue,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ArrayFacts {
+    pub local_kinds: HashMap<u32, ArrayKindFact>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -93,6 +107,18 @@ impl TypeFacts {
 
     pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.unsigned_i32_locals
+    }
+
+    pub(crate) fn array_kind(&self, local_id: u32) -> ArrayKindFact {
+        self.arrays
+            .local_kinds
+            .get(&local_id)
+            .copied()
+            .unwrap_or(ArrayKindFact::Unknown)
+    }
+
+    pub(crate) fn proves_packed_f64_array(&self, local_id: u32) -> bool {
+        self.array_kind(local_id) == ArrayKindFact::PackedF64
     }
 
     pub(crate) fn index_used_locals(&self) -> &HashSet<u32> {
@@ -206,6 +232,7 @@ pub(crate) fn collect_type_facts(
         arg_dependent_clamp_fn_ids,
     );
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
+    let array_facts = collect_array_facts(stmts);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
@@ -235,6 +262,7 @@ pub(crate) fn collect_type_facts(
             integer_locals: integer_locals.clone(),
             unsigned_i32_locals,
         },
+        arrays: array_facts,
         integer_range: IntegerRangeFacts {
             index_used_locals,
             strictly_i32_bounded_locals,
@@ -409,6 +437,335 @@ fn is_fresh_uint8array_length_literal(expr: &Expr) -> bool {
         Expr::Integer(n) => *n >= 0 && *n < i32::MAX as i64,
         Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n < i32::MAX as f64,
         _ => false,
+    }
+}
+
+fn collect_array_facts(stmts: &[Stmt]) -> ArrayFacts {
+    let mut facts = ArrayFacts::default();
+    collect_array_facts_in_stmts(stmts, &mut facts.local_kinds);
+    facts
+}
+
+fn collect_array_facts_in_stmts(stmts: &[Stmt], kinds: &mut HashMap<u32, ArrayKindFact>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { id, ty, init, .. } => {
+                let declared_kind = array_kind_from_declared_type(ty);
+                if declared_kind != ArrayKindFact::Unknown {
+                    let init_kind = init
+                        .as_ref()
+                        .map(array_kind_from_initializer)
+                        .unwrap_or(ArrayKindFact::Unknown);
+                    kinds.insert(*id, meet_array_kind(declared_kind, init_kind));
+                }
+                if let Some(init) = init {
+                    collect_array_facts_in_expr(init, kinds);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                collect_array_facts_in_expr(expr, kinds);
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_array_facts_in_expr(condition, kinds);
+                collect_array_facts_in_stmts(then_branch, kinds);
+                if let Some(else_branch) = else_branch {
+                    collect_array_facts_in_stmts(else_branch, kinds);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                collect_array_facts_in_expr(condition, kinds);
+                collect_array_facts_in_stmts(body, kinds);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    collect_array_facts_in_stmts(std::slice::from_ref(init.as_ref()), kinds);
+                }
+                if let Some(condition) = condition {
+                    collect_array_facts_in_expr(condition, kinds);
+                }
+                if let Some(update) = update {
+                    collect_array_facts_in_expr(update, kinds);
+                }
+                collect_array_facts_in_stmts(body, kinds);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_array_facts_in_stmts(body, kinds);
+                if let Some(catch) = catch {
+                    collect_array_facts_in_stmts(&catch.body, kinds);
+                }
+                if let Some(finally) = finally {
+                    collect_array_facts_in_stmts(finally, kinds);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                collect_array_facts_in_expr(discriminant, kinds);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        collect_array_facts_in_expr(test, kinds);
+                    }
+                    collect_array_facts_in_stmts(&case.body, kinds);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_array_facts_in_stmts(std::slice::from_ref(body.as_ref()), kinds);
+            }
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_) => {}
+        }
+    }
+}
+
+fn collect_array_facts_in_expr(expr: &Expr, kinds: &mut HashMap<u32, ArrayKindFact>) {
+    match expr {
+        Expr::ArrayPush { array_id, value } => {
+            let value_kind = if expr_is_numeric_shaped(value) {
+                ArrayKindFact::PackedF64
+            } else {
+                ArrayKindFact::PackedValue
+            };
+            update_array_kind(kinds, *array_id, value_kind);
+            collect_array_facts_in_expr(value, kinds);
+        }
+        Expr::ArrayPushSpread { array_id, source } => {
+            update_array_kind(kinds, *array_id, ArrayKindFact::Unknown);
+            collect_array_facts_in_expr(source, kinds);
+        }
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
+            update_array_kind(kinds, *id, ArrayKindFact::HoleyValue);
+        }
+        Expr::ArrayUnshift { array_id, value } => {
+            update_array_kind(kinds, *array_id, ArrayKindFact::Unknown);
+            collect_array_facts_in_expr(value, kinds);
+        }
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => {
+            update_array_kind(kinds, *array_id, ArrayKindFact::Unknown);
+            collect_array_facts_in_expr(start, kinds);
+            if let Some(delete_count) = delete_count {
+                collect_array_facts_in_expr(delete_count, kinds);
+            }
+            for item in items {
+                collect_array_facts_in_expr(item, kinds);
+            }
+        }
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                let value_kind = if expr_is_numeric_shaped(value) {
+                    ArrayKindFact::PackedF64
+                } else {
+                    ArrayKindFact::PackedValue
+                };
+                update_array_kind(kinds, *id, value_kind);
+            }
+            collect_array_facts_in_expr(object, kinds);
+            collect_array_facts_in_expr(index, kinds);
+            collect_array_facts_in_expr(value, kinds);
+        }
+        Expr::LocalSet(id, value) => {
+            if kinds.contains_key(id) {
+                update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+            }
+            collect_array_facts_in_expr(value, kinds);
+        }
+        Expr::ObjectFreeze(target)
+        | Expr::ObjectSeal(target)
+        | Expr::ObjectPreventExtensions(target) => {
+            invalidate_array_kind_target(kinds, target);
+            collect_array_facts_in_expr(target, kinds);
+        }
+        Expr::ObjectDefineProperty(target, key, descriptor)
+        | Expr::ReflectDefineProperty {
+            target,
+            key,
+            descriptor,
+        } => {
+            invalidate_array_kind_target(kinds, target);
+            collect_array_facts_in_expr(target, kinds);
+            collect_array_facts_in_expr(key, kinds);
+            collect_array_facts_in_expr(descriptor, kinds);
+        }
+        Expr::ObjectDefineProperties(target, descriptors) => {
+            invalidate_array_kind_target(kinds, target);
+            collect_array_facts_in_expr(target, kinds);
+            collect_array_facts_in_expr(descriptors, kinds);
+        }
+        Expr::ObjectSetPrototypeOf(target, proto) => {
+            invalidate_array_kind_target(kinds, target);
+            collect_array_facts_in_expr(target, kinds);
+            collect_array_facts_in_expr(proto, kinds);
+        }
+        Expr::Call { callee, args, .. } => {
+            collect_array_facts_in_expr(callee, kinds);
+            for arg in args {
+                if let Expr::LocalGet(id) = arg {
+                    if kinds.contains_key(id) {
+                        update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+                    }
+                }
+                collect_array_facts_in_expr(arg, kinds);
+            }
+        }
+        Expr::CallSpread { callee, args, .. } => {
+            collect_array_facts_in_expr(callee, kinds);
+            for arg in args {
+                let inner = match arg {
+                    perry_hir::CallArg::Expr(expr) | perry_hir::CallArg::Spread(expr) => expr,
+                };
+                if let Expr::LocalGet(id) = inner {
+                    if kinds.contains_key(id) {
+                        update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+                    }
+                }
+                collect_array_facts_in_expr(inner, kinds);
+            }
+        }
+        Expr::Closure { .. } => {
+            for kind in kinds.values_mut() {
+                *kind = ArrayKindFact::Unknown;
+            }
+        }
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_array_facts_in_expr(child, kinds);
+            });
+        }
+    }
+}
+
+fn invalidate_array_kind_target(kinds: &mut HashMap<u32, ArrayKindFact>, target: &Expr) {
+    if let Expr::LocalGet(id) = target {
+        if kinds.contains_key(id) {
+            update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+        }
+    }
+}
+
+fn update_array_kind(kinds: &mut HashMap<u32, ArrayKindFact>, id: u32, observed: ArrayKindFact) {
+    if let Some(kind) = kinds.get_mut(&id) {
+        *kind = meet_array_kind(*kind, observed);
+    }
+}
+
+fn array_kind_from_declared_type(ty: &perry_types::Type) -> ArrayKindFact {
+    match ty {
+        perry_types::Type::Array(elem)
+            if matches!(
+                elem.as_ref(),
+                perry_types::Type::Number | perry_types::Type::Int32
+            ) =>
+        {
+            ArrayKindFact::PackedF64
+        }
+        perry_types::Type::Array(_) => ArrayKindFact::PackedValue,
+        _ => ArrayKindFact::Unknown,
+    }
+}
+
+fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
+    match expr {
+        Expr::Array(elements) if elements.iter().all(expr_is_literal_number) => {
+            ArrayKindFact::PackedF64
+        }
+        Expr::Array(_) => ArrayKindFact::PackedValue,
+        Expr::ArraySpread(elements) => {
+            let mut saw_hole = false;
+            let mut all_numeric = true;
+            for element in elements {
+                match element {
+                    perry_hir::ArrayElement::Expr(expr) => {
+                        all_numeric &= expr_is_literal_number(expr);
+                    }
+                    perry_hir::ArrayElement::Spread(_) => return ArrayKindFact::Unknown,
+                    perry_hir::ArrayElement::Hole => saw_hole = true,
+                }
+            }
+            if saw_hole {
+                ArrayKindFact::HoleyValue
+            } else if all_numeric {
+                ArrayKindFact::PackedF64
+            } else {
+                ArrayKindFact::PackedValue
+            }
+        }
+        _ => ArrayKindFact::Unknown,
+    }
+}
+
+fn expr_is_literal_number(expr: &Expr) -> bool {
+    matches!(expr, Expr::Integer(_) | Expr::Number(_))
+}
+
+fn expr_is_numeric_shaped(expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(_) | Expr::Number(_) | Expr::LocalGet(_) | Expr::IndexGet { .. } => true,
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
+            expr_is_numeric_shaped(left) && expr_is_numeric_shaped(right)
+        }
+        Expr::Unary { operand, .. } | Expr::NumberCoerce(operand) | Expr::Void(operand) => {
+            expr_is_numeric_shaped(operand)
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_is_numeric_shaped(condition)
+                && expr_is_numeric_shaped(then_expr)
+                && expr_is_numeric_shaped(else_expr)
+        }
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            expr_is_numeric_shaped(left) && expr_is_numeric_shaped(right)
+        }
+        Expr::MathMin(values) | Expr::MathMax(values) => values.iter().all(expr_is_numeric_shaped),
+        Expr::MathAbs(value)
+        | Expr::MathSqrt(value)
+        | Expr::MathFloor(value)
+        | Expr::MathCeil(value)
+        | Expr::MathRound(value)
+        | Expr::MathTrunc(value)
+        | Expr::MathSign(value)
+        | Expr::MathF16round(value) => expr_is_numeric_shaped(value),
+        _ => false,
+    }
+}
+
+fn meet_array_kind(left: ArrayKindFact, right: ArrayKindFact) -> ArrayKindFact {
+    use ArrayKindFact::*;
+    match (left, right) {
+        (Unknown, _) | (_, Unknown) => Unknown,
+        (HoleyValue, _) | (_, HoleyValue) => HoleyValue,
+        (PackedValue, _) | (_, PackedValue) => PackedValue,
+        (PackedF64, PackedF64) => PackedF64,
     }
 }
 

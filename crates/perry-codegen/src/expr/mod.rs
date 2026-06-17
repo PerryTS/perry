@@ -98,7 +98,7 @@ pub(crate) use nanbox_inline::{
     i32_bool_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline, nanbox_pointer_inline_pub,
     nanbox_string_inline,
 };
-pub(crate) use native_record::raw_f64_layout_fact;
+pub(crate) use native_record::{array_kind_fact, raw_f64_layout_fact};
 pub(crate) use object_literal::lower_object_literal;
 pub(crate) use pod_record::{
     lower_and_store_initial_pod_field, lower_pod_local_reassignment, materialize_pod_local,
@@ -623,6 +623,14 @@ pub(crate) struct FnCtx<'a> {
     /// IndexSet site can rely on `i < arr.length` without rechecking.
     pub bounded_index_pairs: Vec<BoundedIndexPair>,
 
+    /// Scoped loop-versioning facts for `for (...; i < arr.length; i++)`
+    /// clones guarded by `js_typed_feedback_packed_f64_array_loop_guard`.
+    /// Inside the fast clone, `arr[i]` and `arr[i] = numeric_expr` can lower
+    /// directly to raw `double` load/store because the loop-entry guard proves
+    /// the array is a live packed raw-f64 plain Array and the loop proof keeps
+    /// `i` in bounds.
+    pub packed_f64_loop_facts: Vec<PackedF64LoopFact>,
+
     /// Parallel i32 counter slots for integer loop counters that are
     /// used as bounded array indices. When a for-loop counter is in
     /// `integer_locals` AND appears in `bounded_index_pairs`, `lower_for`
@@ -1033,6 +1041,14 @@ pub(crate) struct BoundedIndexPair {
     pub index_local_id: u32,
     pub array_local_id: u32,
     pub scope_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PackedF64LoopFact {
+    pub index_local_id: u32,
+    pub array_local_id: u32,
+    pub scope_id: u32,
+    pub guard_id: String,
 }
 
 impl<'a> FnCtx<'a> {

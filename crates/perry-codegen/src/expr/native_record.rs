@@ -62,6 +62,15 @@ pub(crate) fn raw_f64_layout_fact(
     native_fact_use("raw_f64_layout", local_id, state, detail, reason)
 }
 
+pub(crate) fn array_kind_fact(
+    local_id: Option<u32>,
+    state: &'static str,
+    detail: &str,
+    reason: Option<MaterializationReason>,
+) -> NativeFactUse {
+    native_fact_use("array_kind", local_id, state, detail, reason)
+}
+
 pub(super) fn native_fact_uses_for_record(
     local_id: Option<u32>,
     lowered: &LoweredValue,

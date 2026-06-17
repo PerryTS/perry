@@ -542,9 +542,9 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         vec![Stmt::Return(Some(Expr::IndexGet {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Binary {
-                op: BinaryOp::Mod,
+                op: BinaryOp::BitAnd,
                 left: Box::new(Expr::LocalGet(2)),
-                right: Box::new(Expr::Integer(64)),
+                right: Box::new(Expr::Integer(63)),
             }),
         }))],
     ));

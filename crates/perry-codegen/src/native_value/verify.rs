@@ -257,6 +257,8 @@ fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
         "js_array_numeric_get_f64_unboxed"
             | "js_array_numeric_set_f64_unboxed"
             | "js_array_numeric_push_f64_unboxed"
+            | "packed_f64_loop_load"
+            | "packed_f64_loop_store"
             | "class_field_get.raw_f64_load"
             | "class_field_set.raw_f64_store"
     )
@@ -320,6 +322,7 @@ fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
                 "NumericArrayIndexSet",
                 "js_typed_feedback_array_index_set_fallback_boxed"
             )
+            | ("PackedF64LoopGuard", "packed_f64_loop_fallback")
             | ("ClassFieldGet", "js_object_get_field_by_name_f64")
             | ("ClassFieldSet", "js_object_set_field_by_name")
     )
