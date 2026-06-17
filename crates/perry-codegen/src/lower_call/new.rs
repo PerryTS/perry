@@ -602,171 +602,171 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 ],
             )
         } else {
-        // Compile-time layout constants.
-        const GC_HEADER_SIZE: u64 = 8;
-        const OBJECT_HEADER_SIZE: u64 = 24;
-        const FIELD_SLOT_SIZE: u64 = 8;
-        const MIN_FIELD_SLOTS: u64 = 8;
-        const GC_TYPE_OBJECT: u64 = 2;
-        const GC_FLAG_ARENA: u64 = 0x02;
-        // PR #1146: pointer-free hint for inline-allocated regular
-        // objects. The field-store sites issue per-slot
-        // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
-        // slots regardless of this initial tag.
-        const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-        const OBJECT_TYPE_REGULAR: u64 = 1;
+            // Compile-time layout constants.
+            const GC_HEADER_SIZE: u64 = 8;
+            const OBJECT_HEADER_SIZE: u64 = 24;
+            const FIELD_SLOT_SIZE: u64 = 8;
+            const MIN_FIELD_SLOTS: u64 = 8;
+            const GC_TYPE_OBJECT: u64 = 2;
+            const GC_FLAG_ARENA: u64 = 0x02;
+            // PR #1146: pointer-free hint for inline-allocated regular
+            // objects. The field-store sites issue per-slot
+            // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
+            // slots regardless of this initial tag.
+            const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+            const OBJECT_TYPE_REGULAR: u64 = 1;
 
-        let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
-        let payload_size = OBJECT_HEADER_SIZE + alloc_field_count * FIELD_SLOT_SIZE;
-        let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
-        let total_size_str = total_size.to_string();
+            let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
+            let payload_size = OBJECT_HEADER_SIZE + alloc_field_count * FIELD_SLOT_SIZE;
+            let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
+            let total_size_str = total_size.to_string();
 
-        // Lazy: allocate the per-function arena-state slot on the
-        // first `new` we see. The slot init (`call @js_inline_arena_state`
-        // + store) lives in the entry block via `entry_init_call_ptr`,
-        // so it dominates every reachable use.
-        let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
-            slot
-        } else {
-            let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
-            ctx.arena_state_slot = Some(slot.clone());
-            slot
-        };
+            // Lazy: allocate the per-function arena-state slot on the
+            // first `new` we see. The slot init (`call @js_inline_arena_state`
+            // + store) lives in the entry block via `entry_init_call_ptr`,
+            // so it dominates every reachable use.
+            let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
+                slot
+            } else {
+                let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
+                ctx.arena_state_slot = Some(slot.clone());
+                slot
+            };
 
-        // Hoist the per-class `keys_array` global load to the function
-        // entry block (cached in a stack slot per class). Without this
-        // hoisting, LLVM would reload `@perry_class_keys_<class>` on
-        // every loop iteration, because the loop body's `call
-        // @js_inline_arena_slow_alloc` blocks LICM — LLVM can't prove
-        // the call doesn't modify the global.
-        let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
-            s
-        } else {
-            let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
-            ctx.class_keys_slots
-                .insert(class_name.to_string(), s.clone());
-            s
-        };
-        let keys_ptr = ctx.block().load(I64, &keys_slot);
+            // Hoist the per-class `keys_array` global load to the function
+            // entry block (cached in a stack slot per class). Without this
+            // hoisting, LLVM would reload `@perry_class_keys_<class>` on
+            // every loop iteration, because the loop body's `call
+            // @js_inline_arena_slow_alloc` blocks LICM — LLVM can't prove
+            // the call doesn't modify the global.
+            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
+                s
+            } else {
+                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                ctx.class_keys_slots
+                    .insert(class_name.to_string(), s.clone());
+                s
+            };
+            let keys_ptr = ctx.block().load(I64, &keys_slot);
 
-        // Inline bump-allocator IR.
-        let blk = ctx.block();
-        let state_ptr = blk.load(PTR, &arena_state_slot);
+            // Inline bump-allocator IR.
+            let blk = ctx.block();
+            let state_ptr = blk.load(PTR, &arena_state_slot);
 
-        // offset = state.offset (at byte offset 8 in InlineArenaState).
-        // The offset is invariant 8-aligned: arena blocks start at offset 0
-        // (8-aligned), every allocation is a multiple of 8 (`total_size`
-        // includes the 8-byte GcHeader and `MIN_FIELD_SLOTS=8` slots ×
-        // 8 bytes), and `js_inline_arena_slow_alloc` only ever swings the
-        // state to `block.offset` which is also always 8-aligned. So we
-        // skip the `(offset + 7) & -8` align-up step entirely — saves
-        // 2 instructions per iter on the hot path.
-        let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-        let offset_val = blk.load(I64, &offset_field_ptr);
-        let aligned_off = offset_val.clone();
+            // offset = state.offset (at byte offset 8 in InlineArenaState).
+            // The offset is invariant 8-aligned: arena blocks start at offset 0
+            // (8-aligned), every allocation is a multiple of 8 (`total_size`
+            // includes the 8-byte GcHeader and `MIN_FIELD_SLOTS=8` slots ×
+            // 8 bytes), and `js_inline_arena_slow_alloc` only ever swings the
+            // state to `block.offset` which is also always 8-aligned. So we
+            // skip the `(offset + 7) & -8` align-up step entirely — saves
+            // 2 instructions per iter on the hot path.
+            let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
+            let offset_val = blk.load(I64, &offset_field_ptr);
+            let aligned_off = offset_val.clone();
 
-        // new_offset = aligned + total_size
-        let new_offset = blk.add(I64, &aligned_off, &total_size_str);
+            // new_offset = aligned + total_size
+            let new_offset = blk.add(I64, &aligned_off, &total_size_str);
 
-        // size = state.size (at byte offset 16)
-        let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-        let size_val = blk.load(I64, &size_field_ptr);
+            // size = state.size (at byte offset 16)
+            let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
+            let size_val = blk.load(I64, &size_field_ptr);
 
-        // fits = new_offset <= size
-        let fits = blk.icmp_ule(I64, &new_offset, &size_val);
+            // fits = new_offset <= size
+            let fits = blk.icmp_ule(I64, &new_offset, &size_val);
 
-        // Set up fast/slow/merge basic blocks.
-        let fast_idx = ctx.new_block("alloc.fast");
-        let slow_idx = ctx.new_block("alloc.slow");
-        let merge_idx = ctx.new_block("alloc.merge");
-        let fast_label = ctx.block_label(fast_idx);
-        let slow_label = ctx.block_label(slow_idx);
-        let merge_label = ctx.block_label(merge_idx);
+            // Set up fast/slow/merge basic blocks.
+            let fast_idx = ctx.new_block("alloc.fast");
+            let slow_idx = ctx.new_block("alloc.slow");
+            let merge_idx = ctx.new_block("alloc.merge");
+            let fast_label = ctx.block_label(fast_idx);
+            let slow_label = ctx.block_label(slow_idx);
+            let merge_label = ctx.block_label(merge_idx);
 
-        ctx.block().cond_br(&fits, &fast_label, &slow_label);
+            ctx.block().cond_br(&fits, &fast_label, &slow_label);
 
-        // ---- Fast path: bump and return data + aligned ----
-        ctx.current_block = fast_idx;
-        let blk = ctx.block();
-        // GC_STORE_AUDIT(INIT): inline arena bump offset is allocator metadata, not a JS heap edge.
-        blk.store(I64, &new_offset, &offset_field_ptr);
-        // data ptr is at byte offset 0 in InlineArenaState
-        let data_ptr = blk.load(PTR, &state_ptr);
-        let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-        let fast_pred_label = blk.label.clone();
-        blk.br(&merge_label);
+            // ---- Fast path: bump and return data + aligned ----
+            ctx.current_block = fast_idx;
+            let blk = ctx.block();
+            // GC_STORE_AUDIT(INIT): inline arena bump offset is allocator metadata, not a JS heap edge.
+            blk.store(I64, &new_offset, &offset_field_ptr);
+            // data ptr is at byte offset 0 in InlineArenaState
+            let data_ptr = blk.load(PTR, &state_ptr);
+            let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
+            let fast_pred_label = blk.label.clone();
+            blk.br(&merge_label);
 
-        // ---- Slow path: call into the runtime ----
-        ctx.current_block = slow_idx;
-        let raw_slow = ctx.block().call(
-            PTR,
-            "js_inline_arena_slow_alloc",
-            &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
-        );
-        let slow_pred_label = ctx.block().label.clone();
-        ctx.block().br(&merge_label);
+            // ---- Slow path: call into the runtime ----
+            ctx.current_block = slow_idx;
+            let raw_slow = ctx.block().call(
+                PTR,
+                "js_inline_arena_slow_alloc",
+                &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
+            );
+            let slow_pred_label = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
 
-        // ---- Merge: phi the raw pointer, write headers, NaN-box ----
-        ctx.current_block = merge_idx;
-        let blk = ctx.block();
-        let raw = blk.phi(
-            PTR,
-            &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
-        );
+            // ---- Merge: phi the raw pointer, write headers, NaN-box ----
+            ctx.current_block = merge_idx;
+            let blk = ctx.block();
+            let raw = blk.phi(
+                PTR,
+                &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
+            );
 
-        // Write GcHeader (8 bytes) as a single i64 store. Field
-        // packing (little-endian):
-        //   bits  0..7   = obj_type (u8)
-        //   bits  8..15  = gc_flags (u8)
-        //   bits 16..31  = _reserved (u16)
-        //   bits 32..63  = size (u32)
-        let gc_packed: u64 = GC_TYPE_OBJECT
-            | (GC_FLAG_ARENA << 8)
-            | (GC_LAYOUT_POINTER_FREE << 16)
-            | ((total_size as u64) << 32);
-        // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
-        blk.store(I64, &gc_packed.to_string(), &raw);
+            // Write GcHeader (8 bytes) as a single i64 store. Field
+            // packing (little-endian):
+            //   bits  0..7   = obj_type (u8)
+            //   bits  8..15  = gc_flags (u8)
+            //   bits 16..31  = _reserved (u16)
+            //   bits 32..63  = size (u32)
+            let gc_packed: u64 = GC_TYPE_OBJECT
+                | (GC_FLAG_ARENA << 8)
+                | (GC_LAYOUT_POINTER_FREE << 16)
+                | ((total_size as u64) << 32);
+            // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
+            blk.store(I64, &gc_packed.to_string(), &raw);
 
-        // Write ObjectHeader at raw + 8.
-        // First 8 bytes: object_type (u32, low) | class_id (u32, high)
-        let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
-        let oh_word_1: u64 = OBJECT_TYPE_REGULAR | ((cid as u64) << 32);
-        blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
+            // Write ObjectHeader at raw + 8.
+            // First 8 bytes: object_type (u32, low) | class_id (u32, high)
+            let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
+            let oh_word_1: u64 = OBJECT_TYPE_REGULAR | ((cid as u64) << 32);
+            blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
 
-        // Second 8 bytes: parent_class_id (u32, low) | field_count (u32, high)
-        let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
-        let oh_word_2: u64 = (parent_cid as u64) | ((field_count as u64) << 32);
-        blk.store(I64, &oh_word_2.to_string(), &oh_addr_2);
+            // Second 8 bytes: parent_class_id (u32, low) | field_count (u32, high)
+            let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
+            let oh_word_2: u64 = (parent_cid as u64) | ((field_count as u64) << 32);
+            blk.store(I64, &oh_word_2.to_string(), &oh_addr_2);
 
-        // Third 8 bytes: keys_array pointer. The keys_ptr we loaded
-        // above is an i64 (carries the ArrayHeader address); store as
-        // i64 since the underlying memory is 8 bytes either way.
-        let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
-        // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
-        blk.store(I64, &keys_ptr, &oh_addr_3);
+            // Third 8 bytes: keys_array pointer. The keys_ptr we loaded
+            // above is an i64 (carries the ArrayHeader address); store as
+            // i64 since the underlying memory is 8 bytes either way.
+            let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
+            // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
+            blk.store(I64, &keys_ptr, &oh_addr_3);
 
-        // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
-        // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately
-        // initializes ALL `max(field_count, 8)` slots "to prevent stale data from
-        // previously freed GC objects from bleeding through." This inline bump path
-        // wrote only the headers and left the slots uninitialized, so a field
-        // read-before-write — or a GC that scans the still-constructing instance —
-        // observed stale arena bytes. When those bytes were a previously-freed
-        // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
-        // crashed with "Cannot read properties of undefined". Slots start at
-        // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
-        for i in 0..alloc_field_count {
-            let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
-            let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
-            // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
-            blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
-        }
+            // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
+            // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately
+            // initializes ALL `max(field_count, 8)` slots "to prevent stale data from
+            // previously freed GC objects from bleeding through." This inline bump path
+            // wrote only the headers and left the slots uninitialized, so a field
+            // read-before-write — or a GC that scans the still-constructing instance —
+            // observed stale arena bytes. When those bytes were a previously-freed
+            // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
+            // crashed with "Cannot read properties of undefined". Slots start at
+            // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
+            for i in 0..alloc_field_count {
+                let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
+                let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
+                // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
+                blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+            }
 
-        // User pointer = raw + 8 (the ObjectHeader address — what the
-        // function-call path returned). Convert to i64 to match what
-        // the existing nanbox_pointer_inline expects.
-        let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-        blk.ptrtoint(&user_ptr, I64)
+            // User pointer = raw + 8 (the ObjectHeader address — what the
+            // function-call path returned). Convert to i64 to match what
+            // the existing nanbox_pointer_inline expects.
+            let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
+            blk.ptrtoint(&user_ptr, I64)
         }
     } else {
         // Fallback: build the packed-keys string at this site and
