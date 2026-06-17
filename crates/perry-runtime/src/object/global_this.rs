@@ -2295,6 +2295,60 @@ extern "C" fn typed_array_buffer_getter_thunk(
     }
 }
 
+/// `%TypedArray%.prototype [ @@toStringTag ]` getter (ES2024 23.2.3.38). When
+/// `this` is a TypedArray it returns the constructor name (`"Int8Array"`,
+/// `"Uint8Array"`, …); for any other receiver it returns `undefined` (NO
+/// throw — the spec getter is `undefined`-tolerant). `safe-stable-stringify`
+/// (a pino dependency) detects typed arrays via
+/// `getOwnPropertyDescriptor(%TypedArray%.prototype, Symbol.toStringTag).get`
+/// then `desc.get.call(value)`, so a missing accessor previously threw
+/// `Cannot read properties of undefined (reading 'get')`.
+extern "C" fn typed_array_to_string_tag_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    match crate::object::typed_array_to_string_tag_name(this) {
+        Some(name) => {
+            let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
+        }
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// Install the `%TypedArray%.prototype [ @@toStringTag ]` accessor (get-only,
+/// `{ enumerable: false, configurable: true }`) on the intrinsic prototype so
+/// `Object.getOwnPropertyDescriptor(%TypedArray%.prototype, Symbol.toStringTag)`
+/// reflects a real accessor descriptor with a callable `.get`. The getter's
+/// `this`-based result drives `safe-stable-stringify`'s typed-array detection.
+fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    let sym = crate::symbol::well_known_symbol("toStringTag");
+    if sym.is_null() {
+        return;
+    }
+    unsafe {
+        let f = typed_array_to_string_tag_getter_thunk as *const u8;
+        crate::closure::js_register_closure_arity(f, 0);
+        let c = crate::closure::js_closure_alloc(f, 0);
+        if c.is_null() {
+            return;
+        }
+        super::native_module::set_bound_native_closure_name(c, "get [Symbol.toStringTag]");
+        let get_bits = crate::value::js_nanbox_pointer(c as i64).to_bits();
+        let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+        let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
+        crate::symbol::set_symbol_accessor_property(proto_value, sym_value, get_bits, 0);
+        crate::symbol::set_symbol_property_attrs(
+            proto_obj as usize,
+            sym as usize,
+            super::PropertyAttrs::new(false, false, true),
+        );
+    }
+}
+
 /// Install the four `%TypedArray%.prototype` accessor descriptors
 /// (`length`, `byteLength`, `byteOffset`, `buffer`) on a typed-array
 /// constructor's prototype object so `Object.getOwnPropertyDescriptor`
@@ -2456,6 +2510,7 @@ fn ensure_typed_array_intrinsic() -> (*mut crate::closure::ClosureHeader, *mut O
     // "length")` to keep working.
     install_typed_array_proto_accessors(proto);
     install_typed_array_iterator_symbol(proto);
+    install_typed_array_to_string_tag(proto);
     // The per-kind prototypes (`Int8Array.prototype`, …) inherit ALL of their
     // methods from this shared `%TypedArray%.prototype` (their `[[Prototype]]`),
     // so `Int8Array.prototype.hasOwnProperty("map") === false` and

@@ -562,6 +562,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if is_width_tracked_typed_array_receiver(ctx, object) {
+                // A symbol-keyed read on a typed array (`ta[Symbol.toStringTag]`,
+                // `ta[Symbol.iterator]`) must NOT take the dynamic-index helper
+                // below — it stringifies the key and reads an ordinary [[Get]],
+                // missing the `%TypedArray%.prototype` symbol accessors. Route
+                // symbol keys to the symbol-property resolver (mirrors the array
+                // path), which exposes `@@toStringTag` (`safe-stable-stringify`)
+                // and `@@iterator`.
+                if matches!(index.as_ref(), Expr::SymbolFor(_)) {
+                    let obj_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_object_get_symbol_property",
+                        &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
+                    ));
+                }
                 // #2063: a key that isn't provably a number — a method-name
                 // string (`ta["copyWithin"]`, `ta[m]` where m iterates method
                 // names), a numeric string (`ta["2"]`), or any non-numeric /

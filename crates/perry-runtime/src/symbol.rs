@@ -1953,6 +1953,26 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // `(new Int8Array())[Symbol.toStringTag]` → `"Int8Array"` (and Node
+    // `Buffer`/`Uint8Array` → `"Uint8Array"`). The accessor lives on the
+    // `%TypedArray%.prototype` intrinsic, not the instance, so the OWN-accessor
+    // lookup above missed it; resolve the constructor name directly off the
+    // receiver here (the intrinsic getter does the same via its `this`). Covers
+    // both the raw-pointer typed-array form and Perry's buffer-backed
+    // `Uint8Array`. `safe-stable-stringify` (a pino dep) relies on this.
+    if raw_addr >= 0x1000 {
+        let tag_wk = well_known_symbol("toStringTag");
+        if !tag_wk.is_null() {
+            let tag_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(tag_wk as *const u8).bits());
+            if sym_key_from_f64(sym_f64) == sym_key_from_f64(tag_f64) {
+                if let Some(name) = crate::object::typed_array_to_string_tag_name(obj_f64) {
+                    let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                }
+            }
+        }
+    }
     // #321: arrays expose `Symbol.iterator`. perry has no standalone array
     // iterator object (for-of is special-cased), but `arr[Symbol.iterator]`
     // must resolve to a callable so `Symbol.iterator in arr` is true

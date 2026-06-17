@@ -2016,6 +2016,45 @@ unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
     string_value_to_owned(tag_value)
 }
 
+/// The `%TypedArray%.prototype [ @@toStringTag ]` value for `value` if it is a
+/// TypedArray (the constructor name, e.g. `"Int8Array"` / `"Uint8Array"`),
+/// else `None`. Covers both the raw-pointer typed-array representation and
+/// Perry's buffer-backed `Uint8Array`/`Uint8ClampedArray` (Node's `Buffer` is
+/// a `Uint8Array`, so it too reports `"Uint8Array"`). `ArrayBuffer` /
+/// `SharedArrayBuffer` / `DataView` / `CryptoKey` are NOT typed arrays and
+/// return `None` (their `@@toStringTag` getter yields `undefined`). Shared by
+/// `js_object_to_string`'s typed-array brand arm and the public
+/// `%TypedArray%.prototype[@@toStringTag]` accessor getter.
+pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str> {
+    use crate::value::JSValue;
+    let bits = value.to_bits();
+    let jsv = JSValue::from_bits(bits);
+    let raw_addr = if jsv.is_pointer() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if bits > 0x1000 && (bits >> 48) == 0 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if raw_addr < 0x1000 {
+        return None;
+    }
+    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+        return Some(crate::typedarray::name_for_kind(kind));
+    }
+    // Buffer-backed `Uint8Array` (and Node `Buffer`) — registered as a buffer
+    // but still a TypedArray. Exclude the non-TypedArray buffer flavours.
+    if crate::buffer::is_registered_buffer(raw_addr)
+        && crate::buffer::crypto_key_meta(raw_addr).is_none()
+        && !crate::buffer::is_array_buffer(raw_addr)
+        && !crate::buffer::is_shared_array_buffer(raw_addr)
+        && !crate::buffer::is_data_view(raw_addr)
+    {
+        return Some("Uint8Array");
+    }
+    None
+}
+
 /// `Object.prototype.toString.call(x)` — returns `[object <tag>]` where
 /// `<tag>` is read from the value's class-level `Symbol.toStringTag` getter
 /// if registered, otherwise `Object` (matching Node for plain objects).
