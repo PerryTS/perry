@@ -287,7 +287,9 @@ fn validate_js_value_bits_record(record: &NativeRepRecord, errors: &mut Vec<Stri
             prefix()
         ));
     }
-    if record.materialization_reason.is_some() {
+    if record.materialization_reason.is_some()
+        || record.native_value_state == NativeValueState::Materialized
+    {
         let transition = record
             .native_abi_transition
             .as_ref()
@@ -1897,6 +1899,19 @@ mod tests {
         });
 
         assert!(verify_native_rep_records(&[to_bits, to_js_value]).is_ok());
+    }
+
+    #[test]
+    fn rejects_materialized_js_value_bits_without_transition() {
+        let mut r = record();
+        r.semantic = SemanticKind::JsValue;
+        r.native_rep = NativeRep::JsValueBits;
+        r.native_rep_name = "js_value_bits".to_string();
+        r.llvm_ty = I64;
+        r.llvm_value = "%bits".to_string();
+        r.native_value_state = NativeValueState::Materialized;
+        r.materialization_reason = None;
+        assert!(verify_native_rep_records(&[r]).is_err());
     }
 
     #[test]

@@ -1234,6 +1234,98 @@ fn pod_field_read_after_dynamic_materialization_uses_number_coerce() {
 }
 
 #[test]
+fn typed_array_f64_store_coerces_raw_numeric_array_fallback_value() {
+    let module = module_with_classes_and_params(
+        "typed_array_f64_store_coerces_numeric_array_fallback.ts",
+        Vec::new(),
+        vec![param(3, "values", Type::Array(Box::new(Type::Number)))],
+        Type::Number,
+        vec![
+            native_arena_owner_let(1, "arena", int(64), false),
+            native_arena_view_let(
+                2,
+                "out",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(2)),
+                index: Box::new(int(0)),
+                value: Box::new(Expr::IndexGet {
+                    object: Box::new(local(3)),
+                    index: Box::new(int(0)),
+                }),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_number_coerce"),
+        "Float64Array native stores must coerce guarded numeric-array fallback values before raw storage:\n{ir}"
+    );
+    assert!(
+        ir.contains("store double"),
+        "test must exercise the raw Float64Array store path:\n{ir}"
+    );
+}
+
+#[test]
+fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
+    let mut properties = std::collections::HashMap::new();
+    properties.insert("gain".to_string(), prop(Type::Number));
+    let packet_ty = Type::Object(ObjectType {
+        name: None,
+        properties,
+        property_order: Some(vec!["gain".to_string()]),
+        index_signature: None,
+    });
+    let module = module_with_classes_and_params(
+        "scalar_field_store_keeps_numeric_array_fallback_boxed.ts",
+        Vec::new(),
+        vec![param(3, "values", Type::Array(Box::new(Type::Number)))],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "packet".to_string(),
+                ty: packet_ty,
+                mutable: true,
+                init: Some(Expr::Object(
+                    vec![("gain".to_string(), number(0.0))]
+                        .into_iter()
+                        .collect(),
+                )),
+            },
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(2)),
+                property: "gain".to_string(),
+                value: Box::new(Expr::IndexGet {
+                    object: Box::new(local(3)),
+                    index: Box::new(int(0)),
+                }),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(local(2)),
+                property: "gain".to_string(),
+            })),
+        ],
+    );
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"),
+        "test must exercise a numeric-array get with a boxed fallback arm:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_array_numeric_value_to_raw_f64"),
+        "scalar raw-f64 fields must not canonicalize a possibly boxed fallback value into raw storage:\n{ir}"
+    );
+}
+
+#[test]
 fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     let packet_ty = pod_type(&[
         ("tag", Type::Named("PerryU32".to_string())),

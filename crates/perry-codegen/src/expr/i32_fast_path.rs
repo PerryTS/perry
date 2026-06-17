@@ -8,6 +8,7 @@ use super::{lower_expr, unbox_to_i64, FlatConstInfo, FnCtx};
 use crate::native_value::{
     materialize_js_value_bits, ExpectedNativeRep, LoweredValue, MaterializationReason,
 };
+use crate::type_analysis::{expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr};
 use crate::types::{DOUBLE, F32, I32, I64};
 
 /// Returns true if `e` is guaranteed to produce a finite double value
@@ -693,7 +694,15 @@ fn lower_expr_native_usize(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue
 }
 
 fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    let value = lower_expr(ctx, e)?;
+    let needs_raw_f64_fallback_coercion = expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
+        || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e);
+    let raw = lower_expr(ctx, e)?;
+    let value = if needs_raw_f64_fallback_coercion {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &raw)])
+    } else {
+        raw
+    };
     let lowered = f64_lowered(value);
     ctx.record_lowered_value(
         native_expr_kind(e),
@@ -711,7 +720,15 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
 }
 
 fn lower_expr_native_f32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    let d = lower_expr(ctx, e)?;
+    let needs_raw_f64_fallback_coercion = expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
+        || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e);
+    let raw = lower_expr(ctx, e)?;
+    let d = if needs_raw_f64_fallback_coercion {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &raw)])
+    } else {
+        raw
+    };
     let value = ctx.block().fptrunc(DOUBLE, &d, F32);
     let lowered = f32_lowered(value);
     ctx.record_lowered_value(
