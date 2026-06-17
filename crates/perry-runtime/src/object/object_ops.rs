@@ -2784,6 +2784,24 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         );
                     }
                 }
+                // A native-module namespace object (`require("path")` etc.,
+                // class_id NATIVE_MODULE_CLASS_ID, the `__module__`-tagged
+                // object) is an ordinary object whose [[Prototype]] is
+                // %Object.prototype% — NOT itself. The `return obj_value` self-
+                // prototype fallback below makes turbopack's `interopEsm`
+                // proto-chain walk (`for(cur=raw; !LEAF.includes(cur);
+                // cur=getProto(cur))`) never terminate — getProto keeps
+                // returning the same object, so it creates export getters
+                // forever (the Next.js standalone startup runaway: unbounded
+                // memory growth, no `✓ Ready`). Return Object.prototype so the
+                // walk reaches a LEAF_PROTOTYPE and stops.
+                if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+                    let proto = crate::object::builtin_prototype_value("Object");
+                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                        return proto;
+                    }
+                    return f64::from_bits(TAG_NULL);
+                }
             }
             return obj_value;
         }
@@ -2891,6 +2909,24 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                             crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
                         );
                     }
+                }
+                // A native-module namespace object (`require("path")` etc.,
+                // class_id NATIVE_MODULE_CLASS_ID, the `__module__`-tagged
+                // object) is an ordinary object whose [[Prototype]] is
+                // %Object.prototype% — NOT itself. The `return obj_value` self-
+                // prototype fallback below makes turbopack's `interopEsm`
+                // proto-chain walk (`for(cur=raw; !LEAF.includes(cur);
+                // cur=getProto(cur))`) never terminate — getProto keeps
+                // returning the same object, so it creates export getters
+                // forever (the Next.js standalone startup runaway: unbounded
+                // memory growth, no `✓ Ready`). Return Object.prototype so the
+                // walk reaches a LEAF_PROTOTYPE and stops.
+                if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+                    let proto = crate::object::builtin_prototype_value("Object");
+                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                        return proto;
+                    }
+                    return f64::from_bits(TAG_NULL);
                 }
             }
             return obj_value;
