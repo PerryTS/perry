@@ -51,6 +51,8 @@ pub(crate) struct AliasNoAliasFacts {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct EscapeFacts {
+    pub direct_method_new_locals: HashMap<u32, HashSet<String>>,
+    pub direct_field_new_locals: HashMap<u32, HashSet<String>>,
     pub non_escaping_news: HashMap<u32, String>,
     pub non_escaping_new_used_fields: HashMap<u32, HashSet<String>>,
     pub non_escaping_arrays: HashMap<u32, u32>,
@@ -116,6 +118,14 @@ impl NativeRegionFactGraph {
         &self.escape.non_escaping_news
     }
 
+    pub(crate) fn direct_method_new_locals(&self) -> &HashMap<u32, HashSet<String>> {
+        &self.escape.direct_method_new_locals
+    }
+
+    pub(crate) fn direct_field_new_locals(&self) -> &HashMap<u32, HashSet<String>> {
+        &self.escape.direct_field_new_locals
+    }
+
     pub(crate) fn non_escaping_new_used_fields(&self) -> &HashMap<u32, HashSet<String>> {
         &self.escape.non_escaping_new_used_fields
     }
@@ -164,6 +174,18 @@ pub(crate) fn collect_native_region_fact_graph(
         clamp_fn_ids,
     );
     let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
+    let direct_method_new_locals = super::direct_method_new::collect_direct_method_new_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+    );
+    let direct_field_new_locals = super::direct_method_new::collect_direct_field_new_locals(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+    );
     let non_escaping_news =
         super::escape_news::collect_non_escaping_news(stmts, boxed_vars, module_globals, classes);
     let non_escaping_new_used_fields =
@@ -196,6 +218,8 @@ pub(crate) fn collect_native_region_fact_graph(
             known_noalias_buffer_locals,
         },
         escape: EscapeFacts {
+            direct_method_new_locals,
+            direct_field_new_locals,
             non_escaping_news,
             non_escaping_new_used_fields,
             non_escaping_arrays,
@@ -342,7 +366,7 @@ fn is_fresh_uint8array_length_literal(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_hir::BinaryOp;
+    use perry_hir::{BinaryOp, Class, ClassField, CompareOp, Function, UpdateOp};
     use perry_types::Type;
 
     fn const_let(id: u32, init: Expr) -> Stmt {
@@ -374,6 +398,91 @@ mod tests {
             op: BinaryOp::UShr,
             left: Box::new(left),
             right: Box::new(Expr::Integer(0)),
+        }
+    }
+
+    fn empty_function(id: u32, name: &str, return_type: Type, body: Vec<Stmt>) -> Function {
+        Function {
+            id,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    fn counter_class() -> Class {
+        Class {
+            id: 1,
+            name: "Counter".to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            fields: vec![ClassField {
+                name: "value".to_string(),
+                key_expr: None,
+                ty: Type::Number,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            }],
+            constructor: Some(empty_function(
+                2,
+                "Counter_constructor",
+                Type::Void,
+                vec![Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::This),
+                    property: "value".to_string(),
+                    value: Box::new(Expr::Integer(0)),
+                })],
+            )),
+            methods: vec![
+                empty_function(
+                    3,
+                    "increment",
+                    Type::Void,
+                    vec![Stmt::Expr(Expr::PropertySet {
+                        object: Box::new(Expr::This),
+                        property: "value".to_string(),
+                        value: Box::new(Expr::Binary {
+                            op: BinaryOp::Add,
+                            left: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::This),
+                                property: "value".to_string(),
+                            }),
+                            right: Box::new(Expr::Integer(1)),
+                        }),
+                    })],
+                ),
+                empty_function(
+                    4,
+                    "get",
+                    Type::Number,
+                    vec![Stmt::Return(Some(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "value".to_string(),
+                    }))],
+                ),
+            ],
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
         }
     }
 
@@ -784,6 +893,114 @@ mod tests {
         assert!(
             !ints.contains(&2),
             "`x++` over a disqualified local must not stay integer"
+        );
+    }
+
+    #[test]
+    fn direct_field_new_local_survives_inlined_loop_field_update() {
+        let counter = counter_class();
+        let classes = HashMap::from([("Counter".to_string(), &counter)]);
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "counter".to_string(),
+                ty: Type::Named("Counter".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Counter".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                }),
+            },
+            Stmt::For {
+                init: Some(Box::new(mutable_number_let(7, Expr::Integer(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(7)),
+                    right: Box::new(Expr::Integer(10)),
+                }),
+                update: Some(Expr::Update {
+                    id: 7,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "value".to_string(),
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(1)),
+                            property: "value".to_string(),
+                        }),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                })],
+            },
+        ];
+
+        let graph = collect_native_region_fact_graph(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+        );
+
+        assert!(
+            graph
+                .direct_field_new_locals()
+                .get(&1)
+                .is_some_and(|fields| fields.contains("value")),
+            "direct field facts: {:?}",
+            graph.direct_field_new_locals()
+        );
+    }
+
+    #[test]
+    fn direct_field_new_local_rejects_deleted_field() {
+        let counter = counter_class();
+        let classes = HashMap::from([("Counter".to_string(), &counter)]);
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "counter".to_string(),
+                ty: Type::Named("Counter".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Counter".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                }),
+            },
+            Stmt::Expr(Expr::Delete(Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "value".to_string(),
+            }))),
+            Stmt::Expr(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "value".to_string(),
+            }),
+        ];
+
+        let graph = collect_native_region_fact_graph(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+        );
+
+        assert!(
+            !graph.direct_field_new_locals().contains_key(&1),
+            "direct field facts should reject deleted candidates: {:?}",
+            graph.direct_field_new_locals()
         );
     }
 }

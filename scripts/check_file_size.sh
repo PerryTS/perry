@@ -318,6 +318,12 @@ crates/perry-runtime/src/typed_feedback.rs
 # emit_ helpers all live next to `lower_for`. Splitting the preguard/hoist
 # helpers into a sibling module is tracked under #1435.
 crates/perry-codegen/src/stmt/loops.rs
+# Cross-call inliner + exact-receiver loop-fact analysis. Crossed the 2000-line
+# gate after the direct-`new`-receiver loop-body fact tower (#5322) added the
+# `exact_receiver_facts_for_loop_body` / `loop_*_preserves_local_receiver`
+# statement/expression walkers next to the existing inliner. Splitting the
+# loop-fact analysis into a sibling module is tracked under #1435.
+crates/perry-transform/src/inline/call_inliner.rs
 EOF
 )
 

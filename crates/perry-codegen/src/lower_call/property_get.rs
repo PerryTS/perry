@@ -2034,6 +2034,41 @@ pub fn try_lower_property_get_method_call(
             if !method_has_rest {
                 let shape_only_guard =
                     !class_chain_has_field_named(ctx, &class_name, property.as_str());
+                let exact_const_new_receiver = match object.as_ref() {
+                    Expr::LocalGet(local_id) => ctx
+                        .const_new_class_locals
+                        .get(local_id)
+                        .is_some_and(|exact_class| exact_class == &class_name),
+                    _ => false,
+                };
+                let direct_method_new_receiver = match object.as_ref() {
+                    Expr::LocalGet(local_id) => {
+                        exact_const_new_receiver
+                            && ctx
+                                .direct_method_new_locals
+                                .get(local_id)
+                                .is_some_and(|methods| methods.contains(property))
+                    }
+                    _ => false,
+                };
+                if direct_method_new_receiver {
+                    return Ok(Some(ctx.block().call(DOUBLE, &fallback_fn, &arg_slices)));
+                }
+                if exact_const_new_receiver {
+                    // The local was initialized by `const x = new C(...)`, so
+                    // the receiver cannot be one of C's subclasses. Keep the
+                    // own-property override check for JS-visible method
+                    // replacement, but skip the heavier typed-feedback
+                    // class/vtable guard on every call.
+                    return Ok(Some(emit_own_method_override_check(
+                        ctx,
+                        &recv_box,
+                        property,
+                        &fallback_fn,
+                        &arg_slices,
+                        &lowered_args,
+                    )));
+                }
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,

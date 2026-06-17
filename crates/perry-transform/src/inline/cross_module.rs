@@ -133,6 +133,9 @@ pub fn gather_cross_module_methods(module: &Module) -> HashMap<(String, String),
                 MethodCandidate {
                     func: method.clone(),
                     this_param_id: None,
+                    data_field_names: class_chain_property_sets(&module.classes, &class.name)
+                        .map(|(fields, _, _)| fields)
+                        .unwrap_or_default(),
                     method_lookup_safe: method_lookup_is_unshadowed(
                         &module.classes,
                         &class.name,
@@ -234,6 +237,9 @@ pub fn gather_cross_module_methods_with_extern_imports(
                 MethodCandidate {
                     func: method.clone(),
                     this_param_id: None,
+                    data_field_names: class_chain_property_sets(&module.classes, &class.name)
+                        .map(|(fields, _, _)| fields)
+                        .unwrap_or_default(),
                     method_lookup_safe: method_lookup_is_unshadowed(
                         &module.classes,
                         &class.name,

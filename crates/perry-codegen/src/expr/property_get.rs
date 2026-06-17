@@ -1578,6 +1578,54 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         )
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                        let direct_const_new_field = match object.as_ref() {
+                            Expr::LocalGet(local_id) => {
+                                ctx.const_new_class_locals
+                                    .get(local_id)
+                                    .is_some_and(|exact_class| exact_class == &class_name)
+                                    && ctx
+                                        .direct_field_new_locals
+                                        .get(local_id)
+                                        .is_some_and(|fields| fields.contains(property))
+                            }
+                            _ => false,
+                        };
+                        if direct_const_new_field {
+                            let blk = ctx.block();
+                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                            let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                            let header_skip = "24".to_string();
+                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                            let val_direct = blk.load(DOUBLE, &field_ptr);
+                            if requires_raw_f64 {
+                                let direct = LoweredValue {
+                                    semantic: SemanticKind::JsNumber,
+                                    rep: NativeRep::F64,
+                                    llvm_ty: DOUBLE,
+                                    value: val_direct.clone(),
+                                };
+                                ctx.record_lowered_value_with_access_mode(
+                                    "ClassFieldGet",
+                                    None,
+                                    "class_field_get.direct_const_new_raw_f64_load",
+                                    &direct,
+                                    None,
+                                    None,
+                                    Some(BufferAccessMode::UncheckedNative),
+                                    None,
+                                    false,
+                                    false,
+                                    vec![
+                                        format!("class={}", class_name),
+                                        format!("field={}", property),
+                                        format!("field_index={}", field_idx_str),
+                                    ],
+                                );
+                            }
+                            return Ok(val_direct);
+                        }
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
                         // #5093: build the guard operands once, up front, so both
                         // the inline shape pre-check and the guard-call fallback

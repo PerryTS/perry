@@ -76,6 +76,11 @@ pub(crate) fn lower_let(
             if is_object_literal_init(init_expr) {
                 ctx.object_literal_locals.insert(id);
             }
+            if let perry_hir::Expr::New { class_name, .. } = init_expr {
+                if ctx.classes.contains_key(class_name) {
+                    ctx.const_new_class_locals.insert(id, class_name.clone());
+                }
+            }
         }
     }
     if let Some(init_expr) = init {

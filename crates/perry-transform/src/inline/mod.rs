@@ -79,6 +79,10 @@ pub struct MethodCandidate {
     pub func: Function,
     /// The index of the `this` parameter (if present)
     pub this_param_id: Option<LocalId>,
+    /// Non-computed data fields available on this method's receiver class
+    /// chain. Used by loop-scoped exact-receiver propagation to distinguish
+    /// stable field traffic from accessor or method-shadowing traffic.
+    pub data_field_names: HashSet<String>,
     /// True only when a direct prototype-method inline preserves normal
     /// property lookup for this method name. Instance fields, computed fields,
     /// and accessors can all shadow `obj.method` before the prototype method.
@@ -524,6 +528,9 @@ pub fn inline_functions(
                     MethodCandidate {
                         func: method.clone(),
                         this_param_id: None,
+                        data_field_names: class_chain_property_sets(&module.classes, &class.name)
+                            .map(|(fields, _, _)| fields)
+                            .unwrap_or_default(),
                         method_lookup_safe: method_lookup_is_unshadowed(
                             &module.classes,
                             &class.name,
@@ -685,6 +692,7 @@ mod tests {
         MethodCandidate {
             func: function(id, body),
             this_param_id: None,
+            data_field_names: HashSet::new(),
             method_lookup_safe: true,
             required_extern_imports,
         }

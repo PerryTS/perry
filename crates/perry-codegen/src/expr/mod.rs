@@ -778,6 +778,20 @@ pub(crate) struct FnCtx<'a> {
     /// routes to the alloca in `scalar_replaced[top]`.
     pub scalar_ctor_target: Vec<u32>,
 
+    /// Immutable locals initialized directly from `new ClassName(...)`.
+    /// Unlike `non_escaping_news`, these locals may be used as method-call
+    /// receivers, so they are not scalar-replaced. The fact is still useful
+    /// at dispatch sites: a `const x = new C(); x.m()` receiver has an exact
+    /// class, even if `C` has subclasses elsewhere in the module.
+    pub const_new_class_locals: std::collections::HashMap<u32, String>,
+
+    /// Per immutable `new` local, method names whose calls are proven not to
+    /// observe an own-method override during this native region. These can
+    /// lower to the direct class-method body without the per-call override
+    /// probe.
+    pub direct_method_new_locals: std::collections::HashMap<u32, std::collections::HashSet<String>>,
+    pub direct_field_new_locals: std::collections::HashMap<u32, std::collections::HashSet<String>>,
+
     /// Non-escaping `new` locals identified by escape analysis. Maps
     /// local_id → class_name for `let p = new Point(...)` where `p`
     /// is only used in PropertyGet/PropertySet. The Stmt::Let lowering

@@ -8,6 +8,7 @@
 mod clamp_detect;
 mod class_accessors;
 mod closures;
+mod direct_method_new;
 mod escape_arrays;
 mod escape_check;
 mod escape_news;

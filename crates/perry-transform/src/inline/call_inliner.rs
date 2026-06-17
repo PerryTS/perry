@@ -48,6 +48,537 @@ pub fn stmt_contains_return(s: &Stmt) -> bool {
     }
 }
 
+fn exact_receiver_facts_for_loop_body(
+    incoming: &ExactReceiverFacts,
+    condition: Option<&Expr>,
+    update: Option<&Expr>,
+    body: &[Stmt],
+    method_candidates: &HashMap<(String, String), MethodCandidate>,
+) -> ExactReceiverFacts {
+    let mut facts = incoming.clone();
+    if let Some(cond) = condition {
+        invalidate_exact_receivers_for_expr(cond, &mut facts);
+    }
+    if let Some(upd) = update {
+        invalidate_exact_receivers_for_expr(upd, &mut facts);
+    }
+
+    facts.retain(|local_id, fact| {
+        let method_names = loop_method_names_for_class(&fact.class_name, method_candidates);
+        let header_preserves = condition.is_none_or(|cond| {
+            loop_expr_preserves_local_receiver(
+                cond,
+                *local_id,
+                &fact.class_name,
+                &method_names,
+                method_candidates,
+            )
+        }) && update.is_none_or(|upd| {
+            loop_expr_preserves_local_receiver(
+                upd,
+                *local_id,
+                &fact.class_name,
+                &method_names,
+                method_candidates,
+            )
+        });
+        header_preserves
+            && body.iter().all(|stmt| {
+                loop_stmt_preserves_local_receiver(
+                    stmt,
+                    *local_id,
+                    &fact.class_name,
+                    &method_names,
+                    method_candidates,
+                )
+            })
+    });
+    facts
+}
+
+fn loop_method_names_for_class(
+    class_name: &str,
+    method_candidates: &HashMap<(String, String), MethodCandidate>,
+) -> HashSet<String> {
+    method_candidates
+        .keys()
+        .filter_map(|(candidate_class, method)| {
+            (candidate_class == class_name).then(|| method.clone())
+        })
+        .collect()
+}
+
+fn loop_stmt_preserves_local_receiver(
+    stmt: &Stmt,
+    local_id: LocalId,
+    class_name: &str,
+    method_names: &HashSet<String>,
+    method_candidates: &HashMap<(String, String), MethodCandidate>,
+) -> bool {
+    match stmt {
+        Stmt::Let { id, init, .. } => {
+            *id != local_id
+                && init.as_ref().is_none_or(|expr| {
+                    loop_expr_preserves_local_receiver(
+                        expr,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                })
+        }
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            loop_expr_preserves_local_receiver(
+                expr,
+                local_id,
+                class_name,
+                method_names,
+                method_candidates,
+            )
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            loop_expr_preserves_local_receiver(
+                condition,
+                local_id,
+                class_name,
+                method_names,
+                method_candidates,
+            ) && then_branch.iter().all(|stmt| {
+                loop_stmt_preserves_local_receiver(
+                    stmt,
+                    local_id,
+                    class_name,
+                    method_names,
+                    method_candidates,
+                )
+            }) && else_branch.as_ref().is_none_or(|branch| {
+                branch.iter().all(|stmt| {
+                    loop_stmt_preserves_local_receiver(
+                        stmt,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                })
+            })
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            loop_expr_preserves_local_receiver(
+                condition,
+                local_id,
+                class_name,
+                method_names,
+                method_candidates,
+            ) && body.iter().all(|stmt| {
+                loop_stmt_preserves_local_receiver(
+                    stmt,
+                    local_id,
+                    class_name,
+                    method_names,
+                    method_candidates,
+                )
+            })
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_none_or(|stmt| {
+                loop_stmt_preserves_local_receiver(
+                    stmt,
+                    local_id,
+                    class_name,
+                    method_names,
+                    method_candidates,
+                )
+            }) && condition.as_ref().is_none_or(|expr| {
+                loop_expr_preserves_local_receiver(
+                    expr,
+                    local_id,
+                    class_name,
+                    method_names,
+                    method_candidates,
+                )
+            }) && update.as_ref().is_none_or(|expr| {
+                loop_expr_preserves_local_receiver(
+                    expr,
+                    local_id,
+                    class_name,
+                    method_names,
+                    method_candidates,
+                )
+            }) && body.iter().all(|stmt| {
+                loop_stmt_preserves_local_receiver(
+                    stmt,
+                    local_id,
+                    class_name,
+                    method_names,
+                    method_candidates,
+                )
+            })
+        }
+        Stmt::Labeled { body, .. } => loop_stmt_preserves_local_receiver(
+            body,
+            local_id,
+            class_name,
+            method_names,
+            method_candidates,
+        ),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().all(|stmt| {
+                loop_stmt_preserves_local_receiver(
+                    stmt,
+                    local_id,
+                    class_name,
+                    method_names,
+                    method_candidates,
+                )
+            }) && catch.as_ref().is_none_or(|catch| {
+                catch.body.iter().all(|stmt| {
+                    loop_stmt_preserves_local_receiver(
+                        stmt,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                })
+            }) && finally.as_ref().is_none_or(|stmts| {
+                stmts.iter().all(|stmt| {
+                    loop_stmt_preserves_local_receiver(
+                        stmt,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                })
+            })
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            loop_expr_preserves_local_receiver(
+                discriminant,
+                local_id,
+                class_name,
+                method_names,
+                method_candidates,
+            ) && cases.iter().all(|case| {
+                case.test.as_ref().is_none_or(|test| {
+                    loop_expr_preserves_local_receiver(
+                        test,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                }) && case.body.iter().all(|stmt| {
+                    loop_stmt_preserves_local_receiver(
+                        stmt,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                })
+            })
+        }
+        Stmt::PreallocateBoxes(ids) => !ids.contains(&local_id),
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_) => true,
+    }
+}
+
+fn loop_expr_preserves_local_receiver(
+    expr: &Expr,
+    local_id: LocalId,
+    class_name: &str,
+    method_names: &HashSet<String>,
+    method_candidates: &HashMap<(String, String), MethodCandidate>,
+) -> bool {
+    match expr {
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) if *id == local_id => false,
+        Expr::Update { id, .. } if *id == local_id => false,
+        Expr::Call { callee, args, .. } => {
+            let Expr::PropertyGet { object, property } = callee.as_ref() else {
+                return false;
+            };
+            let Expr::LocalGet(receiver_id) = object.as_ref() else {
+                return false;
+            };
+            if *receiver_id != local_id {
+                return false;
+            }
+            let Some(candidate) =
+                method_candidates.get(&(class_name.to_string(), property.clone()))
+            else {
+                return false;
+            };
+            candidate.method_lookup_safe
+                && method_body_preserves_this_receiver(candidate, class_name, method_candidates)
+                && args.iter().all(|arg| {
+                    loop_expr_preserves_local_receiver(
+                        arg,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                })
+        }
+        Expr::CallSpread { .. }
+        | Expr::NativeMethodCall { .. }
+        | Expr::StaticMethodCall { .. }
+        | Expr::SuperCall(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::New { .. }
+        | Expr::NewDynamic { .. }
+        | Expr::ObjectAssign { .. }
+        | Expr::IndexSet { .. }
+        | Expr::IndexUpdate { .. }
+        | Expr::StaticFieldSet { .. }
+        | Expr::ClassStaticSymbolSet { .. }
+        | Expr::RegisterClassParentDynamic { .. }
+        | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::ClassExprFresh { .. }
+        | Expr::SetFunctionPrototype { .. }
+        | Expr::RegisterPrototypeMethod { .. }
+        | Expr::RegisterFunctionPrototypeMethod { .. }
+        | Expr::ObjectDefineProperty(_, _, _)
+        | Expr::ObjectDefineProperties(_, _)
+        | Expr::ObjectSetPrototypeOf(_, _)
+        | Expr::Delete(_)
+        | Expr::ReflectSet { .. }
+        | Expr::ReflectDelete { .. }
+        | Expr::ReflectDefineProperty { .. } => false,
+        Expr::PropertyGet { object, .. } => {
+            if matches!(object.as_ref(), Expr::LocalGet(id) if *id == local_id) {
+                return false;
+            }
+            loop_expr_preserves_local_receiver(
+                object,
+                local_id,
+                class_name,
+                method_names,
+                method_candidates,
+            )
+        }
+        Expr::PropertySet { .. } | Expr::PropertyUpdate { .. } => false,
+        Expr::Closure {
+            params,
+            body,
+            captures,
+            mutable_captures,
+            ..
+        } => {
+            !captures
+                .iter()
+                .chain(mutable_captures.iter())
+                .any(|id| *id == local_id)
+                && params.iter().all(|param| {
+                    param.default.as_ref().is_none_or(|default| {
+                        loop_expr_preserves_local_receiver(
+                            default,
+                            local_id,
+                            class_name,
+                            method_names,
+                            method_candidates,
+                        )
+                    })
+                })
+                && body.iter().all(|stmt| {
+                    loop_stmt_preserves_local_receiver(
+                        stmt,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    )
+                })
+        }
+        _ => {
+            let mut ok = true;
+            walk_expr_children(expr, &mut |child| {
+                if ok {
+                    ok = loop_expr_preserves_local_receiver(
+                        child,
+                        local_id,
+                        class_name,
+                        method_names,
+                        method_candidates,
+                    );
+                }
+            });
+            ok
+        }
+    }
+}
+
+fn method_body_preserves_this_receiver(
+    candidate: &MethodCandidate,
+    class_name: &str,
+    method_candidates: &HashMap<(String, String), MethodCandidate>,
+) -> bool {
+    let method_names = loop_method_names_for_class(class_name, method_candidates);
+    candidate.func.body.iter().all(|stmt| {
+        method_stmt_preserves_this_receiver(stmt, &candidate.data_field_names, &method_names)
+    })
+}
+
+fn method_stmt_preserves_this_receiver(
+    stmt: &Stmt,
+    data_field_names: &HashSet<String>,
+    method_names: &HashSet<String>,
+) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_none_or(|expr| {
+            method_expr_preserves_this_receiver(expr, data_field_names, method_names)
+        }),
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            method_expr_preserves_this_receiver(expr, data_field_names, method_names)
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            method_expr_preserves_this_receiver(condition, data_field_names, method_names)
+                && then_branch.iter().all(|stmt| {
+                    method_stmt_preserves_this_receiver(stmt, data_field_names, method_names)
+                })
+                && else_branch.as_ref().is_none_or(|branch| {
+                    branch.iter().all(|stmt| {
+                        method_stmt_preserves_this_receiver(stmt, data_field_names, method_names)
+                    })
+                })
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            method_expr_preserves_this_receiver(discriminant, data_field_names, method_names)
+                && cases.iter().all(|case| {
+                    case.test.as_ref().is_none_or(|test| {
+                        method_expr_preserves_this_receiver(test, data_field_names, method_names)
+                    }) && case.body.iter().all(|stmt| {
+                        method_stmt_preserves_this_receiver(stmt, data_field_names, method_names)
+                    })
+                })
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().all(|stmt| {
+                method_stmt_preserves_this_receiver(stmt, data_field_names, method_names)
+            }) && catch.as_ref().is_none_or(|catch| {
+                catch.body.iter().all(|stmt| {
+                    method_stmt_preserves_this_receiver(stmt, data_field_names, method_names)
+                })
+            }) && finally.as_ref().is_none_or(|stmts| {
+                stmts.iter().all(|stmt| {
+                    method_stmt_preserves_this_receiver(stmt, data_field_names, method_names)
+                })
+            })
+        }
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } | Stmt::Labeled { .. } => {
+            false
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => true,
+    }
+}
+
+fn method_expr_preserves_this_receiver(
+    expr: &Expr,
+    data_field_names: &HashSet<String>,
+    method_names: &HashSet<String>,
+) -> bool {
+    match expr {
+        Expr::This => false,
+        Expr::Call { .. }
+        | Expr::CallSpread { .. }
+        | Expr::NativeMethodCall { .. }
+        | Expr::StaticMethodCall { .. }
+        | Expr::SuperCall(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::New { .. }
+        | Expr::NewDynamic { .. }
+        | Expr::ObjectAssign { .. }
+        | Expr::IndexSet { .. }
+        | Expr::IndexUpdate { .. }
+        | Expr::StaticFieldSet { .. }
+        | Expr::ClassStaticSymbolSet { .. }
+        | Expr::RegisterClassParentDynamic { .. }
+        | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::ClassExprFresh { .. }
+        | Expr::SetFunctionPrototype { .. }
+        | Expr::RegisterPrototypeMethod { .. }
+        | Expr::RegisterFunctionPrototypeMethod { .. }
+        | Expr::ObjectDefineProperty(_, _, _)
+        | Expr::ObjectDefineProperties(_, _)
+        | Expr::ObjectSetPrototypeOf(_, _)
+        | Expr::Delete(_)
+        | Expr::ReflectSet { .. }
+        | Expr::ReflectDelete { .. }
+        | Expr::ReflectDefineProperty { .. } => false,
+        Expr::PropertyGet { object, property } => {
+            if matches!(object.as_ref(), Expr::This) {
+                return data_field_names.contains(property) && !method_names.contains(property);
+            }
+            method_expr_preserves_this_receiver(object, data_field_names, method_names)
+        }
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+        } => {
+            matches!(object.as_ref(), Expr::This)
+                && data_field_names.contains(property)
+                && !method_names.contains(property)
+                && method_expr_preserves_this_receiver(value, data_field_names, method_names)
+        }
+        Expr::PropertyUpdate {
+            object, property, ..
+        } => {
+            matches!(object.as_ref(), Expr::This)
+                && data_field_names.contains(property)
+                && !method_names.contains(property)
+        }
+        _ => {
+            let mut ok = true;
+            walk_expr_children(expr, &mut |child| {
+                if ok {
+                    ok = method_expr_preserves_this_receiver(child, data_field_names, method_names);
+                }
+            });
+            ok
+        }
+    }
+}
+
 /// Replace every `Stmt::Return(Some(e))` in `stmts` (recursively) with
 /// `Stmt::Expr(LocalSet(let_id, e)); Stmt::Break`, and every
 /// `Stmt::Return(None)` with a single `Stmt::Break`. Used to convert the body
@@ -594,20 +1125,18 @@ pub fn inline_calls_in_stmts(
                         class_field_types,
                     );
                 }
-                let mut for_extra: Vec<&Expr> = Vec::new();
-                if let Some(c) = condition.as_ref() {
-                    for_extra.push(c);
-                }
-                if let Some(u) = update.as_ref() {
-                    for_extra.push(u);
-                }
-                let mut body_facts =
-                    loop_invariant_seed_facts(exact_receiver_facts, body, &for_extra);
+                let mut body_facts = exact_receiver_facts_for_loop_body(
+                    exact_receiver_facts,
+                    condition.as_ref(),
+                    update.as_ref(),
+                    body,
+                    method_candidates,
+                );
                 // The for-init can also rebind a receiver local (e.g.
                 // `for (c = makeOther(); …)`), so drop facts it mutates too —
                 // otherwise a stale pre-loop class could survive into the body
                 // and allow an unsound inline. (`init` is a Stmt, not an Expr,
-                // so it can't go through `for_extra`.)
+                // so the header-expression checks above can't see it.)
                 if let Some(init_stmt) = init.as_ref() {
                     let mut init_mutated: std::collections::HashSet<LocalId> =
                         std::collections::HashSet::new();

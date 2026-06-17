@@ -331,6 +331,10 @@ pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value
 }
 
 pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
+    ctx.const_new_class_locals.remove(&id);
+    ctx.direct_method_new_locals.remove(&id);
+    ctx.direct_field_new_locals.remove(&id);
+
     let aliases = ctx.native_i32_aliases.clone();
     ctx.native_i32_aliases
         .retain(|alias_id, _| !native_i32_alias_chain_mentions(&aliases, *alias_id, id));

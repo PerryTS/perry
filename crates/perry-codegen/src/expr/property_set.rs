@@ -309,6 +309,73 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         )
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+                        let direct_const_new_field = match object.as_ref() {
+                            Expr::LocalGet(local_id) => {
+                                ctx.const_new_class_locals
+                                    .get(local_id)
+                                    .is_some_and(|exact_class| exact_class == &class_name)
+                                    && ctx
+                                        .direct_field_new_locals
+                                        .get(local_id)
+                                        .is_some_and(|fields| fields.contains(property))
+                            }
+                            _ => false,
+                        };
+                        if direct_const_new_field
+                            && (!requires_raw_f64 || is_numeric_expr(ctx, value))
+                        {
+                            let blk = ctx.block();
+                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                            let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                            let header_skip = "24".to_string();
+                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                            if requires_raw_f64 {
+                                // GC_STORE_AUDIT(POINTER_FREE): the field's
+                                // declared type is a raw-f64 candidate and the
+                                // value is proven numeric, so a plain f64 (not a
+                                // GC pointer) is written — no write barrier.
+                                blk.store(DOUBLE, &val_double, &field_ptr);
+                                let stored = LoweredValue {
+                                    semantic: SemanticKind::JsNumber,
+                                    rep: NativeRep::F64,
+                                    llvm_ty: DOUBLE,
+                                    value: val_double.clone(),
+                                };
+                                ctx.record_lowered_value_with_access_mode(
+                                    "ClassFieldSet",
+                                    None,
+                                    "class_field_set.direct_const_new_raw_f64_store",
+                                    &stored,
+                                    None,
+                                    None,
+                                    Some(BufferAccessMode::UncheckedNative),
+                                    None,
+                                    false,
+                                    false,
+                                    vec![
+                                        format!("class={}", class_name),
+                                        format!("field={}", property),
+                                        format!("field_index={}", field_idx_str),
+                                    ],
+                                );
+                            } else {
+                                let field_addr = blk.ptrtoint(&field_ptr, I64);
+                                emit_jsvalue_slot_store_on_block(
+                                    blk,
+                                    &field_ptr,
+                                    &val_double,
+                                    &obj_handle,
+                                    &field_idx_str,
+                                    true,
+                                    &obj_bits,
+                                    &field_addr,
+                                    true,
+                                );
+                            }
+                            return Ok(val_double);
+                        }
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
                         // #5093: build the guard operands once, up front, so both
                         // the inline shape pre-check and the guard-call fallback
