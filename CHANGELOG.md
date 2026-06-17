@@ -1,3 +1,24 @@
+## v0.5.1177 — fix(codegen): injective function-symbol names (distinct names that sanitize alike)
+
+Two distinct module-level functions could mangle to the same LLVM symbol, so
+clang rejected the module with "invalid redefinition of function". Two root
+causes, both fixed:
+
+- `scoped_fn_name` used the lossy `sanitize` (every non-`[A-Za-z0-9_]` byte →
+  `_`), so minified names like `$Z5` and `_Z5` both became
+  `perry_fn_<mod>___Z5`. Switched to the injective `sanitize_member` (the same
+  mangler `scoped_static_method_name` already uses); byte-identical for the
+  common `[A-Za-z0-9_]` case. `func_names` is keyed by func id and every call
+  site resolves through it, so changing the mangling stays consistent.
+- Minified code reuses short names (`function A`) across scopes, and perry
+  lambda-lifts nested functions to module level, so two module functions can
+  legitimately share a name. `compile_module` now disambiguates collisions
+  with a `__dupN` suffix keyed by the mangled symbol. Exported functions are
+  referenced cross-module by their canonical `scoped_fn_name`, so they reserve
+  their name first and never get suffixed.
+
+Sibling fix to the per-class class-keys-global disambiguation (5ac457967).
+
 ## v0.5.1176 — fix(runtime): loose equality (`==`) now treats SSO short strings as strings
 
 `js_jsvalue_loose_equals` (the helper behind `assert.equal`/`assert.deepEqual`
