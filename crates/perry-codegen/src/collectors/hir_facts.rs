@@ -56,7 +56,9 @@ pub(crate) struct EscapeFacts {
     pub non_escaping_news: HashMap<u32, String>,
     pub non_escaping_new_used_fields: HashMap<u32, HashSet<String>>,
     pub non_escaping_arrays: HashMap<u32, u32>,
+    pub non_escaping_array_used_indices: HashMap<u32, HashSet<u32>>,
     pub non_escaping_object_literals: HashMap<u32, Vec<String>>,
+    pub non_escaping_object_literal_used_fields: HashMap<u32, HashSet<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -127,8 +129,16 @@ impl TypeFacts {
         &self.escape.non_escaping_arrays
     }
 
+    pub(crate) fn non_escaping_array_used_indices(&self) -> &HashMap<u32, HashSet<u32>> {
+        &self.escape.non_escaping_array_used_indices
+    }
+
     pub(crate) fn non_escaping_object_literals(&self) -> &HashMap<u32, Vec<String>> {
         &self.escape.non_escaping_object_literals
+    }
+
+    pub(crate) fn non_escaping_object_literal_used_fields(&self) -> &HashMap<u32, HashSet<String>> {
+        &self.escape.non_escaping_object_literal_used_fields
     }
 
     pub(crate) fn materialization_hazard_locals(&self) -> &HashSet<u32> {
@@ -220,11 +230,18 @@ pub(crate) fn collect_type_facts(
         super::escape_news::collect_non_escaping_new_used_fields(stmts, &non_escaping_news);
     let non_escaping_arrays =
         super::escape_arrays::collect_non_escaping_arrays(stmts, boxed_vars, module_globals);
+    let non_escaping_array_used_indices =
+        super::escape_arrays::collect_non_escaping_array_used_indices(stmts, &non_escaping_arrays);
     let non_escaping_object_literals = super::escape_objects::collect_non_escaping_object_literals(
         stmts,
         boxed_vars,
         module_globals,
     );
+    let non_escaping_object_literal_used_fields =
+        super::escape_objects::collect_non_escaping_object_literal_used_fields(
+            stmts,
+            &non_escaping_object_literals,
+        );
     let scalar_replaceable_object_locals = non_escaping_news
         .keys()
         .chain(non_escaping_object_literals.keys())
@@ -249,7 +266,9 @@ pub(crate) fn collect_type_facts(
             non_escaping_news,
             non_escaping_new_used_fields,
             non_escaping_arrays,
+            non_escaping_array_used_indices,
             non_escaping_object_literals,
+            non_escaping_object_literal_used_fields,
         },
         purity: PurityFacts {
             pure_helper_function_ids: clamp_fn_ids.clone(),

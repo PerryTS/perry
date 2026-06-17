@@ -247,7 +247,11 @@ pub(super) fn compile_function(
         non_escaping_news: native_facts.non_escaping_news().clone(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
+        non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
         non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
+        non_escaping_object_literal_used_fields: native_facts
+            .non_escaping_object_literal_used_fields()
+            .clone(),
         flat_const_arrays: &cross_module.flat_const_arrays,
         array_row_aliases: HashMap::new(),
         clamp3_functions: &cross_module.clamp3_functions,
