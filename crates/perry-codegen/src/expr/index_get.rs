@@ -508,6 +508,88 @@ fn lower_bounded_array_index_get(
     ))
 }
 
+fn lower_preguarded_numeric_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    site_id: &str,
+    guard_ok_slot: &str,
+) -> Result<String> {
+    let fast_idx = ctx.new_block("bidx.preguarded.fast");
+    let fallback_idx = ctx.new_block("bidx.preguarded.fallback");
+    let merge_idx = ctx.new_block("bidx.preguarded.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let guard_ok_i32 = ctx.block().load(I32, guard_ok_slot);
+    let guard_ok = ctx.block().icmp_ne(I32, &guard_ok_i32, "0");
+    ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+    ctx.current_block = fallback_idx;
+    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+    let fallback_val = ctx.block().call(
+        DOUBLE,
+        "js_typed_feedback_array_index_get_fallback_boxed",
+        &[(I64, site_id), (DOUBLE, arr_box), (DOUBLE, &idx_box)],
+    );
+    let fallback_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fast_idx;
+    let fast_blk = ctx.block();
+    let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
+    let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
+    let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
+    let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
+    let with_header = fast_blk.add(I64, &byte_offset, "8");
+    let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+    let element_ptr = fast_blk.inttoptr(I64, &element_addr);
+    let fast_val = fast_blk.load(DOUBLE, &element_ptr);
+    let fast_end_label = fast_blk.label.clone();
+    fast_blk.br(&merge_label);
+
+    let fast = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::F64,
+        llvm_ty: DOUBLE,
+        value: fast_val.clone(),
+    };
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "NumericArrayIndexGet",
+        None,
+        "numeric_array_index_get.range_preguarded_raw_f64_load",
+        &fast,
+        Some(BoundsState::Guarded {
+            guard_id: "numeric_array_range_preguard".to_string(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        vec![raw_f64_layout_fact(
+            None,
+            "consumed",
+            "numeric_array_range_preguard",
+            None,
+        )],
+        Vec::new(),
+        false,
+        false,
+        Vec::new(),
+    );
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[
+            (&fast_val, &fast_end_label),
+            (&fallback_val, &fallback_end_label),
+        ],
+    ))
+}
+
 fn lower_legacy_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -915,6 +997,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
                         if require_numeric_layout {
+                            if let Some(preguard) = ctx
+                                .preguarded_numeric_array_index_gets
+                                .get(&(*arr_id, *idx_id))
+                                .cloned()
+                            {
+                                return lower_preguarded_numeric_array_index_get(
+                                    ctx,
+                                    &arr_box,
+                                    &idx_i32,
+                                    &preguard.site_id,
+                                    &preguard.guard_ok_slot,
+                                );
+                            }
                             return lower_guarded_array_index_get_trusted_i32(
                                 ctx, &arr_box, &idx_i32, "bidx.num", None,
                             );

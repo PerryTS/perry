@@ -684,11 +684,15 @@ fn typed_feedback_hoists_invariant_numeric_array_get_out_of_inner_loop() {
 
     assert!(ir.contains("for.prebody"), "{ir}");
     assert!(ir.contains("hoist.num.fast"), "{ir}");
+    assert!(ir.contains("range_preguard.fast"), "{ir}");
+    assert!(ir.contains("bidx.preguarded.fast"), "{ir}");
+    assert!(ir.contains("bidx.preguarded.fallback"), "{ir}");
     assert!(
         ir.contains("call void @js_typed_feedback_record_array_guard_fast_passes"),
         "{ir}"
     );
     assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard_i32"));
+    assert!(!ir.contains("bidx.num.fast"), "{ir}");
 }
 
 #[test]

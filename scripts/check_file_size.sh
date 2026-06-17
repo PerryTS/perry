@@ -311,6 +311,13 @@ crates/perry-stdlib/src/events.rs
 # accounting and can't move without scattering it. Splitting the fast-cache out
 # of the registry trunk is tracked under #1435.
 crates/perry-runtime/src/typed_feedback.rs
+# Loop lowering + numeric-array preguard/hoist helper tower. Crossed the
+# 2000-line gate as the numeric-array fast-path stack grew `lower_for`'s
+# companion helpers: the invariant-read hoist (#5312), the range/affine read
+# preguards (#5315/#5317), and the bounded-write preguard (#5323) classify_/
+# emit_ helpers all live next to `lower_for`. Splitting the preguard/hoist
+# helpers into a sibling module is tracked under #1435.
+crates/perry-codegen/src/stmt/loops.rs
 EOF
 )
 

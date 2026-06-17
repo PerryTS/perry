@@ -606,6 +606,12 @@ pub(crate) struct FnCtx<'a> {
     /// prebody filled the slot.
     pub hoisted_array_index_gets: std::collections::HashMap<(u32, u32), String>,
 
+    /// Loop-local guards for numeric array reads where the loop condition
+    /// proves every visited index is in bounds. Keyed as `(array_local_id,
+    /// index_local_id)` and active only while lowering that loop body.
+    pub preguarded_numeric_array_index_gets:
+        std::collections::HashMap<(u32, u32), PreguardedNumericArrayIndexGet>,
+
     /// `(counter_local_id, array_local_id)` pairs that are guaranteed
     /// inbounds inside the current loop nest — populated by
     /// `lower_for` when it detects the same `for (...; i < arr.length;
@@ -1031,6 +1037,12 @@ pub(crate) struct BoundedIndexPair {
     pub index_local_id: u32,
     pub array_local_id: u32,
     pub scope_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreguardedNumericArrayIndexGet {
+    pub site_id: String,
+    pub guard_ok_slot: String,
 }
 
 impl<'a> FnCtx<'a> {

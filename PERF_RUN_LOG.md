@@ -436,3 +436,57 @@
   - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only`, and the matrix before/after comparison above uses the captured local sixth-cycle baseline.
   - This is a deliberately narrow runtime ABI and codegen change: only paths with an already trusted i32 index use the new guard, and fallback boxing remains available for correctness.
 - PR: https://github.com/PerryTS/perry/pull/5313
+
+## 2026-06-17 - Preguard numeric array range reads in length-bounded loops
+
+- Start revision: `c03e618ea`
+- Branch: `codex/perry-numeric-array-range-preguard`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux direct binaries and `perf stat`; baseline binary was `/tmp/perry-10_nested_loops-current` from the previous stacked tip
+- Baseline commands:
+  - `for i in 1 2 3 4 5; do /tmp/perry-10_nested_loops-current; done`
+  - `perf stat -r 3 -e cycles,instructions,branches,branch-misses -x, /tmp/perry-10_nested_loops-current`
+- Baseline results:
+  - direct nested binary samples: 122ms, 121ms, 122ms, 97ms, 122ms; sum always `26991000000`
+  - `perf stat -r 3`: 365,501,458 cycles, 1,725,895,246 instructions, 379,443,063 branches, 123,979 branch-misses
+- Selected gap and evidence:
+  - After invariant `arr[i]` hoisting and trusted-i32 get guards, `10_nested_loops.ts` still called `js_typed_feedback_numeric_array_index_get_guard_i32` for `arr[j]` on every inner-loop iteration.
+  - The loop condition `j < arr.length` already proves the visited range is in bounds, and the body is local arithmetic plus the already-hoisted invariant read.
+  - Current IR showed the hot body calling the i32 guard at site 2 before the raw-f64 load; `perf record` attributed the majority of samples to that inner-loop guard/load region.
+- Change:
+  - Added loop-local numeric array range preguards for conservative `for (...; j < arr.length; j++)` bodies with exactly one `arr[j]` read and no runtime-call-producing expressions.
+  - The prebody now guards the final visited index (`arr.length - 1`) once, records skipped fast passes in bulk, and stores the guard result in a stack slot.
+  - While lowering the loop body, matching bounded numeric `arr[j]` reads branch on the cached guard flag and use a direct raw-f64 payload load on the fast side.
+  - The fallback side still calls `js_typed_feedback_array_index_get_fallback_boxed`, preserving correctness when the preguard fails.
+  - Added native-rep verifier coverage for `numeric_array_index_get.range_preguarded_raw_f64_load`.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/10_nested_loops.ts -o /tmp/perry-10_nested_loops-range-preguard --trace llvm --quiet`
+  - `rg -n "range_preguard|bidx\\.preguarded|bidx\\.num|js_typed_feedback_numeric_array_index_get_guard_i32|range_preguarded" /tmp/perry_llvm_3335351_1781686591469211157_0.ll`
+  - `for i in 1 2 3 4 5; do /tmp/perry-10_nested_loops-range-preguard; done`
+  - `perf stat -r 3 -e cycles,instructions,branches,branch-misses -x, /tmp/perry-10_nested_loops-range-preguard`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-range-preguard-typed-feedback.json /tmp/perry-10_nested_loops-range-preguard`
+- Post-change results:
+  - LLVM IR contains `range_preguard.fast`, `bidx.preguarded.fast`, and `bidx.preguarded.fallback`; the hot body no longer contains `bidx.num.fast`.
+  - Native-rep artifact records `numeric_array_index_get.range_preguarded_raw_f64_load` with `numeric_array_range_preguard`.
+  - direct nested binary samples: 25ms, 25ms, 18ms, 25ms, 21ms; sum always `26991000000`
+  - `perf stat -r 3`: 44,283,539 cycles, 29,368,028 instructions, 2,572,000 branches, 105,696 branch-misses
+  - typed-feedback trace: both numeric array read sites reported 9,000,000 guard passes, 0 failures, and 0 fallback calls
+- Measured impact:
+  - `10_nested_loops` direct binary: 122ms -> 25ms median, 79.5% faster wall time
+  - Direct nested binary cycles: 365.5M -> 44.3M, 87.9% fewer
+  - Direct nested binary instructions: 1.726B -> 29.4M, 98.3% fewer
+  - Direct nested binary branches: 379.4M -> 2.57M, 99.3% fewer
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen native_value::verify::tests::rejects_raw_f64_checked_native_without_consumed_layout_fact`
+  - `cargo test -p perry-codegen --test native_proof_regressions`
+  - `cargo build --release`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+- Notes:
+  - The classifier intentionally rejects calls, conditionals, logical short-circuit expressions, and unrelated index reads so cached raw loads do not span possible runtime calls or branch-only reads.
+  - This is a stacked draft PR on top of the trusted-i32 numeric get guard PR.
+- PR: https://github.com/PerryTS/perry/pull/5315

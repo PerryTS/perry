@@ -3,8 +3,9 @@
 use super::*;
 
 use crate::expr::{
-    expr_has_numeric_pointer_free_array_layout, lower_guarded_array_index_get_trusted_i32,
-    nanbox_pointer_inline, BoundedIndexPair, IntRangeFact,
+    emit_typed_feedback_register_site, expr_has_numeric_pointer_free_array_layout,
+    lower_guarded_array_index_get_trusted_i32, nanbox_pointer_inline, BoundedIndexPair,
+    IntRangeFact, PreguardedNumericArrayIndexGet, TypedFeedbackContract, TypedFeedbackKind,
 };
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
@@ -217,6 +218,12 @@ struct InvariantArrayIndexGetHoist {
     array_local_id: u32,
     index_local_id: u32,
     inner_counter_local_id: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RangeNumericArrayIndexGetPreguard {
+    array_local_id: u32,
+    index_local_id: u32,
 }
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
@@ -588,16 +595,40 @@ pub(crate) fn lower_for(
     let invariant_array_get_slot: Option<String> = invariant_array_get_hoist
         .as_ref()
         .map(|_| ctx.func.alloca_entry(DOUBLE));
+    let range_array_get_preguard: Option<RangeNumericArrayIndexGetPreguard> =
+        if let (Some((arr_id, counter_id, op)), Some(_)) =
+            (hoist_classification, i32_length_slot.as_ref())
+        {
+            if matches!(op, perry_hir::CompareOp::Lt)
+                && hoisted_index_bounds_are_safe
+                && ctx.i32_counter_slots.contains_key(&counter_id)
+            {
+                classify_range_numeric_array_index_get_preguard(
+                    ctx,
+                    arr_id,
+                    counter_id,
+                    invariant_array_get_hoist.map(|hoist| hoist.index_local_id),
+                    update,
+                    body,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    let has_loop_prebody =
+        invariant_array_get_hoist.is_some() || range_array_get_preguard.is_some();
 
     let cond_idx = ctx.new_block("for.cond");
-    let prebody_idx = if invariant_array_get_hoist.is_some() {
+    let prebody_idx = if has_loop_prebody {
         Some(ctx.new_block("for.prebody"))
     } else {
         None
     };
     let body_idx = ctx.new_block("for.body");
     let update_idx = ctx.new_block("for.update");
-    let backedge_cond_idx = if invariant_array_get_hoist.is_some() {
+    let backedge_cond_idx = if has_loop_prebody {
         Some(ctx.new_block("for.cond.backedge"))
     } else {
         None
@@ -723,20 +754,32 @@ pub(crate) fn lower_for(
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
-    if let (Some(pre_idx), Some(hoist), Some(slot)) = (
-        prebody_idx,
-        invariant_array_get_hoist,
-        invariant_array_get_slot.as_ref(),
-    ) {
+    let mut range_preguard_runtime: Option<((u32, u32), PreguardedNumericArrayIndexGet)> = None;
+    if let Some(pre_idx) = prebody_idx {
         ctx.current_block = pre_idx;
-        let value = emit_invariant_numeric_array_index_get_hoist(
-            ctx,
-            hoist,
-            i32_length_slot
-                .as_ref()
-                .expect("invariant array get hoist requires an i32 length slot"),
-        )?;
-        ctx.block().store(DOUBLE, &value, slot);
+        if let (Some(hoist), Some(slot)) =
+            (invariant_array_get_hoist, invariant_array_get_slot.as_ref())
+        {
+            let value = emit_invariant_numeric_array_index_get_hoist(
+                ctx,
+                hoist,
+                i32_length_slot
+                    .as_ref()
+                    .expect("invariant array get hoist requires an i32 length slot"),
+            )?;
+            ctx.block().store(DOUBLE, &value, slot);
+        }
+        if let Some(preguard) = range_array_get_preguard {
+            let info = emit_range_numeric_array_index_get_preguard(
+                ctx,
+                preguard,
+                i32_length_slot
+                    .as_ref()
+                    .expect("range array get preguard requires an i32 length slot"),
+            )?;
+            range_preguard_runtime =
+                Some(((preguard.array_local_id, preguard.index_local_id), info));
+        }
         if !ctx.block().is_terminated() {
             ctx.block().br(&body_label);
         }
@@ -761,7 +804,25 @@ pub(crate) fn lower_for(
     } else {
         None
     };
+    let range_preguard_replacement = if let Some((key, preguard)) = range_preguard_runtime.as_ref()
+    {
+        Some((
+            *key,
+            ctx.preguarded_numeric_array_index_gets
+                .insert(*key, preguard.clone()),
+        ))
+    } else {
+        None
+    };
     let lower_result = lower_stmts(ctx, body);
+    if let Some((key, previous)) = range_preguard_replacement {
+        if let Some(previous) = previous {
+            ctx.preguarded_numeric_array_index_gets
+                .insert(key, previous);
+        } else {
+            ctx.preguarded_numeric_array_index_gets.remove(&key);
+        }
+    }
     if let Some((key, previous)) = hoisted_replacement {
         if let Some(previous) = previous {
             ctx.hoisted_array_index_gets.insert(key, previous);
@@ -810,12 +871,12 @@ pub(crate) fn lower_for(
                 &exit_label,
             ) {
                 return Err(anyhow::anyhow!(
-                    "invariant array get hoist missing backedge i32 condition"
+                    "loop prebody missing backedge i32 condition"
                 ));
             }
         } else {
             return Err(anyhow::anyhow!(
-                "invariant array get hoist missing backedge condition inputs"
+                "loop prebody missing backedge condition inputs"
             ));
         }
     }
@@ -913,6 +974,64 @@ fn emit_invariant_numeric_array_index_get_hoist(
     )
 }
 
+fn emit_range_numeric_array_index_get_preguard(
+    ctx: &mut FnCtx<'_>,
+    preguard: RangeNumericArrayIndexGetPreguard,
+    len_i32_slot: &str,
+) -> Result<PreguardedNumericArrayIndexGet> {
+    let arr_expr = perry_hir::Expr::LocalGet(preguard.array_local_id);
+    let arr_box = lower_expr(ctx, &arr_expr)?;
+    let counter_slot = ctx
+        .i32_counter_slots
+        .get(&preguard.index_local_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("range array get preguard missing i32 counter"))?;
+    let len_i32 = ctx.block().load(I32, len_i32_slot);
+    let counter_i32 = ctx.block().load(I32, &counter_slot);
+    let remaining_i32 = ctx.block().sub(I32, &len_i32, &counter_i32);
+    let skipped_i32 = ctx.block().sub(I32, &remaining_i32, "1");
+    let skipped_i64 = ctx.block().zext(I32, &skipped_i32, I64);
+    let last_i32 = ctx.block().sub(I32, &len_i32, "1");
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        "array[index]",
+        TypedFeedbackContract::numeric_array_get_index(),
+    );
+    let guard_result = ctx.block().call(
+        I32,
+        "js_typed_feedback_numeric_array_index_get_guard_i32",
+        &[
+            (I64, &site_id),
+            (DOUBLE, &arr_box),
+            (I32, &last_i32),
+            (I32, "1"),
+        ],
+    );
+    let guard_ok_slot = ctx.func.alloca_entry(I32);
+    ctx.block().store(I32, &guard_result, &guard_ok_slot);
+    let guard_ok = ctx.block().icmp_ne(I32, &guard_result, "0");
+
+    let fast_idx = ctx.new_block("range_preguard.fast");
+    let done_idx = ctx.new_block("range_preguard.done");
+    let fast_label = ctx.block_label(fast_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&guard_ok, &fast_label, &done_label);
+
+    ctx.current_block = fast_idx;
+    ctx.block().call_void(
+        "js_typed_feedback_record_array_guard_fast_passes",
+        &[(I64, &site_id), (I64, &skipped_i64)],
+    );
+    ctx.block().br(&done_label);
+
+    ctx.current_block = done_idx;
+    Ok(PreguardedNumericArrayIndexGet {
+        site_id,
+        guard_ok_slot,
+    })
+}
+
 fn emit_i32_length_loop_condition(
     ctx: &mut FnCtx<'_>,
     counter_id: u32,
@@ -964,6 +1083,118 @@ fn classify_invariant_numeric_array_index_get_hoist(
         index_local_id: index_id,
         inner_counter_local_id: inner_counter_id,
     })
+}
+
+fn classify_range_numeric_array_index_get_preguard(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    counter_id: u32,
+    allowed_hoisted_index_id: Option<u32>,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> Option<RangeNumericArrayIndexGetPreguard> {
+    if !expr_has_numeric_pointer_free_array_layout(ctx, &perry_hir::Expr::LocalGet(arr_id)) {
+        return None;
+    }
+    let [perry_hir::Stmt::Expr(expr)] = body else {
+        return None;
+    };
+    if update.is_some_and(|expr| expr_mutates_local(expr, arr_id)) {
+        return None;
+    }
+    if expr_mutates_local(expr, arr_id) || expr_mutates_local(expr, counter_id) {
+        return None;
+    }
+    let count =
+        count_range_numeric_array_index_gets(expr, arr_id, counter_id, allowed_hoisted_index_id)?;
+    (count == 1).then_some(RangeNumericArrayIndexGetPreguard {
+        array_local_id: arr_id,
+        index_local_id: counter_id,
+    })
+}
+
+fn count_range_numeric_array_index_gets(
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+    allowed_hoisted_index_id: Option<u32>,
+) -> Option<usize> {
+    use perry_hir::{ArrayElement, Expr};
+
+    let count = |expr: &Expr| {
+        count_range_numeric_array_index_gets(expr, arr_id, counter_id, allowed_hoisted_index_id)
+    };
+    let count_pair = |left: &Expr, right: &Expr| Some(count(left)? + count(right)?);
+
+    match expr {
+        Expr::IndexGet { object, index } => match (object.as_ref(), index.as_ref()) {
+            (Expr::LocalGet(candidate_arr_id), Expr::LocalGet(candidate_index_id))
+                if *candidate_arr_id == arr_id && *candidate_index_id == counter_id =>
+            {
+                Some(1)
+            }
+            (Expr::LocalGet(candidate_arr_id), Expr::LocalGet(candidate_index_id))
+                if *candidate_arr_id == arr_id
+                    && Some(*candidate_index_id) == allowed_hoisted_index_id =>
+            {
+                Some(0)
+            }
+            _ => None,
+        },
+        Expr::LocalSet(id, value) => {
+            if *id == arr_id || *id == counter_id {
+                None
+            } else {
+                count(value)
+            }
+        }
+        Expr::Update { id, .. } => (*id != arr_id && *id != counter_id).then_some(0),
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            count_pair(left.as_ref(), right.as_ref())
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand) => count(operand),
+        Expr::Array(elements) => elements
+            .iter()
+            .try_fold(0, |acc, expr| Some(acc + count(expr)?)),
+        Expr::ArraySpread(elements) => elements.iter().try_fold(0, |acc, element| match element {
+            ArrayElement::Expr(expr) | ArrayElement::Spread(expr) => Some(acc + count(expr)?),
+            ArrayElement::Hole => Some(acc),
+        }),
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            count_pair(left.as_ref(), right.as_ref())
+        }
+        Expr::MathMin(elements) | Expr::MathMax(elements) => elements
+            .iter()
+            .try_fold(0, |acc, expr| Some(acc + count(expr)?)),
+        Expr::MathAbs(expr)
+        | Expr::MathSqrt(expr)
+        | Expr::MathFloor(expr)
+        | Expr::MathCeil(expr)
+        | Expr::MathRound(expr)
+        | Expr::MathF16round(expr) => count(expr),
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::String(_)
+        | Expr::WtfString(_) => Some(0),
+        // Avoid cached raw loads across runtime calls or branch-only reads.
+        Expr::Call { .. }
+        | Expr::CallSpread { .. }
+        | Expr::Conditional { .. }
+        | Expr::Logical { .. } => None,
+        _ => None,
+    }
 }
 
 fn find_invariant_array_index_get_candidate(
