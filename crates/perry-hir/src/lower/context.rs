@@ -708,6 +708,24 @@ impl LoweringContext {
         self.locals.lookup(name)
     }
 
+    /// Like `lookup_local`, but only searches locals defined in the CURRENT
+    /// function scope (at or after the most recent `enter_scope` mark). Used by
+    /// function-declaration hoisting so a nested `function a` SHADOWS an
+    /// outer-scope binding of the same name (fresh local + box) instead of
+    /// reusing the outer local's box — which, when the outer binding is a
+    /// closure-captured variable (a webpack chunk's `function a` require
+    /// captured by an inner IIFE, with `function a` error-formatters in nested
+    /// module factories), let the nested declaration overwrite the captured
+    /// box at runtime.
+    pub(crate) fn lookup_local_in_current_scope(&self, name: &str) -> Option<LocalId> {
+        let scope_start = self.scope_local_marks.last().copied().unwrap_or(0);
+        self.locals[scope_start..]
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, id, _)| *id)
+    }
+
     fn lookup_local_index(&self, name: &str) -> Option<usize> {
         self.locals.lookup_index(name)
     }

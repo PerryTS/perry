@@ -648,7 +648,11 @@ pub fn lower_fn_body_block_stmt(
                 continue;
             }
             let name = fn_decl.ident.sym.to_string();
-            let local_id = if let Some(existing) = ctx.lookup_local(&name) {
+            // Reuse only a CURRENT-scope binding (a sibling `var`/`function`
+            // hoisted into this same body). A same-named local from an OUTER
+            // scope must be shadowed with a fresh local, else this declaration
+            // would write into the outer binding's box at runtime.
+            let local_id = if let Some(existing) = ctx.lookup_local_in_current_scope(&name) {
                 existing
             } else {
                 ctx.define_local(name.clone(), Type::Any)
