@@ -41,6 +41,48 @@ fn is_array_only_method_name(name: &str) -> bool {
     )
 }
 
+/// For the Any-typed-receiver string-method fallback only: is `argc` a
+/// plausible argument count for the String.prototype builtin named
+/// `name`? When a builtin-named method is invoked on a receiver that is
+/// NOT provably a string (object literal, `any`, unknown) AND the arg
+/// count can't match the String builtin's signature, the call is almost
+/// certainly a user method that merely shares a name with a String
+/// builtin — e.g. joi's `internals.trim(value, schema)` (#5271). Forcing
+/// the String path there used to abort codegen with
+/// "String.trim takes no args, got 2"; gating on arity here lets such
+/// calls fall through to the runtime method dispatcher instead.
+///
+/// The accepted ranges mirror `lower_string_method`'s per-arm arity
+/// guards. Char-access methods (`charAt`/`charCodeAt`/`codePointAt`)
+/// ignore surplus args per spec, so any count is fine for them.
+fn string_only_method_arity_ok(name: &str, argc: usize) -> bool {
+    match name {
+        // No-arg string transforms.
+        "trim" | "trimStart" | "trimEnd" | "toLowerCase" | "toUpperCase" => argc == 0,
+        // Locale-aware case folding: optional `locales`.
+        "toLocaleLowerCase" | "toLocaleUpperCase" => argc <= 1,
+        // split(separator?, limit?).
+        "split" => argc <= 2,
+        // substring(start?, end?).
+        "substring" => argc <= 2,
+        // substr(start, length?) — start is required.
+        "substr" => argc == 1 || argc == 2,
+        // replaceAll(search, replace).
+        "replaceAll" => argc == 2,
+        // padStart/padEnd(targetLength, padString?).
+        "padStart" | "padEnd" => argc == 1 || argc == 2,
+        // repeat(count).
+        "repeat" => argc == 1,
+        // localeCompare(that, locales?, options?).
+        "localeCompare" => argc <= 3,
+        // Char-access ignores extra args (still evaluated for side effects).
+        "charAt" | "charCodeAt" | "codePointAt" => true,
+        // Conservative default: methods reaching this gate but not listed
+        // here keep their prior (already arity-checked) routing.
+        _ => true,
+    }
+}
+
 fn is_date_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(object, Expr::DateNew(_))
         || receiver_class_name(ctx, object).as_deref() == Some("Date")
@@ -393,7 +435,34 @@ pub fn try_lower_property_get_method_call(
         // Falling through here routes it to the generic `js_native_call_method`
         // dispatch (→ `dispatch_native_module_method`); forcing the string path
         // hands the namespace pointer to a string FFI and SIGSEGVs.
+        // #5271: a builtin-named method on a receiver that is NOT provably a
+        // string (object literal, `any`, unknown) may be a USER method that
+        // merely shares the name — joi's `internals.trim(value, schema)`, or
+        // any `{ trim() {…} }.trim()`. Forcing the static String path there
+        // hands the object pointer to a string FFI: it either aborts codegen
+        // on the String arity guard (`String.trim takes no args, got 2`) or
+        // bit-casts the object as a string and returns "[object Object]".
+        //
+        // Take the static String fast path only when:
+        //   * the receiver is NOT a known object-literal local — `o.trim()`
+        //     on `const o = { trim() {…} }` is the object's OWN method, never
+        //     `String.prototype.trim`, even when the arity matches; AND
+        //   * the arg count is plausible for the String builtin — when it is
+        //     NOT (joi's `internals.trim(value, schema)`: 2 args to a 0-arg
+        //     builtin), the call is a user method sharing the name.
+        // Otherwise fall through to `js_native_call_method`, which resolves
+        // the receiver's own member at runtime and still services a genuine
+        // (Any-typed) string receiver via its `jsval.is_string()` arm — so
+        // the earlier "[object Object]" hazard the comment above warns about
+        // no longer applies (the runtime grew full string-method arms in
+        // #421/#514). See #5271.
+        let receiver_is_object_literal = matches!(
+            &**object,
+            Expr::LocalGet(id) if ctx.object_literal_locals.contains(id)
+        ) || matches!(&**object, Expr::Object(_));
         if is_string_only_method
+            && string_only_method_arity_ok(property, args.len())
+            && !receiver_is_object_literal
             && !is_array_expr(ctx, object)
             && !is_buffer
             && !is_native_module_dynamic_index(object)

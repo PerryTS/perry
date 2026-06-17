@@ -269,6 +269,7 @@ pub fn lower_module_with_class_id_types_and_seed(
         start_class_id,
         resolved_types,
         imported_class_fields,
+        None,
         false,
     )
 }
@@ -284,6 +285,7 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
 ) -> Result<(Module, ClassId)> {
     lower_module_full(
@@ -293,6 +295,7 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
         start_class_id,
         resolved_types,
         imported_class_fields,
+        imported_class_accessors,
         is_entry_module,
         false,
     )
@@ -335,6 +338,7 @@ pub fn lower_module_full(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
     is_external_module: bool,
 ) -> Result<(Module, ClassId)> {
@@ -346,6 +350,9 @@ pub fn lower_module_full(
     ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
+    }
+    if let Some(seed) = imported_class_accessors {
+        ctx.seed_imported_class_accessors(seed);
     }
     let mut module = Module::new(name);
 
@@ -661,7 +668,7 @@ pub fn lower_module_full(
                     {
                         static_method_names.push(format!("#{}", method.key.name));
                     }
-                    ast::ClassMember::ClassProp(prop) if prop.is_static => {
+                    ast::ClassMember::ClassProp(prop) if prop.is_static && !prop.declare => {
                         if let ast::PropName::Ident(ident) = &prop.key {
                             static_field_names.push(ident.sym.to_string());
                         }

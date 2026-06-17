@@ -198,6 +198,7 @@ pub(super) fn compile_function(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         option_object_locals: HashMap::new(),
+        object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,

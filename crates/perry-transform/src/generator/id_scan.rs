@@ -445,6 +445,7 @@ mod tests {
                 class_name: "__AnonShape_test".to_string(),
                 args: vec![closure],
                 type_args: Vec::new(),
+                byte_offset: 0,
             }],
         };
 

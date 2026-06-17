@@ -6,6 +6,7 @@
 pub mod analysis;
 pub mod audit;
 pub mod capability;
+mod class_accessors;
 pub mod deferral;
 pub(crate) mod destructuring;
 pub mod dynamic_import;
@@ -28,6 +29,7 @@ pub mod walker;
 pub use analysis::{collect_local_refs_expr, collect_local_refs_stmt};
 pub use audit::{audit_module, AuditManifest, ModuleAudit};
 pub use capability::{audit_module_capabilities, CapabilityPolicy, CapabilityViolation};
+pub use class_accessors::ClassAccessorNames;
 pub use deferral::{arm_deferral_sink, disarm_deferral_sink, try_defer_refusal, DeferredRefusal};
 pub use dynamic_import::{
     collect_dynamic_import_local_candidate_literals, collect_dynamic_import_param_literals,

@@ -252,6 +252,85 @@ module.exports = inner;
     }
 
     #[test]
+    fn issue_5275_detects_bracket_module_exports() {
+        // @colors/colors/lib/custom/trap.js shape: bracket default export.
+        assert!(is_commonjs("module['exports'] = function runTheTrap() {};"));
+        assert!(is_commonjs(
+            "module[\"exports\"] = function runTheTrap() {};"
+        ));
+    }
+
+    #[test]
+    fn issue_5275_detects_bracket_named_exports() {
+        assert!(is_commonjs("exports['foo'] = 1;"));
+        assert!(is_commonjs("exports[\"foo\"] = 1;"));
+    }
+
+    #[test]
+    fn issue_5275_dynamic_bracket_key_is_not_cjs_on_its_own() {
+        // A genuinely dynamic `module[k] = …` (non-literal key) is not a CJS
+        // export signal — without other CJS tokens this stays ESM.
+        assert!(!is_commonjs("const k = 'x';\nmodule[k] = 1;\n"));
+    }
+
+    #[test]
+    fn issue_5275_extracts_bracket_named_exports() {
+        let src = "exports['foo'] = 1;\nexports[\"bar\"] = function(){};";
+        let names = extract_exports_from_source(src);
+        assert_eq!(names, vec!["foo".to_string(), "bar".to_string()]);
+    }
+
+    #[test]
+    fn issue_5275_extracts_bracket_module_exports_dot_named() {
+        let src = "module.exports['foo'] = 1;";
+        let names = extract_exports_from_source(src);
+        assert_eq!(names, vec!["foo".to_string()]);
+    }
+
+    #[test]
+    fn issue_5275_does_not_extract_dynamic_bracket_key() {
+        // `exports[k] = …` with a non-string-literal key must not surface a
+        // named export.
+        let src = "const k = 'x';\nexports[k] = 1;";
+        let names = extract_exports_from_source(src);
+        assert!(names.is_empty(), "expected no names, got {:?}", names);
+    }
+
+    #[test]
+    fn issue_5275_single_module_exports_accepts_bracket_form() {
+        let src = "class Child {}\nmodule['exports'] = Child;";
+        assert_eq!(
+            extract_single_module_exports_assignment(src),
+            Some("Child".to_string())
+        );
+        let src2 = "class Child {}\nmodule[\"exports\"] = Child;";
+        assert_eq!(
+            extract_single_module_exports_assignment(src2),
+            Some("Child".to_string())
+        );
+    }
+
+    #[test]
+    fn issue_5275_wrap_default_export_for_bracket_module_exports() {
+        // The mb repro: `module['exports'] = function greet(){}`. The IIFE
+        // runs the bracket assignment, so `export default _cjs;` resolves to
+        // the function — but the file MUST be wrapped first (detection).
+        let src = "module['exports'] = function greet(n) { return n; };";
+        assert!(is_commonjs(src));
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/mb/index.js"));
+        assert!(
+            wrapped.contains("export default _cjs;"),
+            "expected default export through _cjs, got:\n{}",
+            wrapped
+        );
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "mb/index.js").is_ok(),
+            "wrapped bracket-export module must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn extracts_module_exports_object_literal_shorthand() {
         // Issue #624: `module.exports = { createContext }`
         let src = "function createContext(v){return v;}\nmodule.exports = { createContext };";

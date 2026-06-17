@@ -82,9 +82,11 @@ impl SH for Expr {
             Expr::PrivateGuard { class_name, field_name, kind, op, object } => { tag(h, 12402); class_name.hash(h); field_name.hash(h); kind.hash(h); op.hash(h); object.as_ref().hash(h); }
             Expr::Await(e) => { tag(h, 40); e.as_ref().hash(h); }
             Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
-            Expr::New { class_name, args, type_args, } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
-            Expr::NewDynamic { callee, args } => { tag(h, 43); callee.as_ref().hash(h); args.hash(h); }
-            Expr::NewDynamicSpread { callee, args } => { tag(h, 12507); callee.as_ref().hash(h); args.hash(h); }
+            // #5253: `byte_offset` is diagnostic-only — excluded from the hash
+            // for the same reason as `Call.byte_offset` (see #5247 above).
+            Expr::New { class_name, args, type_args, .. } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
+            Expr::NewDynamic { callee, args, .. } => { tag(h, 43); callee.as_ref().hash(h); args.hash(h); }
+            Expr::NewDynamicSpread { callee, args, .. } => { tag(h, 12507); callee.as_ref().hash(h); args.hash(h); }
             Expr::NewTarget => { tag(h, 12301); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }

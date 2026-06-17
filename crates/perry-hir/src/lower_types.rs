@@ -273,6 +273,8 @@ fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> O
 /// source never nests literals this deep, so the cap loses no practical
 /// precision while keeping pathological/minified inputs tractable.
 const INFER_TYPE_RECURSION_CAP: u32 = 48;
+const INFER_TYPE_STACK_RED_ZONE: usize = 256 * 1024;
+const INFER_TYPE_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     thread_local! {
@@ -294,6 +296,12 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
         return Type::Any;
     }
 
+    stacker::maybe_grow(INFER_TYPE_STACK_RED_ZONE, INFER_TYPE_STACK_SEGMENT, || {
+        infer_type_from_expr_inner(expr, ctx)
+    })
+}
+
+fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     match expr {
         // Literals
         ast::Expr::Lit(lit) => match lit {

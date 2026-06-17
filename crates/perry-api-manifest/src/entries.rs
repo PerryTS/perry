@@ -3777,18 +3777,23 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     property("cluster", "schedulingPolicy"),
     property("cluster", "SCHED_RR"),
     property("cluster", "SCHED_NONE"),
-    // `cluster.on` / `cluster.addListener` exist as EventEmitter
-    // prototype methods on the cluster module ITSELF in Node, but
-    // `import * as cluster from "node:cluster"` reads them as named
-    // exports — and there is no `on` / `addListener` named export.
-    // Node's parity fixture prints "undefined" for both. Register them
-    // as properties so the #463 strict gate doesn't bail out at compile
-    // time; `get_native_module_constant` returns `undefined` at
-    // runtime.
     // #3687: the EventEmitter method surface. On the `import * as` namespace
     // these all read `undefined` (they are not named exports); on the default
-    // import they resolve to bound methods. Registered so the #463 strict gate
-    // accepts reads/calls at compile time.
+    // import they resolve to bound methods through `NATIVE_MODULE_TABLE`.
+    internal_method("cluster", "on", false, None),
+    internal_method("cluster", "addListener", false, None),
+    internal_method("cluster", "once", false, None),
+    internal_method("cluster", "prependListener", false, None),
+    internal_method("cluster", "prependOnceListener", false, None),
+    internal_method("cluster", "emit", false, None),
+    internal_method("cluster", "eventNames", false, None),
+    internal_method("cluster", "listenerCount", false, None),
+    internal_method("cluster", "removeListener", false, None),
+    internal_method("cluster", "off", false, None),
+    internal_method("cluster", "removeAllListeners", false, None),
+    // Keep property reads registered so the #463 strict gate accepts the
+    // namespace-export shape; `get_native_module_constant` returns undefined
+    // for these names at runtime.
     internal_property("cluster", "on"),
     internal_property("cluster", "addListener"),
     internal_property("cluster", "once"),

@@ -505,6 +505,11 @@ fn collect_module_one(
     } else {
         Some(&ctx.cross_module_class_field_types)
     };
+    let imported_class_accessors = if ctx.cross_module_class_accessors.is_empty() {
+        None
+    } else {
+        Some(&ctx.cross_module_class_accessors)
+    };
     // Issue #444: this module is the user-supplied entry iff its canonical
     // path matches the one stashed by `compile.rs::run_with_parse_cache`
     // before the first `collect_modules` invocation. Bundle-extension
@@ -594,6 +599,7 @@ fn collect_module_one(
         *next_class_id,
         resolved_types,
         imported_class_fields,
+        imported_class_accessors,
         is_entry_module,
         is_external_module,
     );

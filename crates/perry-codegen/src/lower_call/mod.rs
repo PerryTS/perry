@@ -115,6 +115,23 @@ pub(crate) use native_table::iter_native_module_table;
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // #5253: localize the `ReferenceError: X is not defined` thrown by the
+    // unresolved-identifier runtime helper. A bare unresolved identifier
+    // (`module`, winston's stray globals, …) lowers to
+    // `Call { callee: ExternFuncRef("js_global_get_or_throw_unresolved"),
+    // args: [name], byte_offset }` (perry-hir lower_expr). That helper throws a
+    // ReferenceError through `js_referenceerror_new` → `make_stack`, which reads
+    // `CURRENT_CALL_LOCATION`. Emit a `js_set_call_location` from the call's
+    // recorded byte offset (set on `pending_call_offset` by the `Expr::Call`
+    // dispatcher) before lowering the call, so the throw carries `at file:line`.
+    // No-op in the default build; offset 0 (synthesized refs) resolves to none.
+    if let Expr::ExternFuncRef { name, .. } = callee {
+        if name == "js_global_get_or_throw_unresolved" {
+            let off = ctx.strings.pending_call_offset();
+            crate::expr::calls::emit_call_location_at(ctx, off);
+        }
+    }
+
     // #3656: `p.call(thisArg, …)` / `p.apply(thisArg, argsArray)` on a Proxy
     // routes through the proxy's `[[Call]]` (apply trap) rather than reading
     // `.call`/`.apply` off the forwarded target.

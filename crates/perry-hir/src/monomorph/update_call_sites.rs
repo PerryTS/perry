@@ -176,6 +176,7 @@ fn update_call_sites_in_expr(
             class_name,
             args,
             type_args,
+            ..
         } => {
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);

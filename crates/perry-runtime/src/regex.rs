@@ -120,6 +120,40 @@ thread_local! {
     static FANCY_CACHE: RefCell<HashMap<(String, String), Arc<fancy_regex::Regex>>> = RefCell::new(HashMap::new());
 }
 
+/// Compiled-program size budget handed to both regex engines.
+///
+/// The `regex` crate (and the `regex-automata` backend `fancy-regex`
+/// delegates to) caps a compiled program at 10 MiB by default and rejects
+/// anything larger with `CompiledTooBig` / `ExceededSizeLimit` — which our
+/// callers surface as a bogus `SyntaxError: invalid pattern`. JS itself has
+/// no such limit, so a *valid* pattern with large bounded repetitions is
+/// wrongly rejected. semver's ReDoS-hardened `safeRe` rewrites (`\s{0,1}`,
+/// `\d{1,256}`, `[…]{0,250}`, …) blow well past 10 MiB; raise the budget so
+/// these legitimate patterns compile. 64 MiB comfortably fits semver's full
+/// range regex while still bounding pathological input.
+#[cfg(feature = "regex-engine")]
+const REGEX_SIZE_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Build a `regex` crate `Regex` with the raised [`REGEX_SIZE_LIMIT`] so that
+/// large-but-valid bounded-quantifier patterns aren't rejected as
+/// `CompiledTooBig`. Drop-in replacement for `regex::Regex::new`.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn build_std_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    regex::RegexBuilder::new(pattern)
+        .size_limit(REGEX_SIZE_LIMIT)
+        .build()
+}
+
+/// Build a `fancy_regex` `Regex` with the raised delegate size limit (see
+/// [`REGEX_SIZE_LIMIT`]). `fancy-regex` delegates non-fancy subpatterns to the
+/// `regex` crate, so the same 10 MiB cap applies there; raise it in lockstep.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fancy_regex::Error> {
+    fancy_regex::RegexBuilder::new(pattern)
+        .delegate_size_limit(REGEX_SIZE_LIMIT)
+        .build()
+}
+
 #[cfg(feature = "regex-engine")]
 fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
     REGEX_CACHE.with(|cache| {
@@ -150,7 +184,7 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
         } else {
             translated
         };
-        let regex = match Regex::new(&regex_pattern) {
+        let regex = match build_std_regex(&regex_pattern) {
             Ok(re) => re,
             Err(_) => {
                 // Pattern has features regex crate doesn't support
@@ -161,7 +195,7 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
                 // existing callers don't crash — the fancy-regex fallback
                 // is handled in js_regexp_exec_fancy below.
                 FANCY_CACHE.with(|fc| {
-                    if let Ok(fre) = fancy_regex::Regex::new(&regex_pattern) {
+                    if let Ok(fre) = build_fancy_regex(&regex_pattern) {
                         fc.borrow_mut().insert(
                             (pattern.to_string(), flags.to_string()),
                             std::sync::Arc::new(fre),
@@ -399,8 +433,7 @@ pub extern "C" fn js_regexp_new(
             ));
         }
         let translated = js_regex_to_rust(pattern_str);
-        if regex::Regex::new(&translated).is_err() && fancy_regex::Regex::new(&translated).is_err()
-        {
+        if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
             throw_regexp_syntax_error(&format!(
                 "Invalid regular expression: /{}/: invalid pattern",
                 pattern_str

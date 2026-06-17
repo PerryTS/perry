@@ -50,6 +50,55 @@ fn with_static_member_context<T>(
     result
 }
 
+fn runtime_instance_accessor_names(members: &[ast::ClassMember]) -> crate::ClassAccessorNames {
+    let mut accessor_names = crate::ClassAccessorNames::default();
+
+    for member in members {
+        match member {
+            ast::ClassMember::Method(m)
+                if !m.is_static
+                    && m.function.body.is_some()
+                    && matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+            {
+                let key = match &m.key {
+                    ast::PropName::Ident(i) => i.sym.to_string(),
+                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
+                    _ => continue,
+                };
+                match m.kind {
+                    ast::MethodKind::Getter => {
+                        accessor_names.insert_getter(key);
+                    }
+                    ast::MethodKind::Setter => {
+                        accessor_names.insert_setter(key);
+                    }
+                    _ => {}
+                }
+            }
+            ast::ClassMember::PrivateMethod(m)
+                if !m.is_static
+                    && m.function.body.is_some()
+                    && matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
+            {
+                let key = format!("#{}", m.key.name);
+                match m.kind {
+                    ast::MethodKind::Getter => {
+                        accessor_names.insert_getter(key);
+                    }
+                    ast::MethodKind::Setter => {
+                        accessor_names.insert_setter(key);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    accessor_names
+}
+
 fn lower_generic_computed_class_member(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
@@ -462,7 +511,7 @@ pub fn lower_class_decl(
                 // call-site lookup via has_static_method() succeeds.
                 static_method_names.push(format!("#{}", method.key.name));
             }
-            ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            ast::ClassMember::ClassProp(prop) if prop.is_static && !prop.declare => {
                 if let ast::PropName::Ident(ident) = &prop.key {
                     static_field_names.push(ident.sym.to_string());
                 }
@@ -816,6 +865,9 @@ pub fn lower_class_decl(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
+                if prop.declare {
+                    continue;
+                }
                 // Computed-key fields (`[Symbol.for("k")] = init`) flow through
                 // here for both instance AND static positions.
                 // `lower_class_prop` captures the key expression in
@@ -995,37 +1047,13 @@ pub fn lower_class_decl(
         // accessor when a subclass instance's `.points` was read across
         // modules (the runtime's setter dispatch walks the class vtable
         // chain correctly, but the spurious own-data slot wins lookup).
-        let mut accessor_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for member in &class_decl.class.body {
-            match member {
-                ast::ClassMember::Method(m)
-                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
-                {
-                    let key = match &m.key {
-                        ast::PropName::Ident(i) => i.sym.to_string(),
-                        ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                        ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
-                        _ => continue,
-                    };
-                    accessor_names.insert(key);
-                }
-                ast::ClassMember::PrivateMethod(m)
-                    if matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
-                {
-                    accessor_names.insert(format!("#{}", m.key.name));
-                }
-                _ => {}
-            }
-        }
+        let mut accessor_names = runtime_instance_accessor_names(&class_decl.class.body);
         // Pull in accessor names from the parent chain. The parent's
         // registration stored the own+inherited union, so a single lookup
         // on the direct parent suffices.
         if let Some(ref parent_name) = extends_name {
             if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
-                for a in parent_accessors {
-                    accessor_names.insert(a.clone());
-                }
+                accessor_names.extend_from(parent_accessors);
             }
         }
 
@@ -1072,7 +1100,7 @@ pub fn lower_class_decl(
                                             let fname = prop_ident.sym.to_string();
                                             if !declared_field_names.contains(&fname)
                                                 && !inherited_field_names.contains(&fname)
-                                                && !accessor_names.contains(&fname)
+                                                && !accessor_names.contains_any(&fname)
                                                 && !method_names.contains(&fname)
                                             {
                                                 fields.push(ClassField {
@@ -1110,10 +1138,9 @@ pub fn lower_class_decl(
 
         // Issue #665: register own+inherited accessor names so subclasses
         // lowered after this one can also skip them when scanning ctor
-        // bodies. `accessor_names` already contains the union from the
-        // parent-chain lookup above.
-        let accessor_list: Vec<String> = accessor_names.into_iter().collect();
-        ctx.register_class_accessor_names(name.clone(), accessor_list);
+        // bodies. `accessor_names` already contains the getter/setter names
+        // from the parent-chain lookup above.
+        ctx.register_class_accessor_names(name.clone(), accessor_names);
 
         // Issue #302: also register field TYPES so the for-of arm can
         // detect `for (... of this.someMap)` patterns. Only own fields are
@@ -1391,7 +1418,7 @@ pub fn lower_class_from_ast(
             {
                 static_method_names.push(format!("#{}", method.key.name));
             }
-            ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            ast::ClassMember::ClassProp(prop) if prop.is_static && !prop.declare => {
                 if let ast::PropName::Ident(ident) = &prop.key {
                     static_field_names.push(ident.sym.to_string());
                 }
@@ -1514,6 +1541,9 @@ pub fn lower_class_from_ast(
                 }
             }
             ast::ClassMember::ClassProp(prop) => {
+                if prop.declare {
+                    continue;
+                }
                 // Computed-key fields (`[Symbol.for("k")] = init`) flow through
                 // here for both instance AND static positions.
                 // `lower_class_prop` captures the key expression in
@@ -1657,19 +1687,13 @@ pub fn lower_class_from_ast(
     // `var C = class { set ''(p){…} }; C.prototype[''] = v`) were silently
     // dropped to `RegisterPrototypeMethod`. Test262 accessor-name-inst setters.
     {
-        let mut accessor_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for (prop_name, _) in getters.iter().chain(setters.iter()) {
-            accessor_names.insert(prop_name.clone());
-        }
+        let mut accessor_names = runtime_instance_accessor_names(&class.body);
         if let Some(ref parent_name) = extends_name {
             if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
-                for a in parent_accessors {
-                    accessor_names.insert(a.clone());
-                }
+                accessor_names.extend_from(parent_accessors);
             }
         }
-        ctx.register_class_accessor_names(name.to_string(), accessor_names.into_iter().collect());
+        ctx.register_class_accessor_names(name.to_string(), accessor_names);
     }
 
     // Issue #740: synthesize __perry_cap_* capture machinery for class

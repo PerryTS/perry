@@ -406,7 +406,7 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             collect_used_new_fields_in_expr(callee, non_escaping_news, used);
             for arg in args {
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);

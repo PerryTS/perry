@@ -1406,7 +1406,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             }
         }
         // Dynamic new expression
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             collect_assigned_locals_expr(callee, assigned);
             for arg in args {
                 collect_assigned_locals_expr(arg, assigned);
@@ -2053,7 +2053,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                 replace_this_in_expr(a, this_id);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             replace_this_in_expr(callee, this_id);
             for a in args {
                 replace_this_in_expr(a, this_id);

@@ -8,9 +8,9 @@ use regex::Regex;
 
 use super::grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
 use super::{
-    get_or_compile_regex, is_regex_pointer, is_valid_ptr, is_valid_regex_ptr, js_regexp_get_flags,
-    js_regexp_get_source, js_string_from_str, string_as_str, throw_regexp_syntax_error,
-    validate_and_canonicalize_flags, RegExpHeader,
+    build_fancy_regex, build_std_regex, get_or_compile_regex, is_regex_pointer, is_valid_ptr,
+    is_valid_regex_ptr, js_regexp_get_flags, js_regexp_get_source, js_string_from_str,
+    string_as_str, throw_regexp_syntax_error, validate_and_canonicalize_flags, RegExpHeader,
 };
 
 /// `RegExp.prototype.compile(pattern, flags)`. Re-initializes the receiver
@@ -90,7 +90,7 @@ pub extern "C" fn js_regexp_compile_value(
         ));
     }
     let translated = js_regex_to_rust(pattern_str);
-    if regex::Regex::new(&translated).is_err() && fancy_regex::Regex::new(&translated).is_err() {
+    if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
         throw_regexp_syntax_error(&format!(
             "Invalid regular expression: /{}/: invalid pattern",
             pattern_str

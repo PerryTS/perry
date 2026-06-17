@@ -137,6 +137,7 @@ pub(super) fn try_global_builtins(
                     class_name: "Array".to_string(),
                     args,
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 }));
             }
             "isNaN" => {
