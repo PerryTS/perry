@@ -112,6 +112,14 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
     );
+    // #5334 lever A: class-field-SET guard-MISS fallback, outlined. The cold arm
+    // of the default diamond collapses from two calls (record_fallback +
+    // set_field_by_name) to this one. Args: (site_id, obj_bits, key_raw, value).
+    module.declare_function(
+        "js_class_field_set_fallback",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
     module.declare_function(
         "js_typed_feedback_class_field_get_guard",
         I32,
