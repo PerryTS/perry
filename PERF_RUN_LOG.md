@@ -167,3 +167,70 @@
   - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only` and the before/after comparison above uses the captured local second-cycle results.
   - This follow-up is intended as a stacked draft PR on top of the guarded numeric array direct payload access PR.
 - PR: https://github.com/PerryTS/perry/pull/5307
+
+## 2026-06-17 - Numeric array guard pre-classification fast pass
+
+- Start revision: `6a01499d4f`
+- Branch: `codex/perry-numeric-array-guard-precheck`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux `/usr/bin/time`; local `node` cannot execute `.ts` benchmark inputs, so Node columns and correctness comparisons were skipped by the harness
+- Baseline commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-array-guard-cache-final --quiet`
+  - `for i in 1 2 3 4 5; do /tmp/perry-matrix-array-guard-cache-final; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-array-guard-cache-final-trace.json /tmp/perry-matrix-array-guard-cache-final`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-array-guard-cache-final`
+  - `./benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-array-guard-cache-final-ed71efde8.json`
+  - `./benchmarks/quick.sh`
+- Baseline results:
+  - direct matrix binary: 1239ms, 1258ms, 1223ms, 1247ms, 1226ms; checksum always `41079519680`
+  - typed-feedback trace: 33,619,968 numeric array index-get guard passes, 65,536 numeric array index-set guard passes, 0 get/set guard failures
+  - `perf stat` direct matrix binary: 4,485,321,202 cycles, 16,737,765,528 instructions, 3,085,068,790 branches, 382,419 branch-misses, 1.2376s elapsed
+  - compare quick medians: loop_overhead 56ms/18728KB, fibonacci 240ms/18888KB, math_intensive 55ms/18768KB, nested_loops 662ms/22888KB, factorial 76ms/18836KB
+  - quick: fibonacci 268ms/18MB, math_intensive 74ms/18MB, nested_loops 670ms/22MB, factorial 75ms/18MB, matrix_multiply 1228ms/30MB
+- Selected gap and evidence:
+  - After the monomorphic array guard cache, `matrix_multiply` remained the slowest `quick.sh` case at 1228ms.
+  - Trace still showed 33.6M successful numeric array get guard calls and 65K set guard calls with no get/set failures.
+  - Runtime inspection showed numeric array get/set guards still called `classify_array` before the cache lookup; for raw-f64 numeric arrays this recomputes layout and element-kind facts on every monomorphic cache hit.
+- Change:
+  - Added a pre-classification `numeric_array_fast_observation` helper for numeric array index get/set guard calls.
+  - The helper performs the required raw object, GC header, len/cap, bounds, and raw-f64 numeric layout checks, then constructs the same array observation the slow classifier would produce for numeric arrays.
+  - Numeric get/set guards now try the exact monomorphic array guard cache before calling `classify_array`; cache miss, stale cache, contract failure, nonnumeric index/value, or layout mismatch still falls back to the existing full classify/`guard_observe` path.
+  - Added a focused test that compares the helper's in-bounds and out-of-bounds observations against `classify_array`.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-guard-precheck-final2 --quiet`
+  - `for i in 1 2 3 4 5; do /usr/bin/time -f "sample=$i wall=%e rss_kb=%M" /tmp/perry-matrix-guard-precheck-final2; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-guard-precheck-final2-trace.json /usr/bin/time -f "wall=%e rss_kb=%M" /tmp/perry-matrix-guard-precheck-final2 && jq '.guards' /tmp/perry-matrix-guard-precheck-final2-trace.json`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-guard-precheck-final2`
+  - `benchmarks/quick.sh`
+  - `benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-guard-precheck-final2.json`
+- Post-change results:
+  - direct matrix binary: 400ms, 398ms, 398ms, 385ms, 386ms; checksum always `41079519680`
+  - direct run wall/RSS samples: 0.42s/31404KB, 0.42s/31244KB, 0.42s/31192KB, 0.39s/31304KB, 0.39s/31308KB
+  - final trace run: `matrix_multiply:395`, checksum `41079519680`, wall 0.42s, RSS 31500KB, 33,619,968 numeric array index-get guard passes, 65,536 numeric array index-set guard passes, 0 get/set guard failures; push guard retained 39 fallback calls
+  - `perf stat` direct matrix binary: 1,443,394,074 cycles, 7,034,084,638 instructions, 1,568,434,556 branches, 241,348 branch-misses, 0.4222s elapsed
+  - compare quick medians: loop_overhead 76ms/18880KB, fibonacci 266ms/18764KB, math_intensive 55ms/19092KB, nested_loops 225ms/23204KB, factorial 95ms/18764KB
+  - quick: fibonacci 254ms/18MB, math_intensive 73ms/18MB, nested_loops 229ms/22MB, factorial 97ms/18MB, matrix_multiply 407ms/30MB
+- Measured impact:
+  - `16_matrix_multiply` direct median: 1239ms -> 398ms, 67.9% faster
+  - `16_matrix_multiply` quick: 1228ms -> 407ms, 66.9% faster
+  - Direct matrix binary cycles: 4.49B -> 1.44B, 67.8% fewer
+  - Direct matrix binary instructions: 16.74B -> 7.03B, 58.0% fewer
+  - Direct matrix binary branches: 3.09B -> 1.57B, 49.2% fewer
+  - `10_nested_loops` compare median: 662ms -> 225ms, 66.0% faster
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-runtime typed_feedback_numeric_array`
+  - `cargo test -p perry-runtime typed_feedback`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen --test typed_shape_descriptors`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+  - `cargo build --release`
+  - Typed-feedback trace confirmed get/set guard pass counts and zero get/set failures match the pre-change trace while avoiding the full classifier on cache hits.
+- Notes:
+  - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only` and the before/after comparison above uses the captured local third-cycle results.
+  - This follow-up is intended as a stacked draft PR on top of the monomorphic array guard fast-cache PR.
+- PR: https://github.com/PerryTS/perry/pull/5309

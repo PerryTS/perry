@@ -538,6 +538,34 @@ fn typed_feedback_numeric_array_guard_fast_path_preserves_snapshot_counts() {
 }
 
 #[test]
+fn typed_feedback_numeric_array_fast_observation_matches_classifier() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+
+    let values = [1.0, 2.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+
+    for index in [0, values.len() as u32] {
+        let observation = numeric_array_fast_observation(raw_addr, index, false, None)
+            .expect("numeric fast observation");
+        let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(index));
+        assert_eq!(observation.class_id, class_id);
+        assert_eq!(observation.heap_type, heap_type);
+        assert_eq!(observation.aux, aux);
+        assert_eq!(observation.value_tag, element_kind);
+    }
+
+    let set_observation =
+        numeric_array_fast_observation(raw_addr, 1, true, Some(STABLE_VALUE_INT32))
+            .expect("numeric set fast observation");
+    let (_, _, aux, _) = classify_array(raw_addr, Some(1));
+    assert_eq!(set_observation.aux, aux);
+    assert_eq!(set_observation.value_tag, STABLE_VALUE_INT32);
+    assert!(numeric_array_fast_observation(raw_addr, values.len() as u32, true, None).is_none());
+}
+
+#[test]
 fn typed_feedback_numeric_array_guard_fast_path_respects_megamorphic_state() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();
