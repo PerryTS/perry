@@ -31,7 +31,22 @@ fn function_has_use_strict(func: &ast::Function) -> bool {
 
 pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result<Function> {
     let name = fn_decl.ident.sym.to_string();
-    let func_id = ctx.lookup_func(&name).unwrap_or_else(|| ctx.fresh_func());
+    // A function declaration's name must be resolvable inside its own body
+    // (recursion / self-reference) and to sibling statements (hoisting). The
+    // pre-scan hoists top-level/shallow decls, but deeply-nested decls inside
+    // closures can slip through — and then `fresh_func()` here would mint an id
+    // WITHOUT registering the name, so `lookup_func(name)` stays None and a
+    // self-reference `o(...)` / member read on the func name lowers to an
+    // unresolved global (→ `ReferenceError: o is not defined` deep in Next.js's
+    // webpack-bundled modules). Register the name now when it wasn't already.
+    let func_id = match ctx.lookup_func(&name) {
+        Some(id) => id,
+        None => {
+            let id = ctx.fresh_func();
+            ctx.register_func(name.clone(), id);
+            id
+        }
+    };
 
     // #4101: retain the original source text so `fn.toString()` reconstructs
     // it. Slice the module source against the function's AST span; prepend the
