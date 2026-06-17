@@ -82,6 +82,30 @@ pub(crate) fn pre_register_forward_captured_lets(
                         }
                     }
                 }
+            } else {
+                // `var` bindings are already predefined + boxed by
+                // `predefine_var_bindings_in_function_body`, but their box is
+                // NOT in the prealloc set. A closure created EARLIER in the body
+                // that references a `var` declared LATER (`r.d(t,{x:()=>n.x});
+                // var n=r("…")` — the webpack ESM re-export shape in Next.js'
+                // react-server.node.js) must capture the *live* box, not a
+                // TAG_UNDEFINED snapshot. Add forward-captured `var` ids to the
+                // prealloc set so codegen allocates the box at function entry.
+                for decl in &var_decl.decls {
+                    let mut binding_idents: Vec<(String, u32)> = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut binding_idents);
+                    for (name, _span_lo) in binding_idents {
+                        if !seen_closure_refs.contains(&name) {
+                            continue;
+                        }
+                        if let Some(id) = ctx.lookup_local(&name) {
+                            if !forward_boxed_ids.contains(&id) {
+                                ctx.var_hoisted_ids.insert(id);
+                                forward_boxed_ids.push(id);
+                            }
+                        }
+                    }
+                }
             }
         }
         // Record closures introduced by THIS statement for subsequent decls.
