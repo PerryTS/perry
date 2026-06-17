@@ -47,6 +47,7 @@ mod native;
 mod native_module_dispatch;
 mod native_table;
 mod new;
+mod new_helpers;
 mod options;
 mod property_get;
 mod ui_styling;

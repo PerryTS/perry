@@ -1,0 +1,278 @@
+//! Constructor-body analysis helpers for `new ClassName(args…)` lowering.
+//!
+//! Pure predicate walkers (no codegen side effects) split out of `new.rs`
+//! to keep that file under the file-size gate. They classify a constructor
+//! body — does it call `super()`, dereference `this`, value-return, etc. —
+//! to drive `lower_new`'s static no-super-throw / inline-vs-call decisions,
+//! plus `node_stream_parent_kind` and `collect_decl_local_ids`.
+
+use perry_hir::Expr;
+
+use crate::expr::FnCtx;
+
+/// Generic "does any statement in this ctor body satisfy `stmt_pred` or
+/// contain an expression satisfying `expr_pred`" walker, shared by the
+/// no-super static-throw heuristics below.
+fn ctor_body_any(
+    body: &[perry_hir::Stmt],
+    expr_pred: &dyn Fn(&Expr) -> bool,
+    stmt_pred: &dyn Fn(&perry_hir::Stmt) -> bool,
+) -> bool {
+    body.iter().any(|s| stmt_any(s, expr_pred, stmt_pred))
+}
+
+fn stmt_any(
+    stmt: &perry_hir::Stmt,
+    expr_pred: &dyn Fn(&Expr) -> bool,
+    stmt_pred: &dyn Fn(&perry_hir::Stmt) -> bool,
+) -> bool {
+    use perry_hir::Stmt;
+    if stmt_pred(stmt) {
+        return true;
+    }
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_pred),
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_pred(e),
+        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_pred),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_pred(condition)
+                || ctor_body_any(then_branch, expr_pred, stmt_pred)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|b| ctor_body_any(b, expr_pred, stmt_pred))
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_pred(condition) || ctor_body_any(body, expr_pred, stmt_pred)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref()
+                .is_some_and(|s| stmt_any(s, expr_pred, stmt_pred))
+                || condition.as_ref().is_some_and(expr_pred)
+                || update.as_ref().is_some_and(expr_pred)
+                || ctor_body_any(body, expr_pred, stmt_pred)
+        }
+        Stmt::Labeled { body, .. } => stmt_any(body, expr_pred, stmt_pred),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            ctor_body_any(body, expr_pred, stmt_pred)
+                || catch
+                    .as_ref()
+                    .is_some_and(|c| ctor_body_any(&c.body, expr_pred, stmt_pred))
+                || finally
+                    .as_ref()
+                    .is_some_and(|f| ctor_body_any(f, expr_pred, stmt_pred))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_pred(discriminant)
+                || cases.iter().any(|c| {
+                    c.test.as_ref().is_some_and(expr_pred)
+                        || ctor_body_any(&c.body, expr_pred, stmt_pred)
+                })
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+    }
+}
+
+const NO_STMT_PRED: &dyn Fn(&perry_hir::Stmt) -> bool = &|_| false;
+
+/// True when a DIRECT `super(...)` call appears in this constructor body
+/// (`walk_expr_children` does not descend into `Expr::Closure` bodies). A
+/// derived constructor that never calls `super()` leaves `this`
+/// uninitialized — ECMAScript then throws ReferenceError at the implicit
+/// `return this`. We detect the static no-super case at compile time so
+/// `new Sub()` throws instead of returning a half-built object.
+pub(super) fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(body, &expr_calls_super, NO_STMT_PRED)
+}
+
+fn expr_calls_super(expr: &Expr) -> bool {
+    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_calls_super(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// True when a closure (arrow) created in the ctor body contains a
+/// `super(...)` call. Such an arrow can run DURING construction (e.g.
+/// stored on an iterator and invoked from its `return()` while the ctor's
+/// for-of is still iterating), so the static no-super throw must not fire —
+/// unless the body also dereferences `this` directly (see the call site).
+/// Refs class/subclass/derived-class-return-override-{for-of,finally-super}-arrow.
+pub(super) fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(body, &expr_calls_super_incl_closures, NO_STMT_PRED)
+}
+
+fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
+    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
+        return true;
+    }
+    if let Expr::Closure { body, .. } = expr {
+        return ctor_body_any(body, &expr_calls_super_incl_closures, NO_STMT_PRED);
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_calls_super_incl_closures(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// True when the ctor body dereferences `this` OUTSIDE nested closures.
+/// Combined with `ctor_body_closure_calls_super`: a direct `this` access in
+/// a no-direct-super derived ctor throws ReferenceError per spec before any
+/// closure could run `super()`, so the static entry throw stays correct
+/// (test262 class/elements/privatefieldset-evaluation-order-1).
+pub(super) fn ctor_body_uses_this(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(body, &expr_uses_this_direct, NO_STMT_PRED)
+}
+
+fn expr_uses_this_direct(expr: &Expr) -> bool {
+    if matches!(expr, Expr::This) {
+        return true;
+    }
+    if matches!(expr, Expr::Closure { .. }) {
+        return false;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_uses_this_direct(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// True when the constructor body contains a value-bearing `return` in its
+/// own body (closures excluded; a bare `return undefined` does NOT count —
+/// spec falls back to the uninitialized `this` and still throws). The
+/// return-override path initializes the `new` expression's value without
+/// `super()`, so the static no-super ReferenceError must not fire —
+/// `js_ctor_return_override` still enforces the derived-ctor rules on the
+/// returned value at runtime. Refs
+/// class/subclass/class-definition-null-proto-contains-return-override and
+/// class/subclass/builtin-objects/Object/constructor-return-undefined-throws.
+pub(super) fn ctor_body_has_value_return(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(
+        body,
+        &|_| false,
+        &|s| matches!(s, perry_hir::Stmt::Return(Some(e)) if !matches!(e, Expr::Undefined)),
+    )
+}
+
+pub(super) fn node_stream_parent_kind(
+    ctx: &FnCtx<'_>,
+    class: &perry_hir::Class,
+) -> Option<&'static str> {
+    let mut cur = class.extends_name.as_deref();
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        match name {
+            "Readable" => return Some("readable"),
+            "Duplex" => return Some("duplex"),
+            "Transform" => return Some("transform"),
+            _ => {}
+        }
+        if ctx.imported_class_ctors.contains_key(name) {
+            return None;
+        }
+        let Some(parent) = ctx.classes.get(name).copied() else {
+            return None;
+        };
+        if parent.constructor.is_some() {
+            return None;
+        }
+        cur = parent.extends_name.as_deref();
+        depth += 1;
+        if depth > 32 {
+            break;
+        }
+    }
+    None
+}
+
+/// Collect every LocalId DECLARED (via `Stmt::Let`, incl. nested in compound
+/// statements) within a constructor body. Used to detect the wall-44 inline
+/// collision: a ctor local whose id is also a capture of the enclosing closure.
+/// Mirrors `collect_let_ids` in `class_members.rs`.
+pub(super) fn collect_decl_local_ids(
+    stmts: &[perry_hir::Stmt],
+    out: &mut std::collections::HashSet<u32>,
+) {
+    use perry_hir::Stmt;
+    for s in stmts {
+        match s {
+            Stmt::Let { id, .. } => {
+                out.insert(*id);
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_decl_local_ids(then_branch, out);
+                if let Some(e) = else_branch {
+                    collect_decl_local_ids(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_decl_local_ids(body, out)
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init_stmt) = init {
+                    if let Stmt::Let { id, .. } = init_stmt.as_ref() {
+                        out.insert(*id);
+                    }
+                }
+                collect_decl_local_ids(body, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_decl_local_ids(body, out);
+                if let Some(c) = catch {
+                    collect_decl_local_ids(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_decl_local_ids(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_decl_local_ids(&case.body, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_decl_local_ids(std::slice::from_ref(body.as_ref()), out)
+            }
+            _ => {}
+        }
+    }
+}
