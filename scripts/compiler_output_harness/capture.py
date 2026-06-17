@@ -540,7 +540,10 @@ def verify_existing(args: argparse.Namespace) -> int:
     ir_after = after.read_text(encoding="utf-8")
     assembly = asm.read_text(encoding="utf-8")
     counters = structural_counters(ir_before, ir_after, assembly)
-    runtime_summary = runtime_counter_summary(None, counters)
+    benchmark = (
+        manifest.get("benchmark") if isinstance(manifest.get("benchmark"), dict) else None
+    )
+    runtime_summary = runtime_counter_summary(benchmark, counters)
     target = (
         args.target
         or compile_plan.get("effective_target")
@@ -553,7 +556,7 @@ def verify_existing(args: argparse.Namespace) -> int:
         ir_before=ir_before,
         ir_after=ir_after,
         assembly=assembly,
-        benchmark=None,
+        benchmark=benchmark,
         vectorization=vectorization,
         counters=counters,
         runtime_summary=runtime_summary,

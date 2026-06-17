@@ -442,6 +442,43 @@ def numeric_array_native_records():
     ])
 
 
+def numeric_arrays_inline_ir():
+    return """
+define i32 @main() {
+entry:
+  call i64 @js_array_numeric_push_f64_unboxed(i64 1, double 2.0)
+  %g = call i32 @js_typed_feedback_numeric_array_index_get_guard(i64 1, double 0.0, double 0.0, i32 0, i32 1)
+  %gc = icmp ne i32 %g, 0
+  br i1 %gc, label %bidx.num.fast.1, label %bidx.num.fallback.2
+
+bidx.num.fast.1:
+  %addr = add i64 1, 8
+  %p = inttoptr i64 %addr to ptr
+  %v = load double, ptr %p, align 8
+  br label %bidx.num.merge.3
+
+bidx.num.fallback.2:
+  br label %bidx.num.merge.3
+
+bidx.num.merge.3:
+  %sg = call i32 @js_typed_feedback_numeric_array_index_set_guard(i64 1, double 0.0, i32 0, double 3.0, i32 1)
+  %sc = icmp ne i32 %sg, 0
+  br i1 %sc, label %idxset.bounded_numeric_fast.4, label %idxset.bounded_numeric_merge.5
+
+idxset.bounded_numeric_fast.4:
+  %sval = fadd double 3.0, 0.0
+  %saddr = add i64 1, 8
+  %sp = inttoptr i64 %saddr to ptr
+  %sraw = call double @js_array_numeric_value_to_raw_f64(double %sval)
+  store double %sraw, ptr %sp, align 8
+  br label %idxset.bounded_numeric_merge.5
+
+idxset.bounded_numeric_merge.5:
+  ret i32 0
+}
+"""
+
+
 def h1_equivalence_native_records():
     region_ids = {
         "direct_bounded": "h1_native_rep_equivalence_ts.module_init.direct_bounded",
@@ -813,6 +850,79 @@ idxset.bounded_numeric_merge.5:
             report = (root / "structural-report.json").read_text(encoding="utf-8")
             self.assertIn("object_disassembly_present", report)
 
+    def test_verify_existing_uses_manifest_benchmark_stdout_for_stdout_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ir = numeric_arrays_inline_ir()
+            (root / "llvm-before-opt.ll").write_text(ir, encoding="utf-8")
+            (root / "llvm-after-opt.analysis.ll").write_text(ir, encoding="utf-8")
+            (root / "object-disassembly.s").write_text(GOOD_ASM, encoding="utf-8")
+            (root / "native-reps.json").write_text(
+                json.dumps({"records": numeric_array_native_records()}),
+                encoding="utf-8",
+            )
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "benchmark": {
+                            "runs": [
+                                {
+                                    "run": 1,
+                                    "exit_code": 0,
+                                    "stdout_first": "25\n",
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "artifact_dir": str(root),
+                    "workload": "numeric_arrays",
+                    "gate": True,
+                    "print_summary": False,
+                    "target": None,
+                    "clang_arg": None,
+                    "fp_contract": None,
+                    "expect_fma": "auto",
+                },
+            )()
+            self.assertEqual(HARNESS.verify_existing(args), 0)
+
+    def test_verify_existing_stdout_checks_fail_without_manifest_benchmark(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ir = numeric_arrays_inline_ir()
+            (root / "llvm-before-opt.ll").write_text(ir, encoding="utf-8")
+            (root / "llvm-after-opt.analysis.ll").write_text(ir, encoding="utf-8")
+            (root / "object-disassembly.s").write_text(GOOD_ASM, encoding="utf-8")
+            (root / "native-reps.json").write_text(
+                json.dumps({"records": numeric_array_native_records()}),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "artifact_dir": str(root),
+                    "workload": "numeric_arrays",
+                    "gate": True,
+                    "print_summary": False,
+                    "target": None,
+                    "clang_arg": None,
+                    "fp_contract": None,
+                    "expect_fma": "auto",
+                },
+            )()
+            self.assertEqual(HARNESS.verify_existing(args), 1)
+            report = (root / "structural-report.json").read_text(encoding="utf-8")
+            self.assertIn("numeric_arrays_checksum", report)
+            self.assertIn("no benchmark stdout captured", report)
+
     def test_explicit_perry_path_is_repo_relative(self):
         resolved = HARNESS.resolve_perry("target/debug/perry")
         self.assertEqual(resolved, [str(REPO_ROOT / "target/debug/perry")])
@@ -899,6 +1009,31 @@ idxset.bounded_numeric_merge.5:
                                 "allowed_missed_reason_kinds": [],
                             },
                             "runtime_budgets": {},
+                        }
+                    },
+                }
+            )
+
+    def test_workload_spec_rejects_substring_stdout_checks(self):
+        with self.assertRaises(HARNESS.HarnessError):
+            HARNESS.validate_workload_spec(
+                {
+                    "schema_version": 1,
+                    "workloads": {
+                        "bad": {
+                            "source": "fixture.ts",
+                            "kind": "numeric_loop",
+                            "vectorization": {
+                                "min_vectorized_loops": 0,
+                                "allowed_missed_reason_kinds": [],
+                            },
+                            "runtime_budgets": {},
+                            "stdout_checks": [
+                                {
+                                    "name": "bad_stdout",
+                                    "contains": "25",
+                                }
+                            ],
                         }
                     },
                 }
@@ -1166,6 +1301,52 @@ idxset.bounded_numeric_merge.5:
             native_reps=[{"records": records}],
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_stdout_checks_require_benchmark_data(self):
+        ir = numeric_arrays_inline_ir()
+        report = HARNESS.verify_artifacts(
+            workload="numeric_arrays",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": numeric_array_native_records()}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("numeric_arrays_checksum" in error for error in report["errors"]),
+            report["errors"],
+        )
+        self.assertTrue(
+            any("no benchmark stdout captured" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_stdout_checks_are_exact_for_every_run(self):
+        ir = numeric_arrays_inline_ir()
+        report = HARNESS.verify_artifacts(
+            workload="numeric_arrays",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark={
+                "runs": [
+                    {"run": 1, "exit_code": 0, "stdout_first": "25\n"},
+                    {"run": 2, "exit_code": 0, "stdout_first": "125\n"},
+                ]
+            },
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            native_reps=[{"records": numeric_array_native_records()}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "numeric_arrays_checksum" in error and "failed_runs=[2]" in error
+                for error in report["errors"]
+            ),
+            report["errors"],
+        )
 
     def test_numeric_array_native_rep_checks_require_raw_layout_facts(self):
         ir = """

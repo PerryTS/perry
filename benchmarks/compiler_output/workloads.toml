@@ -639,7 +639,7 @@ detail = "numeric indexed write takes the guarded raw-f64 fast path, canonicaliz
 
 [[workloads.numeric_arrays.stdout_checks]]
 name = "numeric_arrays_checksum"
-contains = "25"
+equals = "25\n"
 detail = "numeric-array fixture stdout checksum"
 
 [workloads.numeric_arrays.native_rep_checks]
@@ -838,7 +838,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.raw_numeric_object_fields.stdout_checks]]
 name = "raw_numeric_object_fields_checksum"
-contains = "raw_numeric_object_fields:26.25"
+equals = "raw_numeric_object_fields:26.25\n"
 detail = "raw numeric object field fixture stdout checksum"
 
 [[workloads.raw_numeric_object_fields.ir_checks]]
@@ -1046,7 +1046,7 @@ detail = "scalar-replaced literals do not use runtime property or array access h
 
 [[workloads.scalar_replacement_literals.stdout_checks]]
 name = "scalar_replacement_checksum"
-contains = "17"
+equals = "17\n"
 detail = "scalar-replacement fixture stdout checksum"
 
 [workloads.scalar_replacement_literals.native_rep_checks]
@@ -1133,7 +1133,7 @@ detail = "tracked typed arrays use native element-width loads"
 
 [[workloads.width_aware_buffer_kernels.stdout_checks]]
 name = "width_aware_buffer_kernels_checksum"
-contains = "width_aware_buffer_kernels:38314632556"
+equals = "width_aware_buffer_kernels:38314632556\n"
 detail = "width-aware buffer and typed-array semantic checksum"
 
 [workloads.width_aware_buffer_kernels.native_rep_checks]
@@ -1281,7 +1281,7 @@ buffer_slow_path_accesses_static = 16
 
 [[workloads.native_owned_typed_views.stdout_checks]]
 name = "native_owned_typed_views_checksum"
-contains = "native_owned_typed_views:1383.25"
+equals = "native_owned_typed_views:1383.25\n"
 detail = "native-owned typed view checksum"
 
 [workloads.native_owned_typed_views.native_rep_checks]
@@ -1438,7 +1438,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.native_pod_layout_constants.stdout_checks]]
 name = "native_pod_layout_constants_checksum"
-contains = "native_pod_layout_constants:55"
+equals = "native_pod_layout_constants:55\n"
 detail = "POD layout constants preserve native-arena packet checksum"
 
 [workloads.native_memory_bulk_fill]
@@ -1470,7 +1470,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.native_memory_bulk_fill.stdout_checks]]
 name = "native_memory_bulk_fill_checksum"
-contains = "native_memory_bulk_fill:471"
+equals = "native_memory_bulk_fill:471\n"
 detail = "NativeMemory.fillU32 and copy preserve packet checksum"
 
 [workloads.native_memory_bulk_fill.native_rep_checks]
@@ -1532,7 +1532,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.native_memory_fixture.stdout_checks]]
 name = "native_memory_fixture_checksum"
-contains = "native_memory_fixture:1701"
+equals = "native_memory_fixture:1701\n"
 detail = "native arenas, bulk fill/copy, POD view lowering, and native pod+count call preserve checksum"
 
 [workloads.native_memory_fixture.native_rep_checks]
@@ -1613,7 +1613,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.native_abi_packet_typed.stdout_checks]]
 name = "native_abi_packet_typed_checksum"
-contains = "native_abi_packet_typed:"
+equals = "native_abi_packet_typed:33688032\n"
 detail = "typed packet fixture emits a semantic checksum"
 
 [workloads.native_abi_packet_typed.native_rep_checks]
@@ -1687,7 +1687,7 @@ buffer_slow_path_accesses_static = 128
 
 [[workloads.native_abi_packet_control.stdout_checks]]
 name = "native_abi_packet_control_checksum"
-contains = "native_abi_packet_control:"
+equals = "native_abi_packet_control:33688032\n"
 detail = "control packet fixture emits a semantic checksum"
 
 [workloads.native_abi_packet_control.native_rep_checks]
