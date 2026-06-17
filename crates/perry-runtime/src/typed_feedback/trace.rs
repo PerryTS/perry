@@ -392,4 +392,5 @@ mod keep_typed_feedback {
     #[used] static K22: extern "C" fn(u64, f64) -> f64 = js_typed_feedback_observe_helper_return;
     #[cfg(feature = "diagnostics")]
     #[used] static K23: extern "C" fn() = js_typed_feedback_maybe_dump_trace;
+    #[used] static K24: extern "C" fn(u64, f64, i32, i32) -> i32 = js_typed_feedback_numeric_array_index_get_guard_i32;
 }

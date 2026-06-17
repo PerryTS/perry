@@ -367,3 +367,72 @@
   - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only`, and the before/after comparison above uses the captured local fifth-cycle baseline.
   - This follow-up is intended as a stacked draft PR on top of the i32 array index lowering PR.
 - PR: https://github.com/PerryTS/perry/pull/5312
+
+## 2026-06-17 - Use i32 numeric array get guards for trusted integer indices
+
+- Start revision: `f8454f6bb`
+- Branch: `codex/perry-i32-numeric-get-guard`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux `/usr/bin/time` and `perf stat`; local `node` cannot execute `.ts` benchmark inputs, so Node columns and correctness comparisons were skipped by the harness
+- Baseline commands:
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-invariant-hoist-baseline --trace llvm --quiet`
+  - `for i in 1 2 3 4 5; do /usr/bin/time -f "matrix baseline sample=$i wall=%e rss_kb=%M" /tmp/perry-matrix-invariant-hoist-baseline; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-invariant-hoist-baseline-trace.json /usr/bin/time -f "matrix baseline trace wall=%e rss_kb=%M" /tmp/perry-matrix-invariant-hoist-baseline && jq '[.sites[] | select(.kind=="array_element") | {site_id, operation, guard_name, observed_count, guard_passes, guard_failures, fallback_calls}]' /tmp/perry-matrix-invariant-hoist-baseline-trace.json`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-invariant-hoist-baseline`
+  - `perf record -F 999 -g --call-graph fp -o /tmp/perry-matrix-invariant-hoist-baseline.perf /tmp/perry-matrix-invariant-hoist-baseline`
+- Baseline results:
+  - direct matrix binary samples: 391ms, 406ms, 385ms, 397ms, 407ms; checksum always `41079519680`
+  - trace run: `matrix_multiply:394`, wall 0.42s, RSS 31528KB
+  - hot get trace sites `3181980809628221440` and `3181980809628221441`: 16,777,216 observations/passes each, 0 failures, 0 fallback calls
+  - final checksum get trace site `3181980809628221446`: 65,536 observations/passes, 0 failures, 0 fallback calls
+  - direct matrix `perf stat`: 1,462,371,864 cycles, 7,017,654,871 instructions, 1,568,480,811 branches, 253,622 branch-misses, 0.4253s elapsed
+  - `perf report` showed roughly 48.7% and 45.6% at the two generated hot get fast-path load/address-mask regions
+  - `benchmarks/quick.sh` from the previous cycle: matrix_multiply 390ms/30MB
+- Selected gap and evidence:
+  - After invariant-read hoisting, `16_matrix_multiply.ts` had two fully hot numeric array index-get sites in the innermost multiply loop.
+  - LLVM IR still emitted `sitofp i32` for each trusted computed get index before calling `js_typed_feedback_numeric_array_index_get_guard`, even though codegen had already proven and lowered the index as i32.
+  - The runtime guard then rechecked the boxed index bits with `is_plain_number_bits(index_value)`, adding avoidable work on every hot get.
+- Change:
+  - Added `js_typed_feedback_numeric_array_index_get_guard_i32(site_id, receiver, index, require_in_bounds)` for codegen paths that already have a trusted i32 index.
+  - The new guard preserves numeric-layout, bounds, observation, pass/fail, and fallback accounting, but skips the boxed-index argument and plain-number bit check.
+  - Changed computed numeric array gets and bounded-index numeric gets to call the trusted-i32 guard when the index is already lowered as i32.
+  - Moved the i32-to-double boxing for trusted-i32 gets into the fallback block only, so the hot fast path does not materialize the boxed index.
+  - Reused the trusted-i32 helper from the invariant numeric array read hoist prebody.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-i32-get-guard --trace llvm --quiet`
+  - `rg -n "numeric_array_index_get_guard_i32|numeric_array_index_get_guard\\(|sitofp i32" .perry-trace/llvm/_16_matrix_multiply_ts.ll`
+  - `for i in 1 2 3 4 5; do /usr/bin/time -f "matrix i32-guard sample=$i wall=%e rss_kb=%M" /tmp/perry-matrix-i32-get-guard; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-i32-get-guard-trace.json /usr/bin/time -f "matrix i32-guard trace wall=%e rss_kb=%M" /tmp/perry-matrix-i32-get-guard && jq '[.sites[] | select(.kind=="array_element") | {site_id, operation, guard_name, observed_count, guard_passes, guard_failures, fallback_calls}]' /tmp/perry-matrix-i32-get-guard-trace.json`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-i32-get-guard`
+  - `benchmarks/quick.sh`
+  - `benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-compare-i32-get-guard.json`
+- Post-change results:
+  - LLVM IR uses `js_typed_feedback_numeric_array_index_get_guard_i32` for the two hot matrix get sites and the final checksum get site; the remaining get-index `sitofp` instructions are in fallback blocks.
+  - direct matrix binary samples: 378ms, 381ms, 385ms, 365ms, 376ms; checksum always `41079519680`
+  - trace run: `matrix_multiply:384`, wall 0.41s, RSS 31436KB
+  - hot get trace sites `3181980809628221440` and `3181980809628221441`: 16,777,216 observations/passes each, 0 failures, 0 fallback calls
+  - final checksum get trace site `3181980809628221446`: 65,536 observations/passes, 0 failures, 0 fallback calls
+  - direct matrix `perf stat`: 1,372,519,931 cycles, 6,614,211,059 instructions, 1,434,035,989 branches, 244,367 branch-misses, 0.4080s elapsed
+  - quick: fibonacci 262ms/18MB, math_intensive 61ms/18MB, nested_loops 118ms/22MB, factorial 93ms/18MB, matrix_multiply 368ms/30MB
+  - compare quick medians: loop_overhead 78ms/18828KB, fibonacci 246ms/18944KB, math_intensive 56ms/18904KB, nested_loops 120ms/23176KB, factorial 85ms/18904KB
+- Measured impact:
+  - `16_matrix_multiply` direct binary: 397ms -> 378ms median, 4.8% faster
+  - `16_matrix_multiply` quick: 390ms -> 368ms, 5.6% faster
+  - Direct matrix binary cycles: 1.462B -> 1.373B, 6.1% fewer
+  - Direct matrix binary instructions: 7.018B -> 6.614B, 5.8% fewer
+  - Direct matrix binary branches: 1.568B -> 1.434B, 8.6% fewer
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-runtime typed_feedback_numeric_array_get_guard_i32_requires_numeric_layout`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen --test typed_shape_descriptors`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+  - `cargo build --release`
+  - Final typed-feedback trace confirmed unchanged get observation/pass totals and zero fallback calls.
+- Notes:
+  - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only`, and the matrix before/after comparison above uses the captured local sixth-cycle baseline.
+  - This is a deliberately narrow runtime ABI and codegen change: only paths with an already trusted i32 index use the new guard, and fallback boxing remains available for correctness.
+- PR: https://github.com/PerryTS/perry/pull/5313

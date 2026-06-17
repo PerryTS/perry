@@ -591,7 +591,7 @@ fn typed_feedback_guards_computed_numeric_array_index_uses_i32_loop_bound() {
         }],
     ));
 
-    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
+    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard_i32"));
     assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
     assert!(ir.contains("mul i32"), "{ir}");
     assert!(ir.contains("add i32"), "{ir}");
@@ -688,7 +688,7 @@ fn typed_feedback_hoists_invariant_numeric_array_get_out_of_inner_loop() {
         ir.contains("call void @js_typed_feedback_record_array_guard_fast_passes"),
         "{ir}"
     );
-    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
+    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard_i32"));
 }
 
 #[test]

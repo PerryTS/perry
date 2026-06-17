@@ -1523,6 +1523,55 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
 }
 
 #[no_mangle]
+pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard_i32(
+    site_id: u64,
+    receiver: f64,
+    index: i32,
+    require_in_bounds: i32,
+) -> i32 {
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    let require_in_bounds = require_in_bounds != 0;
+    if site_id != 0 && index >= 0 {
+        if let Some(observation) =
+            numeric_array_fast_observation(raw_addr, index as u32, require_in_bounds, None)
+        {
+            if array_guard_fast_pass(site_id, &observation, true) {
+                return 1;
+            }
+        }
+    }
+    let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
+    let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
+    let observation = Observation {
+        source: ObservationSource::Array,
+        object_addr: 0,
+        shape_addr: 0,
+        key_hash: 0,
+        class_id,
+        heap_type,
+        aux,
+        value_tag: element_kind,
+    };
+    let contract_valid = index >= 0
+        && numeric_array_index_guard(
+            raw_addr as *const ArrayHeader,
+            index as u32,
+            require_in_bounds,
+        );
+    let pass = guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::ArrayElement,
+        observation,
+        contract_valid,
+    );
+    if pass {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
     site_id: u64,
     receiver: f64,

@@ -195,6 +195,47 @@ pub(crate) fn lower_guarded_array_index_get(
     require_numeric_layout: bool,
     skipped_fast_pass_count: Option<&str>,
 ) -> Result<String> {
+    lower_guarded_array_index_get_impl(
+        ctx,
+        arr_box,
+        Some(idx_box),
+        idx_i32,
+        block_prefix,
+        require_numeric_layout,
+        skipped_fast_pass_count,
+        false,
+    )
+}
+
+pub(crate) fn lower_guarded_array_index_get_trusted_i32(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    block_prefix: &str,
+    skipped_fast_pass_count: Option<&str>,
+) -> Result<String> {
+    lower_guarded_array_index_get_impl(
+        ctx,
+        arr_box,
+        None,
+        idx_i32,
+        block_prefix,
+        true,
+        skipped_fast_pass_count,
+        true,
+    )
+}
+
+fn lower_guarded_array_index_get_impl(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_box: Option<&str>,
+    idx_i32: &str,
+    block_prefix: &str,
+    require_numeric_layout: bool,
+    skipped_fast_pass_count: Option<&str>,
+    trusted_i32_index: bool,
+) -> Result<String> {
     let contract = if require_numeric_layout {
         TypedFeedbackContract::numeric_array_get_index()
     } else {
@@ -215,34 +256,58 @@ pub(crate) fn lower_guarded_array_index_get(
 
     let guard_ok = {
         let blk = ctx.block();
-        let guard_fn = if require_numeric_layout {
-            "js_typed_feedback_numeric_array_index_get_guard"
+        let use_i32_numeric_guard = require_numeric_layout && trusted_i32_index;
+        let guard_i32 = if use_i32_numeric_guard {
+            blk.call(
+                I32,
+                "js_typed_feedback_numeric_array_index_get_guard_i32",
+                &[
+                    (I64, &feedback_site_id),
+                    (DOUBLE, arr_box),
+                    (I32, idx_i32),
+                    (I32, "1"),
+                ],
+            )
         } else {
-            "js_typed_feedback_plain_array_index_get_guard"
+            let guard_fn = if require_numeric_layout {
+                "js_typed_feedback_numeric_array_index_get_guard"
+            } else {
+                "js_typed_feedback_plain_array_index_get_guard"
+            };
+            let idx_box =
+                idx_box.expect("non-i32 array index guard path requires a boxed index value");
+            blk.call(
+                I32,
+                guard_fn,
+                &[
+                    (I64, &feedback_site_id),
+                    (DOUBLE, arr_box),
+                    (DOUBLE, idx_box),
+                    (I32, idx_i32),
+                    (I32, "1"),
+                ],
+            )
         };
-        let guard_i32 = blk.call(
-            I32,
-            guard_fn,
-            &[
-                (I64, &feedback_site_id),
-                (DOUBLE, arr_box),
-                (DOUBLE, idx_box),
-                (I32, idx_i32),
-                (I32, "1"),
-            ],
-        );
         blk.icmp_ne(I32, &guard_i32, "0")
     };
     ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
 
     ctx.current_block = fallback_idx;
+    let fallback_idx_box;
+    let fallback_idx_ref = match idx_box {
+        Some(idx_box) => idx_box,
+        None => {
+            fallback_idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+            &fallback_idx_box
+        }
+    };
     let fallback_val = ctx.block().call(
         DOUBLE,
         "js_typed_feedback_array_index_get_fallback_boxed",
         &[
             (I64, &feedback_site_id),
             (DOUBLE, arr_box),
-            (DOUBLE, idx_box),
+            (DOUBLE, fallback_idx_ref),
         ],
     );
     let fallback_end_label = ctx.block().label.clone();
@@ -850,15 +915,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
                         if require_numeric_layout {
-                            let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
-                            return lower_guarded_array_index_get(
-                                ctx,
-                                &arr_box,
-                                &idx_double,
-                                &idx_i32,
-                                "bidx.num",
-                                true,
-                                None,
+                            return lower_guarded_array_index_get_trusted_i32(
+                                ctx, &arr_box, &idx_i32, "bidx.num", None,
                             );
                         }
                         return lower_bounded_array_index_get(ctx, &arr_box, &idx_i32);
@@ -881,6 +939,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.integer_returning_functions,
                     ctx.i32_identity_functions,
                 );
+                if use_i32_index && require_numeric_layout {
+                    let idx_i32 = lower_expr_as_i32(ctx, index)?;
+                    return lower_guarded_array_index_get_trusted_i32(
+                        ctx, &arr_box, &idx_i32, "arr", None,
+                    );
+                }
                 let (idx_double, idx_i32) = if use_i32_index {
                     let idx_i32 = lower_expr_as_i32(ctx, index)?;
                     let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);

@@ -88,6 +88,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, I64],
     );
     module.declare_function(
+        "js_typed_feedback_numeric_array_index_get_guard_i32",
+        I32,
+        &[I64, DOUBLE, I32, I32],
+    );
+    module.declare_function(
         "js_typed_feedback_observe_property_get",
         VOID,
         &[I64, I64, I64],
